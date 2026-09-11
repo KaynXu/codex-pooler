@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.7.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.8...codex-pooler-v0.7.9) (2026-09-11)
+
+
+### Features
+
+* **admin:** show the downstream delivery receipt in the request log attempt drawer ([457bfd9](https://github.com/icoretech/codex-pooler/commit/457bfd9a354b93d3c64cbf3528efe4b69abc01e0))
+* **gateway:** record a downstream delivery receipt for native websocket terminals ([fbe2e71](https://github.com/icoretech/codex-pooler/commit/fbe2e715c812093660a809c879a99729e9bf7b19))
+* **gateway:** record the downstream delivery receipt for HTTP SSE turns ([6b31f1d](https://github.com/icoretech/codex-pooler/commit/6b31f1d4944b7a610a292506ba393ac1b16fe43d))
+* **gateway:** send a derived session-id upstream for /v1 requests with a prompt_cache_key ([4e32aeb](https://github.com/icoretech/codex-pooler/commit/4e32aeb9db803b05bef1c842a096bd57e936eeb1))
+* **status:** add OpenAI incidents feed and admin surface ([2a0f615](https://github.com/icoretech/codex-pooler/commit/2a0f6155dfa1efc3703b2d6c81c391672e14ebf9))
+
+
+### Bug Fixes
+
+* **accounting:** keep the delivery receipt projection a runtime reference and accept an already-dead owner in the witness test ([faaaef8](https://github.com/icoretech/codex-pooler/commit/faaaef85659d6cb1f6660bf3be5169dda2a3fe7c))
+* **gateway:** admit a byte-identical websocket resend after a provider terminal failure ([af00377](https://github.com/icoretech/codex-pooler/commit/af00377b633e0e65d7884a647c964b080f0dea1f))
+* **gateway:** finalize a websocket turn whose response task died by exception ([f9bf8f9](https://github.com/icoretech/codex-pooler/commit/f9bf8f9e87894a74f461bfd8322175030ddd6dcb))
+* **gateway:** refresh and retry HTTP dispatch on a provider 401 instead of passing it to the client ([3f7b4ed](https://github.com/icoretech/codex-pooler/commit/3f7b4ed318547ffdd277c0a2686f6a2cd6d39979))
+* **status:** preserve feed errors for worker retries ([d9704fc](https://github.com/icoretech/codex-pooler/commit/d9704fc61fcd202457663e19b1cba75b2fe9b221))
+
+
+### Performance Improvements
+
+* **gateway:** end socket terminate drains on signals and plumb owner timeouts through recovery ([d3c31cf](https://github.com/icoretech/codex-pooler/commit/d3c31cf39035a6a49f7f7e3c8b9a3566da9b4da4))
+* **gateway:** report pre-content owner terminals immediately, plumb handoff timeouts, and bound hosted shell validation ([75c97dd](https://github.com/icoretech/codex-pooler/commit/75c97dd5a9b1b4afeb05eda4f87e8086f6253fd3))
+
+
+### Tests
+
+* **gateway:** give the rejection drain, replay cleanup and saved-reset decision time test-facing knobs ([10b9d7f](https://github.com/icoretech/codex-pooler/commit/10b9d7f813c0ac31d7fabfeec62974a84fd3c319))
+* keep the suite fast, quiet, and off the network ([c53e54e](https://github.com/icoretech/codex-pooler/commit/c53e54ec0b684ec2618dc88f0ba4189e38dafc6e))
+* **platform:** give the replay migration rehearsal and the owner protocol test real detection budgets ([cd65d47](https://github.com/icoretech/codex-pooler/commit/cd65d47c87f51879d67787a51e95c419f5c203f4))
+* **quota:** prime the header exhaustion row from the hard-pin recovery test itself ([7ca2782](https://github.com/icoretech/codex-pooler/commit/7ca2782af338a6b16f0f80ca8cd7c50ab740d506))
+* **runtime:** give the local owner crash test its own sandbox connections ([b8020d6](https://github.com/icoretech/codex-pooler/commit/b8020d6ca0e643457806105819287f5058c59095))
+* **runtime:** purge the crash test's identity, secrets and assignment rows too ([2bb1d1b](https://github.com/icoretech/codex-pooler/commit/2bb1d1b314e4aad35febbfed0978f45618ea25fd))
+* **runtime:** purge the owner crash test's committed rows and scope table-wide assertions to the Pool ([a29aceb](https://github.com/icoretech/codex-pooler/commit/a29aceb328277a8ca30a472bb346712e703e60a2))
+* **runtime:** split the owner forwarding websocket test into family files ([1270b46](https://github.com/icoretech/codex-pooler/commit/1270b4626c0d48fb976c08d9187ef63e1b78608b))
+* **runtime:** split the websocket controller test into family files ([b752030](https://github.com/icoretech/codex-pooler/commit/b752030157d8142129309663549b1c10bfafaf15))
+* **support:** mark the lifecycle log capture helper for dialyzer ([945a1f9](https://github.com/icoretech/codex-pooler/commit/945a1f97afd590fc252a19ab5188e6844290c228))
+* **upstream:** add a native per-frame barrier mode to FakeUpstream and tag strict fixture provenance ([3eabd6a](https://github.com/icoretech/codex-pooler/commit/3eabd6a11d7eab84bc5030a42d99a4a841e10f2f))
+* **upstream:** finish the strict FakeUpstream migration ([e6210dd](https://github.com/icoretech/codex-pooler/commit/e6210dda2f22b13516b0fb2a6d48edb0e4fd4a2d))
+* **upstream:** migrate one protocol-sensitive test per family to strict fixtures ([5c6d346](https://github.com/icoretech/codex-pooler/commit/5c6d346a254a5c0e60d983ecaa50e9d7b00cd9fd))
+
+
+### Miscellaneous Chores
+
+* **deps:** update dependency helm/helm to v4.3.0 ([#382](https://github.com/icoretech/codex-pooler/issues/382)) ([423457d](https://github.com/icoretech/codex-pooler/commit/423457d216dc5c5f9c78ab758da59df92581b940))
+* **deps:** update dependency node to v26.8.2 ([#383](https://github.com/icoretech/codex-pooler/issues/383)) ([fbdd0c7](https://github.com/icoretech/codex-pooler/commit/fbdd0c7a87ee293baa4477a50cccb5b48f6ef7d1))
+
 ## [0.7.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.7.7...codex-pooler-v0.7.8) (2026-09-10)
 
 
