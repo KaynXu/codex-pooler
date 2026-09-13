@@ -259,10 +259,10 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   test "exposes bounded stream outcomes without identifier metadata", %{conn: conn} do
     interrupted_metric =
-      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket"})
+      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket",via="unknown"})
 
     unknown_metric =
-      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown"})
+      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown",via="unknown"})
 
     :telemetry.execute(
       [:codex_pooler, :gateway, :stream, :outcome],
@@ -359,11 +359,11 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert metric_sample(
              body,
-             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers"})
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="unknown"})
            ) ==
              metric_sample(
                baseline,
-               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers"})
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="unknown"})
              ) + 1
 
     assert metric_sample(
