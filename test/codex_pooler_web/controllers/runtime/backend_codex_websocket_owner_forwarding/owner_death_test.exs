@@ -51,6 +51,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     end)
   end
 
+  @tag :committed_cleanup_jobs
+  test "owner-death fixture teardown removes owned jobs and preserves a shared identity job" do
+    upstream = start_upstream(FakeUpstream.json_response(%{}))
+    setup = Sandbox.unboxed_run(Repo, fn -> gateway_setup(upstream) end)
+
+    cleanup = fn ->
+      purge_committed_pool_rows!(setup.pool.id, setup.identity.id, setup.pricing.id)
+    end
+
+    on_exit(cleanup)
+
+    CodexPooler.CommittedJobCleanupSupport.assert_cleanup_jobs!(
+      setup.pool,
+      setup.identity,
+      setup.assignment,
+      cleanup
+    )
+  end
+
   test "remote owner loss before visible output recovers without re-resolving the turn mode" do
     upstream =
       start_upstream(

@@ -71,6 +71,18 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   end
 
   describe "reconciliation jobs" do
+    @tag :committed_cleanup_jobs
+    test "metadata fixture teardown removes owned jobs and preserves a shared identity job" do
+      {pool, identity, assignment} = committed_metadata_reconciliation_fixture()
+
+      CodexPooler.CommittedJobCleanupSupport.assert_cleanup_jobs!(
+        pool,
+        identity,
+        assignment,
+        fn -> cleanup_committed_metadata_reconciliation_fixture(pool, identity) end
+      )
+    end
+
     test "completes partial reconciliation when only catalog sync fails" do
       future_reset = DateTime.add(DateTime.utc_now(), 300, :second)
 
@@ -6422,19 +6434,21 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
     {pool, identity, _assignment} = fixture
 
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        CodexPooler.PoolerFixtures.delete_committed_pools!([pool.id])
-
-        Repo.delete_all(
-          from(current_identity in UpstreamIdentity,
-            where: current_identity.id == ^identity.id
-          )
-        )
-      end)
-    end)
+    on_exit(fn -> cleanup_committed_metadata_reconciliation_fixture(pool, identity) end)
 
     fixture
+  end
+
+  defp cleanup_committed_metadata_reconciliation_fixture(pool, identity) do
+    Sandbox.unboxed_run(Repo, fn ->
+      CodexPooler.PoolerFixtures.delete_committed_pools!([pool.id])
+
+      Repo.delete_all(
+        from(current_identity in UpstreamIdentity,
+          where: current_identity.id == ^identity.id
+        )
+      )
+    end)
   end
 
   defp committed_stale_priming_fixture do
