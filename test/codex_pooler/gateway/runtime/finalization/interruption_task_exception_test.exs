@@ -72,6 +72,35 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
              3
   end
 
+  test "a task exception after a retryable attempt still settles its reservation" do
+    fixture = fixture()
+
+    assert {:ok, _attempt} =
+             Accounting.record_retryable_attempt_failure(fixture.attempt, %{
+               last_error_code: "upstream_stream_error",
+               response_status_code: 502
+             })
+
+    attempt_before = Repo.reload!(fixture.attempt)
+    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert Repo.reload!(fixture.attempt) == attempt_before
+
+    assert Enum.sort(
+             Repo.all(
+               from e in LedgerEntry,
+                 where: e.request_id == ^fixture.request.id,
+                 select: e.entry_kind
+             )
+           ) == ["release", "reservation", "settlement"]
+
+    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+
+    assert Repo.aggregate(
+             from(e in LedgerEntry, where: e.request_id == ^fixture.request.id),
+             :count
+           ) == 3
+  end
+
   test "a receipt that does not match the request is a no-op" do
     fixture = fixture()
 

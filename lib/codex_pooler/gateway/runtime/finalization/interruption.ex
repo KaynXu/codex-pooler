@@ -358,6 +358,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         })
         |> complete_task_exception_turn!(turn, nil, reason, now)
 
+      Accounting.reservation_outstanding?(request) ->
+        Accounting.finalize_request_with_disposition(request, attempt, %{
+          request_status: "failed",
+          response_status_code: @task_exception_status_code,
+          last_error_code: reason,
+          preserve_replay_attempt: true,
+          usage: %{status: "usage_unknown", source: reason}
+        })
+        |> complete_task_exception_turn!(turn, attempt, reason, now)
+
       true ->
         request
         |> Ecto.Changeset.change(%{
