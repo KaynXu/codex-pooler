@@ -85,7 +85,7 @@ defmodule CodexPooler.CommittedWriteGuard do
   @harness_tables []
 
   # Columns a restore through the domain API rewrites without changing what the row says.
-  @bookkeeping_columns ["lock_version"]
+  @bookkeeping_columns []
 
   @connection_keys [
     :hostname,
@@ -339,9 +339,8 @@ defmodule CodexPooler.CommittedWriteGuard do
     conn
   end
 
-  # Every table is compared by normalized row content. Timestamps and lock_version are omitted
-  # because restoring through domain APIs rewrites bookkeeping values. This catches updates to
-  # non-singleton rows as well as singleton state changes.
+  # Every table is compared by normalized row content, including timestamps and lock_version.
+  # This catches updates to non-singleton rows as well as singleton state changes.
   defp watched_tables!(conn) do
     %Postgrex.Result{rows: rows} =
       Postgrex.query!(
@@ -528,7 +527,7 @@ defmodule CodexPooler.CommittedWriteGuard do
   defp format_changes(changes) do
     Enum.map_join(changes, "\n", fn
       {table, :content, n} ->
-        "  #{table}: content changed (#{n} rows; timestamps and lock_version are not compared)"
+        "  #{table}: content changed (#{n} rows)"
 
       {table, was, now} ->
         "  #{table}: #{was || "absent"} -> #{now || "absent"}#{format_delta(was, now)}"
