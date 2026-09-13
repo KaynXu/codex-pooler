@@ -70,7 +70,7 @@ defmodule CodexPooler.Telemetry.Relay do
   def prune do
     delete_bounded(
       :day,
-      dynamic([e], is_nil(e.claimed_at))
+      dynamic([_e], true)
     )
   end
 

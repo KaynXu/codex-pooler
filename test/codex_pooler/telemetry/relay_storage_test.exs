@@ -118,6 +118,34 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     assert {0, _} = Relay.prune()
   end
 
+  test "prune removes old claimed rows and preserves fresh claimed rows" do
+    now = DateTime.utc_now()
+
+    old =
+      Repo.insert!(%RelayEvent{
+        event: "stale_sweep",
+        labels: %{},
+        count: 1,
+        inserted_at: DateTime.add(now, -86_401, :second),
+        claimed_at: DateTime.add(now, -86_400, :second),
+        claimed_by: "old"
+      })
+
+    fresh =
+      Repo.insert!(%RelayEvent{
+        event: "stale_sweep",
+        labels: %{},
+        count: 1,
+        inserted_at: now,
+        claimed_at: now,
+        claimed_by: "fresh"
+      })
+
+    assert {1, _} = Relay.prune()
+    assert Repo.get(RelayEvent, old.id) == nil
+    assert Repo.get(RelayEvent, fresh.id)
+  end
+
   test "transaction rollback leaves no relay rows" do
     assert {:error, :rollback} =
              Repo.transaction(fn ->
