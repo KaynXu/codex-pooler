@@ -107,6 +107,38 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     assert_failed_validation_accounting!(setup, 1)
   end
 
+  test "POST /v1/chat/completions under Full preserves the Chat parameter name", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond: validation_rejection(400, "unsupported_value", "reasoning.effort")
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", %{
+        "model" => setup.model.exposed_model_id,
+        "messages" => [%{"role" => "user", "content" => @prompt_sentinel}],
+        "reasoning_effort" => "high",
+        "stream" => true
+      })
+
+    assert json_response(response, 400)["error"]["param"] == "reasoning_effort"
+    refute response.resp_body =~ @provider_sentinel
+    refute response.resp_body =~ @prompt_sentinel
+    FakeUpstream.verify!(upstream)
+    assert_failed_validation_accounting!(setup, 1)
+  end
+
   test "POST /v1/responses keeps non-allowlisted and non-400 rejections redacted", %{conn: conn} do
     cases = [
       {"unknown code", validation_rejection(400, "provider_specific_code", "reasoning.effort"),

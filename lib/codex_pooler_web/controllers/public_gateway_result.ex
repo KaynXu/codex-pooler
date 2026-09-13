@@ -77,8 +77,9 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     })
   end
 
-  def send(conn, {:ok, %{body: _body} = result}, _success_normalizer, _opts),
-    do: GatewayHelpers.send_gateway_result(conn, result)
+  def send(conn, {:ok, %{body: body} = result}, _success_normalizer, opts) do
+    GatewayHelpers.send_gateway_result(conn, %{result | body: map_validation_param(body, opts)})
+  end
 
   def send(conn, {:error, %{status: status} = reason}, _success_normalizer, _opts) do
     if PublicResponse.redacted_gateway_error?(reason) do
@@ -96,4 +97,12 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   defp public_error_status(_status, %{public_input_file_upstream_404?: true}), do: 404
   defp public_error_status(404, _result), do: 502
   defp public_error_status(status, _result), do: status
+
+  defp map_validation_param(%{"error" => %{"param" => param}} = body, opts)
+       when is_binary(param) do
+    mapper = Keyword.get(opts, :validation_param, &Function.identity/1)
+    put_in(body, ["error", "param"], mapper.(param))
+  end
+
+  defp map_validation_param(body, _opts), do: body
 end
