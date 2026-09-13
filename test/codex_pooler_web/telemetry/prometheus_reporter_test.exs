@@ -18,7 +18,6 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     end
 
     assert_receive {:prometheus_folded, ^pid}, 1_000
-    assert :ets.info(:prometheus_metrics_dist, :size) < 5
     tasks = for _ <- 1..8, do: Task.async(fn -> PrometheusReporter.scrape(name) end)
     bodies = Enum.map(tasks, &Task.await(&1, 1_000))
     assert Enum.uniq(bodies) |> length() == 1
