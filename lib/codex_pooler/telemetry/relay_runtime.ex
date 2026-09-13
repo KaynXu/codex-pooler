@@ -144,9 +144,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     Process.send_after(self(), :drain, state.drain_ms)
     {:noreply, state}
   rescue
-    _ ->
-      Process.send_after(self(), :cleanup, 60_000)
-      {:noreply, state}
+    _ -> {:noreply, state}
   end
 
   @impl true
@@ -156,7 +154,9 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     Process.send_after(self(), :cleanup, 60_000)
     {:noreply, state}
   rescue
-    _ -> {:noreply, state}
+    _ ->
+      Process.send_after(self(), :cleanup, 60_000)
+      {:noreply, state}
   end
 
   defp flush_snapshot(state, key, event, labels, value) do
