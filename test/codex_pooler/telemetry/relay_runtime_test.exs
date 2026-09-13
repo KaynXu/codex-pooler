@@ -41,6 +41,44 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     end)
   end
 
+  test "synchronized callbacks preserve every same-key count and numeric sum", %{table: table} do
+    coordinator = self()
+    gate = make_ref()
+    writers = 32
+    iterations = 200
+
+    tasks =
+      for _ <- 1..writers do
+        Task.async(fn ->
+          send(coordinator, {gate, self()})
+
+          receive do
+            ^gate -> :ok
+          end
+
+          for _ <- 1..iterations do
+            :telemetry.execute(
+              [:codex_pooler, :saved_reset, :convergence],
+              %{count: 2, applied_to_canonical_ms: 0.5, applied_to_lifecycle_ms: 3},
+              %{source: "runtime_headers", outcome: "confirmed_by_quota"}
+            )
+          end
+        end)
+      end
+
+    for _ <- tasks do
+      assert_receive {^gate, _pid}
+    end
+
+    Enum.each(tasks, &send(&1.pid, gate))
+    Enum.each(tasks, &Task.await(&1, 10_000))
+
+    assert [{{"saved_reset_convergence", _labels}, measurements}] = :ets.tab2list(table)
+    assert measurements.count == writers * iterations * 2
+    assert measurements.applied_to_canonical_ms == writers * iterations * 0.5
+    assert measurements.applied_to_lifecycle_ms == writers * iterations * 3
+  end
+
   test "flush persists rows and drain re-emits once without recursion", %{
     runtime: runtime,
     table: table

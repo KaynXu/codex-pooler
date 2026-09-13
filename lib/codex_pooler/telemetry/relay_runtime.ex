@@ -61,24 +61,34 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
          count when is_integer(count) and count > 0 <- Map.get(measurements, :count, 1) do
       key = {relay_event, labels}
 
-      prior =
-        case :ets.lookup(table, key) do
-          [{^key, value}] -> value
-          [] -> %{}
-        end
-
-      value =
-        Enum.reduce(measurements, Map.put(prior, :count, Map.get(prior, :count, 0) + count), fn
-          {:count, _}, acc -> acc
-          {k, v}, acc -> if is_number(v), do: Map.update(acc, k, v, &(&1 + v)), else: acc
-        end)
-
-      :ets.insert(table, {key, value})
+      values = Map.filter(measurements, fn {_key, value} -> is_number(value) end)
+      accumulate(table, key, Map.put(values, :count, count))
     else
       _ -> :ok
     end
   rescue
     _ -> :ok
+  end
+
+  # Only a writer racing this same key retries. Keeping the key in the replacement
+  # also lets ETS atomically reject a stale snapshot after a concurrent flush.
+  defp accumulate(table, key, measurements) do
+    case :ets.lookup(table, key) do
+      [] ->
+        unless :ets.insert_new(table, {key, measurements}),
+          do: accumulate(table, key, measurements)
+
+      [{^key, prior}] ->
+        value = Map.merge(prior, measurements, fn _key, old, added -> old + added end)
+
+        replacement = [
+          {{:"$1", :"$2"}, [{:"=:=", :"$1", {:const, key}}, {:"=:=", :"$2", {:const, prior}}],
+           [{{:"$1", {:const, value}}}]}
+        ]
+
+        if :ets.select_replace(table, replacement) == 0,
+          do: accumulate(table, key, measurements)
+    end
   end
 
   @impl true
@@ -113,7 +123,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
         [{^key, value}] ->
           case Relay.insert(event, labels, Map.get(value, :count, 1), value, state.owner) do
             {:ok, _} -> :ok
-            _ -> :ets.insert(state.table, {key, value})
+            _ -> accumulate(state.table, key, value)
           end
 
         [] ->
@@ -147,6 +157,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       event ->
         measurements = normalize_map(row.measurements)
         labels = normalize_map(row.labels)
+
         :telemetry.execute(
           event,
           Map.merge(%{count: row.count}, measurements),
@@ -178,15 +189,18 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   defp normalize_map(map) when is_map(map) do
     Map.new(map, fn {key, value} ->
-      normalized = case key do
-        "count" -> :count
-        "applied_to_canonical_ms" -> :applied_to_canonical_ms
-        "canonical_to_lifecycle_ms" -> :canonical_to_lifecycle_ms
-        "applied_to_lifecycle_ms" -> :applied_to_lifecycle_ms
-        other -> other
-      end
+      normalized =
+        case key do
+          "count" -> :count
+          "applied_to_canonical_ms" -> :applied_to_canonical_ms
+          "canonical_to_lifecycle_ms" -> :canonical_to_lifecycle_ms
+          "applied_to_lifecycle_ms" -> :applied_to_lifecycle_ms
+          other -> other
+        end
+
       {normalized, value}
     end)
   end
+
   defp normalize_map(_), do: %{}
 end
