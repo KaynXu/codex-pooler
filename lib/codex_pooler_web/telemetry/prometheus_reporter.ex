@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
 
     state = %{
       body: state.body,
+      folded?: false,
       interval_ms: Keyword.get(opts, :interval_ms, @interval_ms),
       fold_notify: Keyword.get(opts, :fold_notify)
     }
@@ -30,15 +31,19 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
 
   @impl true
   def handle_call(:scrape, _from, state) do
-    body = TelemetryMetricsPrometheus.Core.scrape()
-    {:reply, body, %{state | body: body}}
+    if state.folded? do
+      {:reply, state.body, state}
+    else
+      body = TelemetryMetricsPrometheus.Core.scrape()
+      {:reply, body, %{state | body: body}}
+    end
   end
 
   @impl true
   def handle_info(:fold, state) do
     body = TelemetryMetricsPrometheus.Core.scrape()
     if is_pid(state.fold_notify), do: send(state.fold_notify, {:prometheus_folded, self()})
-    {:noreply, %{state | body: body}, {:continue, :schedule}}
+    {:noreply, %{state | body: body, folded?: true}, {:continue, :schedule}}
   end
 
   defp schedule(interval_ms), do: Process.send_after(self(), :fold, interval_ms)
