@@ -8561,14 +8561,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              run_unboxed(fn ->
                owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([fixture.pool_id])
 
+               pool_count =
+                 CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id], owner_ids)
+
                {identity_count, _rows} =
                  Repo.delete_all(
                    from identity in UpstreamIdentity,
                      where: identity.id == ^fixture.identity_id
                  )
-
-               pool_count =
-                 CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id], owner_ids)
 
                %{identities: identity_count, pools: pool_count}
              end)
