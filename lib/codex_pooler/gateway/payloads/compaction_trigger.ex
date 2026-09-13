@@ -171,7 +171,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
          %{
            status: 502,
            code: "invalid_compaction_response",
-           message: "upstream compact response was not valid JSON"
+           message: "upstream compact response was not valid JSON",
+           compaction_invalid_reason: "invalid_json"
          }}
 
       {:error, :missing_encrypted_content} ->
@@ -179,7 +180,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
          %{
            status: 502,
            code: "invalid_compaction_response",
-           message: "upstream compact response did not include encrypted compaction content"
+           message: "upstream compact response did not include encrypted compaction content",
+           compaction_invalid_reason: "missing_encrypted_content"
          }}
     end
   end

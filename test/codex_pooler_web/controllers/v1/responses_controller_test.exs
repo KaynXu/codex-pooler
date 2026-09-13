@@ -3271,6 +3271,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert attempt.completed_at
       assert attempt.network_error_code == "invalid_compaction_response"
 
+      assert attempt.response_metadata["compaction_invalid_reason"] ==
+               "missing_encrypted_content"
+
       assert Repo.aggregate(
                from(entry in LedgerEntry,
                  where: entry.request_id == ^request.id and entry.entry_kind == "settlement"

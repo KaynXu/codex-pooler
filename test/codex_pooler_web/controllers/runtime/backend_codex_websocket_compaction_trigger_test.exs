@@ -2143,19 +2143,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   test "invalid buffered native compact bodies fail before success settlement" do
     cases = [
       {FakeUpstream.malformed_json("{malformed-native-compact", 200),
-       "upstream compact response was not valid JSON"},
+       "upstream compact response was not valid JSON", "invalid_json"},
       {FakeUpstream.json_response(%{"id" => "resp_missing_native_compact_content"}),
-       "upstream compact response did not include encrypted compaction content"},
+       "upstream compact response did not include encrypted compaction content",
+       "missing_encrypted_content"},
       {buffered_native_compaction_response("resp_empty_native_compact_content", "", :output),
-       "upstream compact response did not include encrypted compaction content"},
+       "upstream compact response did not include encrypted compaction content",
+       "missing_encrypted_content"},
       {buffered_native_compaction_response(
          "resp_blank_native_compact_content",
          " \t\r\n",
          :top_level
-       ), "upstream compact response did not include encrypted compaction content"}
+       ), "upstream compact response did not include encrypted compaction content",
+       "missing_encrypted_content"}
     ]
 
-    for {mode, expected_message} <- cases do
+    for {mode, expected_message, expected_reason} <- cases do
       upstream = start_upstream(mode)
       setup = gateway_setup(upstream, compact?: true)
       {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -2186,6 +2189,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       assert attempt.status == "failed"
       assert attempt.network_error_code == "invalid_compaction_response"
+      assert attempt.response_metadata["compaction_invalid_reason"] == expected_reason
       refute attempt.retryable
 
       assert [turn] =

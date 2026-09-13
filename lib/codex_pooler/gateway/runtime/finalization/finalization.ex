@@ -1057,13 +1057,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp finalize_invalid_compaction(response, context, error, opts \\ []) do
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context
 
+    response_metadata =
+      Metadata.response_metadata(response, error.code, request_options)
+      |> maybe_put_compaction_invalid_reason(error)
+
     attrs =
       SettlementAttrs.failure(
         context,
         error.status,
         error.code,
         error.message,
-        Metadata.response_metadata(response, error.code, request_options),
+        response_metadata,
         latency_ms: elapsed_ms(context.started),
         before_finalize: fn ->
           SideEffects.observe_http_response(context, response, Metadata.response_body(response))
@@ -1090,6 +1094,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:error, gateway_error}
     end
   end
+
+  defp maybe_put_compaction_invalid_reason(metadata, %{compaction_invalid_reason: reason})
+       when is_binary(reason), do: Map.put(metadata, "compaction_invalid_reason", reason)
+
+  defp maybe_put_compaction_invalid_reason(metadata, _error), do: metadata
 
   defp finalize_successful_json_response(
          response,

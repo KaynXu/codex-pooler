@@ -2307,7 +2307,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
          "message" => "upstream response was not valid json",
          "param" => nil,
          "type" => "server_error"
-       }},
+       }, nil},
       {FakeUpstream.json_response(%{
          "id" => "resp_missing_encrypted_content",
          "output" => [%{"type" => "compaction", "id" => "cmp-without-content"}],
@@ -2318,11 +2318,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
          "message" => "upstream compact response did not include encrypted compaction content",
          "param" => nil,
          "type" => "server_error"
-       }}
+       }, nil}
     ]
 
     for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
-        {upstream_mode, expected_error} <- cases do
+        {upstream_mode, expected_error, expected_reason} <- cases do
       upstream = start_upstream(upstream_mode)
       setup = gateway_setup(upstream, compact?: true)
 
@@ -2343,6 +2343,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       refute response.resp_body =~ "cmp-without-content"
       refute response.resp_body =~ "cmp-fallback-without-content"
       refute response.resp_body =~ "malformed-compact-json"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      if expected_reason do
+        assert attempt.response_metadata["compaction_invalid_reason"] == expected_reason
+      else
+        refute Map.has_key?(attempt.response_metadata, "compaction_invalid_reason")
+      end
     end
   end
 
