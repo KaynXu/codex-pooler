@@ -5,11 +5,30 @@ defmodule CodexPooler.Status.SyncTest do
 
   alias CodexPooler.OpenAIStatus
   alias CodexPooler.Status.Events
+  alias CodexPooler.Status.FeedParser
   alias CodexPooler.Status.Schemas.{FeedState, Incident}
   alias CodexPooler.Status.Sync
   alias Ecto.Adapters.SQL.Sandbox
 
   @notification_timeout 15_000
+
+  test "non-feed XML polls preserve active incidents and record the failure" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    seed = fn _state, _opts -> {:ok, %{items: [item("preserved")], content_hash: "feed"}} end
+    assert {:ok, _} = Sync.sync(fetcher: seed, now: now)
+
+    invalid = fn _state, opts -> FeedParser.parse("<error>unavailable</error>", opts) end
+
+    for seconds <- 1..3 do
+      assert {:error, %{code: "invalid_feed"}} =
+               Sync.sync(fetcher: invalid, now: DateTime.add(now, seconds, :second))
+    end
+
+    assert [%{guid: "preserved", omission_count: 0, retired_at: nil}] =
+             OpenAIStatus.active_incidents()
+
+    assert OpenAIStatus.feed_state().last_success_at == now
+  end
 
   defp item(guid, status \\ "Investigating") do
     now = ~U[2026-09-10 10:00:00.000000Z]

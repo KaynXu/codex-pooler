@@ -22,6 +22,14 @@ defmodule CodexPooler.Status.FeedParserTest do
     end
   end
 
+  test "rejects non-feed XML instead of reporting an empty successful feed" do
+    for xml <- ["<html><body>Temporarily unavailable</body></html>", "<error>unavailable</error>"] do
+      assert {:error, %{code: :invalid_feed}} = FeedParser.parse(xml, now: @now)
+    end
+
+    assert {:ok, %{items: []}} = FeedParser.parse("<rss><channel/></rss>", now: @now)
+  end
+
   test "normalizes bounded RSS items, deduplicates guid, and clamps future dates" do
     xml = """
     <rss><channel>

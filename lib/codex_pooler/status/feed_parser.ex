@@ -46,8 +46,21 @@ defmodule CodexPooler.Status.FeedParser do
     # xmerl expects the original UTF-8 byte sequence as a charlist. `String.to_charlist/1`
     # turns multibyte characters into codepoints and makes otherwise valid feeds fail.
     {doc, _} = :xmerl_scan.string(:binary.bin_to_list(xml), [{:quiet, true}])
-    nodes = :xmerl_xpath.string(~c"//item", doc) |> Enum.map(&elem(&1, 8))
 
+    case :xmerl_xpath.string(~c"/rss/channel", doc) do
+      [_channel] ->
+        nodes = :xmerl_xpath.string(~c"/rss/channel/item", doc) |> Enum.map(&elem(&1, 8))
+        parse_nodes(nodes, now)
+
+      _ ->
+        error(:invalid_feed, "feed must contain an RSS channel")
+    end
+  catch
+    :exit, _ -> error(:malformed_xml, "feed XML could not be parsed")
+    _, _ -> error(:malformed_xml, "feed XML could not be parsed")
+  end
+
+  defp parse_nodes(nodes, now) do
     if length(nodes) > @max_items do
       error(:too_many_items, "feed item count exceeds limit")
     else
@@ -74,9 +87,6 @@ defmodule CodexPooler.Status.FeedParser do
          }}
       end
     end
-  catch
-    :exit, _ -> error(:malformed_xml, "feed XML could not be parsed")
-    _, _ -> error(:malformed_xml, "feed XML could not be parsed")
   end
 
   defp parse_items(nodes, now) do
