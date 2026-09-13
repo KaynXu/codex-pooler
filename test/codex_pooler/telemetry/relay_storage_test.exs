@@ -40,6 +40,64 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     assert {:ok, []} = Relay.claim(10, "owner-b")
   end
 
+  test "claim leases exclude fresh rows and reclaim stale rows" do
+    now = DateTime.utc_now()
+
+    fresh =
+      Repo.insert!(%RelayEvent{
+        event: "stale_sweep",
+        labels: %{},
+        count: 1,
+        inserted_at: now,
+        claimed_at: now,
+        claimed_by: "old"
+      })
+
+    stale =
+      Repo.insert!(%RelayEvent{
+        event: "stale_sweep",
+        labels: %{},
+        count: 1,
+        inserted_at: now,
+        claimed_at: DateTime.add(now, -61, :second),
+        claimed_by: "old"
+      })
+
+    assert {:ok, [claimed]} = Relay.claim(10, "new")
+    assert claimed.id == stale.id
+    assert claimed.claimed_by == "new"
+    assert Repo.get!(RelayEvent, fresh.id).claimed_by == "old"
+  end
+
+  test "concurrent claimers receive disjoint rows" do
+    for _ <- 1..4,
+        do:
+          Repo.insert!(%RelayEvent{
+            event: "stale_sweep",
+            labels: %{},
+            count: 1,
+            inserted_at: DateTime.utc_now()
+          })
+
+    parent = self()
+
+    tasks =
+      for owner <- ["a", "b"] do
+        Task.async(fn -> send(parent, {:claimed, owner, Relay.claim(10, owner)}) end)
+      end
+
+    Enum.each(tasks, &Task.await(&1, 5_000))
+
+    claims =
+      for _ <- tasks do
+        assert_receive {:claimed, _owner, result}
+        result
+      end
+
+    ids = Enum.flat_map(claims, fn {:ok, rows} -> Enum.map(rows, & &1.id) end)
+    assert length(ids) == length(Enum.uniq(ids))
+  end
+
   test "expiry removes unclaimed rows older than one hour and prune removes day-old rows" do
     now = DateTime.utc_now()
 
