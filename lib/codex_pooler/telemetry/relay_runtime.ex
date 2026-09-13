@@ -37,7 +37,9 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
          labels when is_map(labels) <- labels(metadata),
          count when is_integer(count) and count > 0 <- Map.get(measurements, :count, 1) do
       key = {relay_event, labels}
-      :ets.update_counter(__MODULE__, key, {2, count}, {key, 0})
+      prior = case :ets.lookup(__MODULE__, key) do [{^key, value}] -> value; [] -> %{} end
+      value = Enum.reduce(measurements, Map.put(prior, :count, Map.get(prior, :count, 0) + count), fn {k, v}, acc -> if is_number(v), do: Map.update(acc, k, v, &(&1 + v)), else: acc end)
+      :ets.insert(__MODULE__, {key, value})
     else
       _ -> :ok
     end
@@ -55,12 +57,12 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   @impl true
   def handle_info(:flush, state) do
     :ets.tab2list(state.table)
-    |> Enum.each(fn {key = {event, labels}, _count} ->
+    |> Enum.each(fn {key = {event, labels}, measurements} ->
       case :ets.take(state.table, key) do
         [{^key, count}] ->
-          case Relay.insert(event, labels, count) do
+          case Relay.insert(event, labels, Map.get(measurements, :count, 1), measurements) do
             {:ok, _} -> :ok
-            _ -> :ets.update_counter(state.table, key, {2, count}, {key, 0})
+            _ -> :ets.insert(state.table, {key, measurements})
           end
 
         [] -> :ok
@@ -87,7 +89,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   defp emit(row) do
     case Map.get(@source_events, row.event) do
       nil -> :ok
-      event -> :telemetry.execute(event, %{count: row.count}, row.labels)
+      event -> :telemetry.execute(event, Map.merge(%{count: row.count}, row.measurements || %{}), Map.put(row.labels, "via", "job_relay"))
     end
   end
 
@@ -105,6 +107,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     do:
       metadata
       |> Map.take([:scope, :decision, :source, :outcome, :phase, :transport, :via])
+      |> Map.put_new(:via, "in_process")
       |> Map.new(fn {k, v} -> {k, bounded(v)} end)
 
   defp bounded(v) when is_atom(v), do: Atom.to_string(v)

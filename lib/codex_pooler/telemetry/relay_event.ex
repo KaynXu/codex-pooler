@@ -6,6 +6,7 @@ defmodule CodexPooler.Telemetry.RelayEvent do
     field :event, :string
     field :labels, :map, default: %{}
     field :count, :integer, default: 1
+    field :measurements, :map, default: %{}
     field :inserted_at, :utc_datetime_usec
     field :claimed_at, :utc_datetime_usec
     field :claimed_by, :string
@@ -13,8 +14,8 @@ defmodule CodexPooler.Telemetry.RelayEvent do
 
   def changeset(s, attrs) do
     s
-    |> cast(attrs, [:event, :labels, :count, :inserted_at])
-    |> validate_required([:event, :labels, :count, :inserted_at])
+    |> cast(attrs, [:event, :labels, :count, :measurements, :inserted_at])
+    |> validate_required([:event, :labels, :count, :measurements, :inserted_at])
     |> validate_inclusion(:event, @events)
     |> validate_number(:count, greater_than_or_equal_to: 0)
     |> validate_change(:labels, fn :labels, v ->

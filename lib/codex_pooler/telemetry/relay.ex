@@ -8,6 +8,7 @@ defmodule CodexPooler.Telemetry.Relay do
       event: event,
       labels: labels,
       count: count,
+      measurements: measurements,
       inserted_at: DateTime.utc_now()
     })
     |> Repo.insert()

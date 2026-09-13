@@ -7,6 +7,7 @@ defmodule CodexPooler.Repo.Migrations.CreateTelemetryRelayEvents do
       add :event, :string, null: false
       add :labels, :map, null: false, default: %{}
       add :count, :bigint, null: false, default: 1
+      add :measurements, :map, null: false, default: %{}
       add :inserted_at, :utc_datetime_usec, null: false
       add :claimed_at, :utc_datetime_usec
       add :claimed_by, :string
