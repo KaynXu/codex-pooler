@@ -359,11 +359,11 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert metric_sample(
              body,
-             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="in_process"})
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers"})
            ) ==
              metric_sample(
                baseline,
-               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="in_process"})
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers"})
              ) + 1
 
     assert metric_sample(

@@ -379,7 +379,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
     assert %Telemetry.Metrics.Counter{
              event_name: [:codex_pooler, :quota, :cycle, :decision],
              measurement: :count,
-             tags: [:scope, :decision, :source]
+             tags: [:scope, :decision, :source, :via]
            } =
              quota_metric =
              metric_by_name(metrics, "codex_pooler.quota.cycle.decision.count")
@@ -411,7 +411,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
     assert %Telemetry.Metrics.Counter{
              event_name: [:codex_pooler, :gateway, :stream, :outcome],
              measurement: :count,
-             tags: [:outcome, :downstream_transport, :upstream_transport]
+             tags: [:outcome, :downstream_transport, :upstream_transport, :via]
            } = metric
 
     assert %{
