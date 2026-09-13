@@ -759,13 +759,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {"/backend-api/codex/responses", :sse, :valid},
         {"/backend-api/codex/v1/responses", :sse, :malformed}
       ],
-      mode <- ["full", "lite"] do
+      mode <- ["full", "lite"],
+      metadata_encoding <- if(transport == :sse, do: [:json, :object], else: [:json]) do
     if transport == :sse do
       @tag :codex_remote_compaction_v2
     end
 
     @tag :strict_fake_upstream
-    test "#{path} completes #{mode} #{transport} native compaction and reuses the downstream socket" do
+    test "#{path} completes #{mode} #{transport} native compaction with #{metadata_encoding} metadata and reuses the downstream socket" do
       path = unquote(path)
       transport = unquote(transport)
       optional_metadata = unquote(optional_metadata)
@@ -810,7 +811,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         public_websocket_connect!(port, setup, upgrade_turn_state, path)
 
       try do
-        payload = compact_payload(setup, frame_turn_state, transport)
+        payload =
+          setup
+          |> compact_payload(frame_turn_state, transport)
+          |> encode_compaction_metadata(unquote(metadata_encoding))
+
         previous_logger_level = Logger.level()
         Logger.configure(level: :info)
         on_exit(fn -> Logger.configure(level: previous_logger_level) end)
@@ -2417,6 +2422,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   defp assert_compact_turn_state_header(headers, :sse, _frame_turn_state),
     do: assert(header_values(headers, "x-codex-turn-state") == [])
+
+  defp encode_compaction_metadata(payload, :json), do: payload
+
+  defp encode_compaction_metadata(payload, :object) do
+    payload
+    |> CodexPooler.JSON.decode!()
+    |> update_in(["client_metadata", "x-codex-turn-metadata"], &CodexPooler.JSON.decode!/1)
+    |> CodexPooler.JSON.encode!()
+  end
 
   defp compact_payload(setup, turn_state, transport \\ :buffered) do
     client_metadata =

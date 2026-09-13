@@ -43,24 +43,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     refute WebsocketCodec.valid_prepared_frame?(forged)
   end
 
-  test "full-history native V2 compact selects connection-bound collection" do
-    payload =
-      native_compaction_trigger_payload(%{
-        "x-codex-turn-metadata" =>
-          CodexPooler.JSON.encode!(%{
-            "compaction" => %{"implementation" => "responses_compaction_v2"}
-          })
-      })
+  for encoding <- [:json, :object] do
+    test "full-history native V2 compact with #{encoding} metadata selects connection-bound collection" do
+      metadata = %{"compaction" => %{"implementation" => "responses_compaction_v2"}}
 
-    assert {:ok, prepared} =
-             WebsocketCodec.prepare_frame(
-               CodexPooler.JSON.encode!(payload),
-               direct_responses_options(payload),
-               fn _ -> :ok end
-             )
+      metadata =
+        if unquote(encoding) == :json, do: CodexPooler.JSON.encode!(metadata), else: metadata
 
-    assert prepared.request_options.transport.transport == "websocket"
-    assert RequestOptions.connection_bound_compaction?(prepared.request_options)
+      payload = native_compaction_trigger_payload(%{"x-codex-turn-metadata" => metadata})
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 CodexPooler.JSON.encode!(payload),
+                 direct_responses_options(payload),
+                 fn _ -> :ok end
+               )
+
+      assert prepared.request_options.transport.transport == "websocket"
+      assert RequestOptions.connection_bound_compaction?(prepared.request_options)
+    end
   end
 
   test "sealed prepared compact preserves its anchor before continuity hydration" do

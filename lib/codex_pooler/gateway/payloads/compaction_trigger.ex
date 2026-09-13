@@ -48,6 +48,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   @spec compaction_result_transport(payload()) :: compaction_result_transport()
   def compaction_result_transport(%{"client_metadata" => %{} = metadata}) do
     case metadata["x-codex-turn-metadata"] do
+      %{"compaction" => %{"implementation" => "responses_compaction_v2"}} ->
+        :sse
+
       turn_metadata when is_binary(turn_metadata) ->
         case CodexPooler.JSON.decode(turn_metadata) do
           {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}} -> :sse
