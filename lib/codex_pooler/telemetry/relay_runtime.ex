@@ -62,10 +62,10 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     :ets.tab2list(state.table)
     |> Enum.each(fn {key = {event, labels}, measurements} ->
       case :ets.take(state.table, key) do
-        [{^key, measurements}] ->
-          case Relay.insert(event, labels, Map.get(measurements, :count, 1), measurements) do
+        [{^key, value}] ->
+          case Relay.insert(event, labels, Map.get(value, :count, 1), value) do
             {:ok, _} -> :ok
-            _ -> :ets.insert(state.table, {key, measurements})
+            _ -> :ets.insert(state.table, {key, value})
           end
 
         [] -> :ok
