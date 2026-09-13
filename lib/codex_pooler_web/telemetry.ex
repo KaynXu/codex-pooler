@@ -29,12 +29,14 @@ defmodule CodexPoolerWeb.Telemetry do
   @type stream_outcome_tags :: %{
           outcome: String.t(),
           downstream_transport: String.t(),
-          upstream_transport: String.t()
+          upstream_transport: String.t(),
+          via: String.t()
         }
   @type quota_cycle_decision_tags :: %{
           scope: String.t(),
           decision: String.t(),
-          source: String.t()
+          source: String.t(),
+          via: String.t()
         }
   @type circuit_transition_tags :: %{
           transition: String.t(),
