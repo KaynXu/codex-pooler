@@ -4,7 +4,6 @@ defmodule CodexPooler.Telemetry.Relay do
   alias CodexPooler.{Repo, Telemetry.RelayEvent}
 
   @heartbeat_stale_seconds 60
-  @claim_lease_seconds 60
   @cleanup_batch_size 100
 
   def refresh_heartbeat(owner) when is_binary(owner) do
@@ -50,9 +49,7 @@ defmodule CodexPooler.Telemetry.Relay do
       Repo.query!("SET LOCAL statement_timeout = '5s'")
 
       from(e in RelayEvent,
-        where:
-          e.inserted_at > ago(1, "hour") and
-            (is_nil(e.claimed_at) or e.claimed_at < ago(^@claim_lease_seconds, "second")),
+        where: e.inserted_at > ago(1, "hour") and is_nil(e.claimed_at),
         order_by: [asc: e.inserted_at],
         limit: ^limit,
         lock: "FOR UPDATE SKIP LOCKED"
@@ -73,11 +70,7 @@ defmodule CodexPooler.Telemetry.Relay do
   def prune do
     delete_bounded(
       :day,
-      dynamic(
-        [e],
-        is_nil(e.claimed_at) or
-          e.claimed_at < ^DateTime.add(DateTime.utc_now(), -@claim_lease_seconds, :second)
-      )
+      dynamic([e], is_nil(e.claimed_at))
     )
   end
 
@@ -97,6 +90,7 @@ defmodule CodexPooler.Telemetry.Relay do
             where: ^claim_filter,
             order_by: [asc: e.inserted_at, asc: e.id],
             limit: ^@cleanup_batch_size,
+            lock: "FOR UPDATE SKIP LOCKED",
             select: e.id
           )
           |> Repo.all()

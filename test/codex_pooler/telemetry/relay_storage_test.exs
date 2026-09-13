@@ -40,7 +40,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     assert {:ok, []} = Relay.claim(10, "owner-b")
   end
 
-  test "claim leases exclude fresh rows and reclaim stale rows" do
+  test "claim leases exclude already claimed rows" do
     now = DateTime.utc_now()
 
     fresh =
@@ -63,9 +63,8 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
         claimed_by: "old"
       })
 
-    assert {:ok, [claimed]} = Relay.claim(10, "new")
-    assert claimed.id == stale.id
-    assert claimed.claimed_by == "new"
+    assert {:ok, []} = Relay.claim(10, "new")
+    assert Repo.get!(RelayEvent, stale.id).claimed_by == "old"
     assert Repo.get!(RelayEvent, fresh.id).claimed_by == "old"
   end
 
