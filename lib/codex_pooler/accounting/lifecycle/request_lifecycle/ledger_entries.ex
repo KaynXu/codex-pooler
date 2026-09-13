@@ -31,7 +31,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @type ledger_attrs :: %{
           required(:request_id) => Ecto.UUID.t(),
           required(:pool_id) => Ecto.UUID.t(),
-          required(:api_key_id) => Ecto.UUID.t(),
+          required(:api_key_id) => Ecto.UUID.t() | nil,
           required(:model_id) => Ecto.UUID.t() | nil,
           required(:entry_kind) => String.t(),
           required(:amount_status) => String.t(),

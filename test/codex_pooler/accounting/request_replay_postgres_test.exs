@@ -43,8 +43,8 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
                    Repo.get!(CodexPooler.Accounting.Request, fixture.request.id)
 
           assert request_attempt_count(fixture.request.id) == 1
-          assert terminal_ledger_count(fixture.request.id, "settlement") == 0
-          assert terminal_ledger_count(fixture.request.id, "release") == 0
+          assert terminal_ledger_count(fixture.request.id, "settlement") == 1
+          assert terminal_ledger_count(fixture.request.id, "release") == 1
         end
       end)
 

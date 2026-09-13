@@ -973,7 +973,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
   @tag :replay_api_key_delete
   @tag :replay_race
   @tag :replay_lock_order
-  test "API key deletion closes armed replay before cascading its graph" do
+  test "API key deletion closes armed replay and preserves its accounting history" do
     fixture = replay_fixture(owner?: true, reservation?: true)
     assert {:ok, _armed} = RequestReplay.arm(arm_input(fixture))
 
@@ -994,7 +994,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert Repo.aggregate(
              from(row in LedgerEntry, where: row.request_id == ^fixture.request.id),
              :count
-           ) == 0
+           ) == 3
   end
 
   @tag :replay_api_key_delete

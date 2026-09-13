@@ -133,6 +133,7 @@ defmodule CodexPooler.Accounting.Rollups do
       settled_cost_micros,
       rounded_settled_cost_micros
     FROM source
+    WHERE api_key_id IS NOT NULL
 
     UNION ALL
 
@@ -524,13 +525,18 @@ defmodule CodexPooler.Accounting.Rollups do
   defp daily_rollup_identities(%Request{} = request, %LedgerEntry{} = settlement) do
     [
       %{dimension_kind: "pool", pool_id: request.pool_id},
-      %{dimension_kind: "api_key", pool_id: request.pool_id, api_key_id: request.api_key_id},
+      api_key_identity(request),
       pool_upstream_assignment_identity(request, settlement),
       upstream_identity_identity(request, settlement),
       model_identity(request)
     ]
     |> Enum.reject(&is_nil/1)
   end
+
+  defp api_key_identity(%Request{api_key_id: nil}), do: nil
+
+  defp api_key_identity(%Request{} = request),
+    do: %{dimension_kind: "api_key", pool_id: request.pool_id, api_key_id: request.api_key_id}
 
   defp pool_upstream_assignment_identity(%Request{} = request, %LedgerEntry{} = settlement) do
     if settlement.pool_upstream_assignment_id do
