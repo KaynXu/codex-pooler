@@ -112,7 +112,8 @@ defmodule CodexPoolerWeb.Telemetry do
         CodexPoolerWeb.Telemetry.MemorySampler,
         {:telemetry_poller, period: 10_000},
         prometheus_reporter_children(),
-        admission_sampler_child()
+        admission_sampler_child(),
+        CodexPooler.Telemetry.RelayRuntime
       ]
       |> List.flatten()
       |> Enum.reject(&is_nil/1)
