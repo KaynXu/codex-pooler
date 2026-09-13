@@ -111,9 +111,10 @@ defmodule CodexPoolerWeb.Telemetry do
         perf_probe_child(),
         CodexPoolerWeb.Telemetry.MemorySampler,
         {:telemetry_poller, period: 10_000},
-        prometheus_reporter_child(),
+        prometheus_reporter_children(),
         admission_sampler_child()
       ]
+      |> List.flatten()
       |> Enum.reject(&is_nil/1)
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -599,10 +600,13 @@ defmodule CodexPoolerWeb.Telemetry do
     CodexPooler.Dev.gateway_perf_probe_child()
   end
 
-  @spec prometheus_reporter_child() :: {module(), keyword()} | nil
-  defp prometheus_reporter_child do
+  @spec prometheus_reporter_children() :: [term()]
+  defp prometheus_reporter_children do
     if prometheus_reporter_enabled?() do
       {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()}
+      |> then(&[&1, CodexPoolerWeb.Telemetry.PrometheusReporter])
+    else
+      []
     end
   end
 

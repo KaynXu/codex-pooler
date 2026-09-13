@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Operations.MetricsController do
       :ok ->
         conn
         |> put_resp_content_type("text/plain; version=0.0.4")
-        |> send_resp(200, TelemetryMetricsPrometheus.Core.scrape())
+        |> send_resp(200, CodexPoolerWeb.Telemetry.PrometheusReporter.scrape())
 
       {:error, reason} ->
         conn
