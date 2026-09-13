@@ -21,6 +21,10 @@ defmodule CodexPooler.Telemetry.RelayEvent do
     |> validate_change(:labels, fn :labels, v ->
       if is_map(v) and map_size(v) <= 16, do: [], else: [labels: "must be a bounded map"]
     end)
+    |> validate_change(:measurements, fn :measurements, v ->
+      valid = is_map(v) and map_size(v) <= 8 and Enum.all?(v, fn {k, n} -> is_atom(k) and is_number(n) and abs(n) <= 1.0e12 end)
+      if valid, do: [], else: [measurements: "must be bounded numeric measurements"]
+    end)
   end
 
   def events, do: @events
