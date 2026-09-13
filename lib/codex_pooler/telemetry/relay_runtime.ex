@@ -60,7 +60,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   @impl true
   def handle_info(:flush, state) do
     :ets.tab2list(state.table)
-    |> Enum.each(fn {key = {event, labels}, measurements} ->
+    |> Enum.each(fn {key = {event, labels}, _snapshot} ->
       case :ets.take(state.table, key) do
         [{^key, value}] ->
           case Relay.insert(event, labels, Map.get(value, :count, 1), value) do

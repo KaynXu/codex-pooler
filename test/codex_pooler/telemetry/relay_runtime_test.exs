@@ -19,7 +19,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
     Enum.each(events, fn {source, relay, metadata} ->
       :telemetry.execute(source, %{count: 2}, Map.put(metadata, :oversized, String.duplicate("x", 200)))
-      assert [{{^relay, _labels}, 2}] = Enum.filter(:ets.tab2list(RelayRuntime), fn {{name, _}, _} -> name == relay end)
+      assert [{{^relay, _labels}, %{count: 2}}] = Enum.filter(:ets.tab2list(RelayRuntime), fn {{name, _}, _} -> name == relay end)
     end)
   end
 
