@@ -259,7 +259,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :terminal_failure_diagnostics,
       contract:
-        "terminal failure diagnostics project bounded upstream_error_code, stream_terminal_type, compaction_invalid_reason, and upstream_error_param only on failed and retryable_failed attempt detail; compaction_invalid_reason comes from the compact collector's closed reason vocabulary and degrades to invalid_compaction for any unlisted term; strict ASCII identifiers through 80 bytes remain cleartext, while malformed control invalid-UTF8 or overlong identifiers fingerprint; malformed successful and historical rows omit them, and raw provider messages, bodies, and frames are never projected"
+        "terminal failure diagnostics project bounded upstream_error_code, stream_terminal_type, compaction_invalid_reason, and upstream_error_param only on failed and retryable_failed attempt detail; collector reasons use a closed vocabulary and degrade to invalid_compaction when unlisted, while compact-adaptation reasons are invalid_json or missing_encrypted_content; these are metadata-only and never public response fields; strict ASCII identifiers through 80 bytes remain cleartext, while malformed control invalid-UTF8 or overlong identifiers fingerprint; malformed successful and historical rows omit them, and raw provider messages, bodies, and frames are never projected"
     },
     %{
       slug: :rejection_metadata,
