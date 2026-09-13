@@ -46,27 +46,24 @@ defmodule CodexPooler.Telemetry.Relay do
   end
 
   def claim(limit \\ 100, owner \\ "relay") do
-    {:ok, result} =
-      Repo.transaction(fn ->
-        Repo.query!("SET LOCAL statement_timeout = '5s'")
+    Repo.transaction(fn ->
+      Repo.query!("SET LOCAL statement_timeout = '5s'")
 
-        from(e in RelayEvent,
-          where:
-            e.inserted_at > ago(1, "hour") and
-              (is_nil(e.claimed_at) or e.claimed_at < ago(^@claim_lease_seconds, "second")),
-          order_by: [asc: e.inserted_at],
-          limit: ^limit,
-          lock: "FOR UPDATE SKIP LOCKED"
+      from(e in RelayEvent,
+        where:
+          e.inserted_at > ago(1, "hour") and
+            (is_nil(e.claimed_at) or e.claimed_at < ago(^@claim_lease_seconds, "second")),
+        order_by: [asc: e.inserted_at],
+        limit: ^limit,
+        lock: "FOR UPDATE SKIP LOCKED"
+      )
+      |> Repo.all()
+      |> Enum.map(
+        &Repo.update!(
+          Ecto.Changeset.change(&1, claimed_at: DateTime.utc_now(), claimed_by: owner)
         )
-        |> Repo.all()
-        |> Enum.map(
-          &Repo.update!(
-            Ecto.Changeset.change(&1, claimed_at: DateTime.utc_now(), claimed_by: owner)
-          )
-        )
-      end)
-
-    result
+      )
+    end)
   end
 
   def expire_counted do
@@ -85,25 +82,28 @@ defmodule CodexPooler.Telemetry.Relay do
   end
 
   defp delete_bounded(age, claim_filter) do
-    Repo.transaction(fn ->
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+    {:ok, result} =
+      Repo.transaction(fn ->
+        Repo.query!("SET LOCAL statement_timeout = '5s'")
 
-      cutoff =
-        if age == :day,
-          do: DateTime.add(DateTime.utc_now(), -86_400, :second),
-          else: DateTime.add(DateTime.utc_now(), -3_600, :second)
+        cutoff =
+          if age == :day,
+            do: DateTime.add(DateTime.utc_now(), -86_400, :second),
+            else: DateTime.add(DateTime.utc_now(), -3_600, :second)
 
-      ids =
-        from(e in RelayEvent,
-          where: e.inserted_at < ^cutoff,
-          where: ^claim_filter,
-          order_by: [asc: e.inserted_at, asc: e.id],
-          limit: ^@cleanup_batch_size,
-          select: e.id
-        )
-        |> Repo.all()
+        ids =
+          from(e in RelayEvent,
+            where: e.inserted_at < ^cutoff,
+            where: ^claim_filter,
+            order_by: [asc: e.inserted_at, asc: e.id],
+            limit: ^@cleanup_batch_size,
+            select: e.id
+          )
+          |> Repo.all()
 
-      Repo.delete_all(from e in RelayEvent, where: e.id in ^ids)
-    end)
+        Repo.delete_all(from e in RelayEvent, where: e.id in ^ids)
+      end)
+
+    result
   end
 end
