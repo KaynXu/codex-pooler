@@ -848,6 +848,7 @@ defmodule CodexPoolerWeb.Telemetry do
     do: Map.put(ConvergenceTelemetry.tag_values(metadata), :via, via_tag(metadata[:via]))
 
   defp via_tag(v) when v in ["in_process", "job_relay"], do: v
+  defp via_tag(nil), do: "in_process"
   defp via_tag(_), do: "unknown"
 
   @spec circuit_transition_tag_values(map()) :: circuit_transition_tags()

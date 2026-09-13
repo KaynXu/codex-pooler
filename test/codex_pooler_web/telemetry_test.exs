@@ -403,6 +403,14 @@ defmodule CodexPoolerWeb.TelemetryTest do
              })
   end
 
+  test "direct source events use the in-process series without requiring a relay label" do
+    for metric <- CodexPoolerWeb.Telemetry.prometheus_metrics(), :via in metric.tags do
+      assert metric.tag_values.(%{}).via == "in_process"
+      assert metric.tag_values.(%{via: "job_relay"}).via == "job_relay"
+      assert metric.tag_values.(%{via: "invalid"}).via == "unknown"
+    end
+  end
+
   test "exports stream outcomes with exact bounded tags and a 45-series ceiling" do
     metric =
       CodexPoolerWeb.Telemetry.prometheus_metrics()

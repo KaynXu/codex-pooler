@@ -259,10 +259,10 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   test "exposes bounded stream outcomes without identifier metadata", %{conn: conn} do
     interrupted_metric =
-      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket",via="unknown"})
+      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket",via="in_process"})
 
     unknown_metric =
-      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown",via="unknown"})
+      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown",via="in_process"})
 
     :telemetry.execute(
       [:codex_pooler, :gateway, :stream, :outcome],
@@ -359,20 +359,20 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert metric_sample(
              body,
-             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="unknown"})
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="in_process"})
            ) ==
              metric_sample(
                baseline,
-               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="unknown"})
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers",via="in_process"})
              ) + 1
 
     assert metric_sample(
              body,
-             ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown",via="unknown"})
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown",via="in_process"})
            ) ==
              metric_sample(
                baseline,
-               ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown",via="unknown"})
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown",via="in_process"})
              ) + 1
 
     for metric <- ~w(applied_to_canonical canonical_to_lifecycle applied_to_lifecycle) do
