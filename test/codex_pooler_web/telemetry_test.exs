@@ -398,7 +398,8 @@ defmodule CodexPoolerWeb.TelemetryTest do
              quota_metric.tag_values.(%{
                scope: "account-id",
                decision: "candidate-123",
-               source: "provider-url"
+               source: "provider-url",
+               via: "in_process"
              })
   end
 
