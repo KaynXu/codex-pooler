@@ -145,10 +145,12 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
         :ok
 
       event ->
+        measurements = normalize_map(row.measurements)
+        labels = normalize_map(row.labels)
         :telemetry.execute(
           event,
-          Map.merge(%{count: row.count}, row.measurements || %{}),
-          Map.put(row.labels, "via", "job_relay")
+          Map.merge(%{count: row.count}, measurements),
+          Map.put(labels, :via, "job_relay")
         )
     end
   end
@@ -173,4 +175,18 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   defp bounded(v) when is_atom(v), do: Atom.to_string(v)
   defp bounded(v) when is_binary(v) and byte_size(v) <= 80, do: v
   defp bounded(_), do: "unknown"
+
+  defp normalize_map(map) when is_map(map) do
+    Map.new(map, fn {key, value} ->
+      normalized = case key do
+        "count" -> :count
+        "applied_to_canonical_ms" -> :applied_to_canonical_ms
+        "canonical_to_lifecycle_ms" -> :canonical_to_lifecycle_ms
+        "applied_to_lifecycle_ms" -> :applied_to_lifecycle_ms
+        other -> other
+      end
+      {normalized, value}
+    end)
+  end
+  defp normalize_map(_), do: %{}
 end
