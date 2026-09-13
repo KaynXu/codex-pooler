@@ -727,12 +727,14 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
       assert Repo.get!(Request, predecessor_two.id)
     end
 
-    test "API key and pool request cascades remove links without leaving counterparts" do
+    test "API key deletion preserves lineage while pool request cascades remove links" do
       api_key_setup = accounting_setup(%{price_version: unique_price_version("api-key")})
-      {api_link, _predecessor, _successor} = linked_pair!(api_key_setup)
+      {api_link, api_predecessor, api_successor} = linked_pair!(api_key_setup)
 
       Repo.delete!(api_key_setup.api_key)
-      refute Repo.get(RequestClientRetryLink, api_link.id)
+      assert Repo.get!(RequestClientRetryLink, api_link.id)
+      assert %{api_key_id: nil} = Repo.get!(Request, api_predecessor.id)
+      assert %{api_key_id: nil} = Repo.get!(Request, api_successor.id)
 
       pool_setup = accounting_setup(%{price_version: unique_price_version("pool")})
       {pool_link, _predecessor, _successor} = linked_pair!(pool_setup)
