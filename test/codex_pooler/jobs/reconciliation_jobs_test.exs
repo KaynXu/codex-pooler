@@ -6625,10 +6625,6 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
   defp cleanup_committed_pool(pool_id) do
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(
-        from(assignment in PoolUpstreamAssignment, where: assignment.pool_id == ^pool_id)
-      )
-
       CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
     end)
   end

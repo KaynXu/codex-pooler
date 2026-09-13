@@ -872,12 +872,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
       owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool_id])
       Repo.delete_all(from(k in APIKey, where: k.pool_id == ^pool_id))
 
-      Repo.delete_all(
-        from(a in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
-          where: a.pool_id == ^pool_id
-        )
-      )
-
       CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id], owner_ids)
 
       Repo.delete_all(
