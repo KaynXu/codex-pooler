@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.Repo
@@ -96,6 +97,135 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
              "frames_after_visible" => 2,
              "transport" => "websocket"
            } = Repo.get!(Attempt, attempt.id).response_metadata["downstream_delivery"]
+  end
+
+  for ordering <- [:both_after, :split_across_wait] do
+    @tag completion_ordering: ordering
+    test "socket termination acknowledges completion #{ordering}",
+         %{auth: auth, completion_ordering: ordering} do
+      assert_late_completion(auth, ordering)
+    end
+  end
+
+  defp assert_late_completion(auth, ordering) do
+    previous_level = Logger.level()
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+    Logger.configure(level: :info)
+    registry = start_supervised!({ActivityRegistry, name: nil})
+    parent = self()
+
+    socket =
+      spawn(fn ->
+        receive do
+          {:terminate, state} ->
+            {:ok, logs} =
+              ExUnit.CaptureLog.with_log([level: :info], fn ->
+                CodexResponsesSocket.terminate(:remote, state)
+              end)
+
+            send(parent, {:socket_terminated, logs})
+        end
+      end)
+
+    on_exit(fn -> Process.exit(socket, :kill) end)
+
+    {:ok, task} = start_held_completion(socket, registry, parent, ordering)
+
+    on_exit(fn -> Process.exit(task, :kill) end)
+    monitor = Process.monitor(task)
+    assert_receive {:completion_held, ^task}, @detection_timeout_ms
+
+    {request, attempt} = receipt_fixture(auth)
+
+    state =
+      local_owner_state(auth, task, registry)
+      |> put_delivery_receipt_context(task, request, attempt)
+
+    owner =
+      start_supervised!(
+        {WebsocketOwnerSession,
+         codex_session_id: state.codex_session.id,
+         owner_lease_token: state.websocket_owner_lease_token,
+         owner_instance_id: state.codex_session.owner_instance_id}
+      )
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, %{
+               pid: socket,
+               correlation_id: "late-local-completion"
+             })
+
+    state = %{state | websocket_owner_downstream: downstream}
+    send(socket, {:terminate, state})
+    await_post_cleanup_wait(socket, System.monotonic_time(:millisecond) + @detection_timeout_ms)
+    send(task, :release_completion)
+
+    assert_receive {:DOWN, ^monitor, :process, ^task, reason}, @detection_timeout_ms
+    assert reason == :normal
+    assert_receive {:socket_terminated, logs}, @detection_timeout_ms
+    assert length(Regex.scan(~r/websocket downstream terminal pushed/, logs)) == 1
+    assert ActivityRegistry.activities(name: registry) == []
+    Logger.configure(level: previous_level)
+  end
+
+  defp start_held_completion(socket, registry, parent, :both_after) do
+    ResponseTask.start(
+      socket,
+      :local_owner,
+      fn _task_pid -> {:socket_response_result, :owner_completion_pending, :ok} end,
+      fn _task_pid, _reason -> :ok end,
+      activity_registry: registry,
+      before_local_completion_handoff: fn ->
+        send(parent, {:completion_held, self()})
+
+        receive do
+          :release_completion -> :ok
+        end
+      end
+    )
+  end
+
+  defp start_held_completion(socket, _registry, parent, :split_across_wait) do
+    # Pin the legal scheduler cut between ResponseTask's consecutive activity
+    # and done sends. The other case exercises the real ResponseTask producer.
+    task =
+      spawn(fn ->
+        token = make_ref()
+        send(socket, {:websocket_response_activity, self(), token})
+        send(parent, {:completion_held, self()})
+
+        receive do
+          :release_completion -> :ok
+        end
+
+        send(
+          socket,
+          {:codex_response_done, self(),
+           {:socket_response_result, :owner_completion_pending, :ok}}
+        )
+
+        receive do
+          {:websocket_response_delivery_ack, ^token, _outcome} -> :ok
+        end
+      end)
+
+    {:ok, task}
+  end
+
+  defp await_post_cleanup_wait(socket, deadline) do
+    case Process.info(socket, :current_function) do
+      {:current_function, {CodexResponsesSocket, :do_await_response_tasks, 5}} ->
+        :ok
+
+      other ->
+        assert System.monotonic_time(:millisecond) < deadline,
+               "socket did not reach the post-cleanup wait: #{inspect(other)}"
+
+        receive do
+        after
+          1 -> await_post_cleanup_wait(socket, deadline)
+        end
+    end
   end
 
   defp local_owner_state(auth, task, registry) do

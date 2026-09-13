@@ -3726,7 +3726,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # so the drain ends once every remaining task is parked or gone. A turn that
   # completed while its messages were still unprocessed leaves the token in
   # the mailbox; the activity registry never tracks a local owner task, so the
-  # token is learned here, and only together with that task's own result.
+  # token is learned here. Preserve it if the result arrives in the next drain
+  # phase: the task may be preempted between its activity and result sends.
   defp await_response_task_cleanup_results(state, tasks, monitors, activities, deadline) do
     if Enum.all?(tasks, &response_task_awaiting_delivery_ack?(state, &1)) do
       demonitor_response_tasks(monitors)
@@ -3757,7 +3758,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       after
         response_task_wait_timeout(deadline) ->
           demonitor_response_tasks(monitors)
-          {tasks, state}
+
+          {tasks, Map.put(state, :pending_cleanup_activities, activities)}
       end
     end
   end
@@ -4822,8 +4824,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       timeout = response_task_wait_timeout(deadline)
 
       receive do
+        {:websocket_response_activity, pid, token}
+        when is_map_key(monitors, pid) and is_reference(token) ->
+          state = put_drained_response_task_activity(state, pid, token)
+          do_await_response_tasks(state, reason, tasks, monitors, deadline)
+
         {:codex_response_done, pid, result} ->
-          state = acknowledge_drained_response_task(state, pid, result)
+          pending = Map.get(state, :pending_cleanup_activities, %{})
+
+          state =
+            state
+            |> put_drained_response_task_activity(pid, Map.get(pending, pid))
+            |> Map.put(:pending_cleanup_activities, Map.delete(pending, pid))
+            |> acknowledge_drained_response_task(pid, result)
+
           do_await_response_tasks(state, reason, tasks, monitors, deadline)
 
         {:websocket_owner_runtime_recovered, _correlation_id, _epoch, _runtime} = message ->
