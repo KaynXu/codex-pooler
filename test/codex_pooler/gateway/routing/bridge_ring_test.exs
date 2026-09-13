@@ -1845,6 +1845,166 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     # Nothing is left to truncate once the window has lapsed: routing and repeat
     # escalation both already ignore it, so resolving keeps the operator-visible
     # active count honest at no behavioral cost.
+    test "two concurrent first overloads escalate through their shared database row" do
+      setup = in_db_observer(fn -> routing_setup(2) end)
+      cleanup_unboxed_fixture(setup.pool.id, Enum.map(setup.identities, & &1.id))
+      plan = in_db_observer(fn -> plan_for(setup, "bridge_ring", "overload-two-backends") end)
+      {assignment, identity} = hd(plan.candidates)
+      parent = self()
+      ref = make_ref()
+      handler_id = {__MODULE__, ref}
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            query = String.upcase(Map.get(metadata, :query, ""))
+
+            if Process.get({__MODULE__, :overload_read_barrier}) == ref and
+                 String.starts_with?(query, "SELECT TRUE") and
+                 String.contains?(query, "BRIDGE_DEMOTIONS") do
+              Process.delete({__MODULE__, :overload_read_barrier})
+              send(parent, {:overload_read_done, ref, self()})
+
+              receive do
+                {:release_overload_write, ^ref} -> :ok
+              after
+                15_000 -> raise "overload write barrier was not released"
+              end
+            end
+          end,
+          nil
+        )
+
+      tasks =
+        for _ <- 1..2 do
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              %{rows: [[backend]]} = Repo.query!("SELECT pg_backend_pid()")
+              send(parent, {:overload_backend, ref, backend})
+              Process.put({__MODULE__, :overload_read_barrier}, ref)
+              BridgeRing.record_overload(plan, assignment, identity)
+            end)
+          end)
+        end
+
+      on_exit(fn ->
+        Enum.each(tasks, fn task ->
+          if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+        end)
+      end)
+
+      assert_receive {:overload_backend, ^ref, first_backend}, 15_000
+      assert_receive {:overload_backend, ^ref, second_backend}, 15_000
+      refute first_backend == second_backend
+      assert_receive {:overload_read_done, ^ref, first}, 15_000
+      assert_receive {:overload_read_done, ^ref, second}, 15_000
+      send(first, {:release_overload_write, ref})
+      send(second, {:release_overload_write, ref})
+
+      assert Enum.map(tasks, &Task.await(&1, 15_000)) == [
+               "provider_overloaded",
+               "provider_overloaded"
+             ]
+
+      demotion =
+        in_db_observer(fn ->
+          Repo.one!(from d in BridgeDemotion, where: d.pool_id == ^setup.pool.id)
+        end)
+
+      assert demotion.attempt_count == 2
+      assert DateTime.diff(demotion.demoted_until, demotion.updated_at, :second) == 120
+    end
+
+    test "an ordinary failure extends a first overload without making it resolvable" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "overload-first-mixed")
+      {assignment, identity} = hd(plan.candidates)
+      assert "provider_overloaded" = BridgeRing.record_overload(plan, assignment, identity)
+      assert [first] = active_demotions(setup, assignment)
+      assert DateTime.diff(first.demoted_until, first.created_at, :second) == 20
+
+      assert "upstream_5xx" =
+               BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+
+      assert [extended] = active_demotions(setup, assignment)
+      assert extended.reason_code == "provider_overloaded"
+      assert DateTime.diff(extended.demoted_until, extended.updated_at, :second) == 60
+      later_plan = plan_for(setup, "bridge_ring", "overload-first-mixed")
+      assert :ok = BridgeRing.record_success(later_plan, assignment, identity)
+      assert [retained] = active_demotions(setup, assignment)
+      assert retained.demoted_until == extended.demoted_until
+    end
+
+    test "an older ordinary failure cannot shorten or relabel newer overload evidence" do
+      setup = routing_setup(2)
+      {assignment, identity} = hd(setup.candidates)
+      peer_event = DateTime.add(DateTime.utc_now(), 30, :second)
+
+      overload =
+        insert_demotion!(setup, assignment, identity, "provider_overloaded",
+          now: peer_event,
+          demoted_until: DateTime.add(peer_event, 120, :second)
+        )
+
+      plan = plan_for(setup, "bridge_ring", "overload-newer-peer")
+      assert DateTime.compare(plan.planned_at, peer_event) == :lt
+
+      assert "upstream_5xx" =
+               BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+
+      retained = Repo.reload!(overload)
+      assert retained.reason_code == "provider_overloaded"
+      assert retained.updated_at == peer_event
+      assert retained.demoted_until == overload.demoted_until
+      assert :ok = BridgeRing.record_success(plan, assignment, identity)
+      assert Repo.reload!(overload).status == "active"
+    end
+
+    test "an expired overload does not make the next ordinary failure sticky" do
+      setup = routing_setup(2)
+      {assignment, identity} = hd(setup.candidates)
+      captured = DateTime.utc_now()
+
+      insert_demotion!(setup, assignment, identity, "provider_overloaded",
+        now: DateTime.add(captured, -60, :second),
+        demoted_until: DateTime.add(captured, -40, :second)
+      )
+
+      plan = plan_for(setup, "bridge_ring", "expired-overload-health")
+
+      assert "upstream_5xx" =
+               BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+
+      assert [health] = active_demotions(setup, assignment)
+      assert health.reason_code == "upstream_5xx"
+      later_plan = plan_for(setup, "bridge_ring", "expired-overload-health")
+      assert :ok = BridgeRing.record_success(later_plan, assignment, identity)
+      assert [] == active_demotions(setup, assignment)
+    end
+
+    test "an ordinary failure cannot make a live overload window resolvable by success" do
+      setup = routing_setup(2)
+      plan = plan_for(setup, "bridge_ring", "overload-mixed-failure")
+      {assignment, identity} = hd(plan.candidates)
+
+      assert "provider_overloaded" = BridgeRing.record_overload(plan, assignment, identity)
+      assert "provider_overloaded" = BridgeRing.record_overload(plan, assignment, identity)
+      assert [overload] = active_demotions(setup, assignment)
+
+      assert "upstream_5xx" =
+               BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx")
+
+      later_plan = plan_for(setup, "bridge_ring", "overload-mixed-failure")
+      assert :ok = BridgeRing.record_success(later_plan, assignment, identity)
+
+      assert DateTime.compare(overload.demoted_until, DateTime.utc_now()) == :gt
+      assert [retained] = active_demotions(setup, assignment)
+      assert retained.demoted_until == overload.demoted_until
+    end
+
     test "a success clears an overload row whose window already lapsed" do
       setup = routing_setup(2)
       captured = DateTime.utc_now()

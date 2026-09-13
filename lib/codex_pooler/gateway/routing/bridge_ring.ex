@@ -846,7 +846,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   end
 
   # The conflict clause takes the later of the stored and the new expiry, so a
-  # repeat can only extend a live window, never cut one short.
+  # repeat can only extend a live window, never cut one short. Repeat detection
+  # is also repeated atomically here: concurrent first overloads may both have
+  # read no row before their conflicting inserts serialize on this row.
   defp do_upsert_demotion!(
          plan,
          assignment,
@@ -873,12 +875,33 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       from demotion in BridgeDemotion,
         update: [
           set: [
-            reason_code: ^reason_code,
+            # A health failure cannot erase an unexpired capacity penalty.
+            # Keep the overload reason with its existing monotone deadline so
+            # a later success cannot resolve that live window indirectly.
+            reason_code:
+              fragment(
+                "CASE WHEN ? = ? AND ? > EXCLUDED.updated_at THEN ? ELSE EXCLUDED.reason_code END",
+                demotion.reason_code,
+                ^@overload_reason_code,
+                demotion.demoted_until,
+                demotion.reason_code
+              ),
             upstream_identity_id: ^identity.id,
             demoted_until:
               fragment(
-                "GREATEST(COALESCE(?, EXCLUDED.demoted_until), EXCLUDED.demoted_until)",
-                demotion.demoted_until
+                """
+                GREATEST(COALESCE(?, EXCLUDED.demoted_until), EXCLUDED.demoted_until,
+                  CASE WHEN EXCLUDED.reason_code = ? AND ? = ? AND ? > EXCLUDED.updated_at
+                    THEN GREATEST(?, EXCLUDED.updated_at) + (?::integer * INTERVAL '1 second')
+                    ELSE EXCLUDED.demoted_until END)
+                """,
+                demotion.demoted_until,
+                ^@overload_reason_code,
+                demotion.reason_code,
+                ^@overload_reason_code,
+                demotion.demoted_until,
+                demotion.updated_at,
+                ^@overload_repeat_demotion_seconds
               ),
             last_request_id: ^request_id,
             metadata: ^metadata,
