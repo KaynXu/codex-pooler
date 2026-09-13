@@ -19,7 +19,7 @@ defmodule CodexPooler.Repo.Migrations.CreateTelemetryRelayEvents do
     create constraint(:telemetry_relay_events, :count_non_negative, check: "count >= 0")
 
     create constraint(:telemetry_relay_events, :labels_bounded,
-             check: "jsonb_object_length(labels) <= 16"
+             check: "jsonb_array_length(jsonb_path_query_array(labels, '$.*')) <= 16"
            )
 
     create index(:telemetry_relay_events, [:inserted_at])
