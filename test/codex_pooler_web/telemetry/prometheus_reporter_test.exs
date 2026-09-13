@@ -26,5 +26,39 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     assert hd(bodies) =~ "codex_pooler_gateway_admission_queued"
   end
 
+  test "scrapes an isolated real Core registry and matches its direct output" do
+    registry = unique_name()
+    event = [:codex_pooler_test, :isolated_distribution, unique_event_atom()]
+
+    metric =
+      Telemetry.Metrics.distribution(event,
+        event_name: event,
+        measurement: :value,
+        tags: [:kind],
+        reporter_options: [buckets: [10, 20, 50]]
+      )
+
+    start_supervised!(
+      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
+    )
+
+    reporter = unique_name()
+
+    start_supervised!(
+      {PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000}
+    )
+
+    for value <- [5, 15, 40] do
+      :telemetry.execute(event, %{value: value}, %{kind: "isolated"})
+    end
+
+    direct = TelemetryMetricsPrometheus.Core.scrape(registry)
+    assert PrometheusReporter.scrape(reporter) == direct
+    assert direct =~ "codex_pooler_test_isolated_distribution"
+    assert direct =~ "kind=\"isolated\""
+  end
+
   defp unique_name, do: Module.concat(__MODULE__, "Reporter#{System.unique_integer([:positive])}")
+
+  defp unique_event_atom, do: String.to_atom("event_#{System.unique_integer([:positive])}")
 end
