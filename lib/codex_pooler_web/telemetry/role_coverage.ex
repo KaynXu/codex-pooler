@@ -84,7 +84,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
         CodexPooler.Jobs.SavedResetRedemptionWorker
       ],
       coverage: :partial,
-      fallback: "the saved-reset audit trail",
+      fallback: "the upstream identity saved_reset_redemption lifecycle metadata",
       note:
         "The redemption finalizer emits convergence, and it runs both on the request path and " <>
           "inside the redemption and reconciliation jobs. The rate and latency panels chart " <>

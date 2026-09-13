@@ -529,7 +529,7 @@ defmodule CodexPoolerWeb.Telemetry do
         description:
           "Committed saved-reset convergence transitions observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so transitions committed by " <>
-            "the redemption and reconciliation jobs are absent; read the saved-reset audit trail."
+            "the redemption and reconciliation jobs are absent; read the upstream identity saved_reset_redemption lifecycle metadata."
       ),
       distribution("codex_pooler.saved_reset.convergence.applied_to_canonical.seconds",
         event_name: [:codex_pooler, :saved_reset, :convergence],
@@ -540,7 +540,7 @@ defmodule CodexPoolerWeb.Telemetry do
         description:
           "Applied-to-canonical saved-reset latency observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
-            "are absent; read the saved-reset audit trail.",
+            "are absent; read the upstream identity saved_reset_redemption lifecycle metadata.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       distribution("codex_pooler.saved_reset.convergence.canonical_to_lifecycle.seconds",
@@ -552,7 +552,7 @@ defmodule CodexPoolerWeb.Telemetry do
         description:
           "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
-            "are absent; read the saved-reset audit trail.",
+            "are absent; read the upstream identity saved_reset_redemption lifecycle metadata.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       distribution("codex_pooler.saved_reset.convergence.applied_to_lifecycle.seconds",
@@ -564,7 +564,7 @@ defmodule CodexPoolerWeb.Telemetry do
         description:
           "Applied-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
-            "are absent; read the saved-reset audit trail.",
+            "are absent; read the upstream identity saved_reset_redemption lifecycle metadata.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       counter("codex_pooler.gateway.routing.circuit.transition.count",

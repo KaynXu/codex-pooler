@@ -321,6 +321,24 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   end
 
   describe "the caveat an operator has to see" do
+    test "saved-reset convergence points at lifecycle metadata rather than a nonexistent audit trail" do
+      declaration =
+        RoleCoverage.unscraped_emissions()
+        |> Map.fetch!([:codex_pooler, :saved_reset, :convergence])
+
+      assert declaration.fallback ==
+               "the upstream identity saved_reset_redemption lifecycle metadata"
+
+      descriptions =
+        Telemetry.prometheus_metrics()
+        |> Enum.filter(&(&1.event_name == [:codex_pooler, :saved_reset, :convergence]))
+        |> Enum.map(& &1.description)
+
+      assert length(descriptions) == 4
+      assert Enum.all?(descriptions, &String.contains?(&1, "upstream identity saved_reset_redemption lifecycle metadata"))
+      refute Enum.any?(descriptions, &String.contains?(&1, "audit trail"))
+    end
+
     test "every declared event's metrics say so in their description" do
       silent =
         for metric <- Telemetry.prometheus_metrics(),

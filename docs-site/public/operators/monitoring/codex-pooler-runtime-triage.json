@@ -2553,7 +2553,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Committed post-consume transitions observed by scraped web nodes only. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the saved-reset audit trail instead.",
+      "description": "Committed post-consume transitions observed by scraped web nodes only. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2605,7 +2605,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Best-effort web-node timing for committed transitions. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the saved-reset audit trail instead.",
+      "description": "Best-effort web-node timing for committed transitions. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
