@@ -72,6 +72,11 @@ defmodule CodexPooler.Telemetry.Relay do
   end
 
   def prune do
-    Repo.delete_all(from e in RelayEvent, where: e.inserted_at < ago(1, "day"))
+    Repo.delete_all(
+      from e in RelayEvent,
+        where:
+          e.inserted_at < ago(1, "day") and
+            (is_nil(e.claimed_at) or e.claimed_at < ago(60, "second"))
+    )
   end
 end

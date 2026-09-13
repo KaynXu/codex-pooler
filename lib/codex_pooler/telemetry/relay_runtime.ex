@@ -97,6 +97,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     Process.send_after(self(), :heartbeat, 15_000)
     Process.send_after(self(), :flush, state.flush_ms)
     Process.send_after(self(), :drain, state.drain_ms)
+    Process.send_after(self(), :cleanup, 60_000)
     {:noreply, state}
   end
 
@@ -141,6 +142,16 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     end
 
     Process.send_after(self(), :drain, state.drain_ms)
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:cleanup, state) do
+    _expired = Relay.expire_counted()
+    _pruned = Relay.prune()
+    Process.send_after(self(), :cleanup, 60_000)
     {:noreply, state}
   rescue
     _ -> {:noreply, state}
