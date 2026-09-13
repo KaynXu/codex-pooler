@@ -98,8 +98,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp) do
     with {:ok, evidence} <- Evidence.new(attrs, observed_at),
          identity_id when is_binary(identity_id) <- evidence_identity_id(identity_or_id, attrs) do
-      lock_evidence_identity_reference(identity_id)
       advisory_lock_evidence_identity(identity_id)
+      # Acquire the identity advisory mutex before any row lock. Import and
+      # lifecycle paths use the same order; taking FOR KEY SHARE first can
+      # deadlock with a writer that already owns the advisory lock and then
+      # waits for FOR UPDATE.
+      lock_evidence_identity_reference(identity_id)
 
       attrs =
         evidence
