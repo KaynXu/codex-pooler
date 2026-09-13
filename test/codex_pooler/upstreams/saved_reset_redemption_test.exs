@@ -7511,11 +7511,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp cleanup_committed_recovery_fixture!(fixture) do
     run_unboxed(fn ->
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id])
+
       Repo.delete_all(
         from identity in UpstreamIdentity, where: identity.id == ^fixture.identity_id
       )
-
-      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
     end)
   end
 

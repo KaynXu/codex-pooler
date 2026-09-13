@@ -6616,8 +6616,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
   defp cleanup_committed_reconciliation_fixture(identity_id, pool_ids) do
     Sandbox.unboxed_run(Repo, fn ->
-      # Pools first: deleting the identity cascades to their assignments, and the helper finds
-      # the jobs that name only an assignment through those rows.
+      # Pools first: the helper finds jobs that name only an assignment before cascades remove it.
       CodexPooler.PoolerFixtures.delete_committed_pools!(pool_ids)
 
       Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id == ^identity_id))
