@@ -9,6 +9,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
       start_supervised!(
         {RelayRuntime,
          enabled: true,
+         role: "worker",
          start_paused: true,
          name: {:global, {__MODULE__, make_ref()}},
          flush_ms: 60_000,
@@ -18,7 +19,14 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     Sandbox.allow(Repo, owner, runtime)
     :ok = GenServer.call(runtime, :activate)
     state = :sys.get_state(runtime)
-    %{runtime: runtime, table: state.table, writer: state.owner, handler: state.handler}
+
+    %{
+      sandbox_owner: owner,
+      runtime: runtime,
+      table: state.table,
+      writer: state.owner,
+      handler: state.handler
+    }
   end
 
   test "captures each source contract with its bounded relay event", %{table: table} do
@@ -37,12 +45,14 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
         Map.put(metadata, :oversized, String.duplicate("x", 200))
       )
 
-      assert [{{^relay, _labels}, %{count: 2}}] =
-               Enum.filter(:ets.tab2list(table), fn {{name, _}, _} -> name == relay end)
+      assert [{{^relay, _labels, _values}, 1}] =
+               Enum.filter(:ets.tab2list(table), fn {{name, _, _}, _} -> name == relay end)
     end)
   end
 
-  test "synchronized callbacks preserve every same-key count and numeric sum", %{table: table} do
+  test "synchronized callbacks preserve emission multiplicity and original samples", %{
+    table: table
+  } do
     coordinator = self()
     gate = make_ref()
     writers = 32
@@ -74,15 +84,16 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     Enum.each(tasks, &send(&1.pid, gate))
     Enum.each(tasks, &Task.await(&1, 10_000))
 
-    assert [{{"saved_reset_convergence", _labels}, measurements}] = :ets.tab2list(table)
-    assert measurements.count == writers * iterations * 2
-    assert measurements.applied_to_canonical_ms == writers * iterations * 0.5
-    assert measurements.applied_to_lifecycle_ms == writers * iterations * 3
+    assert [{{"saved_reset_convergence", _labels, measurements}, count}] = :ets.tab2list(table)
+    assert count == writers * iterations
+    assert measurements.applied_to_canonical_ms == 0.5
+    assert measurements.applied_to_lifecycle_ms == 3
   end
 
   test "flush persists rows and drain re-emits once without recursion", %{
     runtime: runtime,
-    table: table
+    table: table,
+    sandbox_owner: owner
   } do
     ref = make_ref()
     test_pid = self()
@@ -100,8 +111,18 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     :sys.get_state(runtime)
     assert_receive :seen, 1_000
     assert Repo.aggregate(RelayEvent, :count) == 1
-    send(runtime, :drain)
-    :sys.get_state(runtime)
+
+    web =
+      start_supervised!(%{
+        id: make_ref(),
+        start:
+          {RelayRuntime, :start_link,
+           [[enabled: true, role: "web", start_paused: true, name: nil]]}
+      })
+
+    Sandbox.allow(Repo, owner, web)
+    send(web, :drain)
+    :sys.get_state(web)
     assert_receive :seen, 1_000
     refute_received :seen
     assert :ets.tab2list(table) == []
@@ -147,12 +168,16 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     :ok = Relay.refresh_heartbeat("another-writer")
     refute Relay.heartbeat_fresh?(writer)
 
-    :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 2}, %{scope: :account})
+    for _ <- 1..2,
+        do:
+          :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 1}, %{
+            scope: :account
+          })
 
     send(runtime, :flush)
     :sys.get_state(runtime)
     assert Repo.aggregate(RelayEvent, :count) == 0
-    assert [{_, %{count: 2}}] = :ets.tab2list(table)
+    assert [{_, 2}] = :ets.tab2list(table)
     send(runtime, :heartbeat)
     :sys.get_state(runtime)
     assert Relay.heartbeat_fresh?(writer)
