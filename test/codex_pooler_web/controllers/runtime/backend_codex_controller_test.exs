@@ -90,6 +90,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "type" => "server_error"
     }
   }
+
+  @tag :native_sse_epoch_stale
+  test "native SSE epoch-stale refusal after authentication returns 401 without upstream work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+    ref = make_ref()
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        reservation = CodexPooler.Accounting.Lifecycle.RequestLifecycle.Reservation
+        service = CodexPooler.Gateway.Runtime.Service
+
+        Process.put(
+          {reservation, :runtime_authorization_barrier},
+          {parent, ref, {:reserve, :before}}
+        )
+
+        Process.put({service, :runtime_authorization_barrier}, {parent, ref, {:reserve, :before}})
+
+        Phoenix.ConnTest.build_conn()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("epoch stale controller race"),
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, _pid}
+
+    setup.api_key
+    |> Ecto.Changeset.change(runtime_revocation_epoch: setup.api_key.runtime_revocation_epoch + 1)
+    |> Repo.update!()
+
+    send(task.pid, {:runtime_authorization_release, ref})
+    conn = Task.await(task, 15_000)
+
+    assert %{"error" => %{"code" => "api_key_runtime_epoch_stale"}} = json_response(conn, 401)
+    assert FakeUpstream.count(upstream) == 0
+
+    assert [%Request{status: "rejected", last_error_code: "api_key_runtime_epoch_stale"}] =
+             Repo.all(Request)
+
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+  end
+
   @code_mode_turn_metadata_projection_routes [
     %{
       local_path: "/backend-api/codex/responses",
