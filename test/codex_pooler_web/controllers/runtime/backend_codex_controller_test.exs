@@ -139,6 +139,79 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.aggregate(LedgerEntry, :count) == 0
   end
 
+  defp assert_sse_race(setup, upstream, code, mutation) do
+    ref = make_ref()
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        reservation = CodexPooler.Accounting.Lifecycle.RequestLifecycle.Reservation
+        service = CodexPooler.Gateway.Runtime.Service
+
+        Process.put(
+          {reservation, :runtime_authorization_barrier},
+          {parent, ref, {:reserve, :before}}
+        )
+
+        Process.put(
+          {service, :runtime_authorization_barrier},
+          {parent, ref, {:reserve, :before}}
+        )
+
+        Phoenix.ConnTest.build_conn()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("lifecycle race"),
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, _pid}
+    mutation.(setup)
+    send(task.pid, {:runtime_authorization_release, ref})
+    conn = Task.await(task, 15_000)
+
+    assert %{"error" => %{"code" => ^code}} = json_response(conn, 401)
+    assert [%Request{status: "rejected", last_error_code: ^code}] = Repo.all(Request)
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  @tag :native_sse_expired
+  test "native SSE expired refusal after authentication" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+
+    assert_sse_race(setup, upstream, "api_key_expired", fn setup ->
+      setup.api_key
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+      |> Repo.update!()
+    end)
+  end
+
+  @tag :native_sse_pool_inactive
+  test "native SSE pool inactive refusal after authentication" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+
+    assert_sse_race(setup, upstream, "pool_inactive", fn setup ->
+      Repo.update!(Ecto.Changeset.change(setup.pool, status: "paused"))
+    end)
+  end
+
+  @tag :native_sse_missing_epoch
+  test "native SSE missing key refusal after authentication" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+
+    assert_sse_race(setup, upstream, "api_key_missing", fn setup ->
+      Repo.delete!(setup.api_key)
+    end)
+  end
+
   @code_mode_turn_metadata_projection_routes [
     %{
       local_path: "/backend-api/codex/responses",
