@@ -121,10 +121,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     |> Enum.each(fn {key = {event, labels}, _snapshot} ->
       case :ets.take(state.table, key) do
         [{^key, value}] ->
-          case Relay.insert(event, labels, Map.get(value, :count, 1), value, state.owner) do
-            {:ok, _} -> :ok
-            _ -> accumulate(state.table, key, value)
-          end
+          flush_snapshot(state, key, event, labels, value)
 
         [] ->
           :ok
@@ -147,6 +144,13 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     {:noreply, state}
   rescue
     _ -> {:noreply, state}
+  end
+
+  defp flush_snapshot(state, key, event, labels, value) do
+    case Relay.insert(event, labels, Map.get(value, :count, 1), value, state.owner) do
+      {:ok, _} -> :ok
+      _ -> accumulate(state.table, key, value)
+    end
   end
 
   defp emit(row) do

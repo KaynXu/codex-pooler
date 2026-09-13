@@ -1,4 +1,5 @@
 defmodule CodexPooler.Telemetry.Relay do
+  @moduledoc false
   import Ecto.Query
   alias CodexPooler.{Repo, Telemetry.RelayEvent}
 
@@ -25,9 +26,9 @@ defmodule CodexPooler.Telemetry.Relay do
   end
 
   def insert(event, labels, count \\ 1, measurements \\ %{}, owner \\ "relay-runtime") do
-    if not heartbeat_fresh?(owner),
-      do: {:error, :stale_heartbeat},
-      else: do_insert(event, labels, count, measurements)
+    if heartbeat_fresh?(owner),
+      do: do_insert(event, labels, count, measurements),
+      else: {:error, :stale_heartbeat}
   end
 
   defp do_insert(event, labels, count, measurements) do

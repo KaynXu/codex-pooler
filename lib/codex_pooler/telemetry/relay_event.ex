@@ -1,6 +1,8 @@
 defmodule CodexPooler.Telemetry.RelayEvent do
+  @moduledoc false
   use CodexPooler.Schema
   import Ecto.Changeset
+
   @events ~w(stale_sweep quota_cycle_decision saved_reset_convergence pre_attempt_release stream_outcome interrupted)
   schema "telemetry_relay_events" do
     field :event, :string
@@ -22,7 +24,10 @@ defmodule CodexPooler.Telemetry.RelayEvent do
       if is_map(v) and map_size(v) <= 16, do: [], else: [labels: "must be a bounded map"]
     end)
     |> validate_change(:measurements, fn :measurements, v ->
-      valid = is_map(v) and map_size(v) <= 8 and Enum.all?(v, fn {k, n} -> is_atom(k) and is_number(n) and abs(n) <= 1.0e12 end)
+      valid =
+        is_map(v) and map_size(v) <= 8 and
+          Enum.all?(v, fn {k, n} -> is_atom(k) and is_number(n) and abs(n) <= 1.0e12 end)
+
       if valid, do: [], else: [measurements: "must be bounded numeric measurements"]
     end)
   end
