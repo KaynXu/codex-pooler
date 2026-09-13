@@ -113,8 +113,7 @@ defmodule CodexPoolerWeb.Telemetry do
         CodexPoolerWeb.Telemetry.MemorySampler,
         {:telemetry_poller, period: 10_000},
         prometheus_reporter_children(),
-        admission_sampler_child(),
-        CodexPooler.Telemetry.RelayRuntime
+        admission_sampler_child()
       ]
       |> List.flatten()
       |> Enum.reject(&is_nil/1)
@@ -843,7 +842,8 @@ defmodule CodexPoolerWeb.Telemetry do
     }
   end
 
-  defp convergence_tag_values(metadata), do: Map.put(ConvergenceTelemetry.tag_values(metadata), :via, via_tag(metadata[:via]))
+  defp convergence_tag_values(metadata),
+    do: Map.put(ConvergenceTelemetry.tag_values(metadata), :via, via_tag(metadata[:via]))
 
   defp via_tag(v) when v in ["in_process", "job_relay"], do: v
   defp via_tag(_), do: "unknown"

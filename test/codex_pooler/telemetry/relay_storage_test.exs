@@ -3,6 +3,25 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
   alias CodexPooler.Telemetry.{Relay, RelayEvent}
 
+  setup do
+    :ok = Relay.refresh_heartbeat("relay-runtime")
+  end
+
+  test "a missing or stale heartbeat refuses inserts without borrowing another writer" do
+    assert {:error, :stale_heartbeat} = Relay.insert("stale_sweep", %{}, 1, %{}, "missing-writer")
+
+    Repo.query!(
+      "UPDATE telemetry_relay_heartbeats SET heartbeat_at = NOW() - INTERVAL '2 minutes' WHERE owner = $1",
+      ["relay-runtime"]
+    )
+
+    :ok = Relay.refresh_heartbeat("another-writer")
+    assert {:error, :stale_heartbeat} = Relay.insert("stale_sweep", %{})
+    assert Repo.aggregate(RelayEvent, :count) == 0
+    :ok = Relay.refresh_heartbeat("relay-runtime")
+    assert {:ok, _} = Relay.insert("stale_sweep", %{})
+  end
+
   test "inserts allowlisted bounded events and rejects invalid rows" do
     assert {:ok, %RelayEvent{event: "stale_sweep", count: 2}} =
              Relay.insert("stale_sweep", %{"via" => "in_process"}, 2)
@@ -23,17 +42,32 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
   test "expiry removes unclaimed rows older than one hour and prune removes day-old rows" do
     now = DateTime.utc_now()
-    Repo.insert!(%RelayEvent{event: "stale_sweep", labels: %{}, count: 1, inserted_at: DateTime.add(now, -3601, :second)})
-    Repo.insert!(%RelayEvent{event: "stale_sweep", labels: %{}, count: 1, inserted_at: DateTime.add(now, -86_401, :second)})
+
+    Repo.insert!(%RelayEvent{
+      event: "stale_sweep",
+      labels: %{},
+      count: 1,
+      inserted_at: DateTime.add(now, -3601, :second)
+    })
+
+    Repo.insert!(%RelayEvent{
+      event: "stale_sweep",
+      labels: %{},
+      count: 1,
+      inserted_at: DateTime.add(now, -86_401, :second)
+    })
+
     assert {2, _} = Relay.expire_counted()
     assert {0, _} = Relay.prune()
   end
 
   test "transaction rollback leaves no relay rows" do
-    assert {:error, :rollback} = Repo.transaction(fn ->
-      {:ok, _} = Relay.insert("interrupted", %{}, 1)
-      Repo.rollback(:rollback)
-    end)
+    assert {:error, :rollback} =
+             Repo.transaction(fn ->
+               {:ok, _} = Relay.insert("interrupted", %{}, 1)
+               Repo.rollback(:rollback)
+             end)
+
     assert Repo.aggregate(RelayEvent, :count) == 0
   end
 end

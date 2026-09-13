@@ -5,19 +5,29 @@ defmodule CodexPooler.Telemetry.Relay do
   @heartbeat_stale_seconds 60
 
   def refresh_heartbeat(owner) when is_binary(owner) do
-    Repo.query("INSERT INTO telemetry_relay_heartbeats (owner, heartbeat_at) VALUES ($1, NOW()) ON CONFLICT (owner) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at", [owner])
-    :ok
+    case Repo.query(
+           "INSERT INTO telemetry_relay_heartbeats (owner, heartbeat_at) VALUES ($1, NOW()) ON CONFLICT (owner) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at",
+           [owner]
+         ) do
+      {:ok, _} -> :ok
+      {:error, error} -> {:error, error}
+    end
   end
 
   def heartbeat_fresh?(owner) when is_binary(owner) do
-    case Repo.query("SELECT heartbeat_at > NOW() - ($2 * INTERVAL '1 second') FROM telemetry_relay_heartbeats WHERE owner = $1", [owner, @heartbeat_stale_seconds]) do
+    case Repo.query(
+           "SELECT heartbeat_at > NOW() - ($2 * INTERVAL '1 second') FROM telemetry_relay_heartbeats WHERE owner = $1",
+           [owner, @heartbeat_stale_seconds]
+         ) do
       {:ok, %{rows: [[fresh]]}} -> fresh
       _ -> false
     end
   end
 
-  def insert(event, labels, count \\ 1, measurements \\ %{}) do
-    if not heartbeat_fresh?("relay-runtime"), do: {:error, :stale_heartbeat}, else: do_insert(event, labels, count, measurements)
+  def insert(event, labels, count \\ 1, measurements \\ %{}, owner \\ "relay-runtime") do
+    if not heartbeat_fresh?(owner),
+      do: {:error, :stale_heartbeat},
+      else: do_insert(event, labels, count, measurements)
   end
 
   defp do_insert(event, labels, count, measurements) do

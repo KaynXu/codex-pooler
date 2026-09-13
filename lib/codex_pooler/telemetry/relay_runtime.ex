@@ -7,42 +7,73 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   @events %{
     [:codex_pooler, :quota, :cycle, :decision] => "quota_cycle_decision",
     [:codex_pooler, :saved_reset, :convergence] => "saved_reset_convergence",
-    [:codex_pooler, :accounting, :reservation, :pre_attempt_release] =>
-      "pre_attempt_release",
+    [:codex_pooler, :accounting, :reservation, :pre_attempt_release] => "pre_attempt_release",
     [:codex_pooler, :gateway, :stream, :outcome] => "stream_outcome"
   }
   @source_events Map.new(@events, fn {source, event} -> {event, source} end)
 
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts \\ []) do
+    # Sandboxed tests start and allow their own runtime before activating it.
+    enabled =
+      Keyword.get(opts, :enabled, CodexPooler.Repo.config()[:pool] != Ecto.Adapters.SQL.Sandbox)
+
+    if enabled do
+      GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+    else
+      :ignore
+    end
+  end
 
   @impl true
   def init(opts) do
-    table = :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
+    Process.flag(:trap_exit, true)
+    table = :ets.new(__MODULE__, [:public, :set, read_concurrency: true])
+    handler = {__MODULE__, self()}
 
     :telemetry.attach_many(
-      {__MODULE__, self()},
+      handler,
       Map.keys(@events),
       &__MODULE__.handle_event/4,
-      self()
+      table
     )
 
     flush_ms = Keyword.get(opts, :flush_ms, 5_000)
     drain_ms = Keyword.get(opts, :drain_ms, 15_000)
-    {:ok, %{table: table, flush_ms: flush_ms, drain_ms: drain_ms}, {:continue, :schedule}}
+
+    state = %{
+      table: table,
+      handler: handler,
+      owner: Ecto.UUID.generate(),
+      flush_ms: flush_ms,
+      drain_ms: drain_ms
+    }
+
+    if Keyword.get(opts, :start_paused, false),
+      do: {:ok, state},
+      else: {:ok, state, {:continue, :schedule}}
   end
 
-  def handle_event(event, measurements, metadata, _config) do
+  def handle_event(event, measurements, metadata, table) do
     with false <- Process.get({__MODULE__, :draining}, false),
          relay_event when is_binary(relay_event) <- Map.get(@events, event),
          labels when is_map(labels) <- labels(metadata),
          count when is_integer(count) and count > 0 <- Map.get(measurements, :count, 1) do
       key = {relay_event, labels}
-      prior = case :ets.lookup(__MODULE__, key) do [{^key, value}] -> value; [] -> %{} end
-      value = Enum.reduce(measurements, Map.put(prior, :count, Map.get(prior, :count, 0) + count), fn
-        {:count, _}, acc -> acc
-        {k, v}, acc -> if is_number(v), do: Map.update(acc, k, v, &(&1 + v)), else: acc
-      end)
-      :ets.insert(__MODULE__, {key, value})
+
+      prior =
+        case :ets.lookup(table, key) do
+          [{^key, value}] -> value
+          [] -> %{}
+        end
+
+      value =
+        Enum.reduce(measurements, Map.put(prior, :count, Map.get(prior, :count, 0) + count), fn
+          {:count, _}, acc -> acc
+          {k, v}, acc -> if is_number(v), do: Map.update(acc, k, v, &(&1 + v)), else: acc
+        end)
+
+      :ets.insert(table, {key, value})
     else
       _ -> :ok
     end
@@ -52,26 +83,44 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   @impl true
   def handle_continue(:schedule, state) do
-    Relay.refresh_heartbeat("relay-runtime")
+    :ok = Relay.refresh_heartbeat(state.owner)
+    Process.send_after(self(), :heartbeat, 15_000)
     Process.send_after(self(), :flush, state.flush_ms)
     Process.send_after(self(), :drain, state.drain_ms)
     {:noreply, state}
   end
 
   @impl true
+  def handle_call(:activate, _from, state) do
+    {:noreply, state} = handle_continue(:schedule, state)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def terminate(_reason, state), do: :telemetry.detach(state.handler)
+
+  @impl true
+  def handle_info(:heartbeat, state) do
+    :ok = Relay.refresh_heartbeat(state.owner)
+    Process.send_after(self(), :heartbeat, 15_000)
+    {:noreply, state}
+  end
+
   def handle_info(:flush, state) do
     :ets.tab2list(state.table)
     |> Enum.each(fn {key = {event, labels}, _snapshot} ->
       case :ets.take(state.table, key) do
         [{^key, value}] ->
-          case Relay.insert(event, labels, Map.get(value, :count, 1), value) do
+          case Relay.insert(event, labels, Map.get(value, :count, 1), value, state.owner) do
             {:ok, _} -> :ok
             _ -> :ets.insert(state.table, {key, value})
           end
 
-        [] -> :ok
+        [] ->
+          :ok
       end
     end)
+
     Process.send_after(self(), :flush, state.flush_ms)
     {:noreply, state}
   rescue
@@ -79,7 +128,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   end
 
   def handle_info(:drain, state) do
-    case Relay.claim(100, "relay-runtime") do
+    case Relay.claim(100, state.owner) do
       {:ok, rows} -> Enum.each(rows, &safe_emit/1)
       _ -> :ok
     end
@@ -92,8 +141,15 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   defp emit(row) do
     case Map.get(@source_events, row.event) do
-      nil -> :ok
-      event -> :telemetry.execute(event, Map.merge(%{count: row.count}, row.measurements || %{}), Map.put(row.labels, "via", "job_relay"))
+      nil ->
+        :ok
+
+      event ->
+        :telemetry.execute(
+          event,
+          Map.merge(%{count: row.count}, row.measurements || %{}),
+          Map.put(row.labels, "via", "job_relay")
+        )
     end
   end
 
