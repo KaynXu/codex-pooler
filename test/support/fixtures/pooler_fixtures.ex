@@ -51,6 +51,21 @@ defmodule CodexPooler.PoolerFixtures do
           select: assignment.id
       )
 
+    identity_ids =
+      Repo.all(
+        from assignment in PoolUpstreamAssignment,
+          where: assignment.pool_id in ^pool_ids,
+          select: assignment.upstream_identity_id
+      )
+
+    shared_identity_ids =
+      Repo.all(
+        from assignment in PoolUpstreamAssignment,
+          where: assignment.pool_id not in ^pool_ids,
+          select: assignment.upstream_identity_id,
+          distinct: true
+      )
+
     Repo.delete_all(from event in "audit_events", where: event.pool_id in ^dumped_pool_ids)
 
     # Some workers name only the assignment, such as a saved-reset redemption.
@@ -61,7 +76,15 @@ defmodule CodexPooler.PoolerFixtures do
             fragment("?->>'pool_upstream_assignment_id'", job.args) in type(
               ^assignment_ids,
               {:array, :string}
-            )
+            ) or
+            (fragment("?->>'upstream_identity_id'", job.args) in type(
+               ^identity_ids,
+               {:array, :string}
+             ) and
+               fragment("?->>'upstream_identity_id'", job.args) not in type(
+                 ^shared_identity_ids,
+                 {:array, :string}
+               ))
     )
 
     {pool_count, _pools} = Repo.delete_all(from pool in Pool, where: pool.id in ^pool_ids)

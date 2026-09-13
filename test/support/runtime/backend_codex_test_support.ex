@@ -438,6 +438,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         )
       )
 
+    # Remove jobs while assignment rows still make ownership discoverable. Identity-only jobs
+    # are removed only for identities not assigned to another pool.
+    Repo.delete_all(
+      from job in Oban.Job,
+        where:
+          fragment("?->>'pool_id'", job.args) == ^pool_id or
+            fragment("?->>'pool_upstream_assignment_id'", job.args) in ^Repo.all(
+              from a in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
+                where: a.pool_id == ^pool_id,
+                select: a.id
+            ) or
+            (fragment("?->>'upstream_identity_id'", job.args) in ^identity_ids and
+               fragment("?->>'upstream_identity_id'", job.args) not in subquery(
+                 from a in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
+                   where: a.pool_id != ^pool_id,
+                   select: a.upstream_identity_id
+               ))
+    )
+
     # Read before the keys go: the fixture owner is only recorded as their creator.
     owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool_id])
 
