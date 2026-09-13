@@ -19,7 +19,8 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
       scrape_waiters: [],
       interval_ms: Keyword.get(opts, :interval_ms, @interval_ms),
       fold_notify: Keyword.get(opts, :fold_notify),
-      prometheus_name: prometheus_name
+      prometheus_name: prometheus_name,
+      before_scrape: Keyword.get(opts, :before_scrape)
     }
 
     {:ok, state, {:continue, :schedule}}
@@ -39,6 +40,7 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
 
   @impl true
   def handle_info(:scrape_batch, %{scrape_waiters: waiters} = state) do
+    if is_function(state.before_scrape, 0), do: state.before_scrape.()
     body = TelemetryMetricsPrometheus.Core.scrape(state.prometheus_name)
     Enum.each(waiters, &GenServer.reply(&1, body))
     {:noreply, %{state | body: body, scrape_waiters: []}}
