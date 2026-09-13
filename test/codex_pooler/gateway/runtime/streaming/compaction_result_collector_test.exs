@@ -199,7 +199,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
 
     log =
       capture_log([level: :warning], fn ->
-        assert {:error, %{status: 502, code: "invalid_compaction_response"}} =
+        assert {:error,
+                %{
+                  status: 502,
+                  code: "invalid_compaction_response",
+                  message: "upstream compact stream was invalid",
+                  compaction_invalid_reason: "invalid_after_provider_failure"
+                }} =
                  CompactionResultCollector.collect_websocket_body(body)
       end)
 

@@ -262,7 +262,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
         state
         | collection: %{
             collection
-            | invalid_reason: :invalid_compaction,
+            | invalid_reason: :invalid_after_provider_failure,
               provider_terminal_witness: collection.provider_failure,
               provider_failure: nil
           }
