@@ -5,6 +5,7 @@ defmodule CodexPooler.Telemetry.Relay do
 
   @heartbeat_stale_seconds 60
   @claim_lease_seconds 60
+  @cleanup_batch_size 100
 
   def refresh_heartbeat(owner) when is_binary(owner) do
     case Repo.query(
@@ -45,38 +46,64 @@ defmodule CodexPooler.Telemetry.Relay do
   end
 
   def claim(limit \\ 100, owner \\ "relay") do
-    Repo.transaction(fn ->
-      Repo.query!("SET LOCAL statement_timeout = '5s'")
+    {:ok, result} =
+      Repo.transaction(fn ->
+        Repo.query!("SET LOCAL statement_timeout = '5s'")
 
-      from(e in RelayEvent,
-        where:
-          e.inserted_at > ago(1, "hour") and
-            (is_nil(e.claimed_at) or e.claimed_at < ago(^@claim_lease_seconds, "second")),
-        order_by: [asc: e.inserted_at],
-        limit: ^limit,
-        lock: "FOR UPDATE SKIP LOCKED"
-      )
-      |> Repo.all()
-      |> Enum.map(
-        &Repo.update!(
-          Ecto.Changeset.change(&1, claimed_at: DateTime.utc_now(), claimed_by: owner)
+        from(e in RelayEvent,
+          where:
+            e.inserted_at > ago(1, "hour") and
+              (is_nil(e.claimed_at) or e.claimed_at < ago(^@claim_lease_seconds, "second")),
+          order_by: [asc: e.inserted_at],
+          limit: ^limit,
+          lock: "FOR UPDATE SKIP LOCKED"
         )
-      )
-    end)
+        |> Repo.all()
+        |> Enum.map(
+          &Repo.update!(
+            Ecto.Changeset.change(&1, claimed_at: DateTime.utc_now(), claimed_by: owner)
+          )
+        )
+      end)
+
+    result
   end
 
   def expire_counted do
-    Repo.delete_all(
-      from e in RelayEvent, where: is_nil(e.claimed_at) and e.inserted_at < ago(1, "hour")
-    )
+    delete_bounded(:hour, dynamic([e], is_nil(e.claimed_at)))
   end
 
   def prune do
-    Repo.delete_all(
-      from e in RelayEvent,
-        where:
-          e.inserted_at < ago(1, "day") and
-            (is_nil(e.claimed_at) or e.claimed_at < ago(60, "second"))
+    delete_bounded(
+      :day,
+      dynamic(
+        [e],
+        is_nil(e.claimed_at) or
+          e.claimed_at < ^DateTime.add(DateTime.utc_now(), -@claim_lease_seconds, :second)
+      )
     )
+  end
+
+  defp delete_bounded(age, claim_filter) do
+    Repo.transaction(fn ->
+      Repo.query!("SET LOCAL statement_timeout = '5s'")
+
+      cutoff =
+        if age == :day,
+          do: DateTime.add(DateTime.utc_now(), -86_400, :second),
+          else: DateTime.add(DateTime.utc_now(), -3_600, :second)
+
+      ids =
+        from(e in RelayEvent,
+          where: e.inserted_at < ^cutoff,
+          where: ^claim_filter,
+          order_by: [asc: e.inserted_at, asc: e.id],
+          limit: ^@cleanup_batch_size,
+          select: e.id
+        )
+        |> Repo.all()
+
+      Repo.delete_all(from e in RelayEvent, where: e.id in ^ids)
+    end)
   end
 end
