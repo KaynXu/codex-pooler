@@ -2,7 +2,7 @@ defmodule CodexPooler.Telemetry.Relay do
   import Ecto.Query
   alias CodexPooler.{Repo, Telemetry.RelayEvent}
 
-  def insert(event, labels, count \\ 1) do
+  def insert(event, labels, count \\ 1, measurements \\ %{}) do
     %RelayEvent{}
     |> RelayEvent.changeset(%{
       event: event,

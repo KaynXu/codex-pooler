@@ -38,7 +38,10 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
          count when is_integer(count) and count > 0 <- Map.get(measurements, :count, 1) do
       key = {relay_event, labels}
       prior = case :ets.lookup(__MODULE__, key) do [{^key, value}] -> value; [] -> %{} end
-      value = Enum.reduce(measurements, Map.put(prior, :count, Map.get(prior, :count, 0) + count), fn {k, v}, acc -> if is_number(v), do: Map.update(acc, k, v, &(&1 + v)), else: acc end)
+      value = Enum.reduce(measurements, Map.put(prior, :count, Map.get(prior, :count, 0) + count), fn
+        {:count, _}, acc -> acc
+        {k, v}, acc -> if is_number(v), do: Map.update(acc, k, v, &(&1 + v)), else: acc
+      end)
       :ets.insert(__MODULE__, {key, value})
     else
       _ -> :ok
@@ -59,7 +62,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     :ets.tab2list(state.table)
     |> Enum.each(fn {key = {event, labels}, measurements} ->
       case :ets.take(state.table, key) do
-        [{^key, count}] ->
+        [{^key, measurements}] ->
           case Relay.insert(event, labels, Map.get(measurements, :count, 1), measurements) do
             {:ok, _} -> :ok
             _ -> :ets.insert(state.table, {key, measurements})
