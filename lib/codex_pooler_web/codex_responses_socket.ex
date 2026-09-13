@@ -283,11 +283,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> put_response_task_cleanup_result(pid, result)
 
     cleanup_receipt = unacknowledged_delivery_cleanup_receipt(state, pid)
+    {completion_source, _response_result} = socket_response_result(result)
 
     result =
       pid
       |> handle_response_done(result, state)
-      |> maybe_schedule_response_delivery(pid)
+      |> maybe_schedule_response_delivery(pid, completion_source)
       |> maybe_record_unacknowledged_delivery(pid, cleanup_receipt)
 
     close_if_revoked_idle(result)
@@ -3324,13 +3325,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     Map.has_key?(Map.get(state, :response_task_activities, %{}), pid)
   end
 
-  defp maybe_schedule_response_delivery({:stop, reason, detail, state}, pid) do
+  defp maybe_schedule_response_delivery({:stop, reason, detail, state}, pid, _completion_source) do
     {:stop, reason, detail, complete_response_task_delivery_for_pid(state, pid)}
   end
 
-  defp maybe_schedule_response_delivery(result, pid) do
+  defp maybe_schedule_response_delivery(result, pid, completion_source) do
     map_socket_result_state(result, fn state ->
-      if response_delivery_safe?(result, state, pid) do
+      if response_delivery_safe?(result, state, pid, completion_source) do
         schedule_response_task_delivery(state, pid, :completed)
       else
         state
@@ -3338,7 +3339,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end)
   end
 
-  defp response_delivery_safe?(result, state, pid) do
+  # Prewarm completes on this socket even when inference belongs to a remote
+  # owner. Its local terminal is the delivery witness; no owner :complete
+  # message will follow it to release the proxy task and queued generation.
+  defp response_delivery_safe?(result, state, pid, :local_complete) do
+    not match?({:ok, _state}, result) or response_task_terminal_accepted?(state, pid)
+  end
+
+  defp response_delivery_safe?(result, state, pid, _completion_source) do
     cond do
       local_owner_socket?(state) and match?({:ok, _state}, result) ->
         response_task_terminal_accepted?(state, pid)
