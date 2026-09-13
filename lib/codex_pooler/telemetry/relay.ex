@@ -4,6 +4,7 @@ defmodule CodexPooler.Telemetry.Relay do
   alias CodexPooler.{Repo, Telemetry.RelayEvent}
 
   @heartbeat_stale_seconds 60
+  @claim_lease_seconds 60
 
   def refresh_heartbeat(owner) when is_binary(owner) do
     case Repo.query(
@@ -48,7 +49,9 @@ defmodule CodexPooler.Telemetry.Relay do
       Repo.query!("SET LOCAL statement_timeout = '5s'")
 
       from(e in RelayEvent,
-        where: is_nil(e.claimed_at) and e.inserted_at > ago(1, "hour"),
+        where:
+          e.inserted_at > ago(1, "hour") and
+            (is_nil(e.claimed_at) or e.claimed_at < ago(^@claim_lease_seconds, "second")),
         order_by: [asc: e.inserted_at],
         limit: ^limit,
         lock: "FOR UPDATE SKIP LOCKED"
