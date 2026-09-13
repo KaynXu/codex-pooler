@@ -13,8 +13,13 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
   def init(opts) do
     state = %{body: TelemetryMetricsPrometheus.Core.scrape()}
 
-    {:ok, Map.put(state, :interval_ms, Keyword.get(opts, :interval_ms, @interval_ms)),
-     {:continue, :schedule}}
+    state = %{
+      body: state.body,
+      interval_ms: Keyword.get(opts, :interval_ms, @interval_ms),
+      fold_notify: Keyword.get(opts, :fold_notify)
+    }
+
+    {:ok, state, {:continue, :schedule}}
   end
 
   @impl true
@@ -31,7 +36,9 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
 
   @impl true
   def handle_info(:fold, state) do
-    {:noreply, %{state | body: TelemetryMetricsPrometheus.Core.scrape()}, {:continue, :schedule}}
+    body = TelemetryMetricsPrometheus.Core.scrape()
+    if is_pid(state.fold_notify), do: send(state.fold_notify, {:prometheus_folded, self()})
+    {:noreply, %{state | body: body}, {:continue, :schedule}}
   end
 
   defp schedule(interval_ms), do: Process.send_after(self(), :fold, interval_ms)
