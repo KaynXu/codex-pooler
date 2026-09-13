@@ -6424,13 +6424,13 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
+        CodexPooler.PoolerFixtures.delete_committed_pools!([pool.id])
+
         Repo.delete_all(
           from(current_identity in UpstreamIdentity,
             where: current_identity.id == ^identity.id
           )
         )
-
-        CodexPooler.PoolerFixtures.delete_committed_pools!([pool.id])
       end)
     end)
 
