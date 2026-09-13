@@ -4,8 +4,8 @@ defmodule CodexPooler.Gateway.Runtime.CommittedGatewayFixtureCleanupTest do
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Jobs.{SavedResetRedemptionWorker, TokenRefreshWorker}
-  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport, as: Support
   alias Ecto.Adapters.SQL.Sandbox
 
