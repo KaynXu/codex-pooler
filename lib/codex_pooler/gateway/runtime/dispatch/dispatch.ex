@@ -359,7 +359,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
 
     case result do
       {:ok, attempt} ->
-        {:ok, %{context | attempt: attempt, started: System.monotonic_time(:millisecond)}}
+        {:ok,
+         %{
+           context
+           | attempt: attempt,
+             retry_count: attempt.attempt_number - 1,
+             started: System.monotonic_time(:millisecond)
+         }}
 
       {:error, %{code: :request_already_finalized}} ->
         release_unstarted_attempt_circuit(

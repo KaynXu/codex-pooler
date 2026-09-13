@@ -89,7 +89,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
     stream_candidate = Keyword.fetch!(opts, :stream_candidate)
 
     fn state, body, failure ->
-      next_index = context.retry_count + 1
+      # A same-identity auth refresh adds an attempt without advancing the
+      # route candidate; failover follows the candidate index, not retry count.
+      next_index = context.index + 1
 
       if compact_assignment_model_miss?(failure, context) do
         finalize_last_first_event_failure(

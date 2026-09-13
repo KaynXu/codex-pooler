@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
       gateway_upstream: 4,
       native_text_input: 1,
       prime_routing_quota!: 1,
+      rendezvous_score: 2,
       put_model_source_assignments!: 2,
       seed_preferring_assignment: 2,
       start_upstream: 1,
@@ -19,7 +20,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
       use_routing_strategy!: 3
     ]
 
-  alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Repo
@@ -340,6 +341,250 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
     assert request.last_error_code == "upstream_unauthorized"
     assert request.request_metadata["auth_refresh"]["status"] == "succeeded"
     assert [_job] = reconciliation_jobs(setup.identity.id)
+  end
+
+  test "a refreshed identity with a pre-visible SSE failure still tries the next candidate", %{
+    conn: conn
+  } do
+    refreshed_token = "synthetic-refreshed-access"
+    # provenance: synthetic_adversarial — OAuth retry and first-event failover compose.
+    first_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch(
+            @initial_token,
+            unauthorized_response(401, "invalid_api_key", "synthetic auth failure")
+          ),
+          oauth_refresh(refreshed_token_response(refreshed_token)),
+          expect_dispatch(refreshed_token, retryable_sse_failure())
+        ])
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch("upstream-token-second", stream_success_sse())
+        ])
+      )
+
+    setup = gateway_setup(first_upstream)
+    store_refresh_token!(setup.identity, "synthetic-refresh-token")
+    {setup, second} = second_candidate!(setup, second_upstream)
+
+    conn =
+      conn
+      |> put_req_header("x-request-id", prefer_first_candidate(setup, second))
+      |> auth(setup)
+      |> post(@endpoint_path, stream_payload(setup, "refresh then SSE failover"))
+
+    assert conn.status == 200
+    assert FakeUpstream.count(second_upstream) == 1
+    assert conn.resp_body =~ "resp_stream_retry_success"
+    assert :ok = FakeUpstream.verify!(first_upstream)
+    assert :ok = FakeUpstream.verify!(second_upstream)
+
+    assert [first, refreshed, fallback] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert Enum.map([first, refreshed, fallback], & &1.status) == [
+             "retryable_failed",
+             "retryable_failed",
+             "succeeded"
+           ]
+
+    assert refreshed.upstream_identity_id == setup.identity.id
+    assert fallback.upstream_identity_id == second.identity.id
+    assert Repo.get!(Request, fallback.request_id).retry_count == 2
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert_retry_ledger!(request)
+  end
+
+  test "each candidate can refresh once while retry accounting includes every attempt", %{
+    conn: conn
+  } do
+    refreshed_token = "synthetic-refreshed-access"
+    # provenance: synthetic_adversarial — OAuth retry and first-event failover compose.
+    first_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch(
+            @initial_token,
+            unauthorized_response(401, "invalid_api_key", "synthetic auth failure")
+          ),
+          oauth_refresh(refreshed_token_response(refreshed_token)),
+          expect_dispatch(refreshed_token, retryable_sse_failure())
+        ])
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch(
+            "upstream-token-second",
+            unauthorized_response(401, "invalid_api_key", "synthetic second auth")
+          ),
+          oauth_refresh(refreshed_token_response("synthetic-second-refreshed")),
+          expect_dispatch("synthetic-second-refreshed", stream_success_sse())
+        ])
+      )
+
+    setup = gateway_setup(first_upstream)
+    store_refresh_token!(setup.identity, "synthetic-refresh-token")
+    {setup, second} = second_candidate!(setup, second_upstream)
+
+    store_refresh_token!(second.identity, "synthetic-second-refresh-token")
+
+    conn =
+      conn
+      |> put_req_header("x-request-id", prefer_first_candidate(setup, second))
+      |> auth(setup)
+      |> post(@endpoint_path, stream_payload(setup, "refresh then SSE failover"))
+
+    assert conn.status == 200
+    assert FakeUpstream.count(second_upstream) == 3
+    assert conn.resp_body =~ "resp_stream_retry_success"
+    assert :ok = FakeUpstream.verify!(first_upstream)
+    assert :ok = FakeUpstream.verify!(second_upstream)
+
+    assert [first, refreshed, fallback, final] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert Enum.map([first, refreshed, fallback, final], & &1.status) == [
+             "retryable_failed",
+             "retryable_failed",
+             "retryable_failed",
+             "succeeded"
+           ]
+
+    assert refreshed.upstream_identity_id == setup.identity.id
+    assert fallback.upstream_identity_id == second.identity.id
+    assert Repo.get!(Request, fallback.request_id).retry_count == 3
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert_retry_ledger!(request)
+  end
+
+  test "refresh followed by two pre-visible failures visits all three candidates", %{
+    conn: conn
+  } do
+    refreshed_token = "synthetic-refreshed-access"
+    # provenance: synthetic_adversarial — OAuth retry and first-event failover compose.
+    first_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch(
+            @initial_token,
+            unauthorized_response(401, "invalid_api_key", "synthetic auth failure")
+          ),
+          oauth_refresh(refreshed_token_response(refreshed_token)),
+          expect_dispatch(refreshed_token, retryable_sse_failure())
+        ])
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch("upstream-token-second", retryable_sse_failure())
+        ])
+      )
+
+    setup = gateway_setup(first_upstream)
+    store_refresh_token!(setup.identity, "synthetic-refresh-token")
+    {setup, second} = second_candidate!(setup, second_upstream)
+
+    third_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          expect_dispatch("upstream-token-third", stream_success_sse())
+        ])
+      )
+
+    third = gateway_upstream(setup.pool, third_upstream, "upstream-token-third", compact?: false)
+    prime_routing_quota!(third.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 3)
+
+    setup = %{
+      setup
+      | model:
+          put_model_source_assignments!(setup.model, [
+            setup.assignment,
+            second.assignment,
+            third.assignment
+          ])
+    }
+
+    assignments = [setup.assignment.id, second.assignment.id, third.assignment.id]
+
+    seed =
+      Enum.find_value(1..500, fn index ->
+        seed = "synthetic-three-candidate-#{index}"
+
+        if Enum.sort_by(
+             assignments,
+             &rendezvous_score(seed, &1),
+             :desc
+           ) == assignments, do: seed
+      end)
+
+    assert is_binary(seed)
+
+    conn =
+      conn
+      |> put_req_header("x-request-id", seed)
+      |> auth(setup)
+      |> post(@endpoint_path, stream_payload(setup, "refresh then SSE failover"))
+
+    assert conn.status == 200
+    assert FakeUpstream.count(second_upstream) == 1
+    assert conn.resp_body =~ "resp_stream_retry_success"
+    assert :ok = FakeUpstream.verify!(first_upstream)
+    assert :ok = FakeUpstream.verify!(second_upstream)
+    assert :ok = FakeUpstream.verify!(third_upstream)
+
+    assert [first, refreshed, fallback, final] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert Enum.map([first, refreshed, fallback, final], & &1.status) == [
+             "retryable_failed",
+             "retryable_failed",
+             "retryable_failed",
+             "succeeded"
+           ]
+
+    assert refreshed.upstream_identity_id == setup.identity.id
+    assert fallback.upstream_identity_id == second.identity.id
+    assert final.upstream_identity_id == third.identity.id
+    assert Repo.get!(Request, fallback.request_id).retry_count == 3
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert_retry_ledger!(request)
+  end
+
+  defp assert_retry_ledger!(request) do
+    kinds =
+      Repo.all(
+        from(entry in LedgerEntry,
+          where: entry.request_id == ^request.id,
+          select: entry.entry_kind
+        )
+      )
+
+    assert Enum.frequencies(kinds) == %{"reservation" => 1, "release" => 1, "settlement" => 1}
+  end
+
+  defp retryable_sse_failure do
+    {:sse,
+     [
+       "event: response.failed\ndata: " <>
+         CodexPooler.JSON.encode!(%{
+           "type" => "response.failed",
+           "response" => %{
+             "status" => "failed",
+             "error" => %{"code" => "server_error", "message" => "synthetic failure"}
+           }
+         }) <> "\n\n"
+     ]}
   end
 
   defp unauthorized_response(status, code, message) do
