@@ -959,13 +959,16 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert {:ok, deleted} = Access.delete_api_key(fixture.scope, fixture.api_key)
     assert deleted.id == fixture.api_key.id
     assert Repo.get(CodexPooler.Access.APIKey, fixture.api_key.id) == nil
-    assert Repo.get(CodexPooler.Accounting.Request, fixture.request.id) == nil
+
+    assert %{api_key_id: nil, status: "failed"} =
+             Repo.get!(CodexPooler.Accounting.Request, fixture.request.id)
+
     assert Repo.get_by(RequestReplayEntitlement, request_id: fixture.request.id) == nil
 
     assert Repo.aggregate(
              from(row in Attempt, where: row.request_id == ^fixture.request.id),
              :count
-           ) == 0
+           ) == 1
 
     assert Repo.aggregate(
              from(row in LedgerEntry, where: row.request_id == ^fixture.request.id),
@@ -1022,12 +1025,12 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert consume_error in [:ineligible, :owner_unavailable]
     assert {:error, :ineligible} = RequestReplay.arm(arm_input(delete_first))
     assert Repo.get(CodexPooler.Access.APIKey, delete_first.api_key.id) == nil
-    assert Repo.get(CodexPooler.Accounting.Request, delete_first.request.id) == nil
+    assert %{api_key_id: nil} = Repo.get!(CodexPooler.Accounting.Request, delete_first.request.id)
 
     assert Repo.aggregate(
              from(row in Attempt, where: row.request_id == ^delete_first.request.id),
              :count
-           ) == 0
+           ) == 1
 
     Application.delete_env(:codex_pooler, :request_replay_consume_test_barrier)
 
@@ -1063,7 +1066,10 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert {:ok, _deleted} = Task.await(consume_first_delete, 15_000)
     assert {:error, :ineligible} = RequestReplay.dispatch_lifecycle(consumed.consume_binding)
     assert Repo.get(CodexPooler.Access.APIKey, consume_first.api_key.id) == nil
-    assert Repo.get(CodexPooler.Accounting.Request, consume_first.request.id) == nil
+
+    assert %{api_key_id: nil} =
+             Repo.get!(CodexPooler.Accounting.Request, consume_first.request.id)
+
     assert Repo.get_by(RequestReplayEntitlement, request_id: consume_first.request.id) == nil
   end
 
