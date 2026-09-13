@@ -491,7 +491,7 @@ defmodule CodexPoolerWeb.Telemetry do
       counter("codex_pooler.gateway.stream.outcome.count",
         event_name: [:codex_pooler, :gateway, :stream, :outcome],
         measurement: :count,
-        tags: [:outcome, :downstream_transport, :upstream_transport],
+        tags: [:outcome, :downstream_transport, :upstream_transport, :via],
         tag_values: &stream_outcome_tag_values/1,
         description:
           "Gateway stream outcomes by bounded outcome and transport metadata. " <>
@@ -514,7 +514,7 @@ defmodule CodexPoolerWeb.Telemetry do
       counter("codex_pooler.quota.cycle.decision.count",
         event_name: [:codex_pooler, :quota, :cycle, :decision],
         measurement: :count,
-        tags: [:scope, :decision, :source],
+        tags: [:scope, :decision, :source, :via],
         tag_values: &quota_cycle_decision_tag_values/1,
         description:
           "Quota cycle decisions by bounded scope, decision, and source class. " <>
@@ -525,7 +525,7 @@ defmodule CodexPoolerWeb.Telemetry do
       counter("codex_pooler.saved_reset.convergence.count",
         event_name: [:codex_pooler, :saved_reset, :convergence],
         measurement: :count,
-        tags: [:source, :outcome],
+        tags: [:source, :outcome, :via],
         tag_values: &ConvergenceTelemetry.tag_values/1,
         description:
           "Committed saved-reset convergence transitions observed on scraped web nodes. " <>
@@ -536,7 +536,7 @@ defmodule CodexPoolerWeb.Telemetry do
         event_name: [:codex_pooler, :saved_reset, :convergence],
         measurement: :applied_to_canonical_ms,
         unit: {:millisecond, :second},
-        tags: [:source, :outcome],
+        tags: [:source, :outcome, :via],
         tag_values: &ConvergenceTelemetry.tag_values/1,
         description:
           "Applied-to-canonical saved-reset latency observed on scraped web nodes. " <>
@@ -548,7 +548,7 @@ defmodule CodexPoolerWeb.Telemetry do
         event_name: [:codex_pooler, :saved_reset, :convergence],
         measurement: :canonical_to_lifecycle_ms,
         unit: {:millisecond, :second},
-        tags: [:source, :outcome],
+        tags: [:source, :outcome, :via],
         tag_values: &ConvergenceTelemetry.tag_values/1,
         description:
           "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
@@ -560,7 +560,7 @@ defmodule CodexPoolerWeb.Telemetry do
         event_name: [:codex_pooler, :saved_reset, :convergence],
         measurement: :applied_to_lifecycle_ms,
         unit: {:millisecond, :second},
-        tags: [:source, :outcome],
+        tags: [:source, :outcome, :via],
         tag_values: &ConvergenceTelemetry.tag_values/1,
         description:
           "Applied-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
@@ -794,7 +794,8 @@ defmodule CodexPoolerWeb.Telemetry do
       downstream_transport:
         admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
       upstream_transport:
-        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports)
+        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports),
+      via: via_tag(metadata[:via])
     }
   end
 
@@ -834,9 +835,13 @@ defmodule CodexPoolerWeb.Telemetry do
     %{
       scope: admin_stats_enum_value(metadata[:scope], @quota_cycle_scopes),
       decision: admin_stats_enum_value(metadata[:decision], @quota_cycle_decisions),
-      source: admin_stats_enum_value(metadata[:source], @quota_cycle_sources)
+      source: admin_stats_enum_value(metadata[:source], @quota_cycle_sources),
+      via: via_tag(metadata[:via])
     }
   end
+
+  defp via_tag(v) when v in ["in_process", "job_relay"], do: v
+  defp via_tag(_), do: "unknown"
 
   @spec circuit_transition_tag_values(map()) :: circuit_transition_tags()
   defp circuit_transition_tag_values(metadata) do
