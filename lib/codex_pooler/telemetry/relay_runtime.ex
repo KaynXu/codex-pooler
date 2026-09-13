@@ -41,12 +41,22 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     flush_ms = Keyword.get(opts, :flush_ms, 5_000)
     drain_ms = Keyword.get(opts, :drain_ms, 15_000)
 
+    cleanup_fun =
+      Keyword.get(opts, :cleanup_fun, fn ->
+        Relay.expire_counted()
+        Relay.prune()
+      end)
+
+    cleanup_interval_ms = Keyword.get(opts, :cleanup_interval_ms, 60_000)
+
     state = %{
       table: table,
       handler: handler,
       owner: Ecto.UUID.generate(),
       flush_ms: flush_ms,
-      drain_ms: drain_ms
+      drain_ms: drain_ms,
+      cleanup_fun: cleanup_fun,
+      cleanup_interval_ms: cleanup_interval_ms
     }
 
     if Keyword.get(opts, :start_paused, false),
@@ -97,7 +107,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     Process.send_after(self(), :heartbeat, 15_000)
     Process.send_after(self(), :flush, state.flush_ms)
     Process.send_after(self(), :drain, state.drain_ms)
-    Process.send_after(self(), :cleanup, 60_000)
+    Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
     {:noreply, state}
   end
 
@@ -149,13 +159,12 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   @impl true
   def handle_info(:cleanup, state) do
-    _expired = Relay.expire_counted()
-    _pruned = Relay.prune()
-    Process.send_after(self(), :cleanup, 60_000)
+    state.cleanup_fun.()
+    Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
     {:noreply, state}
   rescue
     _ ->
-      Process.send_after(self(), :cleanup, 60_000)
+      Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
       {:noreply, state}
   end
 

@@ -161,4 +161,23 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     assert [%RelayEvent{count: 2}] = Repo.all(RelayEvent)
     assert :ets.tab2list(table) == []
   end
+
+  test "cleanup failure schedules another cleanup pass" do
+    parent = self()
+
+    {:ok, runtime} =
+      start_supervised(
+        {RelayRuntime,
+         start_paused: true,
+         cleanup_interval_ms: 10,
+         cleanup_fun: fn ->
+           send(parent, :cleanup_attempt)
+           raise "synthetic cleanup failure"
+         end}
+      )
+
+    send(runtime, :cleanup)
+    assert_receive :cleanup_attempt
+    assert_receive :cleanup, 100
+  end
 end
