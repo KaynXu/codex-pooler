@@ -18,10 +18,14 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     end
 
     assert_receive {:prometheus_folded, ^pid}, 1_000
+    dist_tables = :ets.all() |> Enum.filter(fn tid -> :ets.info(tid, :type) == :duplicate_bag end)
+    assert Enum.all?(dist_tables, fn tid -> :ets.info(tid, :size) < 5 end)
     tasks = for _ <- 1..8, do: Task.async(fn -> PrometheusReporter.scrape(name) end)
     bodies = Enum.map(tasks, &Task.await(&1, 1_000))
     assert Enum.uniq(bodies) |> length() == 1
     assert is_binary(hd(bodies))
+    assert hd(bodies) == PrometheusReporter.scrape(name)
+    assert hd(bodies) =~ "codex_pooler_gateway_stream_buffer_oversized"
   end
 
   defp unique_name, do: Module.concat(__MODULE__, "Reporter#{System.unique_integer([:positive])}")
