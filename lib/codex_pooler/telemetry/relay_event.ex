@@ -1,7 +1,7 @@
 defmodule CodexPooler.Telemetry.RelayEvent do
   use CodexPooler.Schema
   import Ecto.Changeset
-  @events ~w(stale_sweep quota_cycle_decision saved_reset_convergence interrupted)
+  @events ~w(stale_sweep quota_cycle_decision saved_reset_convergence pre_attempt_release stream_outcome interrupted)
   schema "telemetry_relay_events" do
     field :event, :string
     field :labels, :map, default: %{}

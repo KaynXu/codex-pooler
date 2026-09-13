@@ -14,7 +14,7 @@ defmodule CodexPooler.Repo.Migrations.CreateTelemetryRelayEvents do
 
     create constraint(:telemetry_relay_events, :event_allowed,
              check:
-               "event IN ('stale_sweep','quota_cycle_decision','saved_reset_convergence','interrupted')"
+               "event IN ('stale_sweep','quota_cycle_decision','saved_reset_convergence','pre_attempt_release','stream_outcome','interrupted')"
            )
 
     create constraint(:telemetry_relay_events, :count_non_negative, check: "count >= 0")
