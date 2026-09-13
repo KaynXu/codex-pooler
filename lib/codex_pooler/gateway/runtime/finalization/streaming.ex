@@ -312,7 +312,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   end
 
   defp emit_current_terminal_outcome(result, code, transports) do
-    outcome = if code == "client_disconnected", do: "interrupted", else: "failed"
+    outcome =
+      if code in ["client_disconnected", "owner_drained"], do: "interrupted", else: "failed"
 
     case result do
       {:ok, _finalized} -> emit_settlement_outcome(result, outcome, transports)

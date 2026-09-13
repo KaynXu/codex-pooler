@@ -1391,13 +1391,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     response_context = %ResponseContext{context: context, response: sse_response()}
 
-    assert {:ok, _finalized} =
-             Streaming.finalize_failure(
-               synthetic_terminal,
-               {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
-               response_context,
-               state
-             )
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, _finalized} =
+               Streaming.finalize_failure(
+                 synthetic_terminal,
+                 {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
+                 response_context,
+                 state
+               )
+
+      assert_received {:stream_outcome,
+                       %{outcome: "interrupted", downstream_transport: "http_sse"}}
+    end)
 
     request = Repo.reload!(reserved.request)
     assert request.status == "failed"
