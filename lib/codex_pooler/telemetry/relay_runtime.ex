@@ -30,7 +30,8 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   end
 
   def handle_event(event, measurements, metadata, _config) do
-    with relay_event when is_binary(relay_event) <- Map.get(@events, event),
+    with false <- Process.get({__MODULE__, :draining}, false),
+         relay_event when is_binary(relay_event) <- Map.get(@events, event),
          labels when is_map(labels) <- labels(metadata),
          count when is_integer(count) and count > 0 <- Map.get(measurements, :count, 1) do
       key = {relay_event, labels}
@@ -52,9 +53,17 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   @impl true
   def handle_info(:flush, state) do
     :ets.tab2list(state.table)
-    |> Enum.each(fn {{event, labels}, count} -> _ = Relay.insert(event, labels, count) end)
+    |> Enum.each(fn {key = {event, labels}, _count} ->
+      case :ets.take(state.table, key) do
+        [{^key, count}] ->
+          case Relay.insert(event, labels, count) do
+            {:ok, _} -> :ok
+            _ -> :ets.update_counter(state.table, key, {2, count}, {key, 0})
+          end
 
-    :ets.delete_all_objects(state.table)
+        [] -> :ok
+      end
+    end)
     Process.send_after(self(), :flush, state.flush_ms)
     {:noreply, state}
   rescue
@@ -63,7 +72,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   def handle_info(:drain, state) do
     case Relay.claim(100, "relay-runtime") do
-      {:ok, rows} -> Enum.each(rows, &emit/1)
+      {:ok, rows} -> Enum.each(rows, &safe_emit/1)
       _ -> :ok
     end
 
@@ -80,6 +89,16 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
         %{count: row.count},
         row.labels
       )
+
+  defp safe_emit(row) do
+    # Drained events must never be recaptured by our own telemetry handlers.
+    Process.put({__MODULE__, :draining}, true)
+    emit(row)
+  rescue
+    _ -> :ok
+  after
+    Process.delete({__MODULE__, :draining})
+  end
 
   defp labels(metadata),
     do:
