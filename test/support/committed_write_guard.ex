@@ -201,6 +201,12 @@ defmodule CodexPooler.CommittedWriteGuard do
     else
       verify_or_raise!({:verify, :test, label(where), now, calls(harness, now), nodes})
     end
+  rescue
+    error in ExUnit.AssertionError ->
+      # ExUnit retains the primary failure when teardown also fails. Keep the
+      # metadata-only leak diagnostic visible even when the test already failed.
+      IO.puts(:stderr, error.message)
+      reraise error, __STACKTRACE__
   end
 
   @doc false

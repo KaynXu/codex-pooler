@@ -135,6 +135,14 @@ defmodule CodexPooler.CommittedWriteGuardProbe.SandboxedCaseTest do
     assert %UpstreamIdentity{} = upstream_identity_fixture()
   end
 
+  test "fails in its body after leaking a committed identity" do
+    run_unboxed(fn ->
+      upstream_identity_fixture(%{account_label: "Committed write guard probe failed body"})
+    end)
+
+    flunk("synthetic primary failure")
+  end
+
   test "commits an identity and registers its removal first" do
     label = "Committed write guard probe cleanup #{System.unique_integer([:positive])}"
 

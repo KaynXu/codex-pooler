@@ -32,6 +32,8 @@ defmodule CodexPooler.CommittedWriteGuardTest do
              "test leaves an upstream identity no user created behind" =>
                {"failed", "during", ["upstream_identities"]},
              "test writes inside the sandbox after that leak" => {"passed", "none", []},
+             "test fails in its body after leaking a committed identity" =>
+               {"failed", "none", []},
              "test commits an identity and registers its removal first" => {"passed", "none", []},
              "test commits through a connection it starts with DBConnection.start_link/2" =>
                {"failed", "during", ["instance_presences"]},
@@ -48,7 +50,11 @@ defmodule CodexPooler.CommittedWriteGuardTest do
            },
            probe.output
 
-    assert probe.summary == %{"stage" => "probe", "total" => 10, "failures" => 5}, probe.output
+    assert probe.summary == %{"stage" => "probe", "total" => 11, "failures" => 6}, probe.output
+
+    assert probe.output =~
+             ~r/committed rows changed during .*test fails in its body after leaking a committed identity.*\n  upstream_identities: \d+ -> \d+ \(\+1\)/,
+           "the original test failure must not hide the guard diagnostic\n#{probe.output}"
 
     assert probe.exit_code != 0,
            "rows committed after the last verification must fail the run\n#{probe.output}"
