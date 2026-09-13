@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
   alias CodexPooler.Events
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -28,6 +29,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       request_fixture: 2,
       attempt_fixture: 3
     ]
+
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [gateway_setup: 1, start_upstream: 1]
 
   @applied_message_tag Cache
   @cache_key {Cache, :current}
@@ -697,6 +701,183 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     refute payload =~ "invalid/id"
     assert MapSet.size(settled_state.tasks) == 0
     assert settled_state.public_response_task_pid == nil
+  end
+
+  test "rejecting a new public submission preserves the active stream identity and sequence" do
+    release_ref = make_ref()
+
+    frames =
+      Enum.map(["first", "second"], fn delta ->
+        CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => delta})
+      end) ++
+        [
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.completed",
+            "response" => %{
+              "id" => "resp_active_stream_done",
+              "status" => "completed",
+              "output" => [],
+              "usage" => %{"input_tokens" => 2, "output_tokens" => 2, "total_tokens" => 4}
+            }
+          })
+        ]
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            websocket_connection_ordinal: 1,
+            respond:
+              FakeUpstream.barrier_websocket_frames(frames,
+                notify: self(),
+                release_ref: release_ref
+              )
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    assert {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, initial} =
+             CodexResponsesSocket.init(%{
+               auth: auth,
+               opts:
+                 RequestOptions.for_websocket(%{
+                   public_openai_responses_stream: true,
+                   websocket_owner_forwarding_enabled?: false
+                 })
+             })
+
+    try do
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {CodexPooler.JSON.encode!(%{
+                    "type" => "response.create",
+                    "model" => setup.model.exposed_model_id,
+                    "input" => "first",
+                    "stream_id" => "lane-active"
+                  }), [opcode: :text]},
+                 initial
+               )
+
+      task = state.public_response_task_pid
+
+      on_exit(fn ->
+        Process.exit(task, :kill)
+      end)
+
+      Process.put(:active_rejection_socket_state, state)
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^release_ref}, 15_000
+      :ok = FakeUpstream.release_frame(upstream, release_ref)
+      {first, state} = next_public_delta(state, task)
+
+      first_sequence = CodexPooler.JSON.decode!(first)["sequence_number"]
+
+      rejected =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => "gpt-test",
+          "input" => [],
+          "stream_id" => "invalid/id"
+        })
+
+      assert {:push, {:text, error}, state} =
+               CodexResponsesSocket.handle_in({rejected, [opcode: :text]}, state)
+
+      refute Map.has_key?(CodexPooler.JSON.decode!(error), "stream_id")
+
+      assert {:push, {:text, malformed_error}, state} =
+               CodexResponsesSocket.handle_in({"{", [opcode: :text]}, state)
+
+      refute Map.has_key?(CodexPooler.JSON.decode!(malformed_error), "stream_id")
+
+      invalid_model =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => false,
+          "input" => [],
+          "stream_id" => "lane-invalid"
+        })
+
+      assert {:push, {:text, model_error}, state} =
+               CodexResponsesSocket.handle_in({invalid_model, [opcode: :text]}, state)
+
+      assert CodexPooler.JSON.decode!(model_error)["stream_id"] == "lane-invalid"
+
+      assert_receive {:fake_upstream_frame_barrier, 1, _handler, ^release_ref}, 15_000
+      :ok = FakeUpstream.release_frame(upstream, release_ref)
+      {continued, next_state} = next_public_delta(state, task)
+
+      assert CodexPooler.JSON.decode!(continued)["stream_id"] == "lane-active"
+      assert CodexPooler.JSON.decode!(continued)["sequence_number"] == first_sequence + 1
+      assert_receive {:fake_upstream_frame_barrier, 2, _handler, ^release_ref}, 15_000
+      :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
+      final_state = finish_public_response(next_state, task)
+      Process.put(:active_rejection_socket_state, final_state)
+      assert :ok = FakeUpstream.verify!(upstream)
+    after
+      CodexResponsesSocket.terminate(
+        :closed,
+        Process.get(:active_rejection_socket_state, initial)
+      )
+
+      Process.delete(:active_rejection_socket_state)
+    end
+  end
+
+  defp finish_public_response(state, task) do
+    if MapSet.member?(state.tasks, task) do
+      receive do
+        {:codex_response_chunk, ^task, _data} = message ->
+          finish_public_message(message, state, task)
+
+        {:websocket_response_activity, ^task, _token} = message ->
+          finish_public_message(message, state, task)
+
+        {:codex_response_done, ^task, _result} = message ->
+          finish_public_message(message, state, task)
+
+        {:websocket_response_delivery_complete, ^task, _token} = message ->
+          finish_public_message(message, state, task)
+
+        {:direct_request_cleanup, ^task, _ref, _receipt} = message ->
+          finish_public_message(message, state, task)
+      after
+        15_000 -> flunk("active stream did not finish")
+      end
+    else
+      state
+    end
+  end
+
+  defp finish_public_message(message, state, task) do
+    result = CodexResponsesSocket.handle_info(message, state)
+    next_state = elem(result, tuple_size(result) - 1)
+    finish_public_response(next_state, task)
+  end
+
+  defp next_public_delta(state, task) do
+    receive do
+      {:codex_response_chunk, ^task, _data} = message ->
+        case CodexResponsesSocket.handle_info(message, state) do
+          {:push, {:text, payload}, next_state} ->
+            if CodexPooler.JSON.decode!(payload)["type"] == "response.output_text.delta",
+              do: {payload, next_state},
+              else: next_public_delta(next_state, task)
+
+          {:ok, next_state} ->
+            next_public_delta(next_state, task)
+        end
+
+      {:direct_request_cleanup, ^task, _ref, _receipt} = message ->
+        {:ok, next_state} = CodexResponsesSocket.handle_info(message, state)
+        next_public_delta(next_state, task)
+    after
+      15_000 -> flunk("active upstream did not produce its next delta")
+    end
   end
 
   test "queued public creates keep stream ids isolated and start in FIFO order" do

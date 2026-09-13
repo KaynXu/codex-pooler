@@ -1638,15 +1638,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     _trace = NativeCompactionTrace.enroll(:socket, self())
     original_public_context = public_response_context(state)
 
-    case prepare_response_payload(payload, state) do
+    submission_state =
+      if Adapter.public_responses_stream?(state),
+        do: clear_public_response_context(state),
+        else: state
+
+    case prepare_response_payload(payload, submission_state) do
       {:ok, payload, prepared_state} ->
         dispatch_prepared_payload(payload, prepared_state, original_public_context)
 
       {:error, reason, failed_state} ->
-        reject_prepared_response(
-          reason,
-          restore_public_response_context(failed_state, original_public_context)
-        )
+        reject_submission_preserving_active_turn(reason, failed_state, original_public_context)
     end
   end
 
@@ -1661,8 +1663,32 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         )
 
       {:error, reason, failed_state} ->
-        reject_prepared_response(reason, failed_state)
+        reject_submission_preserving_active_turn(reason, failed_state, original_public_context)
     end
+  end
+
+  # Validation belongs to the new submission. Its error uses only that
+  # submission's accepted stream id; the active turn keeps its own sequence.
+  defp reject_submission_preserving_active_turn(reason, state, original_public_context) do
+    case reject_prepared_response(reason, state) do
+      {kind, _, _, _} = result when kind == :stop ->
+        result
+
+      {kind, _, _, _, _} = result when kind == :stop ->
+        result
+
+      result ->
+        map_socket_result_state(
+          result,
+          &restore_active_public_context(&1, original_public_context)
+        )
+    end
+  end
+
+  defp restore_active_public_context(state, original_public_context) do
+    if public_turn_open?(state) and not socket_revoked?(state),
+      do: restore_public_response_context(state, original_public_context),
+      else: state
   end
 
   defp prepare_dispatchable_response(payload, prepared_state) do
