@@ -382,9 +382,13 @@ defmodule CodexPooler.Access.APIKeys do
 
       mutation = fn ->
         locked = Repo.one!(from key in APIKey, where: key.id == ^api_key.id, lock: "FOR UPDATE")
+
         locked
         |> APIKey.changeset(%{key_prefix: key_prefix, key_hash: key_hash})
-        |> Ecto.Changeset.put_change(:runtime_revocation_epoch, locked.runtime_revocation_epoch + 1)
+        |> Ecto.Changeset.put_change(
+          :runtime_revocation_epoch,
+          locked.runtime_revocation_epoch + 1
+        )
         |> Repo.update()
       end
 

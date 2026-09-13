@@ -25,9 +25,11 @@ defmodule CodexPooler.Access.APIKeys.Notifications do
 
   def notify_api_key_change(result, _reason, _previous_pool_id), do: result
 
-  @spec notify_api_key_runtime_transition(result, String.t(), Ecto.UUID.t(), Ecto.UUID.t() | nil) :: result
+  @spec notify_api_key_runtime_transition(result, String.t(), Ecto.UUID.t(), Ecto.UUID.t() | nil) ::
+          result
         when result: term()
   def notify_api_key_runtime_transition(result, reason, event_pool_id, previous_pool_id \\ nil)
+
   def notify_api_key_runtime_transition(
         {:ok, %{api_key: %APIKey{} = api_key}} = result,
         reason,
@@ -48,7 +50,8 @@ defmodule CodexPooler.Access.APIKeys.Notifications do
     result
   end
 
-  def notify_api_key_runtime_transition(result, _reason, _event_pool_id, _previous_pool_id), do: result
+  def notify_api_key_runtime_transition(result, _reason, _event_pool_id, _previous_pool_id),
+    do: result
 
   defp broadcast_api_key_change(%APIKey{} = api_key, reason, previous_pool_id) do
     [previous_pool_id, api_key.pool_id]
@@ -66,7 +69,12 @@ defmodule CodexPooler.Access.APIKeys.Notifications do
     :ok
   end
 
-  defp broadcast_api_key_runtime_transition(%APIKey{} = api_key, reason, event_pool_id, previous_pool_id) do
+  defp broadcast_api_key_runtime_transition(
+         %APIKey{} = api_key,
+         reason,
+         event_pool_id,
+         previous_pool_id
+       ) do
     [previous_pool_id, event_pool_id]
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
@@ -78,6 +86,7 @@ defmodule CodexPooler.Access.APIKeys.Notifications do
         status: api_key.status
       })
     end)
+
     :ok
   end
 end

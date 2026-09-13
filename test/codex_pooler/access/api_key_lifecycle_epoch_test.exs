@@ -131,6 +131,7 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
       scope = Scope.for_user(owner, ["instance_owner"])
       pool = create_pool!(scope, "rotation")
+
       assert {:ok, %{api_key: original, raw_key: old_secret}} =
                Access.create_api_key(scope, pool, %{display_name: "Rotation lifecycle key"})
 
@@ -301,6 +302,7 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
 
           assert Enum.sort(Enum.map(lifecycle_events, & &1.pool_id)) ==
                    Enum.sort([source_pool.id, target_pool.id])
+
           event = Enum.find(lifecycle_events, &(&1.pool_id == target_pool.id))
 
           assert event.payload == %{

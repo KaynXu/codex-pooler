@@ -335,7 +335,15 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
         |> Enum.map(& &1.description)
 
       assert length(descriptions) == 4
-      assert Enum.all?(descriptions, &String.contains?(&1, "upstream identity saved_reset_redemption lifecycle metadata"))
+
+      assert Enum.all?(
+               descriptions,
+               &String.contains?(
+                 &1,
+                 "upstream identity saved_reset_redemption lifecycle metadata"
+               )
+             )
+
       refute Enum.any?(descriptions, &String.contains?(&1, "audit trail"))
     end
 
