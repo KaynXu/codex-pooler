@@ -2324,7 +2324,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the turns that expired-owner recovery settles from the runtime cleanup job are never exported here. A low or empty interrupted series means interruptions settled by that job are not measured, not that they did not happen; read the accounting request and attempt rows instead.",
+      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the turns that expired-owner recovery settles from the runtime cleanup job are never exported here. A low or empty interrupted series means interruptions settled by that job are not measured, not that they did not happen; read the accounting request and attempt rows instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2352,7 +2352,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (outcome, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_outcome_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (outcome, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_outcome_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{outcome}} {{downstream_transport}} -> {{upstream_transport}}",
           "range": true,
@@ -2376,7 +2376,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
+      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2404,7 +2404,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (phase, transport) (rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (phase, transport) (rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{phase}} {{transport}}",
           "range": true,
@@ -2488,7 +2488,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. Repeated candidate decisions indicate a convergence loop. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the decisions taken by account reconciliation, saved-reset redemption and alert evaluation are never exported here. An empty or low graph means those roles are not measured, not that no cycle decision was taken; read the account quota window rows and their evidence history instead.",
+      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Repeated candidate decisions indicate a convergence loop. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the decisions taken by account reconciliation, saved-reset redemption and alert evaluation are never exported here. An empty or low graph means those roles are not measured, not that no cycle decision was taken; read the account quota window rows and their evidence history instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2516,7 +2516,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (scope, decision, source) (rate(codex_pooler_quota_cycle_decision_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (scope, decision, source) (rate(codex_pooler_quota_cycle_decision_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{scope}} {{decision}} {{source}}",
           "range": true,
@@ -2581,7 +2581,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (source, outcome) (rate(codex_pooler_saved_reset_convergence_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (source, outcome) (rate(codex_pooler_saved_reset_convergence_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}}",
           "range": true,
@@ -2633,7 +2633,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}} applied to canonical",
           "range": true,
@@ -2641,7 +2641,7 @@
           "editorMode": "code"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}} canonical to lifecycle",
           "range": true,
@@ -2649,7 +2649,7 @@
           "editorMode": "code"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}} applied to lifecycle",
           "range": true,
