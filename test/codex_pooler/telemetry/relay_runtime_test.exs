@@ -168,16 +168,24 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     {:ok, runtime} =
       start_supervised(
         {RelayRuntime,
-         start_paused: true,
-         cleanup_interval_ms: 10,
-         cleanup_fun: fn ->
-           send(parent, :cleanup_attempt)
-           raise "synthetic cleanup failure"
-         end}
+         [
+           enabled: true,
+           start_paused: true,
+           name: {:global, {__MODULE__, make_ref()}},
+           cleanup_interval_ms: 1,
+           cleanup_fun: fn ->
+             attempts = Process.get(:cleanup_attempts, 0) + 1
+             Process.put(:cleanup_attempts, attempts)
+             send(parent, {:cleanup_attempt, attempts})
+
+             if attempts == 1, do: raise("synthetic cleanup failure")
+           end
+         ]},
+        id: make_ref()
       )
 
     send(runtime, :cleanup)
-    assert_receive :cleanup_attempt
-    assert_receive :cleanup, 100
+    assert_receive {:cleanup_attempt, 1}
+    assert_receive {:cleanup_attempt, 2}, 1_000
   end
 end
