@@ -2,7 +2,8 @@ defmodule CodexPooler.Repo.Migrations.CreateTelemetryRelayEvents do
   use Ecto.Migration
 
   def change do
-    create table(:telemetry_relay_events) do
+    create table(:telemetry_relay_events, primary_key: false) do
+      add :id, :binary_id, primary_key: true, default: fragment("gen_random_uuid()")
       add :event, :string, null: false
       add :labels, :map, null: false, default: %{}
       add :count, :bigint, null: false, default: 1
