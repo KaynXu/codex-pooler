@@ -52,7 +52,20 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
       :telemetry.execute(event, %{value: value}, %{kind: "isolated"})
     end
 
+    %{dist_table_id: dist_table, aggregates_table_id: aggregate_table} =
+      TelemetryMetricsPrometheus.Core.Registry.config(registry)
+
+    metric_name = metric.name
+
+    assert :ets.lookup(dist_table, metric_name) |> length() == 3
+
     direct = TelemetryMetricsPrometheus.Core.scrape(registry)
+    assert :ets.lookup(dist_table, metric_name) == []
+
+    assert [{{^metric_name, %{kind: "isolated"}}, {buckets, 3, 60}}] =
+             :ets.lookup(aggregate_table, {metric_name, %{kind: "isolated"}})
+
+    assert buckets == [{"10", 1}, {"20", 2}, {"50", 3}, {"+Inf", 3}]
     assert PrometheusReporter.scrape(reporter) == direct
     assert direct =~ "codex_pooler_test_isolated_distribution"
     assert direct =~ "kind=\"isolated\""
