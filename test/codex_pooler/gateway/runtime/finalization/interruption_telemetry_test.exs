@@ -9,18 +9,91 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    CodexSession,
+    CodexTurn,
+    SessionContinuity
+  }
 
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Jobs.RuntimeStateCleanupWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
   # Failure-detection budget for the ordered-operations tasks, not a behaviour timer.
   @task_timeout 15_000
+
+  test "cleanup worker emits each expired-owner interruption after commit exactly once" do
+    fixture = committed_interruption_fixture!(:active_attempt)
+    expire_owner!(fixture)
+
+    capture_outcomes(fn ->
+      assert run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end) == :ok
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert_receive {:stream_outcome_transaction, false}
+
+      assert committed_interruption_state(fixture).turn_status == "interrupted"
+      assert run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end) == :ok
+      refute_received {:stream_outcome, _}
+    end)
+  end
+
+  test "cleanup worker recovery inside a rolled-back caller transaction emits nothing" do
+    fixture = committed_interruption_fixture!(:active_attempt)
+    expire_owner!(fixture)
+
+    capture_outcomes(fn ->
+      assert run_unboxed(fn ->
+               Repo.transaction(fn ->
+                 assert perform_job(RuntimeStateCleanupWorker, %{}) == :ok
+                 Repo.rollback(:caller_rollback)
+               end)
+             end) == {:error, :caller_rollback}
+
+      refute_received {:stream_outcome, _}
+      assert committed_interruption_state(fixture).turn_status == "in_progress"
+    end)
+  end
+
+  test "cleanup worker accounting rollback emits nothing and retains the active turn" do
+    fixture = committed_interruption_fixture!(:accounting_failure)
+    expire_owner!(fixture)
+
+    capture_outcomes(fn ->
+      assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime]}} =
+               run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
+
+      refute_received {:stream_outcome, _}
+      assert committed_interruption_state(fixture).turn_status == "in_progress"
+    end)
+  end
+
+  defp expire_owner!(fixture) do
+    run_unboxed(fn ->
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      Repo.update_all(from(s in CodexSession, where: s.id == ^fixture.session.id),
+        set: [owner_lease_expires_at: past]
+      )
+
+      Repo.update_all(
+        from(l in BridgeOwnerLease, where: l.codex_session_id == ^fixture.session.id),
+        set: [expires_at: past]
+      )
+    end)
+  end
 
   test "outermost active-attempt interruption emits once after commit and repeated interruption is silent" do
     fixture = committed_interruption_fixture!(:active_attempt)
@@ -375,6 +448,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
         [:codex_pooler, :gateway, :stream, :outcome],
         fn _event, _measurements, metadata, _config ->
           send(parent, {:stream_outcome, metadata})
+          send(parent, {:stream_outcome_transaction, Repo.in_transaction?()})
         end,
         nil
       )

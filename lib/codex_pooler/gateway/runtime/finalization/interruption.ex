@@ -509,7 +509,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
          session.owner_lease_token == candidate.owner_lease_token and
          session.owner_lease_expires_at == candidate.owner_lease_expires_at and
          DateTime.compare(candidate.owner_lease_expires_at, now()) != :gt do
-      case interrupt_session(candidate.session_id, opts, "owner_unavailable") do
+      case interrupt_session_transaction(candidate.session_id, opts, "owner_unavailable", true) do
         {:ok, result} -> result
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -636,8 +636,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     Map.take(binding, fields) == Map.take(entitlement, fields)
   end
 
-  defp interrupt_session(session_id, %RequestOptions{} = opts, reason) do
-    caller_owned_transaction? = Repo.in_transaction?()
+  defp interrupt_session_transaction(session_id, opts, reason, caller_owned_transaction?) do
     now = now()
     reconnect_window = reconnect_window_seconds(opts)
     next_status = if reconnect_window > 0, do: @session_interrupted, else: @session_closed
@@ -660,7 +659,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           interruption_result(0, [])
       end
     end)
-    |> finalize_transaction(caller_owned_transaction?)
   end
 
   defp interrupt_owned_session(
@@ -1219,6 +1217,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp bounded_transport(transport) when transport in ["http_sse", "websocket"], do: transport
   defp bounded_transport(_transport), do: "unknown"
+
+  @doc false
+  @spec emit_committed_recovery_outcomes(%{interrupted_outcomes: [map()]}) :: :ok
+  def emit_committed_recovery_outcomes(%{interrupted_outcomes: markers}) do
+    unless Repo.in_transaction?(), do: Enum.each(markers, &emit_interrupted_outcome/1)
+    :ok
+  end
 
   defp finalize_transaction(
          {:ok, %{public_result: public_result, interrupted_outcomes: markers}},

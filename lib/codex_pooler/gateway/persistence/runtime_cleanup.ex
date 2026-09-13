@@ -236,9 +236,15 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   defp recover_expired_owner_session(candidate, {:ok, recovered_count}) do
     case Repo.transaction(fn -> recover_expired_owner_session_locked(candidate) end) do
-      {:ok, :stale_owner} -> {:cont, {:ok, recovered_count}}
-      {:ok, :recovered} -> {:cont, {:ok, recovered_count + 1}}
-      {:error, reason} -> {:halt, {:error, reason}}
+      {:ok, :stale_owner} ->
+        {:cont, {:ok, recovered_count}}
+
+      {:ok, {:recovered, result}} ->
+        Interruption.emit_committed_recovery_outcomes(result)
+        {:cont, {:ok, recovered_count + 1}}
+
+      {:error, reason} ->
+        {:halt, {:error, reason}}
     end
   end
 
@@ -266,7 +272,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
                candidate,
                opts
              ) do
-          {:ok, _result} -> :recovered
+          {:ok, result} -> {:recovered, result}
           {:error, reason} -> Repo.rollback(reason)
         end
 
