@@ -17,6 +17,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   @impl true
   def init(opts) do
+    Relay.refresh_heartbeat("relay-runtime")
     table = :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
 
     :telemetry.attach_many(
