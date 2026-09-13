@@ -381,8 +381,10 @@ defmodule CodexPooler.Access.APIKeys do
       {key_prefix, raw_key, key_hash} = Material.generate()
 
       mutation = fn ->
-        api_key
+        locked = Repo.one!(from key in APIKey, where: key.id == ^api_key.id, lock: "FOR UPDATE")
+        locked
         |> APIKey.changeset(%{key_prefix: key_prefix, key_hash: key_hash})
+        |> Ecto.Changeset.put_change(:runtime_revocation_epoch, locked.runtime_revocation_epoch + 1)
         |> Repo.update()
       end
 
@@ -873,11 +875,12 @@ defmodule CodexPooler.Access.APIKeys do
 
   defp maybe_broadcast_dashboard_invalidation(_api_key, _cause, false), do: :ok
 
-  defp notify_api_key_update(result, _previous_api_key, :effective_disabling_transition) do
+  defp notify_api_key_update(result, previous_api_key, :effective_disabling_transition) do
     Notifications.notify_api_key_runtime_transition(
       result,
       "api_key_updated",
-      api_key_from_result(result).pool_id
+      api_key_from_result(result).pool_id,
+      previous_api_key.pool_id
     )
   end
 

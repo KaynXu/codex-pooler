@@ -190,11 +190,12 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
 
   defp maybe_broadcast_dashboard_invalidation(_api_key, false), do: :ok
 
-  defp notify_api_key_update(result, _previous_api_key, :effective_disabling_transition) do
+  defp notify_api_key_update(result, previous_api_key, :effective_disabling_transition) do
     Notifications.notify_api_key_runtime_transition(
       result,
       "api_key_updated",
-      api_key_from_result(result).pool_id
+      api_key_from_result(result).pool_id,
+      previous_api_key.pool_id
     )
   end
 

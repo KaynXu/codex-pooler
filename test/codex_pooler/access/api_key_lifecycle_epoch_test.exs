@@ -127,6 +127,21 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
   end
 
   describe "disabling lifecycle epochs" do
+    test "rotation replaces the secret and fences each previously captured epoch even with stale structs" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = create_pool!(scope, "rotation")
+      assert {:ok, %{api_key: original, raw_key: old_secret}} =
+               Access.create_api_key(scope, pool, %{display_name: "Rotation lifecycle key"})
+
+      assert {:ok, %{api_key: rotated, raw_key: new_secret}} =
+               Access.rotate_api_key(scope, original)
+
+      assert {:error, _} = Access.authenticate_authorization_header("Bearer " <> old_secret)
+      assert {:ok, _} = Access.authenticate_authorization_header("Bearer " <> new_secret)
+      assert rotated.runtime_revocation_epoch == 1
+    end
+
     test "all disabling entry points advance the persisted epoch and emit one sanitized event" do
       Sandbox.unboxed_run(Repo, fn ->
         {scope, pool} = owner_scope_and_pool()
@@ -284,8 +299,9 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
           events = receive_events_before_barriers([source_pool.id, target_pool.id])
           lifecycle_events = Enum.filter(events, &api_key_event?(&1, api_key.id))
 
-          assert [event] = lifecycle_events
-          assert event.pool_id == target_pool.id
+          assert Enum.sort(Enum.map(lifecycle_events, & &1.pool_id)) ==
+                   Enum.sort([source_pool.id, target_pool.id])
+          event = Enum.find(lifecycle_events, &(&1.pool_id == target_pool.id))
 
           assert event.payload == %{
                    "api_key_id" => api_key.id,
