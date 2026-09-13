@@ -42,7 +42,7 @@ defmodule CodexPoolerWeb.Telemetry do
         }
   @type affinity_stale_write_tags :: %{operation: String.t(), affinity_kind: String.t()}
   @type bridge_fallback_tags :: %{reason: String.t()}
-  @type pre_attempt_release_tags :: %{phase: String.t(), transport: String.t()}
+  @type pre_attempt_release_tags :: %{phase: String.t(), transport: String.t(), via: String.t()}
   @type saved_reset_convergence_tags :: %{source: String.t(), outcome: String.t()}
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -526,7 +526,7 @@ defmodule CodexPoolerWeb.Telemetry do
         event_name: [:codex_pooler, :saved_reset, :convergence],
         measurement: :count,
         tags: [:source, :outcome, :via],
-        tag_values: &ConvergenceTelemetry.tag_values/1,
+        tag_values: &convergence_tag_values/1,
         description:
           "Committed saved-reset convergence transitions observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so transitions committed by " <>
@@ -537,7 +537,7 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :applied_to_canonical_ms,
         unit: {:millisecond, :second},
         tags: [:source, :outcome, :via],
-        tag_values: &ConvergenceTelemetry.tag_values/1,
+        tag_values: &convergence_tag_values/1,
         description:
           "Applied-to-canonical saved-reset latency observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
@@ -549,7 +549,7 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :canonical_to_lifecycle_ms,
         unit: {:millisecond, :second},
         tags: [:source, :outcome, :via],
-        tag_values: &ConvergenceTelemetry.tag_values/1,
+        tag_values: &convergence_tag_values/1,
         description:
           "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
@@ -561,7 +561,7 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :applied_to_lifecycle_ms,
         unit: {:millisecond, :second},
         tags: [:source, :outcome, :via],
-        tag_values: &ConvergenceTelemetry.tag_values/1,
+        tag_values: &convergence_tag_values/1,
         description:
           "Applied-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
             "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
@@ -578,7 +578,7 @@ defmodule CodexPoolerWeb.Telemetry do
       counter("codex_pooler.accounting.reservation.pre_attempt_release.count",
         event_name: PreAttemptRelease.telemetry_event(),
         measurement: :count,
-        tags: [:phase, :transport],
+        tags: [:phase, :transport, :via],
         tag_values: &pre_attempt_release_tag_values/1,
         description:
           "Reservations released with no attempt row, by bounded pre-attempt phase and transport. " <>
@@ -814,7 +814,8 @@ defmodule CodexPoolerWeb.Telemetry do
   defp pre_attempt_release_tag_values(metadata) do
     %{
       phase: admin_stats_enum_value(metadata[:phase], PreAttemptRelease.phases()),
-      transport: admin_stats_enum_value(metadata[:transport], @pre_attempt_release_transports)
+      transport: admin_stats_enum_value(metadata[:transport], @pre_attempt_release_transports),
+      via: via_tag(metadata[:via])
     }
   end
 
@@ -839,6 +840,8 @@ defmodule CodexPoolerWeb.Telemetry do
       via: via_tag(metadata[:via])
     }
   end
+
+  defp convergence_tag_values(metadata), do: Map.put(ConvergenceTelemetry.tag_values(metadata), :via, via_tag(metadata[:via]))
 
   defp via_tag(v) when v in ["in_process", "job_relay"], do: v
   defp via_tag(_), do: "unknown"
