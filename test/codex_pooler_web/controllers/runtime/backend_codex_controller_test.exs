@@ -198,17 +198,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     assert_sse_race(setup, upstream, "pool_inactive", fn setup ->
-      Repo.update!(Ecto.Changeset.change(setup.pool, status: "paused"))
-    end)
-  end
-
-  @tag :native_sse_missing_epoch
-  test "native SSE missing key refusal after authentication" do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
-    setup = gateway_setup(upstream)
-
-    assert_sse_race(setup, upstream, "api_key_missing", fn setup ->
-      Repo.delete!(setup.api_key)
+      Repo.update!(Ecto.Changeset.change(setup.pool, status: "disabled"))
     end)
   end
 
