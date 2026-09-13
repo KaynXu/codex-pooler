@@ -4,6 +4,24 @@ defmodule CodexPooler.Status.FeedParserTest do
 
   @now ~U[2026-09-10 00:00:00Z]
 
+  test "normalizes numeric RSS timezone offsets to UTC" do
+    for {date, expected} <- [
+          {"Wed, 09 Sep 2026 12:00:00 +0000", ~U[2026-09-09 12:00:00Z]},
+          {"Wed, 09 Sep 2026 14:30:00 +0230", ~U[2026-09-09 12:00:00Z]},
+          {"Wed, 09 Sep 2026 07:00:00 -0500", ~U[2026-09-09 12:00:00Z]}
+        ] do
+      xml = """
+      <rss><channel><item><guid>offset</guid><title>Incident</title>
+      <status>Monitoring</status><description>Service recovering</description>
+      <link>https://status.openai.com/incidents/offset</link><pubDate>#{date}</pubDate>
+      </item></channel></rss>
+      """
+
+      assert {:ok, %{items: [%{published_at: published_at}]}} = FeedParser.parse(xml, now: @now)
+      assert DateTime.compare(published_at, expected) == :eq
+    end
+  end
+
   test "normalizes bounded RSS items, deduplicates guid, and clamps future dates" do
     xml = """
     <rss><channel>

@@ -286,8 +286,9 @@ defmodule CodexPooler.Status.FeedParser do
 
         with {:ok, date} <- Date.new(to_int(year), months[String.downcase(month)], to_int(day)),
              {:ok, time} <- Time.new(to_int(hh), to_int(mm), to_int(ss), 0),
-             {:ok, dt} <- DateTime.new(date, time, offset(zone)) do
-          {:ok, dt, 0}
+             {:ok, seconds} <- offset(String.upcase(zone)),
+             {:ok, dt} <- DateTime.new(date, time, "Etc/UTC") do
+          {:ok, DateTime.add(dt, -seconds, :second), seconds}
         else
           _ -> {:error, :invalid_date}
         end
@@ -299,12 +300,18 @@ defmodule CodexPooler.Status.FeedParser do
     _ -> {:error, :invalid_date}
   end
 
-  defp offset("GMT"), do: "Etc/UTC"
-  defp offset("UTC"), do: "Etc/UTC"
+  defp offset(zone) when zone in ["GMT", "UTC"], do: {:ok, 0}
 
   defp offset(<<sign, hh::binary-size(2), mm::binary-size(2)>>) do
-    seconds = (to_int(hh) * 60 + to_int(mm)) * 60
-    if sign == ?-, do: -seconds, else: seconds
+    hours = to_int(hh)
+    minutes = to_int(mm)
+
+    if hours < 24 and minutes < 60 do
+      seconds = (hours * 60 + minutes) * 60
+      {:ok, if(sign == ?-, do: -seconds, else: seconds)}
+    else
+      {:error, :invalid_date}
+    end
   end
 
   defp to_int(v), do: String.to_integer(v)
