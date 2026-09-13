@@ -300,7 +300,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
         |> generation_completion_query(attempt_id, generation, status)
         |> update_completion(status, error_code, attempt_id, now)
 
-      if count == 1 do
+      if count == 1 and status == @turn_succeeded do
         update_session_assignment(assignment, attempt, owner_witness)
       end
     end)
