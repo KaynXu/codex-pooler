@@ -24,6 +24,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Events.PostgresBridge
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.PeerRegistry
   alias CodexPooler.Pools
   alias CodexPooler.Repo
@@ -334,7 +336,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
     identity_id = setup.identity.id
 
     on_exit(fn ->
+      owner_pids = pool_owner_pids(setup.pool.id)
+      # The socket may detach while its reusable owner remains alive. Stop only
+      # this fixture's owners before removing their rows or restoring manual sandbox mode.
+      Enum.each(owner_pids, &stop_fixture_owner!/1)
       cleanup_unboxed_pool!(setup)
+      assert Enum.filter(owner_pids, &Process.alive?/1) == []
 
       Repo.delete_all(
         from(job in "oban_jobs",
@@ -351,6 +358,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
       )
 
       Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id == ^identity_id))
+    end)
+  end
+
+  defp stop_fixture_owner!(pid) do
+    monitor = Process.monitor(pid)
+
+    try do
+      GenServer.stop(pid, :shutdown, @detection_timeout_ms)
+    catch
+      :exit, {:noproc, _call} -> :ok
+    end
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, @detection_timeout_ms
+  end
+
+  defp pool_owner_pids(pool_id) do
+    Repo.all(
+      from(session in CodexSession, where: session.pool_id == ^pool_id, select: session.id)
+    )
+    |> Enum.flat_map(fn session_id ->
+      case WebsocketOwnerSession.lookup(session_id) do
+        {:ok, pid} -> [pid]
+        {:error, :owner_unavailable} -> []
+      end
     end)
   end
 
