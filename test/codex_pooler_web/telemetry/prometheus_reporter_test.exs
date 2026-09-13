@@ -89,6 +89,7 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
 
     parent = self()
     release = make_ref()
+    scrape_count = :atomics.new(1, [])
     reporter = unique_name()
 
     start_supervised!(
@@ -97,10 +98,12 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
        prometheus_name: registry,
        interval_ms: 60_000,
        before_scrape: fn ->
-         send(parent, {:scrape_barrier, self()})
+         if :atomics.add_get(scrape_count, 1, 1) == 1 do
+           send(parent, {:scrape_barrier, self()})
 
-         receive do
-           {:release, ^release} -> :ok
+           receive do
+             {:release, ^release} -> :ok
+           end
          end
        end}
     )
