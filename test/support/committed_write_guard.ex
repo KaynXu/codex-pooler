@@ -333,8 +333,9 @@ defmodule CodexPooler.CommittedWriteGuard do
     conn
   end
 
-  # `[{table, nil}]` for a table compared by row count, `[{table, ignored_columns}]` for a table with
-  # a `singleton` column, whose row is also compared by content.
+  # Every table is compared by normalized row content. Timestamps and lock_version are omitted
+  # because restoring through domain APIs rewrites bookkeeping values. This catches updates to
+  # non-singleton rows as well as singleton state changes.
   defp watched_tables!(conn) do
     %Postgrex.Result{rows: rows} =
       Postgrex.query!(
@@ -362,9 +363,9 @@ defmodule CodexPooler.CommittedWriteGuard do
         raise "committed write guard: the test database has no tables; start it after migrating"
 
       tables ->
-        Enum.map(tables, fn [table, singleton?, ignored] ->
+        Enum.map(tables, fn [table, _singleton?, ignored] ->
           Enum.each([table | ignored], &ensure_plain_identifier!/1)
-          {table, if(singleton?, do: ignored)}
+          {table, ignored}
         end)
     end
   end
@@ -378,17 +379,13 @@ defmodule CodexPooler.CommittedWriteGuard do
 
   # `~s|...|` because the SQL carries both `[]` and `()`.
   defp count_query(tables) do
-    Enum.map_join(tables, " UNION ALL ", fn
-      {table, nil} ->
-        ~s|SELECT '#{table}', count(*), NULL::text FROM "#{table}"|
+    Enum.map_join(tables, " UNION ALL ", fn {table, ignored} ->
+      content =
+        ~s|(to_jsonb(r) - ARRAY[#{Enum.map_join(ignored, ", ", &"'#{&1}'")}]::text[])::text|
 
-      {table, ignored} ->
-        content =
-          ~s|(to_jsonb(r) - ARRAY[#{Enum.map_join(ignored, ", ", &"'#{&1}'")}]::text[])::text|
-
-        ~s|SELECT '#{table}', count(*), | <>
-          ~s|md5(coalesce(string_agg(#{content}, ',' ORDER BY #{content}), '')) | <>
-          ~s|FROM "#{table}" AS r|
+      ~s|SELECT '#{table}', count(*), | <>
+        ~s|md5(coalesce(string_agg(#{content}, ',' ORDER BY #{content}), '')) | <>
+        ~s|FROM "#{table}" AS r|
     end)
   end
 

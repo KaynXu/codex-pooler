@@ -453,7 +453,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                fragment("?->>'upstream_identity_id'", job.args) not in subquery(
                  from a in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
                    where: a.pool_id != ^pool_id,
-                   select: a.upstream_identity_id
+                   select: fragment("?::text", a.upstream_identity_id)
                ))
     )
 
@@ -501,7 +501,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     Repo.delete_all(
       from(identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
-        where: identity.id in ^identity_ids
+        where:
+          identity.id in ^identity_ids and
+            identity.id not in subquery(
+              from assignment in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
+                where: assignment.pool_id != ^pool_id,
+                select: assignment.upstream_identity_id
+            )
       )
     )
 
