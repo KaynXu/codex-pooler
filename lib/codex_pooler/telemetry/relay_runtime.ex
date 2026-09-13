@@ -11,6 +11,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       "pre_attempt_release",
     [:codex_pooler, :gateway, :stream, :outcome] => "stream_outcome"
   }
+  @source_events Map.new(@events, fn {source, event} -> {event, source} end)
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -83,13 +84,12 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     _ -> {:noreply, state}
   end
 
-  defp emit(row),
-    do:
-      :telemetry.execute(
-        String.split(row.event, ".") |> Enum.map(&String.to_atom/1),
-        %{count: row.count},
-        row.labels
-      )
+  defp emit(row) do
+    case Map.get(@source_events, row.event) do
+      nil -> :ok
+      event -> :telemetry.execute(event, %{count: row.count}, row.labels)
+    end
+  end
 
   defp safe_emit(row) do
     # Drained events must never be recaptured by our own telemetry handlers.

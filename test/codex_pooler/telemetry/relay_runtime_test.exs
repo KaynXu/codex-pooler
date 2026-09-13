@@ -25,7 +25,8 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
   test "flush persists rows and drain re-emits once without recursion" do
     ref = make_ref()
-    :telemetry.attach(ref, [:codex_pooler, :quota, :cycle, :decision], fn _event, _measurements, _metadata, _ -> send(self(), :seen) end, nil)
+    test_pid = self()
+    :telemetry.attach(ref, [:codex_pooler, :quota, :cycle, :decision], fn _event, _measurements, _metadata, pid -> send(pid, :seen) end, test_pid)
     on_exit(fn -> :telemetry.detach(ref) end)
 
     :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 1}, %{scope: "test"})
