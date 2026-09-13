@@ -10,7 +10,7 @@ defmodule CodexPooler.Telemetry.Relay do
   end
 
   def heartbeat_fresh?(owner) when is_binary(owner) do
-    case Repo.query("SELECT heartbeat_at > NOW() - INTERVAL '60 seconds' FROM telemetry_relay_heartbeats WHERE owner = $1", [owner]) do
+    case Repo.query("SELECT heartbeat_at > NOW() - ($2 * INTERVAL '1 second') FROM telemetry_relay_heartbeats WHERE owner = $1", [owner, @heartbeat_stale_seconds]) do
       {:ok, %{rows: [[fresh]]}} -> fresh
       _ -> false
     end

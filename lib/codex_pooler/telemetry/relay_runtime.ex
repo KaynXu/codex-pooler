@@ -17,7 +17,6 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   @impl true
   def init(opts) do
-    Relay.refresh_heartbeat("relay-runtime")
     table = :ets.new(__MODULE__, [:named_table, :public, :set, read_concurrency: true])
 
     :telemetry.attach_many(
@@ -53,6 +52,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   @impl true
   def handle_continue(:schedule, state) do
+    Relay.refresh_heartbeat("relay-runtime")
     Process.send_after(self(), :flush, state.flush_ms)
     Process.send_after(self(), :drain, state.drain_ms)
     {:noreply, state}
