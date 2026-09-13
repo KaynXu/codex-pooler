@@ -39,8 +39,10 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
           assert terminal_ledger_count(fixture.request.id, "release") == 1
           assert request_attempt_count(fixture.request.id) in 1..2
         else
-          assert is_nil(Repo.get(CodexPooler.Accounting.Request, fixture.request.id))
-          assert request_attempt_count(fixture.request.id) == 0
+          assert %{api_key_id: nil, status: "failed"} =
+                   Repo.get!(CodexPooler.Accounting.Request, fixture.request.id)
+
+          assert request_attempt_count(fixture.request.id) == 1
           assert terminal_ledger_count(fixture.request.id, "settlement") == 0
           assert terminal_ledger_count(fixture.request.id, "release") == 0
         end
@@ -509,7 +511,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
       from row in RequestReplayEntitlement, where: row.request_id == ^fixture.request.id
     )
 
-    Repo.delete_all(from row in CodexPooler.Pools.Pool, where: row.id == ^fixture.pool.id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
     Repo.delete_all(
       from row in CodexPooler.Upstreams.Schemas.UpstreamIdentity,

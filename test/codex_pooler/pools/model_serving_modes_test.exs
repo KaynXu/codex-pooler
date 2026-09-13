@@ -748,7 +748,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
         Repo.insert!(%PlatformBootstrapState{singleton: true, status: "pending"})
       end
 
-      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
       Repo.delete_all(
         from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id

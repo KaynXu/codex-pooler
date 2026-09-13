@@ -363,7 +363,11 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   end
 
   defp delete_graph_fixture!(slugs, labels) do
-    Repo.delete_all(from pool in Pool, where: pool.slug in ^slugs)
+    Enum.each(slugs, fn slug ->
+      %{id: id} = Repo.get_by!(Pool, slug: slug)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([id])
+    end)
+
     Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label in ^labels)
     :ok
   end
