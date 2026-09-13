@@ -23,7 +23,8 @@ defmodule CodexPoolerWeb.Telemetry do
           usage_status: String.t(),
           usage_source: String.t(),
           downstream_transport: String.t(),
-          upstream_transport: String.t()
+          upstream_transport: String.t(),
+          via: String.t()
         }
   @type stream_outcome_tags :: %{
           outcome: String.t(),
@@ -806,7 +807,8 @@ defmodule CodexPoolerWeb.Telemetry do
       downstream_transport:
         admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
       upstream_transport:
-        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports)
+        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports),
+      via: via_tag(metadata[:via])
     }
   end
 
