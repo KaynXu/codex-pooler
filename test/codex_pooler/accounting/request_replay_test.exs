@@ -173,6 +173,27 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert Repo.reload!(terminal_attempt.attempt).status == "failed"
   end
 
+  test "preflight settles an orphaned request reservation exactly once" do
+    fixture = replay_fixture(reservation?: true)
+
+    fixture.attempt
+    |> Ecto.Changeset.change(%{
+      status: "failed",
+      completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      usage_status: "usage_unknown"
+    })
+    |> Repo.update!()
+
+    terminal_attempt = Repo.reload!(fixture.attempt)
+    assert :none = RequestReplay.preflight_snapshot(fixture.preflight)
+    assert Repo.reload!(fixture.attempt) == terminal_attempt
+    assert terminal_ledger_count(fixture.request.id, "settlement") == 1
+    assert terminal_ledger_count(fixture.request.id, "release") == 1
+    assert :none = RequestReplay.preflight_snapshot(fixture.preflight)
+    assert terminal_ledger_count(fixture.request.id, "settlement") == 1
+    assert terminal_ledger_count(fixture.request.id, "release") == 1
+  end
+
   test "preflight keeps live, retryable, pre-attempt, and visible lifecycles as conflicts" do
     # An in-progress attempt with stale usage is still live work.
     stale_usage = replay_fixture()

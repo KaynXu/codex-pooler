@@ -11,6 +11,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   alias CodexPooler.Accounting.{
     Attempt,
     LedgerEntry,
+    LedgerReads,
     Request,
     RequestLifecycle,
     RequestReplayEntitlement
@@ -1248,15 +1249,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
     request =
       if request.status in ["accepted", "in_progress"] do
-        request
-        |> Ecto.Changeset.change(%{
-          status: "failed",
-          usage_status: "usage_unknown",
-          completed_at: now,
-          response_status_code: 500,
-          last_error_code: @orphaned_turn_closed_code
-        })
-        |> Repo.update!()
+        finalize_orphaned_request!(request, attempt, now)
       else
         request
       end
@@ -1287,6 +1280,42 @@ defmodule CodexPooler.Accounting.RequestReplay do
     end)
 
     :closed
+  end
+
+  # Closing a request with an outstanding reservation must settle the ledger
+  # in the same transaction. Otherwise its terminal status removes it from
+  # stale-reservation recovery while its reserved budget remains held.
+  defp finalize_orphaned_request!(request, attempt, now) do
+    attrs = %{
+      request_status: "failed",
+      usage_status: "usage_unknown",
+      response_status_code: 500,
+      last_error_code: @orphaned_turn_closed_code,
+      now: now
+    }
+
+    if match?(%Attempt{}, attempt) and LedgerReads.reservation_outstanding?(request) do
+      attrs =
+        Map.merge(attrs, %{
+          preserve_replay_attempt: true,
+          usage: %{status: "usage_unknown", source: @orphaned_turn_closed_code}
+        })
+
+      case RequestLifecycle.finalize_request(request, attempt, attrs) do
+        {:ok, %{request: finalized}} -> finalized
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    else
+      request
+      |> Ecto.Changeset.change(%{
+        status: attrs.request_status,
+        usage_status: attrs.usage_status,
+        completed_at: now,
+        response_status_code: attrs.response_status_code,
+        last_error_code: attrs.last_error_code
+      })
+      |> Repo.update!()
+    end
   end
 
   defp latest_attempt(request_id) do
