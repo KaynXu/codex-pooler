@@ -5,10 +5,11 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   alias CodexPooler.Telemetry.Relay
 
   @events %{
-    [:codex_pooler, :gateway, :routing, :quota_cycle, :decision] => "quota_cycle_decision",
-    [:codex_pooler, :upstreams, :saved_reset, :convergence] => "saved_reset_convergence",
-    [:codex_pooler, :accounting, :reservation, :pre_attempt_release] => "stale_sweep",
-    [:codex_pooler, :gateway, :stream, :interrupted] => "interrupted"
+    [:codex_pooler, :quota, :cycle, :decision] => "quota_cycle_decision",
+    [:codex_pooler, :saved_reset, :convergence] => "saved_reset_convergence",
+    [:codex_pooler, :accounting, :reservation, :pre_attempt_release] =>
+      "pre_attempt_release",
+    [:codex_pooler, :gateway, :stream, :outcome] => "stream_outcome"
   }
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
