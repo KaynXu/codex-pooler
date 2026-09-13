@@ -2,6 +2,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
+  alias Ecto.Adapters.SQL.Sandbox
 
   setup %{sandbox_owner: owner} do
     runtime =
@@ -14,7 +15,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
          drain_ms: 60_000}
       )
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, owner, runtime)
+    Sandbox.allow(Repo, owner, runtime)
     :ok = GenServer.call(runtime, :activate)
     state = :sys.get_state(runtime)
     %{runtime: runtime, table: state.table, writer: state.owner, handler: state.handler}

@@ -3,7 +3,9 @@ defmodule CodexPooler.Gateway.Runtime.CommittedGatewayFixtureCleanupTest do
 
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Jobs.{SavedResetRedemptionWorker, TokenRefreshWorker}
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport, as: Support
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -12,12 +14,12 @@ defmodule CodexPooler.Gateway.Runtime.CommittedGatewayFixtureCleanupTest do
 
     assignment_job =
       %{pool_upstream_assignment_id: fixture.assignment.id}
-      |> CodexPooler.Jobs.SavedResetRedemptionWorker.new()
+      |> SavedResetRedemptionWorker.new()
       |> Repo.insert!()
 
     identity_job =
       %{upstream_identity_id: fixture.identity.id}
-      |> CodexPooler.Jobs.TokenRefreshWorker.new()
+      |> TokenRefreshWorker.new()
       |> Repo.insert!()
 
     Support.cleanup_unboxed_pool!(fixture)
@@ -45,13 +47,13 @@ defmodule CodexPooler.Gateway.Runtime.CommittedGatewayFixtureCleanupTest do
 
     identity_job =
       %{upstream_identity_id: fixture.identity.id}
-      |> CodexPooler.Jobs.TokenRefreshWorker.new()
+      |> TokenRefreshWorker.new()
       |> Repo.insert!()
 
     Support.cleanup_unboxed_pool!(fixture)
 
     assert Repo.get(UpstreamIdentity, fixture.identity.id)
-    assert Repo.get(CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment, other_assignment.id)
+    assert Repo.get(PoolUpstreamAssignment, other_assignment.id)
     assert Repo.get(Oban.Job, identity_job.id)
   end
 
