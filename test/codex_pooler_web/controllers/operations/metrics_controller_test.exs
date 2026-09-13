@@ -368,11 +368,11 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert metric_sample(
              body,
-             ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown"})
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown",via="unknown"})
            ) ==
              metric_sample(
                baseline,
-               ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown"})
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown",via="unknown"})
              ) + 1
 
     for metric <- ~w(applied_to_canonical canonical_to_lifecycle applied_to_lifecycle) do
