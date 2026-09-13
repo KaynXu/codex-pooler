@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamDrainTest do
   use ExUnit.Case, async: false
 
-  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
+  alias CodexPooler.Gateway.Transports.Streaming.{DeferredStreamDrain, DeferredStreamRegistry}
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
 
   # The drain's own budget is the behavior under test; these waits only detect
@@ -131,6 +131,64 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamDrainTest do
              http_streams_aborted: 0,
              http_streams_failed: 0
            } = RolloutDrain.start_drain(drain_options(drain_name))
+  end
+
+  test "completed live connection releases drain at first poll", %{stream_registry: registry} do
+    parent = self()
+
+    stream =
+      spawn_link(fn ->
+        token =
+          DeferredStreamRegistry.register(%{request_id: "synthetic-request"}, name: registry)
+
+        send(parent, {:registered, token})
+
+        receive do
+          {:gateway_stream_drain, ^token, :owner_drained} ->
+            receive do
+              :finish ->
+                :ok = DeferredStreamRegistry.finish(token, :completed, name: registry)
+                send(parent, :finished)
+            end
+        end
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    monitor = Process.monitor(stream)
+
+    try do
+      assert_receive {:registered, token}, @await_timeout_ms
+      {_epoch, [entry]} = DeferredStreamRegistry.begin_drain(name: registry)
+      Process.put(:clock, 0)
+      Process.put(:waits, 0)
+
+      policy = %{
+        now_ms: fn -> Process.get(:clock) end,
+        schedule_wait: fn recipient, wait_token, wait_ms ->
+          if Process.get(:waits) == 0 do
+            send(stream, :finish)
+            assert_receive :finished, @await_timeout_ms
+            assert {:finished, :completed} = DeferredStreamRegistry.status(token, name: registry)
+          end
+
+          Process.put(:waits, Process.get(:waits) + 1)
+          Process.put(:clock, Process.get(:clock) + wait_ms)
+          send(recipient, {:rollout_drain_wait_elapsed, wait_token})
+          make_ref()
+        end,
+        cancel_wait: fn _, _ -> :ok end
+      }
+
+      assert :completed = DeferredStreamDrain.drain(entry, 1000, policy, registry)
+      assert Process.alive?(stream)
+      assert Process.get(:waits) == 1
+    after
+      send(stream, :stop)
+      assert_receive {:DOWN, ^monitor, :process, ^stream, :normal}, @await_timeout_ms
+    end
   end
 
   defp drain_options(drain_name) do

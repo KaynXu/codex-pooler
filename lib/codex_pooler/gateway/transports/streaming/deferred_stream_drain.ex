@@ -51,10 +51,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamDrain do
       stream_outcome(token, registry, :aborted)
     else
       case wait_or_down(monitor, policy, min(@poll_interval_ms, remaining_ms)) do
-        :process_down -> stream_outcome(token, registry, :failed)
-        :elapsed -> await(token, monitor, deadline_ms, policy, registry)
-        :wait_failed -> :failed
+        :process_down ->
+          stream_outcome(token, registry, :failed)
+
+        :elapsed ->
+          poll_outcome(token, monitor, deadline_ms, policy, registry)
+
+        :wait_failed ->
+          :failed
       end
+    end
+  end
+
+  defp poll_outcome(token, monitor, deadline_ms, policy, registry) do
+    case DeferredStreamRegistry.status(token, name: registry) do
+      {:finished, outcome} -> outcome
+      {:active, _status} -> await(token, monitor, deadline_ms, policy, registry)
+      :unknown -> :failed
     end
   end
 
