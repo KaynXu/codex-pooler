@@ -8,6 +8,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Routing.SessionContinuity, as: RoutingContinuity
+  alias CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Platform.{InstanceHeartbeat, InstancePresence}
   alias CodexPooler.Platform.InstancePresence.Identity
@@ -206,6 +208,59 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
 
       assert {:ok, %{stale_reservations_settled: 1}} =
                Accounting.recover_stale_reservations(DateTime.add(now, 7, :hour))
+    end
+  end
+
+  test "an HTTP request cannot renew an absent incarnation owner lease" do
+    setup = accounting_setup()
+    first = start_instance!(:http_incarnation_first)
+    state = turn_state()
+    {:ok, session} = start_session(setup, state)
+    lease = active_lease!(session.id)
+    {:ok, _stale} = InstancePresence.record_heartbeat(first, DateTime.add(now(), -10, :minute))
+    end_instance!(:http_incarnation_first)
+    second = start_instance!(:http_incarnation_second)
+    assert second.node_name == first.node_name
+    refute second.boot_id == first.boot_id
+
+    opts =
+      RequestOptions.build(%{accepted_turn_state: state}, "/backend-api/codex/responses", %{})
+
+    {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
+    assert attached.continuity.codex_session.owner_instance_boot_id == first.boot_id
+    result = SessionLeaseHeartbeat.run(attached, fn -> :dispatched end)
+
+    assert Repo.reload!(lease).expires_at == lease.expires_at
+    assert result == {:error, :owner_unavailable}
+  end
+
+  for presence <- [:live, :unknown, :legacy] do
+    @tag renewal_presence: presence
+    test "HTTP renewal preserves #{presence} remote ownership", %{renewal_presence: presence} do
+      setup = accounting_setup()
+      _local = start_instance!(:http_control_local)
+      remote = Identity.new("sample-owner@remote", "boot-#{unique()}")
+
+      if presence == :live do
+        {:ok, _row} = InstancePresence.record_heartbeat(remote, now())
+      end
+
+      state = turn_state()
+      {:ok, session} = start_session(setup, state, remote)
+      if presence == :legacy, do: strip_incarnation!(session)
+      before = active_lease!(session.id)
+
+      opts =
+        RequestOptions.build(%{accepted_turn_state: state}, "/backend-api/codex/responses", %{})
+
+      {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
+
+      assert :dispatched = SessionLeaseHeartbeat.run(attached, fn -> :dispatched end)
+      after_lease = active_lease!(session.id)
+      assert after_lease.owner_instance_id == remote.node_name
+      assert after_lease.owner_instance_boot_id == before.owner_instance_boot_id
+      assert after_lease.lease_token == before.lease_token
+      assert DateTime.compare(after_lease.expires_at, before.expires_at) == :gt
     end
   end
 

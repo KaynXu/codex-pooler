@@ -214,7 +214,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
              active_snapshot_for_update(session_ref, lock_deadline),
            now <- db_now(),
-           :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now) do
+           :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now),
+           :ok <- validate_renewal_presence(lease, now) do
         expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
         renewed_lease =
@@ -494,6 +495,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       true ->
         :ok
     end
+  end
+
+  # A request holding a valid token may execute on a different replica. Only
+  # shared evidence that the named incarnation stopped publishing revokes its
+  # liveness; a different local incarnation or a missing row proves nothing.
+  defp validate_renewal_presence(%BridgeOwnerLease{} = lease, now) do
+    identity =
+      InstancePresence.Identity.owner(lease.owner_instance_id, lease.owner_instance_boot_id)
+
+    if InstancePresence.absent?(identity, now),
+      do: {:error, :owner_unavailable},
+      else: :ok
   end
 
   defp session_id(%CodexSession{id: id}) when is_binary(id), do: {:ok, id}
