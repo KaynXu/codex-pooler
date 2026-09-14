@@ -6,6 +6,7 @@ defmodule CodexPooler.Status.FeedParser do
   @max_text 4_000
   @max_guid 512
   @max_link 2_048
+  @future_skew_seconds 300
 
   @type item :: %{
           guid: String.t(),
@@ -19,7 +20,14 @@ defmodule CodexPooler.Status.FeedParser do
         }
 
   @spec parse(binary(), keyword()) ::
-          {:ok, %{items: [item()], content_hash: String.t()}} | {:error, map()}
+          {:ok,
+           %{
+             items: [item()],
+             content_hash: String.t(),
+             skipped_count: non_neg_integer(),
+             complete?: boolean()
+           }}
+          | {:error, map()}
   def parse(xml, opts \\ [])
 
   def parse(xml, opts) when is_binary(xml) do
@@ -32,6 +40,12 @@ defmodule CodexPooler.Status.FeedParser do
       byte_size(xml) == 0 ->
         error(:malformed_xml, "feed body is empty")
 
+      not String.valid?(xml) or String.contains?(xml, <<0>>) ->
+        error(:unsafe_xml, "feed must use UTF-8")
+
+      Regex.match?(~r/<\?xml[^?]*encoding\s*=\s*["'](?!utf-8["'])[^"']+["']/i, xml) ->
+        error(:unsafe_xml, "feed must use UTF-8")
+
       Regex.match?(~r/<!(?:DOCTYPE|ENTITY)\b/i, xml) ->
         error(:unsafe_xml, "doctype and entities are not accepted")
 
@@ -43,67 +57,98 @@ defmodule CodexPooler.Status.FeedParser do
   def parse(_, _), do: error(:invalid_body, "feed body must be binary")
 
   defp parse_xml(xml, now) do
-    # xmerl expects the original UTF-8 byte sequence as a charlist. `String.to_charlist/1`
-    # turns multibyte characters into codepoints and makes otherwise valid feeds fail.
-    {doc, _} = :xmerl_scan.string(:binary.bin_to_list(xml), [{:quiet, true}])
+    # SAX preserves names as strings, unlike DOM scanning which interns provider names.
+    initial = %{path: [], fields: %{}, items: [], channel?: false}
 
-    case :xmerl_xpath.string(~c"/rss/channel", doc) do
-      [_channel] ->
-        nodes = :xmerl_xpath.string(~c"/rss/channel/item", doc) |> Enum.map(&elem(&1, 8))
-        parse_nodes(nodes, now)
+    case :xmerl_sax_parser.stream(xml, [
+           :disallow_entities,
+           {:external_entities, :none},
+           {:fail_undeclared_ref, true},
+           {:event_state, initial},
+           {:event_fun, &sax_event/3}
+         ]) do
+      {:ok, %{channel?: true, items: nodes}, rest} ->
+        if String.trim(to_string(rest)) == "",
+          do: parse_nodes(nodes, now),
+          else: error(:malformed_xml, "unexpected trailing XML")
+
+      {:ok, _, _} ->
+        error(:invalid_feed, "feed must contain an RSS channel")
 
       _ ->
-        error(:invalid_feed, "feed must contain an RSS channel")
+        error(:malformed_xml, "feed XML could not be parsed")
     end
   catch
     :exit, _ -> error(:malformed_xml, "feed XML could not be parsed")
     _, _ -> error(:malformed_xml, "feed XML could not be parsed")
   end
 
-  defp parse_nodes(nodes, now) do
-    if length(nodes) > @max_items do
-      error(:too_many_items, "feed item count exceeds limit")
-    else
-      with {:ok, parsed} <- parse_items(nodes, now),
-           {:ok, items} <- deduplicate(parsed) do
-        hash_fields =
-          Enum.map(
-            items,
-            &Map.take(&1, [
-              :guid,
-              :title,
-              :status,
-              :summary,
-              :component,
-              :link,
-              :hash_published_at
-            ])
-          )
+  defp sax_event({:startElement, _, name, _, _}, _, state) do
+    path = [List.to_string(name) | state.path]
+    state = %{state | path: path, channel?: state.channel? or path == ["channel", "rss"]}
+    if path == ["item", "channel", "rss"], do: %{state | fields: %{}}, else: state
+  end
 
-        {:ok,
-         %{
-           items: Enum.map(items, &Map.delete(&1, :hash_published_at)),
-           content_hash: hash(hash_fields)
-         }}
-      end
+  defp sax_event({:endElement, _, _, _}, _, %{path: ["item", "channel", "rss"]} = state),
+    do: %{state | path: ["channel", "rss"], items: [state.fields | state.items], fields: %{}}
+
+  defp sax_event({:endElement, _, _, _}, _, %{path: [_ | rest]} = state),
+    do: %{state | path: rest}
+
+  defp sax_event({kind, text}, _, %{path: [field, "item", "channel", "rss"]} = state)
+       when kind in [:characters, :ignorableWhitespace] do
+    value = List.to_string(text)
+    %{state | fields: Map.update(state.fields, field, value, &(&1 <> value))}
+  end
+
+  defp sax_event(_, _, state), do: state
+
+  defp parse_nodes(nodes, now) do
+    with {:ok, parsed, skipped} <- parse_items(nodes, now),
+         {:ok, items} <- deduplicate(parsed) do
+      complete? = skipped == 0 and length(items) <= @max_items
+      items = Enum.take(items, @max_items)
+
+      hash_fields =
+        Enum.map(
+          items,
+          &Map.take(&1, [
+            :guid,
+            :title,
+            :status,
+            :summary,
+            :component,
+            :link,
+            :hash_published_at
+          ])
+        )
+
+      {:ok,
+       %{
+         items: Enum.map(items, &Map.delete(&1, :hash_published_at)),
+         content_hash: hash(hash_fields),
+         skipped_count: skipped,
+         complete?: complete?
+       }}
     end
   end
 
   defp parse_items(nodes, now) do
-    Enum.reduce_while(nodes, {:ok, []}, fn children, {:ok, acc} ->
-      case parse_fields(children, now) do
-        {:ok, item} -> {:cont, {:ok, [item | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    {valid, errors} =
+      Enum.reduce(nodes, {[], []}, fn children, {acc, errors} ->
+        case parse_fields(children, now) do
+          {:ok, item} -> {[item | acc], errors}
+          {:error, reason} -> {acc, [reason | errors]}
+        end
+      end)
+
+    case {valid, errors} do
+      {[], [error | _]} -> {:error, error}
+      _ -> {:ok, valid, length(errors)}
+    end
   end
 
-  defp parse_fields(children, now) do
-    fields =
-      children
-      |> Enum.filter(&match?({:xmlElement, _, _, _, _, _, _, _, _, _, _, _}, &1))
-      |> Map.new(fn child -> {local_name(elem(child, 2)), text(child)} end)
-
+  defp parse_fields(fields, now) do
     with :ok <- validate_explicit_status(fields),
          {:ok, guid} <- required(fields, "guid", @max_guid),
          {:ok, title} <- required(fields, "title", @max_text),
@@ -215,9 +260,9 @@ defmodule CodexPooler.Status.FeedParser do
   defp extract_component(description) do
     plain = strip_html(description)
 
-    case Regex.run(~r/affected\s+components?\s+(.{1,256}?)(?:\s+operational\b|\z)/i, plain) do
+    case Regex.run(~r/affected\s+components?\s*:?\s+(.+)\z/iu, plain) do
       [_, value] ->
-        value |> String.trim() |> String.split(~r/\s{2,}|\n/) |> List.first() |> blank_to_nil()
+        value |> String.trim() |> String.slice(0, 512) |> blank_to_nil()
 
       _ ->
         nil
@@ -268,8 +313,13 @@ defmodule CodexPooler.Status.FeedParser do
     parsed = if match?({:error, _}, parsed), do: rfc822(value), else: parsed
 
     case parsed do
-      {:ok, dt, _} -> {:ok, if(DateTime.compare(dt, now) == :gt, do: now, else: dt)}
-      _ -> error(:invalid_date, "feed date is invalid")
+      {:ok, dt, _} ->
+        if DateTime.diff(dt, now, :second) <= @future_skew_seconds,
+          do: {:ok, dt},
+          else: error(:invalid_date, "feed date exceeds allowed clock skew")
+
+      _ ->
+        error(:invalid_date, "feed date is invalid")
     end
   end
 
@@ -326,17 +376,6 @@ defmodule CodexPooler.Status.FeedParser do
 
   defp to_int(v), do: String.to_integer(v)
 
-  defp text(node) do
-    node
-    |> elem(8)
-    |> Enum.map_join("", fn
-      {:xmlText, _, _, _, value, _} -> List.to_string(value)
-      {:xmlElement, _, _, _, _, _, _, _, _, _, _, _} = child -> text(child)
-      _ -> ""
-    end)
-    |> String.trim()
-  end
-
   defp strip_html(value) do
     value
     |> String.replace(~r/<[^>]*>/u, " ")
@@ -358,7 +397,7 @@ defmodule CodexPooler.Status.FeedParser do
 
   defp codepoint(value, base) do
     case Integer.parse(value, base) do
-      {n, ""} when n > 0 and n <= 0x10FFFF -> <<n::utf8>>
+      {n, ""} when n > 0 and n <= 0x10FFFF and n not in 0xD800..0xDFFF -> <<n::utf8>>
       _ -> " "
     end
   end
@@ -374,19 +413,15 @@ defmodule CodexPooler.Status.FeedParser do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
 
-  defp local_name(name) when is_atom(name),
-    do: name |> Atom.to_string() |> String.split(":") |> List.last()
-
-  defp local_name(name) when is_list(name),
-    do: name |> List.to_string() |> String.split(":") |> List.last()
-
   defp deduplicate(items),
     do:
       {:ok,
        items
        |> Enum.group_by(& &1.guid)
-       |> Enum.map(fn {_guid, xs} -> Enum.max_by(xs, & &1.published_at, DateTime) end)
-       |> Enum.sort_by(& &1.published_at, {:desc, DateTime})}
+       |> Enum.map(fn {_guid, xs} ->
+         Enum.max_by(xs, &{DateTime.to_unix(&1.published_at, :microsecond), hash(&1)})
+       end)
+       |> Enum.sort_by(&{-DateTime.to_unix(&1.published_at, :microsecond), &1.guid})}
 
   defp hash(fields),
     do:

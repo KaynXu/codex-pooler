@@ -364,6 +364,16 @@ defmodule CodexPooler.InstanceSettings.Classification do
       notes: "Operator email generation should read this at send time."
     },
     %{
+      key: :openai_status_polling_enabled,
+      bucket: :db_runtime_cached,
+      group: :operator,
+      label: "OpenAI status polling",
+      env_names: [],
+      storage: :database,
+      reloadability: :live,
+      notes: "Disables outbound status.openai.com polls while retaining last-known incidents."
+    },
+    %{
       key: :firewall_allowlist,
       bucket: :db_runtime_cached,
       group: :ingress,

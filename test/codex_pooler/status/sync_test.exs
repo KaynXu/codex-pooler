@@ -12,6 +12,61 @@ defmodule CodexPooler.Status.SyncTest do
 
   @notification_timeout 15_000
 
+  test "identical 200 refreshes feed freshness without rewriting incidents or aggregate revision" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    fetcher = fn _, _ -> {:ok, %{items: [item("identical")], content_hash: "same"}} end
+    assert {:ok, first} = Sync.sync(fetcher: fetcher, now: now)
+    incidents = OpenAIStatus.list_incidents()
+    later = DateTime.add(now, 300, :second)
+    assert {:ok, second} = Sync.sync(fetcher: fetcher, now: later)
+    assert second.aggregate_revision == first.aggregate_revision
+    assert OpenAIStatus.list_incidents() == incidents
+    assert OpenAIStatus.feed_state().last_success_at == later
+  end
+
+  test "identical committed 200 emits only freshness after a material change" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    guid = "stable-#{System.unique_integer([:positive])}"
+    fetcher = fn _, _ -> {:ok, %{items: [item(guid)], content_hash: "stable"}} end
+
+    with_committed_status(guid, fn listener ->
+      assert {:ok, %{aggregate_revision: 1}} = Sync.sync(fetcher: fetcher, now: now)
+      assert_status_event(listener, 1, 1, now)
+      before = OpenAIStatus.list_incidents()
+
+      assert {:ok, %{aggregate_revision: 1, changed_count: 0}} =
+               Sync.sync(fetcher: fetcher, now: DateTime.add(now, 300, :second))
+
+      assert OpenAIStatus.list_incidents() == before
+      assert_freshness_event(listener, 1, DateTime.add(now, 300, :second))
+      changed = fn _, _ -> {:ok, %{items: [%{item(guid) | status: "Monitoring"}]}} end
+      later = DateTime.add(now, 600, :second)
+
+      assert {:ok, %{aggregate_revision: 2, changed_count: 1}} =
+               Sync.sync(fetcher: changed, now: later)
+
+      assert_status_event(listener, 1, 2, later)
+    end)
+  end
+
+  test "partial snapshots cannot retire incidents omitted by parsing or truncation" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+
+    assert {:ok, _} =
+             Sync.sync(fetcher: fn _, _ -> {:ok, %{items: [item("preserve")]}} end, now: now)
+
+    for seconds <- 1..4 do
+      assert {:ok, _} =
+               Sync.sync(
+                 fetcher: fn _, _ -> {:ok, %{items: [], complete?: false}} end,
+                 now: DateTime.add(now, seconds, :second)
+               )
+    end
+
+    assert [%{guid: "preserve", omission_count: 0, retired_at: nil}] =
+             OpenAIStatus.active_incidents()
+  end
+
   test "non-feed XML polls preserve active incidents and record the failure" do
     now = ~U[2026-09-10 10:00:00.000000Z]
     seed = fn _state, _opts -> {:ok, %{items: [item("preserved")], content_hash: "feed"}} end
@@ -102,10 +157,10 @@ defmodule CodexPooler.Status.SyncTest do
       incidents = OpenAIStatus.list_incidents()
       refreshed_at = DateTime.add(now, 1, :second)
 
-      assert {:not_modified, %{changed_count: 0, aggregate_revision: 2}} =
+      assert {:not_modified, %{changed_count: 0, aggregate_revision: 1}} =
                Sync.sync(fetcher: not_modified, now: refreshed_at)
 
-      assert_status_event(listener, 0, 2, refreshed_at)
+      assert_freshness_event(listener, 1, refreshed_at)
       assert OpenAIStatus.list_incidents() == incidents
       state = OpenAIStatus.feed_state()
       assert state.etag == "e2"
@@ -248,7 +303,7 @@ defmodule CodexPooler.Status.SyncTest do
 
     assert {:ok, resolved} =
              OpenAIStatus.upsert_incident(
-               Map.put(item("resolved", "Resolved"), :content_hash, "h"),
+               Map.merge(item("resolved", "Resolved"), %{content_hash: "h", published_at: old}),
                old
              )
 
@@ -321,6 +376,17 @@ defmodule CodexPooler.Status.SyncTest do
 
   defp refute_status_event({notifications, ref, channel}) do
     refute_receive {:notification, ^notifications, ^ref, ^channel, _}, 100
+    refute_received {:openai_status_updated, _}
+    refute_received {:openai_status_freshness, _}
+  end
+
+  defp assert_freshness_event({notifications, ref, channel}, revision, timestamp) do
+    assert_receive {:notification, ^notifications, ^ref, ^channel, payload}, @notification_timeout
+    assert {:ok, decoded} = CodexPooler.JSON.decode(payload)
+    assert {:ok, event} = Events.decode_freshness(decoded)
+    assert event.aggregate_revision == revision
+    assert event.last_success_at == timestamp
+    assert_receive {:openai_status_freshness, ^event}, @notification_timeout
     refute_received {:openai_status_updated, _}
   end
 end

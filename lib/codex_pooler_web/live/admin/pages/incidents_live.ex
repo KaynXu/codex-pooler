@@ -1,7 +1,6 @@
 defmodule CodexPoolerWeb.Admin.IncidentsLive do
   use CodexPoolerWeb, :admin_live_view
 
-  alias CodexPooler.OpenAIStatus
   alias CodexPooler.Status.Events, as: StatusEvents
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.IncidentsPageComponents
@@ -10,8 +9,6 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: OpenAIStatus.subscribe()
-
     socket =
       socket
       |> assign(

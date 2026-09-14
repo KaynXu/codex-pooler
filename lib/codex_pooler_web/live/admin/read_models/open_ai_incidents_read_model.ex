@@ -2,10 +2,10 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
   @moduledoc "Metadata-only projection for the authenticated OpenAI incidents page."
 
   alias CodexPooler.OpenAIStatus
-  alias CodexPooler.Status.Schemas.{FeedState, Incident}
+  alias CodexPooler.Status.Freshness
+  alias CodexPooler.Status.Schemas.Incident
 
   @history_limit 50
-  @stale_after_seconds 900
 
   @type row :: %{
           required(:id) => Ecto.UUID.t(),
@@ -30,7 +30,8 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
           required(:last_success_at) => DateTime.t() | nil,
           required(:last_error_code) => String.t() | nil,
           required(:stale?) => boolean(),
-          required(:available?) => boolean()
+          required(:available?) => boolean(),
+          required(:polling_enabled?) => boolean()
         }
 
   @spec load() :: page()
@@ -49,8 +50,10 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
       history_overflow: max(length(history) - @history_limit, 0),
       last_success_at: state && state.last_success_at,
       last_error_code: state && state.last_error_code,
-      stale?: stale?(state),
-      available?: not is_nil(state)
+      stale?: Freshness.stale?(state && state.last_success_at),
+      available?: not is_nil(state && state.last_success_at),
+      polling_enabled?:
+        CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled
     }
   end
 
@@ -82,21 +85,14 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
   defp display_status(%Incident{retired_at: %DateTime{}}), do: "Retired"
   defp display_status(%Incident{status: status}), do: safe_text(status) || "Unknown"
 
-  defp stale?(nil), do: true
-  defp stale?(%FeedState{last_success_at: nil}), do: true
-
-  defp stale?(%FeedState{last_success_at: timestamp}) do
-    DateTime.diff(DateTime.utc_now(), timestamp, :second) > @stale_after_seconds
-  end
-
   defp safe_text(nil), do: nil
   defp safe_text(value) when is_binary(value), do: String.trim(value)
   defp safe_text(_), do: nil
 
   defp safe_component(value) do
     case safe_text(value) do
-      nil -> "OpenAI platform"
-      "" -> "OpenAI platform"
+      nil -> "Unspecified"
+      "" -> "Unspecified"
       component -> component
     end
   end

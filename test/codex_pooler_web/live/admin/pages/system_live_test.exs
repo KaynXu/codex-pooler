@@ -2079,6 +2079,20 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
   end
 
+  test "saves the status polling toggle through the operator settings form", %{conn: conn} do
+    {:ok, view, _} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    assert has_element?(view, "#instance-settings-openai-status-polling-enabled[checked]")
+
+    view
+    |> element("#instance-settings-operator-form")
+    |> render_submit(%{
+      "instance_settings" => %{"operator" => %{"openai_status_polling_enabled" => "false"}}
+    })
+
+    refute InstanceSettings.get!().operator.openai_status_polling_enabled
+    refute has_element?(view, "#instance-settings-openai-status-polling-enabled[checked]")
+  end
+
   test "saves gateway, file, and transcription limits as one card", %{conn: conn, user: user} do
     {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
 

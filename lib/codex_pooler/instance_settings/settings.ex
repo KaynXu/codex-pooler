@@ -91,6 +91,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
     embeds_one :operator, Operator, on_replace: :update, primary_key: false do
       field :login_base_url, :string
+      field :openai_status_polling_enabled, :boolean, default: true
     end
 
     embeds_one :catalog, Catalog, on_replace: :update, primary_key: false do
@@ -383,8 +384,8 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   defp operator_changeset(operator, attrs) do
     operator
-    |> cast(attrs, [:login_base_url])
-    |> validate_required([:login_base_url])
+    |> cast(attrs, [:login_base_url, :openai_status_polling_enabled])
+    |> validate_required([:login_base_url, :openai_status_polling_enabled])
     |> update_change(:login_base_url, &normalize_operator_app_url/1)
     |> validate_format(:login_base_url, ~r/^https?:\/\//)
     |> validate_change(:login_base_url, &validate_operator_app_url/2)

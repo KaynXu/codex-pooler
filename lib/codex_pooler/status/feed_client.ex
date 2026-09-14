@@ -18,6 +18,8 @@ defmodule CodexPooler.Status.FeedClient do
       url: Keyword.get(opts, :url, @url),
       headers: headers,
       decode_body: false,
+      compressed: false,
+      into: &collect_chunk/2,
       retry: false,
       receive_timeout: timeout,
       # Req refuses `connect_options` together with `finch`, so the connect
@@ -28,6 +30,19 @@ defmodule CodexPooler.Status.FeedClient do
 
     Req.get(request) |> handle_response(state, opts)
   end
+
+  defp collect_chunk({:data, data}, {request, response}) do
+    body = response.body || ""
+
+    if byte_size(body) + byte_size(data) > @max_bytes do
+      {:halt, {request, Req.Response.put_private(response, :status_feed_too_large, true)}}
+    else
+      {:cont, {request, %{response | body: body <> data}}}
+    end
+  end
+
+  defp handle_response({:ok, %{private: %{status_feed_too_large: true}}}, _state, _opts),
+    do: error(:body_too_large, "feed body exceeds limit")
 
   defp handle_response({:ok, %{status: 200, headers: headers, body: body}}, _state, opts)
        when is_binary(body),

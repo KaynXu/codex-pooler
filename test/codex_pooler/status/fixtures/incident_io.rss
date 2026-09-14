@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Service status</title>
+    <item>
+      <title>Delayed responses — service recovering</title>
+      <link>https://status.openai.com//incidents/sample-incident</link>
+      <guid isPermaLink="false">sample-incident</guid>
+      <pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate>
+      <description><![CDATA[<p><b>Status: Monitoring</b></p><p>Processing is recovering for café requests.</p><p><b>Affected components</b></p><ul><li>Responses (Operational)</li><li>Codex (Operational)</li></ul>]]></description>
+    </item>
+  </channel>
+</rss>

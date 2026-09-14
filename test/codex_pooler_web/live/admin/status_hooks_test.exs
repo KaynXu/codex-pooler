@@ -63,4 +63,55 @@ defmodule CodexPoolerWeb.Admin.StatusHooksTest do
     _ = :sys.get_state(view.pid)
     assert :sys.get_state(view.pid).socket.assigns.openai_status_aggregate.aggregate_revision == 7
   end
+
+  test "freshness requires matching content revision and a newer timestamp", %{conn: conn} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, _} =
+             OpenAIStatus.upsert_feed_state(%{
+               aggregate_revision: 7,
+               last_success_at: now,
+               updated_at: now
+             })
+
+    {:ok, view, _} = live(conn, "/admin/incidents")
+    before = :sys.get_state(view.pid).socket.assigns
+
+    for {revision, timestamp} <- [
+          {6, DateTime.add(now, 1, :second)},
+          {8, DateTime.add(now, 1, :second)},
+          {7, now},
+          {7, DateTime.add(now, -1, :second)}
+        ] do
+      send(
+        view.pid,
+        {:openai_status_freshness,
+         %{
+           event_version: 1,
+           event_type: :freshness,
+           aggregate_revision: revision,
+           last_success_at: timestamp
+         }}
+      )
+
+      after_event = :sys.get_state(view.pid).socket.assigns
+      assert after_event.openai_status_aggregate == before.openai_status_aggregate
+      assert after_event.incidents_page == before.incidents_page
+    end
+
+    send(
+      view.pid,
+      {:openai_status_freshness,
+       %{
+         event_version: 1,
+         event_type: :freshness,
+         aggregate_revision: 7,
+         last_success_at: DateTime.add(now, 1, :second),
+         extra: true
+       }}
+    )
+
+    assert :sys.get_state(view.pid).socket.assigns.openai_status_aggregate ==
+             before.openai_status_aggregate
+  end
 end

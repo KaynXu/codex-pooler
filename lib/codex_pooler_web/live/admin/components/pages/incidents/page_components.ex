@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
       </div>
 
       <div
-        :if={@page.stale?}
+        :if={@page.polling_enabled? && @page.available? && @page.stale?}
         id="admin-incidents-stale"
         role="status"
         class="rounded-box border border-warning/40 bg-warning/15 px-3 py-2 text-sm text-base-content"
@@ -41,7 +41,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
       </div>
 
       <div
-        :if={@page.last_error_code}
+        :if={@page.polling_enabled? && @page.available? && @page.last_error_code}
         id="admin-incidents-feed-error"
         role="status"
         class="rounded-box border border-error/30 bg-error/10 px-3 py-2 text-sm text-base-content"
@@ -50,13 +50,21 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
       </div>
 
       <div
-        :if={!@page.available?}
+        :if={@page.polling_enabled? && !@page.available?}
         id="admin-incidents-feed-unavailable"
         role="status"
         class="rounded-box border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-content"
       >
         The status feed is not available yet. The first successful refresh is still pending.
         The feed is checked automatically every five minutes.
+      </div>
+      <div
+        :if={!@page.polling_enabled?}
+        id="admin-incidents-feed-disabled"
+        role="status"
+        class="rounded-box border border-base-300 px-3 py-2 text-sm text-base-content"
+      >
+        Status polling is disabled in System settings. Retained incidents show the last known state.
       </div>
     </section>
 
@@ -70,8 +78,12 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
       <AdminComponents.empty_state
         :if={@page.active == []}
         id="admin-incidents-active-empty"
-        title="No active incidents"
-        description="The status feed has no currently active incidents."
+        title={if @page.available?, do: "No active incidents", else: "No incident data yet"}
+        description={
+          if @page.available?,
+            do: "No active incidents in the last successful status refresh.",
+            else: "A successful status refresh is needed before incident availability is known."
+        }
         icon="hero-check-circle"
       />
       <.incident_table
@@ -140,7 +152,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
             <th>Incident</th>
             <th>Status</th>
             <th>Component</th>
-            <th>Updated</th>
+            <th>Provider update</th>
             <th>Source</th>
           </tr>
         </thead>
@@ -166,7 +178,10 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
             <td class="text-sm text-base-content/70">{row.component}</td>
             <td class="whitespace-nowrap text-sm text-base-content/70">
               <div class="grid gap-1">
-                <span>{format_datetime(row.last_seen_at, @datetime_preferences)}</span>
+                <span data-role="incident-published-at">{format_datetime(
+                  row.published_at,
+                  @datetime_preferences
+                )}</span>
                 <span :if={row.resolved_at}>
                   Resolved {format_datetime(row.resolved_at, @datetime_preferences)}
                 </span>
@@ -221,8 +236,11 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
             </dd>
           </div>
           <div class="flex justify-between gap-3">
-            <dt class="text-base-content/50">Updated</dt><dd class="text-right text-base-content/80">
-              {format_datetime(row.last_seen_at, @datetime_preferences)}
+            <dt class="text-base-content/50">Provider update</dt><dd
+              class="text-right text-base-content/80"
+              data-role="incident-published-at"
+            >
+              {format_datetime(row.published_at, @datetime_preferences)}
             </dd>
           </div>
           <div class="flex justify-between gap-3">
@@ -276,11 +294,13 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
   defp status_class(:retired), do: "bg-base-300 text-base-content/70"
   defp status_class(_), do: "bg-base-300 text-base-content/70"
 
+  defp feed_state(%{polling_enabled?: false}), do: "disabled"
   defp feed_state(%{available?: false}), do: "unavailable"
   defp feed_state(%{last_error_code: code}) when is_binary(code), do: "error"
   defp feed_state(%{stale?: true}), do: "stale"
   defp feed_state(_), do: "current"
 
+  defp feed_state_label(%{polling_enabled?: false}), do: "Polling disabled"
   defp feed_state_label(%{available?: false}), do: "Unavailable"
   defp feed_state_label(%{last_error_code: code}) when is_binary(code), do: "Last fetch failed"
   defp feed_state_label(%{stale?: true}), do: "Stale"

@@ -97,6 +97,20 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
             />
           </div>
         </FormControls.settings_group>
+        <FormControls.settings_group
+          id="instance-settings-openai-status"
+          eyebrow="Status feed"
+          title="OpenAI status polling"
+          description="Check status.openai.com every five minutes for provider incident updates."
+          hint="Disable polling when outbound access is restricted. Existing incident history is retained."
+        >
+          <.input
+            id="instance-settings-openai-status-polling-enabled"
+            field={operator_form[:openai_status_polling_enabled]}
+            type="checkbox"
+            label="Enable OpenAI status polling"
+          />
+        </FormControls.settings_group>
       </.inputs_for>
     </FormControls.settings_card>
 

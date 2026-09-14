@@ -36,8 +36,10 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   import Phoenix.Component, only: [assign: 3]
 
   alias CodexPooler.Events
+  alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
   alias CodexPooler.OpenAIStatus
   alias CodexPooler.Status.Events, as: StatusEvents
+  alias CodexPooler.Status.Freshness
   alias CodexPoolerWeb.Admin.OpenAIIncidentsReadModel
   alias Phoenix.LiveView.Socket
 
@@ -62,8 +64,8 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
         :handle_info,
         &gate_live_update/2
       )
-      |> assign_openai_status()
       |> subscribe_openai_status()
+      |> assign_openai_status()
       |> Phoenix.LiveView.attach_hook(
         :admin_openai_status,
         :handle_info,
@@ -192,8 +194,23 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
     case {operator_id, viewed} do
       {operator_id, [_ | _]} when is_binary(operator_id) ->
         case OpenAIStatus.dismiss_many(operator_id, viewed) do
-          {:ok, _count} -> {:halt, assign_openai_status(socket)}
-          {:error, _reason} -> {:halt, assign_openai_status(socket)}
+          {:ok, _count} ->
+            {:halt, assign_openai_status(socket)}
+
+          {:error, :invalid_revision_set} ->
+            {:halt,
+             socket
+             |> assign_openai_status()
+             |> Phoenix.LiveView.put_flash(
+               :error,
+               "Incidents changed. Review the latest updates before dismissing."
+             )}
+
+          {:error, _reason} ->
+            {:halt,
+             socket
+             |> assign_openai_status()
+             |> Phoenix.LiveView.put_flash(:error, "Incidents could not be dismissed. Try again.")}
         end
 
       _ ->
@@ -209,8 +226,22 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   end
 
   defp subscribe_openai_status(socket) do
-    if Phoenix.LiveView.connected?(socket), do: StatusEvents.subscribe()
+    if Phoenix.LiveView.connected?(socket) do
+      :ok = StatusEvents.subscribe()
+      :ok = InstanceSettingsCache.subscribe_applied()
+    end
+
     socket
+  end
+
+  defp handle_openai_status({InstanceSettingsCache, {:applied, version}}, socket)
+       when is_integer(version) do
+    enabled? = InstanceSettingsCache.current().operator.openai_status_polling_enabled
+    current = get_in(socket.assigns, [:openai_status_aggregate, :polling_enabled?])
+
+    if enabled? != current,
+      do: {:halt, refresh_openai_status(socket)},
+      else: {:halt, socket}
   end
 
   defp handle_openai_status({:openai_status_updated, payload}, socket) do
@@ -226,6 +257,37 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
 
       :ignore ->
         {:halt, socket}
+    end
+  end
+
+  defp handle_openai_status({:openai_status_freshness, payload}, socket) do
+    with {:ok, event} <- StatusEvents.decode_freshness(payload),
+         current when is_map(current) <- socket.assigns[:openai_status_aggregate],
+         true <- event.aggregate_revision == current.aggregate_revision,
+         true <-
+           is_nil(current.last_success_at) or
+             DateTime.compare(event.last_success_at, current.last_success_at) == :gt do
+      freshness = %{
+        last_success_at: event.last_success_at,
+        stale?: Freshness.stale?(event.last_success_at)
+      }
+
+      socket = assign(socket, :openai_status_aggregate, Map.merge(current, freshness))
+
+      socket =
+        if Map.has_key?(socket.assigns, :incidents_page) do
+          assign(
+            socket,
+            :incidents_page,
+            Map.merge(socket.assigns.incidents_page, Map.put(freshness, :available?, true))
+          )
+        else
+          socket
+        end
+
+      {:halt, socket}
+    else
+      _ -> {:halt, socket}
     end
   end
 

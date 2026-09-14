@@ -7,15 +7,58 @@ defmodule CodexPoolerWeb.Admin.AdminShellOpenAIStatusTest do
 
   setup :register_and_log_in_user
 
+  test "dismissal conflict reloads current revisions and explains why the banner remains", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      guid: "conflict",
+      title: "Service recovering",
+      status: "Investigating",
+      summary: "bounded",
+      component: nil,
+      link: "https://status.openai.com/incidents/conflict",
+      published_at: now,
+      content_hash: "first"
+    }
+
+    assert {:ok, _} = OpenAIStatus.upsert_incident(attrs, now)
+
+    assert {:ok, _} =
+             OpenAIStatus.upsert_feed_state(%{last_success_at: now, aggregate_revision: 1})
+
+    {:ok, view, _} = live(conn, ~p"/admin/pools")
+
+    assert {:ok, _} =
+             OpenAIStatus.upsert_incident(
+               %{attrs | title: "Service monitoring", content_hash: "second"},
+               DateTime.add(now, 1, :second)
+             )
+
+    view |> element("#admin-openai-status-dismiss") |> render_click()
+    assert has_element?(view, "#admin-openai-status-banner", "Service monitoring")
+
+    assert has_element?(
+             view,
+             "#flash-error",
+             "Incidents changed. Review the latest updates before dismissing."
+           )
+
+    view |> element("#admin-openai-status-dismiss") |> render_click()
+    refute has_element?(view, "#admin-openai-status-banner")
+  end
+
   test "shows one aggregate banner with bounded titles and dismisses it", %{conn: conn} do
     now = DateTime.utc_now()
 
-    for {id, title} <- [
-          {"one", "First outage"},
-          {"two", "Second outage"},
-          {"three", "Third outage"},
-          {"four", "Fourth outage"}
-        ] do
+    for {{id, title}, index} <-
+          Enum.with_index([
+            {"one", "First outage"},
+            {"two", "Second outage"},
+            {"three", "Third outage"},
+            {"four", "Fourth outage"}
+          ]) do
       {:ok, _} =
         OpenAIStatus.upsert_incident(
           %{
@@ -25,7 +68,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellOpenAIStatusTest do
             summary: "safe summary",
             component: "Responses API",
             link: "https://status.openai.com/incidents/banner-#{id}",
-            published_at: now,
+            published_at: DateTime.add(now, -index, :second),
             content_hash: "hash-#{id}"
           },
           now

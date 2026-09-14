@@ -3,10 +3,48 @@ defmodule CodexPooler.Jobs.OpenAIStatusWorkerTest do
 
   import Ecto.Query
 
-  alias CodexPooler.Jobs.{OpenAIStatusCleanupWorker, OpenAIStatusSyncWorker, Schedule}
+  alias CodexPooler.Jobs.{
+    HealthPolicy,
+    OpenAIStatusCleanupWorker,
+    OpenAIStatusSyncWorker,
+    Schedule
+  }
+
   alias CodexPooler.OpenAIStatus
   alias CodexPooler.Repo
   alias CodexPooler.Status.Sync
+
+  test "disabled polling cancels with zero fetches and resumes after the canonical setting changes" do
+    alias CodexPooler.InstanceSettings
+    settings = InstanceSettings.ensure_singleton!()
+    assert settings.operator.openai_status_polling_enabled
+
+    {:ok, disabled} =
+      InstanceSettings.update_system_settings(settings, %{
+        "operator" => %{"openai_status_polling_enabled" => false}
+      })
+
+    assert InstanceSettings.current().operator.openai_status_polling_enabled == false
+    caller = self()
+
+    Application.put_env(:codex_pooler, :openai_status_sync_fetcher, fn _, _ ->
+      send(caller, :status_fetch_called)
+      {:ok, %{items: [], complete?: true}}
+    end)
+
+    assert {:cancel, :openai_status_polling_disabled} = perform_job(OpenAIStatusSyncWorker, %{})
+    refute_received :status_fetch_called
+    assert OpenAIStatus.feed_state() == nil
+
+    assert {:ok, _} =
+             InstanceSettings.update_system_settings(disabled, %{
+               "operator" => %{"openai_status_polling_enabled" => true}
+             })
+
+    assert :ok = perform_job(OpenAIStatusSyncWorker, %{})
+    assert_received :status_fetch_called
+    assert OpenAIStatus.feed_state().last_success_at
+  end
 
   setup do
     Repo.delete_all(Oban.Job)
@@ -37,7 +75,7 @@ defmodule CodexPooler.Jobs.OpenAIStatusWorkerTest do
     refute inspect(OpenAIStatus.feed_state()) =~ "fetcher"
   end
 
-  test "transient failures retry while permanent feed failures cancel without deleting state" do
+  test "expected upstream failures cancel without deleting state or creating active failures" do
     now = ~U[2026-09-10 10:00:00.000000Z]
 
     assert {:ok, _} =
@@ -50,7 +88,7 @@ defmodule CodexPooler.Jobs.OpenAIStatusWorkerTest do
       {:error, %{code: :upstream_unavailable, message: "temporary"}}
     end)
 
-    assert {:error, {:status_feed, "upstream_unavailable"}} =
+    assert {:cancel, {:status_feed, "upstream_unavailable"}} =
              OpenAIStatusSyncWorker.perform(%Oban.Job{args: %{}})
 
     Application.put_env(:codex_pooler, :openai_status_sync_fetcher, fn _state, _opts ->
@@ -63,13 +101,31 @@ defmodule CodexPooler.Jobs.OpenAIStatusWorkerTest do
     assert OpenAIStatus.feed_state().active_count == 0
   end
 
-  test "network failures remain retryable" do
+  test "network failures cancel until the next scheduled poll" do
     Application.put_env(:codex_pooler, :openai_status_sync_fetcher, fn _state, _opts ->
       {:error, %{code: :network_error, message: "transport unavailable"}}
     end)
 
-    assert {:error, {:status_feed, "network_error"}} =
+    assert {:cancel, {:status_feed, "network_error"}} =
              OpenAIStatusSyncWorker.perform(%Oban.Job{args: %{}})
+
+    assert {:ok, job} = OpenAIStatusSyncWorker.new(%{}) |> Oban.insert()
+    assert %{cancelled: 1, failure: 0} = Oban.drain_queue(queue: :jobs)
+    persisted = Repo.get!(Oban.Job, job.id)
+    assert persisted.state == "cancelled"
+    assert HealthPolicy.classify(persisted) == :cancelled
+  end
+
+  test "unexpected programming failures remain visible to Oban" do
+    Application.put_env(:codex_pooler, :openai_status_sync_fetcher, fn _, _ ->
+      raise ArgumentError, "invalid internal state"
+    end)
+
+    assert {:ok, job} = OpenAIStatusSyncWorker.new(%{}) |> Oban.insert()
+    assert %{failure: 1} = Oban.drain_queue(queue: :jobs, with_safety: true)
+    persisted = Repo.get!(Oban.Job, job.id)
+    assert persisted.state == "retryable"
+    assert HealthPolicy.classify(persisted) == :retry_pressure
   end
 
   test "worker returns a bounded cancellation for an invalid normalized item" do

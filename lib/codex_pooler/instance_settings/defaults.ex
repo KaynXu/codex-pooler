@@ -68,7 +68,8 @@ defmodule CodexPooler.InstanceSettings.Defaults do
   def transcription, do: %{"max_upload_bytes" => @transcription_max_upload_bytes}
 
   @spec operator() :: map()
-  def operator, do: %{"login_base_url" => @operator_login_base_url}
+  def operator,
+    do: %{"login_base_url" => @operator_login_base_url, "openai_status_polling_enabled" => true}
 
   @spec catalog() :: map()
   defdelegate catalog(), to: StaticDefaults
