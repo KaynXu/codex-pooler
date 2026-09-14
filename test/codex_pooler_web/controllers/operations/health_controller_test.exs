@@ -144,7 +144,6 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     activity_registry = :"health-rollout-activity-#{System.unique_integer([:positive])}"
     drain_name = :"health-rollout-drain-#{System.unique_integer([:positive])}"
     stream_registry = :"health-rollout-streams-#{System.unique_integer([:positive])}"
-    deadline = observed_drain_deadline(self())
     start_supervised!({ActivityRegistry, name: activity_registry})
     # Draining marks a registry drained for good, so keep the deferred-stream
     # registry local rather than flipping the global one for later tests.
@@ -152,10 +151,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
     start_supervised!(
       {RolloutDrain,
-       name: drain_name,
-       activity_registry: activity_registry,
-       stream_registry: stream_registry,
-       deadline: deadline}
+       name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry}
     )
 
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
@@ -169,14 +165,11 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     refute ActivityRegistry.draining?()
 
     assert %{result: :ok, owners_seen: 0} =
-             RolloutDrain.start_drain(name: drain_name, timeout_ms: 100, deadline: deadline)
+             RolloutDrain.start_drain(name: drain_name, timeout_ms: 100)
 
     assert ActivityRegistry.draining?(name: activity_registry)
     refute ActivityRegistry.draining?()
-    assert_receive {:health_rollout_drain_worker, drain_worker}
-    drain_worker_ref = Process.monitor(drain_worker)
-    assert_receive {:DOWN, ^drain_worker_ref, :process, ^drain_worker, drain_worker_reason}
-    assert drain_worker_reason in [:normal, :noproc]
+    assert RolloutDrain.draining?(name: drain_name)
 
     {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
 
@@ -236,31 +229,6 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     assert length(events) == 2
     assert Enum.all?(events, &(&1.path == "/backend-api/codex/models"))
     assert Enum.all?(events, &(&1.log_level == :info))
-  end
-
-  defp observed_drain_deadline(parent) do
-    %{
-      now_ms: fn ->
-        unless Process.get({__MODULE__, :health_drain_worker_reported}, false) do
-          Process.put({__MODULE__, :health_drain_worker_reported}, true)
-          send(parent, {:health_rollout_drain_worker, self()})
-        end
-
-        System.monotonic_time(:millisecond)
-      end,
-      schedule_wait: fn recipient, wait_token, wait_ms ->
-        Process.send_after(recipient, {:rollout_drain_wait_elapsed, wait_token}, wait_ms)
-      end,
-      cancel_wait: fn timer_ref, wait_token ->
-        _result = Process.cancel_timer(timer_ref)
-
-        receive do
-          {:rollout_drain_wait_elapsed, ^wait_token} -> :ok
-        after
-          0 -> :ok
-        end
-      end
-    }
   end
 
   defp capture_endpoint_log_decisions(fun) do
