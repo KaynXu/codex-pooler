@@ -22,6 +22,181 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
   @incomplete_job_states ~w(available scheduled executing retryable)
 
   describe "provider token refresh lifecycle" do
+    test "a proactive token expiring during the provider call is not restored to active" do
+      ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.barrier_json_response(%{"error" => "temporary"},
+            status: 503,
+            notify: self(),
+            release_ref: ref
+          )
+        )
+
+      deadline = DateTime.add(DateTime.utc_now(), 500, :millisecond)
+
+      identity =
+        refreshable_identity_fixture(
+          "active",
+          Map.put(known_expiry_metadata(4, deadline), "base_url", FakeUpstream.url(upstream))
+        )
+
+      store_secret!(identity, "refresh_token", secret("refresh", "expires-during-call"))
+
+      task =
+        Task.async(fn ->
+          TokenRefresh.refresh_access_token(identity, trigger_kind: "scheduled")
+        end)
+
+      on_exit(fn -> if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill) end)
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, provider, ^ref}, 15_000
+      on_exit(fn -> send(provider, {:fake_upstream_release_timeout, ref}) end)
+      # Expiration itself is the behavior: release only after the real deadline.
+      timer =
+        Process.send_after(
+          self(),
+          {:expired, ref},
+          max(DateTime.diff(deadline, DateTime.utc_now(), :millisecond), 0) + 1
+        )
+
+      on_exit(fn -> Process.cancel_timer(timer) end)
+      assert_receive {:expired, ^ref}, 15_000
+      assert DateTime.compare(DateTime.utc_now(), deadline) == :gt
+      send(provider, {:fake_upstream_release_timeout, ref})
+      assert {:ok, %{status: :refresh_failed, retryable?: true}} = Task.await(task, 15_000)
+    end
+
+    test "queued scheduled active refresh rechecks disabled proactive setting before provider I/O" do
+      upstream = start_path_upstream(%{"/oauth/token" => {503, %{"error" => "must_not_run"}}})
+
+      identity =
+        refreshable_identity_fixture(
+          "active",
+          Map.put(
+            known_expiry_metadata(4, DateTime.add(DateTime.utc_now(), 3600)),
+            "base_url",
+            FakeUpstream.url(upstream)
+          )
+        )
+
+      store_secret!(identity, "refresh_token", secret("refresh", "disabled"))
+      settings = CodexPooler.InstanceSettings.ensure_singleton!()
+
+      assert {:ok, _} =
+               CodexPooler.InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"upstream_token_refresh_proactive_enabled" => false}
+               })
+
+      assert :discard =
+               perform_job(TokenRefreshWorker, %{
+                 "upstream_identity_id" => identity.id,
+                 "trigger_kind" => "scheduled"
+               })
+
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.reload!(identity).status == "active"
+    end
+
+    for {label, status, trigger, expiry} <- [
+          {:unknown, "active", "scheduled", :unknown},
+          {:expired, "active", "scheduled", :expired},
+          {:reactive, "active", "http_upstream_auth_failure", :valid},
+          {:recovery, "refresh_due", "scheduled", :valid}
+        ] do
+      test "transient #{label} refresh does not preserve active routing" do
+        upstream = start_path_upstream(%{"/oauth/token" => {503, %{"error" => "temporary"}}})
+
+        metadata =
+          case unquote(expiry) do
+            :unknown -> %{}
+            :expired -> known_expiry_metadata(4, DateTime.add(DateTime.utc_now(), -1))
+            :valid -> known_expiry_metadata(4, DateTime.add(DateTime.utc_now(), 3600))
+          end
+
+        identity =
+          refreshable_identity_fixture(
+            unquote(status),
+            Map.put(metadata, "base_url", FakeUpstream.url(upstream))
+          )
+
+        store_secret!(identity, "access_token", secret("access", "control"))
+        store_secret!(identity, "refresh_token", secret("refresh", "control"))
+
+        assert {:error, _} =
+                 perform_job(TokenRefreshWorker, %{
+                   "upstream_identity_id" => identity.id,
+                   "trigger_kind" => unquote(trigger)
+                 })
+
+        assert Repo.reload!(identity).status == "refresh_failed"
+      end
+    end
+
+    test "scheduled terminal invalid_grant still requires reauthentication" do
+      upstream = start_path_upstream(%{"/oauth/token" => {400, %{"error" => "invalid_grant"}}})
+      metadata = known_expiry_metadata(4, DateTime.add(DateTime.utc_now(), 3600))
+
+      identity =
+        refreshable_identity_fixture(
+          "active",
+          Map.put(metadata, "base_url", FakeUpstream.url(upstream))
+        )
+
+      store_secret!(identity, "access_token", secret("access", "terminal"))
+      store_secret!(identity, "refresh_token", secret("refresh", "terminal"))
+
+      assert :discard =
+               perform_job(TokenRefreshWorker, %{
+                 "upstream_identity_id" => identity.id,
+                 "trigger_kind" => "scheduled"
+               })
+
+      assert Repo.reload!(identity).status == "reauth_required"
+    end
+
+    test "worker backoff is independent of persisted identity status" do
+      assert Enum.map(1..7, &TokenRefreshWorker.backoff(%Oban.Job{attempt: &1})) ==
+               [60, 120, 240, 480, 960, 1920, 3600]
+
+      assert TokenRefreshWorker.new(%{}).changes.max_attempts == 8
+    end
+
+    test "scheduled worker transient failure preserves the current usable credential and retries" do
+      upstream = start_path_upstream(%{"/oauth/token" => {503, %{"error" => "temporary"}}})
+      metadata = known_expiry_metadata(4, DateTime.add(DateTime.utc_now(), 3600))
+
+      identity =
+        refreshable_identity_fixture(
+          "active",
+          Map.put(metadata, "base_url", FakeUpstream.url(upstream))
+        )
+
+      store_secret!(identity, "access_token", secret("access", "proactive"))
+      store_secret!(identity, "refresh_token", secret("refresh", "proactive"))
+      before = Repo.reload!(identity)
+      old_access = Secrets.decrypt_active_secret(identity, "access_token")
+      old_refresh = Secrets.decrypt_active_secret(identity, "refresh_token")
+
+      assert {:error, "token refresh failed: codex_auth_transient"} =
+               perform_job(TokenRefreshWorker, %{
+                 "upstream_identity_id" => identity.id,
+                 "trigger_kind" => "scheduled"
+               })
+
+      after_failure = Repo.reload!(identity)
+      assert after_failure.status == "active"
+      assert after_failure.metadata["credential_epoch"] == before.metadata["credential_epoch"]
+
+      assert TokenRefreshMetadata.project_access_token_expiry(after_failure.metadata) ==
+               TokenRefreshMetadata.project_access_token_expiry(before.metadata)
+
+      assert Secrets.decrypt_active_secret(identity, "access_token") == old_access
+      assert Secrets.decrypt_active_secret(identity, "refresh_token") == old_refresh
+      assert after_failure.metadata["token_refresh"]["status"] == "failed"
+      assert length(FakeUpstream.requests(upstream)) == 1
+    end
+
     test "refresh success rotates the access token, preserves encrypted boundaries, and activates refreshable accounts" do
       access_token = secret("access", "old")
       refresh_token = secret("refresh", "stable")

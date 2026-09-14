@@ -39,6 +39,19 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
                   form={gateway_form}
                   controls={gateway_debug_controls()}
                 />
+                <FormControls.scalar_controls
+                  form={gateway_form}
+                  controls={[
+                    %{
+                      type: :toggle,
+                      id: "instance-settings-upstream-token-refresh-proactive-enabled",
+                      field: :upstream_token_refresh_proactive_enabled,
+                      label: "Proactive credential refresh",
+                      hint:
+                        "Refresh active accounts near token expiry, including busy accounts. Disabling this leaves manual refresh, recovery, and refresh after authentication failure enabled."
+                    }
+                  ]}
+                />
               </div>
               <GatewaySettingsMatrix.matrix groups={
                 gateway_setting_groups(gateway_form, files_form, transcription_form)
@@ -241,7 +254,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
         id: "token_refresh",
         label: "Credential refresh",
         description:
-          "Controls how early scheduled recovery refreshes upstream credentials that no traffic is exercising.",
+          "Controls how early scheduled recovery refreshes upstream credentials based on expiry, including busy accounts.",
         form: gateway_form,
         settings: [
           gateway_setting(%{

@@ -213,6 +213,29 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
          timestamp,
          credential_epoch
        ) do
+    if trigger_kind == "scheduled" and locked.status == @active and
+         not CodexPooler.InstanceSettings.current().gateway.upstream_token_refresh_proactive_enabled do
+      token_refresh_result(:noop, locked, retryable?: false, reason: "proactive refresh disabled")
+    else
+      begin_enabled_refresh(
+        locked,
+        trigger_kind,
+        receive_timeout_ms,
+        stale_after_ms,
+        timestamp,
+        credential_epoch
+      )
+    end
+  end
+
+  defp begin_enabled_refresh(
+         locked,
+         trigger_kind,
+         receive_timeout_ms,
+         stale_after_ms,
+         timestamp,
+         credential_epoch
+       ) do
     case active_refresh_attempt_metadata(locked, timestamp) do
       {:ok, metadata} ->
         {:refresh_in_progress, metadata}
@@ -246,6 +269,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
         timestamp,
         credential_epoch
       )
+      |> Map.put(:proactive?, trigger_kind == "scheduled" and locked.status == @active)
 
     case Secrets.decrypt_active_secret(locked, "refresh_token") do
       {:ok, refresh_token} ->
@@ -481,10 +505,18 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
   end
 
   defp finalize_refresh_failure(identity, trigger_kind, attempt, code, timestamp) do
+    expiry =
+      identity.metadata
+      |> TokenRefreshMetadata.project_access_token_expiry()
+      |> AccessTokenExpiry.evaluate(timestamp)
+
+    preserve_active? = attempt.proactive? and expiry.state == :known
+    status = if preserve_active?, do: @active, else: @refresh_failed
+
     failed_identity =
       identity
       |> UpstreamIdentity.changeset(%{
-        status: @refresh_failed,
+        status: status,
         updated_at: timestamp,
         metadata:
           put_token_refresh_metadata(
@@ -497,7 +529,9 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
       })
       |> Repo.update!()
 
-    token_refresh_result(:refresh_failed, failed_identity,
+    token_refresh_result(
+      if(preserve_active?, do: :active, else: :refresh_failed),
+      failed_identity,
       retryable?: true,
       reason: token_refresh_message(code)
     )

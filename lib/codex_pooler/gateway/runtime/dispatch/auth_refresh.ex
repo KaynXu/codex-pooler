@@ -35,8 +35,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh do
   # The 401 was produced by the credentials this dispatch connected with:
   # carrying their epoch lets a late follower skip the provider refresh when
   # another caller already rotated, and retry with the returned identity.
-  # At token expiry every in-flight request on the identity fails auth at
-  # once, so this is the highest-frequency duplicate-refresh source.
+  # This reuses an already committed credential replacement. A concurrent
+  # follower arriving before commit receives refresh_in_progress instead.
   @spec refresh(SelectedCandidateContext.t(), transport()) :: refresh_result()
   def refresh(%SelectedCandidateContext{identity: identity} = context, transport) do
     trigger_kind = trigger_kind(transport)

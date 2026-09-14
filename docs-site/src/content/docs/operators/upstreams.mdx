@@ -260,6 +260,20 @@ refresh first. If token refresh fails, the account can move to `refresh_failed`
 before any user request is routed, and runtime routing excludes it until token
 refresh succeeds or the credentials are relinked.
 
+Scheduled proactive refresh is based on token expiry and includes busy accounts.
+It is enabled by default; use **System → Gateway → Proactive credential refresh**
+to disable this selection. Already queued proactive jobs recheck that setting
+before contacting the provider. Manual refresh, lifecycle recovery, and refresh
+after an upstream authentication failure remain available.
+
+When proactive refresh starts from an active account and fails transiently,
+the same canonically known, unexpired credential remains active and pinned
+continuations may keep using it. The failed refresh remains retryable: delays
+are 60, 120, 240, 480, 960, 1920, and 3600 seconds before the eighth attempt.
+After exhaustion, scheduled selection observes the six-hour cooldown. Unknown
+or expired credentials and reactive authentication failures do not receive this
+preservation; terminal refresh-token rejection still requires reauthentication.
+
 Operators should never paste callback URLs, authorization codes, tokens, cookies,
 returned browser URLs, raw auth.json, OpenAI provider payloads, raw user subjects, or local credential files into docs,
 tickets, logs, or evidence. The admin UI may show the one-time authorization URL

@@ -28,6 +28,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
     :upstream_receive_timeout_ms,
     :upstream_conn_max_idle_time_ms,
     :upstream_token_refresh_margin_seconds,
+    :upstream_token_refresh_proactive_enabled,
     :expired_alias_ttl_seconds,
     :bridge_owner_lease_ttl_seconds,
     :bridge_owner_lease_renewal_seconds,
@@ -52,6 +53,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :upstream_receive_timeout_ms, :integer
       field :upstream_conn_max_idle_time_ms, :integer
       field :upstream_token_refresh_margin_seconds, :integer
+      field :upstream_token_refresh_proactive_enabled, :boolean
       field :expired_alias_ttl_seconds, :integer
       field :bridge_owner_lease_ttl_seconds, :integer
       field :bridge_owner_lease_renewal_seconds, :integer
@@ -240,6 +242,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_receive_timeout_ms,
       :upstream_conn_max_idle_time_ms,
       :upstream_token_refresh_margin_seconds,
+      :upstream_token_refresh_proactive_enabled,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -260,6 +263,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_receive_timeout_ms,
       :upstream_conn_max_idle_time_ms,
       :upstream_token_refresh_margin_seconds,
+      :upstream_token_refresh_proactive_enabled,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,

@@ -1889,6 +1889,26 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
   end
 
+  test "saves and resets proactive credential refresh through the gateway card", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    selector = "#instance-settings-upstream-token-refresh-proactive-enabled"
+    assert has_element?(view, selector <> "[checked]")
+
+    view
+    |> element("#instance-settings-gateway-form")
+    |> render_submit(%{
+      "instance_settings" => %{
+        "gateway" => %{"upstream_token_refresh_proactive_enabled" => "false"}
+      }
+    })
+
+    assert InstanceSettings.get!().gateway.upstream_token_refresh_proactive_enabled == false
+    refute has_element?(view, selector <> "[checked]")
+    render_click(element(view, "#instance-settings-gateway-reset-token_refresh"))
+    assert has_element?(view, selector <> "[checked]")
+    assert InstanceSettings.get!().gateway.upstream_token_refresh_proactive_enabled == false
+  end
+
   test "validates, saves, audits, and reloads the upstream connection idle bound", %{
     conn: conn,
     user: user

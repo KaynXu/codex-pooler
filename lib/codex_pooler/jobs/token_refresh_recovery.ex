@@ -6,7 +6,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   whose lifecycle already records refresh work to finish: `refresh_due`,
   `refreshing` with a stale claim, and `refresh_failed` past its cooldown. The
   proactive arm picks up `active` identities whose access token is expired or
-  close to its deadline, because an identity with no traffic is never moved to
+  close to its deadline, including busy accounts. An identity with no traffic is never moved to
   `refresh_due` by a request and would otherwise age until only a browser
   re-authentication could recover it.
 
@@ -100,7 +100,8 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
       |> TokenRefreshMetadata.project_access_token_expiry()
       |> AccessTokenExpiry.evaluate(now)
 
-    if proactive_refresh_due?(evaluation, now, margin_seconds) do
+    if CodexPooler.InstanceSettings.current().gateway.upstream_token_refresh_proactive_enabled and
+         proactive_refresh_due?(evaluation, now, margin_seconds) do
       proactive_eligibility(identity, now)
     else
       []

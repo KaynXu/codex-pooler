@@ -26,7 +26,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   # refresh_due. Its selection semantics belong to
   # `CodexPooler.Jobs.TokenRefreshRecovery`, which reads this snapshot. Observed
   # Codex access tokens carry a `jwt_exp` deadline roughly 6-10 days out, so the
-  # 48 h default refreshes an idle identity about two days before it would
+  # 48 h default refreshes an active identity about two days before it would
   # expire: enough slack for several attempts at the recovery cooldown, while
   # still leaving most of the token's life untouched. The struct default seeds
   # the Instance Setting default through `InstanceSettings.Defaults`.

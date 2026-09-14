@@ -324,6 +324,17 @@ defmodule CodexPooler.InstanceSettings.Classification do
         "Scheduled token refresh recovery resolves this margin from cached instance settings when each pass runs; changes affect later passes, not in-flight refreshes."
     },
     %{
+      key: :upstream_token_refresh_proactive_enabled,
+      bucket: :db_runtime_cached,
+      group: :gateway,
+      label: "Proactive token refresh",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes:
+        "Expiry-based refresh selection and queued scheduled active claims recheck this setting; recovery and reactive refresh remain enabled."
+    },
+    %{
       key: :model_context_window_overrides,
       bucket: :db_runtime_live,
       group: :gateway,

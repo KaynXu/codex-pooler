@@ -445,6 +445,20 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert maximum.gateway.upstream_connect_timeout_ms == 15_000
   end
 
+  test "proactive refresh defaults on and can be disabled without changing its margin" do
+    settings = InstanceSettings.ensure_singleton!()
+    assert Map.get(settings.gateway, :upstream_token_refresh_proactive_enabled) == true
+
+    assert {:ok, changed} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"upstream_token_refresh_proactive_enabled" => false}
+             })
+
+    assert changed.gateway.upstream_token_refresh_proactive_enabled == false
+    assert changed.gateway.upstream_token_refresh_margin_seconds == 172_800
+    assert InstanceSettings.current().gateway.upstream_token_refresh_proactive_enabled == false
+  end
+
   test "changeset rejects proactive token refresh margin values outside the bounded range" do
     settings = InstanceSettings.ensure_singleton!()
 

@@ -26,8 +26,8 @@ defmodule CodexPooler.Jobs.TokenRefreshWorker do
     case TokenRefresh.refresh_access_token(identity_id,
            trigger_kind: trigger_kind
          ) do
+      {:ok, %{retryable?: true, reason: reason}} -> {:error, reason}
       {:ok, %{status: :active}} -> :ok
-      {:ok, %{status: :refresh_failed, retryable?: true, reason: reason}} -> {:error, reason}
       {:ok, %{status: status}} when status in [:reauth_required, :noop] -> :discard
       {:error, :refresh_in_progress, _metadata} -> {:snooze, 5}
       {:error, reason} -> {:error, reason}

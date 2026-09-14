@@ -1,4 +1,6 @@
 defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
+  alias CodexPooler.Jobs.TokenRefreshRecovery
+
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Jobs
@@ -21,6 +23,29 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
   end
 
   describe "scheduled token refresh recovery enqueue" do
+    test "disabling proactive refresh retains scheduled recovery of refresh_due identities" do
+      active =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 1, :hour),
+              finished_at: DateTime.add(@now, -7, :hour)
+            )
+        )
+
+      due = recovery_identity_fixture("refresh_due")
+      settings = CodexPooler.InstanceSettings.ensure_singleton!()
+
+      assert {:ok, _} =
+               CodexPooler.InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"upstream_token_refresh_proactive_enabled" => false}
+               })
+
+      candidates = TokenRefreshRecovery.list_candidates(now: @now)
+      assert due.id in Enum.map(candidates, & &1.id)
+      refute active.id in Enum.map(candidates, & &1.id)
+    end
+
     test "enqueues refresh_due identities with active assignments immediately" do
       identity = recovery_identity_fixture("refresh_due")
 
@@ -291,7 +316,31 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
     end
   end
 
-  describe "proactive refresh of idle active identities" do
+  describe "expiry-based proactive refresh of active identities" do
+    test "active identities with an in-progress attempt remain eligible by expiry" do
+      identity =
+        recovery_identity_fixture("active",
+          metadata:
+            refreshed_metadata(
+              deadline: DateTime.add(@now, 1, :hour),
+              finished_at: DateTime.add(@now, -7, :hour)
+            )
+        )
+
+      assignment =
+        Repo.one!(from a in PoolUpstreamAssignment, where: a.upstream_identity_id == ^identity.id)
+
+      pool = Repo.get!(CodexPooler.Pools.Pool, assignment.pool_id)
+      %{api_key: key} = active_api_key_fixture(pool)
+      request = request_fixture(%{pool: pool, api_key: key}, %{status: "in_progress"})
+      _attempt = attempt_fixture(request, assignment, %{status: "in_progress"})
+
+      assert identity.id in Enum.map(
+               TokenRefreshRecovery.list_candidates(now: @now),
+               & &1.id
+             )
+    end
+
     test "selects an active identity whose access token is inside the proactive margin" do
       identity =
         recovery_identity_fixture("active",
