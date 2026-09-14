@@ -126,10 +126,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
-  def synthetic_terminal_failure(%{public_openai_chat: stream_state} = state, _reason) do
+  def synthetic_terminal_failure(%{public_openai_chat: stream_state} = state, reason) do
     # Chat streams cannot use the websocket bridge. Keep this gate byte-identical
     # to terminal_missing_interruption_reason/2 so emission and settlement agree.
-    if ChatCompletions.visible_seen?(stream_state) and
+    if (owner_drain_reason?(reason) or ChatCompletions.visible_seen?(stream_state)) and
          not ChatCompletions.terminal_seen?(stream_state) do
       message = StreamProtocol.synthetic_public_openai_responses_failure_message()
 
@@ -218,7 +218,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         %{public_openai_chat: stream_state},
         original_reason
       ) do
-    if ChatCompletions.visible_seen?(stream_state) and
+    if (owner_drain_reason?(original_reason) or ChatCompletions.visible_seen?(stream_state)) and
          not ChatCompletions.terminal_seen?(stream_state) do
       {:upstream_stream_interrupted, original_reason}
     else

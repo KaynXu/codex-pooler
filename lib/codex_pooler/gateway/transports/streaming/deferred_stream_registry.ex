@@ -34,6 +34,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
           required(:pid) => pid(),
           required(:request_id) => String.t() | nil,
           required(:attempt_id) => String.t() | nil,
+          required(:phase) => :admitted | :streaming,
           required(:status) => :active | {:finished, outcome()}
         }
 
@@ -68,6 +69,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
     end
   end
 
+  @spec admit(keyword()) :: {:ok, token() | nil} | {:error, :owner_drained}
+  def admit(opts \\ []) do
+    case GenServer.whereis(server(opts)) do
+      nil -> {:ok, nil}
+      server -> GenServer.call(server, {:admit, self()})
+    end
+  end
+
+  @spec checkpoint(keyword()) :: :ok | {:error, :owner_drained}
+  def checkpoint(opts \\ []) do
+    case GenServer.whereis(server(opts)) do
+      nil -> :ok
+      server -> GenServer.call(server, {:checkpoint, self()})
+    end
+  end
+
   @doc """
   Releases one registration depth for `token` and records `outcome` when the
   outermost deferred stream of that process returns.
@@ -91,7 +108,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
   end
 
   @spec begin_drain(keyword()) :: {reference(), [drain_entry()]}
-  def begin_drain(opts \\ []), do: GenServer.call(server(opts), :begin_drain)
+  def begin_drain(opts \\ []),
+    do: GenServer.call(server(opts), {:begin_drain, Keyword.get(opts, :deadline)})
+
+  @spec drain_entries(keyword()) :: [drain_entry()]
+  def drain_entries(opts \\ []), do: GenServer.call(server(opts), :drain_entries)
 
   @spec complete_drain(reference(), keyword()) :: :ok
   def complete_drain(epoch, opts \\ []) when is_reference(epoch) do
@@ -121,18 +142,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
 
   @impl GenServer
   def init(:ok) do
-    {:ok, %{streams: %{}, pids: %{}, monitors: %{}, draining?: false, drain: nil}}
+    {:ok, %{streams: %{}, pids: %{}, monitors: %{}, draining?: false, drain: nil, deadline: nil}}
   end
 
   @impl GenServer
+  def handle_call({:admit, _pid}, _from, %{draining?: true} = state),
+    do: {:reply, {:error, :owner_drained}, state}
+
+  def handle_call({:admit, pid}, _from, state) do
+    {token, state} = insert_registration(state, pid, %{phase: :admitted})
+    {:reply, {:ok, token}, state}
+  end
+
+  def handle_call({:checkpoint, pid}, _from, state) do
+    reply =
+      if Map.has_key?(state.pids, pid) and cutoff?(state), do: {:error, :owner_drained}, else: :ok
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:register, pid, attrs}, _from, state) do
     case Map.fetch(state.pids, pid) do
       {:ok, token} ->
+        if cutoff?(state), do: send(pid, drain_message(token))
         {:reply, token, refresh_registration(state, token, attrs)}
 
       :error ->
         {token, state} = insert_registration(state, pid, attrs)
-        if state.draining?, do: send(pid, drain_message(token))
+        if cutoff?(state), do: send(pid, drain_message(token))
         {:reply, token, state}
     end
   end
@@ -140,7 +177,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
   def handle_call({:finish, token, outcome}, _from, state) do
     case Map.fetch(state.streams, token) do
       {:ok, %{depth: depth}} when depth > 1 ->
-        {:reply, :ok, put_in(state.streams[token].depth, depth - 1)}
+        state =
+          update_in(state.streams[token], fn entry ->
+            %{entry | depth: depth - 1, outcome: merge_outcome(entry.outcome, outcome)}
+          end)
+
+        {:reply, :ok, state}
 
       {:ok, _entry} ->
         {:reply, :ok, finish_stream(state, token, outcome, true)}
@@ -161,16 +203,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
     end
   end
 
-  def handle_call(:begin_drain, _from, %{drain: nil} = state) do
+  def handle_call({:begin_drain, deadline}, _from, %{drain: nil} = state) do
     epoch = make_ref()
     drain = %{epoch: epoch, tokens: state.streams |> Map.keys() |> MapSet.new(), outcomes: %{}}
-    state = %{state | draining?: true, drain: drain}
-    {:reply, {epoch, drain_entries(state)}, state}
+    state = %{state | draining?: true, drain: drain, deadline: state.deadline || deadline}
+    {:reply, {epoch, entries(state)}, state}
   end
 
-  def handle_call(:begin_drain, _from, state) do
-    {:reply, {state.drain.epoch, drain_entries(state)}, state}
+  def handle_call({:begin_drain, _deadline}, _from, state) do
+    {:reply, {state.drain.epoch, entries(state)}, state}
   end
+
+  def handle_call(:drain_entries, _from, state), do: {:reply, entries(state), state}
 
   def handle_call({:complete_drain, epoch}, _from, %{drain: %{epoch: epoch}} = state) do
     {:reply, :ok, %{state | drain: nil}}
@@ -189,7 +233,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
   end
 
   def handle_call(:streams, _from, state) do
-    {:reply, Enum.map(state.streams, fn {token, entry} -> public_entry(token, entry) end), state}
+    streams =
+      for {token, %{phase: :streaming} = entry} <- state.streams,
+          do: public_entry(token, entry)
+
+    {:reply, streams, state}
   end
 
   def handle_call(:draining?, _from, state), do: {:reply, state.draining?, state}
@@ -216,6 +264,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
       monitor: monitor,
       depth: 1,
       interrupted?: false,
+      phase: Map.get(attrs, :phase, :streaming),
+      outcome: :completed,
       request_id: Map.get(attrs, :request_id),
       attempt_id: Map.get(attrs, :attempt_id)
     }
@@ -226,6 +276,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
         pids: Map.put(state.pids, pid, token),
         monitors: Map.put(state.monitors, monitor, token)
     }
+
+    state = if state.drain, do: update_in(state.drain.tokens, &MapSet.put(&1, token)), else: state
 
     {token, state}
   end
@@ -239,7 +291,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
         entry
         | depth: entry.depth + 1,
           request_id: Map.get(attrs, :request_id, entry.request_id),
-          attempt_id: Map.get(attrs, :attempt_id, entry.attempt_id)
+          attempt_id: Map.get(attrs, :attempt_id, entry.attempt_id),
+          phase: :streaming
       }
     end)
   end
@@ -259,7 +312,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
             monitors: Map.delete(state.monitors, entry.monitor)
         }
 
-        %{state | drain: record_drain_outcome(state.drain, token, entry, outcome)}
+        %{
+          state
+          | drain:
+              record_drain_outcome(
+                state.drain,
+                token,
+                entry,
+                merge_outcome(entry.outcome, outcome)
+              )
+        }
     end
   end
 
@@ -282,7 +344,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
     end
   end
 
-  defp drain_entries(%{drain: drain} = state) do
+  defp entries(%{drain: nil}), do: []
+
+  defp entries(%{drain: drain} = state) do
     Enum.map(drain.tokens, fn token ->
       case Map.get(state.streams, token) do
         nil ->
@@ -301,9 +365,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry do
       pid: entry.pid,
       request_id: entry.request_id,
       attempt_id: entry.attempt_id,
+      phase: entry.phase,
       status: :active
     }
   end
+
+  defp cutoff?(%{draining?: false}), do: false
+  defp cutoff?(%{deadline: nil}), do: true
+  defp cutoff?(%{deadline: %{at: at, now_ms: now_ms}}), do: now_ms.() >= at
+
+  defp merge_outcome(:failed, _), do: :failed
+  defp merge_outcome(_, :failed), do: :failed
+  defp merge_outcome(:aborted, _), do: :aborted
+  defp merge_outcome(_, outcome), do: outcome
 
   # Mirrors `RolloutDrain.configured_server_name/1`: tests point registration at
   # an isolated registry so a drain in one test can never flip the global

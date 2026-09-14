@@ -144,12 +144,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamDrainTest do
         send(parent, {:registered, token})
 
         receive do
-          {:gateway_stream_drain, ^token, :owner_drained} ->
-            receive do
-              :finish ->
-                :ok = DeferredStreamRegistry.finish(token, :completed, name: registry)
-                send(parent, :finished)
-            end
+          :finish ->
+            :ok = DeferredStreamRegistry.finish(token, :completed, name: registry)
+            send(parent, :finished)
         end
 
         receive do

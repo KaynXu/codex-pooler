@@ -24,6 +24,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   @spec dispatch(PreparedContext.t(), callbacks()) :: dispatch_result()
   def dispatch(%PreparedContext{context: context} = prepared_context, callbacks) do
+    case CodexPooler.Gateway.Admission.checkpoint() do
+      :ok ->
+        dispatch_admitted(prepared_context, callbacks)
+
+      {:error, error} ->
+        Finalization.Websocket.finalize_failed(context, %{
+          reason: :owner_drained,
+          error: Map.delete(error, :accounting_disposition),
+          body: "",
+          headers: [],
+          started: context.started
+        })
+    end
+  end
+
+  defp dispatch_admitted(%PreparedContext{context: context} = prepared_context, callbacks) do
     case transport_decision(context.request_options) do
       :websocket ->
         dispatch_websocket(prepared_context, callbacks)

@@ -549,7 +549,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     tracked_policy = %{
       policy
       | now_ms: fn ->
-          Agent.update(worker_tracker, &MapSet.put(&1, self()))
+          # The named coordinator and stream registry also sample the cutoff.
+          # They are supervised harness resources, not finite drain workers.
+          if Process.info(self(), :registered_name) == {:registered_name, []} do
+            Agent.update(worker_tracker, &MapSet.put(&1, self()))
+          end
+
           policy.now_ms.()
         end
     }

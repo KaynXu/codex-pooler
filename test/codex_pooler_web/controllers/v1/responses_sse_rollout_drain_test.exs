@@ -11,11 +11,41 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport.VirtualDeadline
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
   @public_path "/v1/responses"
   @response_id "resp_v1_rollout_drain"
+
+  defmodule RaisingChunkAdapter do
+    @moduledoc false
+    defdelegate send_chunked(state, status, headers), to: Plug.Adapters.Test.Conn
+    defdelegate send_resp(state, status, headers, body), to: Plug.Adapters.Test.Conn
+    defdelegate read_req_body(state, opts), to: Plug.Adapters.Test.Conn
+    defdelegate get_peer_data(state), to: Plug.Adapters.Test.Conn
+    defdelegate get_http_protocol(state), to: Plug.Adapters.Test.Conn
+    def chunk(_state, _body), do: raise(ArgumentError, "synthetic downstream writer failure")
+  end
+
+  defmodule PausingHeadersAdapter do
+    @moduledoc false
+    defdelegate send_resp(state, status, headers, body), to: Plug.Adapters.Test.Conn
+    defdelegate read_req_body(state, opts), to: Plug.Adapters.Test.Conn
+    defdelegate get_peer_data(state), to: Plug.Adapters.Test.Conn
+    defdelegate get_http_protocol(state), to: Plug.Adapters.Test.Conn
+    defdelegate chunk(state, body), to: Plug.Adapters.Test.Conn
+
+    def send_chunked(state, status, headers) do
+      send(state.test_parent, {:headers_held, self(), state.test_ref})
+
+      receive do
+        {:release_headers, ref} when ref == state.test_ref ->
+          Plug.Adapters.Test.Conn.send_chunked(state, status, headers)
+      end
+    end
+  end
 
   # The drain polls settled streams every 200 ms, so the drained stream settles
   # far inside this budget; the waits below are failure detection, not timers
@@ -274,6 +304,467 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
     assert Repo.reload!(request).status == "succeeded"
     assert ledger_count(request.id, "settlement") == 1
     assert open_request_count(setup.pool.id) == 0
+  end
+
+  test "an in-budget SSE response completes normally after rollout drain starts", context do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream(
+          [created_event(), delta_event(), completed_event()],
+          barrier_after: 2,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        context.conn |> auth(setup) |> post(@public_path, stream_payload(setup))
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 2, upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    await_registered_stream(context.stream_registry)
+    deadline = WebsocketRolloutDrainSupport.start_virtual_deadline(self())
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: context.drain_name, timeout_ms: 5_000, deadline_margin_ms: 0] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    response = Task.await(request_task, @await_timeout_ms)
+    VirtualDeadline.advance(deadline, 200)
+    summary = Task.await(drain_task, @await_timeout_ms)
+
+    assert stream_event_types(response.resp_body) == [
+             "response.created",
+             "response.output_text.delta",
+             "response.completed"
+           ]
+
+    assert latest_request(setup.pool.id).status == "succeeded"
+    assert summary.http_streams_completed == 1
+    assert summary.http_streams_failed == 0
+  end
+
+  test "HTTP admitted after drain is refused before reservation or upstream dispatch", context do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event()]))
+    setup = gateway_setup(upstream)
+    assert %{result: :ok} = RolloutDrain.start_drain(drain_options(context.drain_name))
+
+    for path <- [@public_path, "/backend-api/codex/responses"], stream? <- [false, true] do
+      response =
+        build_conn()
+        |> auth(setup)
+        |> post(path, Map.put(stream_payload(setup), "stream", stream?))
+
+      assert response.status == 503
+      assert %{"error" => %{"code" => "owner_drained"}} = json_response(response, 503)
+    end
+
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+    assert FakeUpstream.requests(upstream) == []
+    assert build_conn() |> post(@public_path, stream_payload(setup)) |> Map.fetch!(:status) == 401
+    assert build_conn() |> get("/session?optional=1") |> Map.fetch!(:status) == 200
+  end
+
+  test "pre-visible Chat drain emits an explicit terminal error", context do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref,
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        context.conn
+        |> auth(setup)
+        |> post("/v1/chat/completions", %{
+          "model" => setup.model.exposed_model_id,
+          "messages" => [%{"role" => "user", "content" => "synthetic drain request"}],
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    await_registered_stream(context.stream_registry)
+
+    assert %{http_streams_completed: 1} =
+             RolloutDrain.start_drain(drain_options(context.drain_name))
+
+    response = Task.await(request_task, @await_timeout_ms)
+    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    assert response.status == 200
+    assert response.resp_body =~ "server_error"
+    assert latest_request(setup.pool.id).last_error_code == "owner_drained"
+    refute response.resp_body =~ "owner_drained"
+  end
+
+  for cutoff_before_reservation? <- [false, true] do
+    @cutoff_before_reservation cutoff_before_reservation?
+    test "admitted work joins original cutoff with pre-reservation cutoff=#{cutoff_before_reservation?}",
+         context do
+      assert_admitted_cutoff(context, @cutoff_before_reservation)
+    end
+  end
+
+  for fault <- [:relay_raise, :finalization_raise] do
+    @fault fault
+    test "drain summary records real #{@fault} as failed and preserves original fault", context do
+      assert_fault_summary(context, @fault)
+    end
+  end
+
+  defp assert_fault_summary(context, fault) do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([created_event(), completed_event()],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+    CodexPooler.TestAppEnv.restore_on_exit(:settlement_pricing_test_fault)
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        conn = build_conn() |> auth(setup)
+        conn = Plug.Adapters.Test.Conn.conn(conn, :post, @public_path, stream_payload(setup))
+
+        conn =
+          if fault == :relay_raise do
+            {_adapter, state} = conn.adapter
+            %{conn | adapter: {RaisingChunkAdapter, state}}
+          else
+            conn
+          end
+
+        try do
+          CodexPoolerWeb.Endpoint.call(conn, CodexPoolerWeb.Endpoint.init([]))
+          :unexpected_success
+        rescue
+          exception -> {:raised, root_exception(exception).__struct__}
+        end
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    await_registered_stream(context.stream_registry)
+    deadline = WebsocketRolloutDrainSupport.start_virtual_deadline(self())
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: context.drain_name, timeout_ms: 1_000, deadline_margin_ms: 0] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+
+    if fault == :finalization_raise do
+      Application.put_env(
+        :codex_pooler,
+        :settlement_pricing_test_fault,
+        {setup.pool.id, %DBConnection.ConnectionError{message: "synthetic settlement failure"}}
+      )
+    end
+
+    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    assert {:raised, exception_module} = Task.await(request_task, @await_timeout_ms)
+
+    assert exception_module ==
+             if(fault == :relay_raise, do: ArgumentError, else: DBConnection.ConnectionError)
+
+    VirtualDeadline.advance(deadline, 200)
+
+    assert %{
+             result: :error,
+             http_streams_seen: 1,
+             http_streams_completed: 0,
+             http_streams_failed: 1,
+             http_streams_aborted: 0
+           } = Task.await(drain_task, @await_timeout_ms)
+  end
+
+  defp root_exception(%Plug.Conn.WrapperError{reason: reason}), do: root_exception(reason)
+  defp root_exception(exception), do: exception
+
+  test "a deferred closure registering after the cutoff is interrupted immediately", context do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref,
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        conn = build_conn() |> auth(setup)
+        conn = Plug.Adapters.Test.Conn.conn(conn, :post, @public_path, stream_payload(setup))
+        {_adapter, state} = conn.adapter
+        state = Map.merge(state, %{test_parent: parent, test_ref: release_ref})
+        CodexPoolerWeb.Endpoint.call(%{conn | adapter: {PausingHeadersAdapter, state}}, [])
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    assert_receive {:headers_held, request_pid, ^release_ref}, @await_timeout_ms
+    assert DeferredStreamRegistry.streams(name: context.stream_registry) == []
+    deadline = WebsocketRolloutDrainSupport.start_virtual_deadline(self())
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: context.drain_name, timeout_ms: 1_000, deadline_margin_ms: 0] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+    VirtualDeadline.advance(deadline, 1_000)
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+    send(request_pid, {:release_headers, release_ref})
+    response = Task.await(request_task, @await_timeout_ms)
+    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    assert stream_event_types(response.resp_body) == ["error"]
+    VirtualDeadline.advance(deadline, 200)
+
+    assert %{http_streams_seen: 1, http_streams_completed: 1} =
+             Task.await(drain_task, @await_timeout_ms)
+
+    assert latest_request(setup.pool.id).last_error_code == "owner_drained"
+  end
+
+  test "a stale drain token cannot interrupt the next HTTP request on the same process",
+       context do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([created_event(), completed_event()],
+          barrier_after: 1,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        first = build_conn() |> auth(setup) |> post(@public_path, stream_payload(setup))
+        send(parent, {:first_complete, self(), first.status})
+
+        receive do
+          {:next_request, old_token} ->
+            send(self(), DeferredStreamRegistry.drain_message(old_token))
+            second = build_conn() |> auth(setup) |> post(@public_path, stream_payload(setup))
+
+            {stream_event_types(second.resp_body),
+             receive do
+               {:gateway_stream_drain, ^old_token, :owner_drained} -> :old_token_untouched
+             after
+               0 -> :old_token_consumed
+             end}
+        end
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 1, first_upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    %{token: old_token} = await_registered_stream(context.stream_registry)
+    send(first_upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    assert_receive {:first_complete, request_pid, 200}, @await_timeout_ms
+    assert DeferredStreamRegistry.streams(name: context.stream_registry) == []
+    send(request_pid, {:next_request, old_token})
+
+    assert_receive {:fake_upstream_chunk_barrier, 1, second_upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    %{token: new_token} = await_registered_stream(context.stream_registry)
+    refute old_token == new_token
+    send(second_upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+    assert {["response.created", "response.completed"], :old_token_untouched} =
+             Task.await(request_task, @await_timeout_ms)
+  end
+
+  test "HTTP SSE and websocket owner consume the same cutoff before HTTP settlement margin",
+       context do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref,
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        build_conn() |> auth(setup) |> post(@public_path, stream_payload(setup))
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
+                   @await_timeout_ms
+
+    await_registered_stream(context.stream_registry)
+    owner_key = Ecto.UUID.generate()
+    start_supervised!({WebsocketRolloutDrainSupport.WaitingOwner, key: owner_key, parent: self()})
+    deadline = WebsocketRolloutDrainSupport.start_virtual_deadline(self())
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: context.drain_name, timeout_ms: 1_000, deadline_margin_ms: 200] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}, @await_timeout_ms
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 200}, @await_timeout_ms
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 200}, @await_timeout_ms
+    VirtualDeadline.advance(deadline, 600)
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 200}, @await_timeout_ms
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 200}, @await_timeout_ms
+    assert [%{status: :active}] = DeferredStreamRegistry.streams(name: context.stream_registry)
+    VirtualDeadline.advance(deadline, 200)
+    assert_receive {:rollout_drain_owner_stopped, ^owner_key, :aborted, 1}, @await_timeout_ms
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 200}, @await_timeout_ms
+    response = Task.await(request_task, @await_timeout_ms)
+    send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    assert stream_event_types(response.resp_body) == ["error"]
+    VirtualDeadline.advance(deadline, 200)
+
+    assert %{turns_aborted: 1, http_streams_completed: 1} =
+             Task.await(drain_task, @await_timeout_ms)
+  end
+
+  defp assert_admitted_cutoff(context, cutoff_before_reservation?) do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream([created_event(), completed_event()],
+          barrier_after: 1,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+    barrier_ref = make_ref()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        Process.put(
+          {CodexPooler.Gateway.Runtime.Service, :runtime_authorization_barrier},
+          {parent, barrier_ref, {:reserve, :before}}
+        )
+
+        build_conn() |> auth(setup) |> post(@public_path, stream_payload(setup))
+      end)
+
+    assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reserve, :before, request_pid},
+                   @await_timeout_ms
+
+    deadline = WebsocketRolloutDrainSupport.start_virtual_deadline(self())
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: context.drain_name, timeout_ms: 1_000, deadline_margin_ms: 0] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+    VirtualDeadline.advance(deadline, if(cutoff_before_reservation?, do: 1_000, else: 600))
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+    send(request_pid, {:runtime_authorization_release, barrier_ref})
+
+    if cutoff_before_reservation? do
+      response = Task.await(request_task, @await_timeout_ms)
+      assert response.status == 503
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+      assert FakeUpstream.requests(upstream) == []
+      VirtualDeadline.advance(deadline, 200)
+      assert %{http_streams_seen: 0} = Task.await(drain_task, @await_timeout_ms)
+    else
+      assert_receive {:fake_upstream_chunk_barrier, 1, upstream_pid, ^release_ref},
+                     @await_timeout_ms
+
+      await_registered_stream(context.stream_registry)
+
+      VirtualDeadline.advance(deadline, 400)
+      assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
+      response = Task.await(request_task, @await_timeout_ms)
+      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+      assert List.last(stream_event_types(response.resp_body)) == "error"
+      VirtualDeadline.advance(deadline, 200)
+
+      assert %{http_streams_seen: 1, http_streams_completed: 1} =
+               Task.await(drain_task, @await_timeout_ms)
+
+      assert latest_request(setup.pool.id).last_error_code == "owner_drained"
+    end
   end
 
   defp drain_options(drain_name) do

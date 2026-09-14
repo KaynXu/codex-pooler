@@ -120,13 +120,32 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
         route_class: context.route_class
       })
 
-    with {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
+    with :ok <- drain_checkpoint(context),
+         {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
          {:ok, context} <- validate_reset_probe_scope(context),
          {:ok, context} <- validate_provider_permission(context),
          {:ok, context} <- persist_route_metadata(context),
          {:ok, context} <- begin_candidate_circuit(context, selection),
          {:ok, context} <- start_dispatch_attempt(context, selection) do
       transport_dispatch.(context)
+    end
+  end
+
+  defp drain_checkpoint(context) do
+    case CodexPooler.Gateway.Admission.checkpoint() do
+      :ok ->
+        :ok
+
+      {:error, error} ->
+        case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
+               response_status_code: 499,
+               last_error_code: "owner_drained",
+               usage_status: "not_applicable",
+               pre_attempt_phase: PreAttemptRelease.turn_interrupted()
+             }) do
+          {:ok, _} -> {:error, Map.delete(error, :accounting_disposition)}
+          {:error, _} = failure -> failure
+        end
     end
   end
 

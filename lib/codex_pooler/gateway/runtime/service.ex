@@ -1960,7 +1960,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:ok, request_options}
       end
 
-    with {:ok, request_options} <- hold_result do
+    with :ok <- CodexPooler.Gateway.Admission.checkpoint(),
+         {:ok, request_options} <- hold_result do
       transact_reserved_turn(
         auth,
         model,

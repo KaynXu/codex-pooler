@@ -93,16 +93,26 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         })
 
       try do
-        StreamRelay.run(
-          stream_relay_state(conn, context.request_options, response),
-          response,
-          response_context
-          |> stream_relay_handlers(response, :http_conn, callbacks)
-          |> put_drain_token(drain_token)
+        result =
+          StreamRelay.run(
+            stream_relay_state(conn, context.request_options, response),
+            response,
+            response_context
+            |> stream_relay_handlers(response, :http_conn, callbacks)
+            |> put_drain_token(drain_token)
+          )
+          |> http_stream_result()
+
+        DeferredStreamRegistry.finish(
+          drain_token,
+          if(match?({:error, _}, result), do: :failed, else: :completed)
         )
-        |> http_stream_result()
-      after
-        DeferredStreamRegistry.finish(drain_token, :completed)
+
+        result
+      catch
+        kind, reason ->
+          DeferredStreamRegistry.finish(drain_token, :failed)
+          :erlang.raise(kind, reason, __STACKTRACE__)
       end
     end
   end
