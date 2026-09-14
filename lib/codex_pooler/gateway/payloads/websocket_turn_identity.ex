@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @claim_prefix "codex-turn:"
   @request_claim_prefix "codex-request:"
   @request_claim_domain "native_websocket_response_claim_v1"
+  @compaction_claim_domain "native_websocket_compaction_claim_v1"
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
@@ -65,7 +66,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     end
   end
 
-  @doc "True for a request claim derived from a tool-continuation frame."
+  @doc "True for a payload-scoped native websocket request claim."
   @spec request_claim?(term()) :: boolean()
   def request_claim?(value) when is_binary(value),
     do: String.starts_with?(value, @request_claim_prefix)
@@ -75,6 +76,16 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @spec request_claim_key(<<_::256>>, map()) :: String.t()
   def request_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
+    scoped_request_claim_key(semantic_turn_key, payload, @request_claim_domain)
+  end
+
+  @spec compaction_claim_key(<<_::256>>, map()) :: String.t()
+  def compaction_claim_key(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
+    scoped_request_claim_key(semantic_turn_key, payload, @compaction_claim_domain)
+  end
+
+  defp scoped_request_claim_key(semantic_turn_key, payload, domain) do
     projection = request_claim_projection(payload)
 
     digest =
@@ -83,7 +94,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
         :sha256,
         request_claim_hmac_key(),
         :erlang.term_to_binary(
-          {@request_claim_domain, semantic_turn_key, projection},
+          {domain, semantic_turn_key, projection},
           [:deterministic]
         )
       )

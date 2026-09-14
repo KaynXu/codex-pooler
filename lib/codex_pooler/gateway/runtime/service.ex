@@ -939,26 +939,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          authorization_binding
        ) do
     case native_compaction_retry_preflight(session, api_key, model, context) do
-      {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
-      {:error, :successor_claimed} -> replay_intent_result(:fresh, authorization_binding, nil)
-      :none -> reject_replay_intent(context, session, :missing_witness)
-      {:error, reason} -> reject_replay_intent(context, session, reason)
-    end
-  end
+      {:ok, lifecycle} ->
+        replay_intent_result(:fresh, authorization_binding, lifecycle)
 
-  defp classify_client_retry_intent(
-         _session,
-         _api_key,
-         _model,
-         %{
-           semantic_turn_claim_key: semantic_claim,
-           request_options: %{continuity: %{request_claim_key: request_claim}}
-         },
-         authorization_binding
-       )
-       when is_binary(request_claim) and is_binary(semantic_claim) and
-              request_claim != semantic_claim do
-    replay_intent_result(:fresh, authorization_binding, nil)
+      {:error, :successor_claimed} ->
+        replay_intent_result(:fresh, authorization_binding, %{
+          replay_generation: 0,
+          compaction_successor_pending?: true
+        })
+
+      :none ->
+        reject_replay_intent(context, session, :missing_witness)
+
+      {:error, reason} ->
+        reject_replay_intent(context, session, reason)
+    end
   end
 
   defp classify_client_retry_intent(
@@ -1000,6 +995,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       true ->
         reject_replay_intent(context, session, :missing_witness)
     end
+  end
+
+  defp classify_client_retry_intent(
+         _session,
+         _api_key,
+         _model,
+         %{
+           semantic_turn_claim_key: semantic_claim,
+           request_options: %{continuity: %{request_claim_key: request_claim}}
+         },
+         authorization_binding
+       )
+       when is_binary(request_claim) and is_binary(semantic_claim) and
+              request_claim != semantic_claim do
+    replay_intent_result(:fresh, authorization_binding, nil)
   end
 
   defp classify_client_retry_intent(session, api_key, model, context, authorization_binding) do
@@ -1602,6 +1612,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          _payload,
          _endpoint,
          %RequestOptions{
+           runtime: %{replay_lifecycle_binding: %{compaction_successor_pending?: true}}
+         } = request_options,
+         %RouteState{},
+         runtime_admission_proof
+       ) do
+    redeem_client_retry_runtime_admission(request_options, runtime_admission_proof)
+  end
+
+  defp claim_explicit_websocket_turn(
+         _auth,
+         _model,
+         _payload,
+         _endpoint,
+         %RequestOptions{
            runtime: %{
              replay_lifecycle_binding: %{client_retry_predecessor_request_id: request_id}
            }
@@ -1687,11 +1711,6 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:ok, %{request: request} = claim} ->
         maybe_log_client_resend_admitted(request_options, endpoint, claim)
         {:ok, request, nil}
-
-      {:error, %{code: :duplicate_request} = reason} ->
-        if native_full_history_compaction?(endpoint, request_options),
-          do: {:ok, nil, nil},
-          else: {:error, reason}
 
       {:error, reason} ->
         {:error, reason}
@@ -1786,12 +1805,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       when is_binary(predecessor_request_id) ->
         reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
 
+      %{compaction_successor_pending?: true} ->
+        reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
+
       _ordinary ->
-        if is_nil(turn_claim) and native_full_history_compaction?(endpoint, request_options) do
-          reserve_compaction_retry(auth, model, payload, request_options, attrs)
-        else
-          Accounting.reserve(auth, model, payload, attrs)
-        end
+        Accounting.reserve(auth, model, payload, attrs)
     end
   end
 

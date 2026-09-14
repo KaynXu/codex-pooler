@@ -5,6 +5,23 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
 
   @session_id "018f60df-713f-7ca8-b9a0-0d12c508a123"
 
+  test "compaction claims are stable and distinct from ordinary claims for the same payload" do
+    payload = %{"input" => [%{"type" => "message", "role" => "user", "content" => "synthetic"}]}
+    semantic = :crypto.hash(:sha256, "synthetic-turn")
+    compact = WebsocketTurnIdentity.compaction_claim_key(semantic, payload)
+    ordinary = WebsocketTurnIdentity.request_claim_key(semantic, payload)
+
+    assert WebsocketTurnIdentity.request_claim?(compact)
+    refute compact == ordinary
+    assert compact == WebsocketTurnIdentity.compaction_claim_key(semantic, payload)
+
+    refute compact ==
+             WebsocketTurnIdentity.compaction_claim_key(
+               semantic,
+               Map.put(payload, "model", "other")
+             )
+  end
+
   describe "resolve/2" do
     test "pins canonical turn id acceptance and rejection for metadata consumers" do
       for accepted <- ["a", "turn_1", "turn.1", "turn:1", String.duplicate("z", 256)] do

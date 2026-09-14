@@ -953,10 +953,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
        )
        when is_binary(semantic_turn_key) and is_binary(turn_claim_key) do
     request_claim_key =
-      if ordinary_native_tool_continuation?(payload, request_options) do
-        WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
-      else
-        turn_claim_key
+      cond do
+        full_history_native_compaction?(prepared.endpoint, request_options) ->
+          WebsocketTurnIdentity.compaction_claim_key(semantic_turn_key, payload)
+
+        ordinary_native_tool_continuation?(payload, request_options) ->
+          WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
+
+        true ->
+          turn_claim_key
       end
 
     case WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload) do
@@ -993,6 +998,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp put_native_request_claim(%PreparedWebsocketFrame{} = prepared), do: {:ok, prepared}
+
+  defp full_history_native_compaction?(
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{
+           native_compaction_admission: nil,
+           transport: %{transport: "websocket", websocket_delivery_mode: :collect_full_history},
+           continuity: %{previous_response_id: nil},
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_input_mode: :full_history,
+             compaction_result_mode: :native_websocket,
+             native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :compaction}
+           }
+         }
+       ),
+       do: true
+
+  defp full_history_native_compaction?(_endpoint, %RequestOptions{}), do: false
 
   defp ordinary_native_tool_continuation?(
          %{"input" => input} = payload,

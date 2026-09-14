@@ -409,6 +409,165 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
     end
   end
 
+  for reconnect? <- [false, true] do
+    test "fresh full-history compaction after an ordinary turn keeps its own claim (reconnect=#{reconnect?})" do
+      compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-fresh-summary"}
+
+      terminal = fn id, output ->
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"id" => id, "status" => "completed", "output" => output}
+        })
+      end
+
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond: FakeUpstream.websocket_text_frames([terminal.("resp_fresh_ordinary", [])])
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [
+                valid: true,
+                equals: %{"type" => "response.create"},
+                forbidden: ["previous_response_id"]
+              ],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "type" => "response.output_item.done",
+                    "item" => compact_item
+                  }),
+                  terminal.("resp_fresh_compact", [compact_item])
+                ])
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      {:ok, state} = owner_socket(auth, "fresh-compact", "fresh-compact-session")
+
+      turn_metadata = %{
+        "turn_id" => "fresh-compact-turn",
+        "window_id" => "fresh-compact-window",
+        "context_window_id" => Ecto.UUID.generate(),
+        "window_number" => 1,
+        "request_kind" => "turn"
+      }
+
+      input = [%{"type" => "message", "role" => "user", "content" => "synthetic history"}]
+
+      ordinary =
+        websocket_input_payload(setup, input, %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => CodexPooler.JSON.encode!(turn_metadata)
+          }
+        })
+
+      assert {:ok, state} = CodexResponsesSocket.handle_in({ordinary, [opcode: :text]}, state)
+      [ordinary_task] = Enum.to_list(state.tasks)
+      ordinary_monitor = Process.monitor(ordinary_task)
+      assert {:push, {:text, _frame}, state} = receive_owner_socket_push(state)
+      assert {:ok, state} = receive_socket_turn_done(state)
+
+      assert_receive {:DOWN, ^ordinary_monitor, :process, ^ordinary_task, _},
+                     @handoff_detection_timeout_ms
+
+      state =
+        if unquote(reconnect?) do
+          assert :ok = CodexResponsesSocket.terminate(:closed, state)
+
+          {:ok, resumed} =
+            owner_socket(auth, "fresh-compact-reconnected", "fresh-compact-session")
+
+          resumed
+        else
+          state
+        end
+
+      metadata =
+        turn_metadata
+        |> Map.put("request_kind", "compaction")
+        |> Map.put("compaction", %{
+          "trigger" => "auto",
+          "reason" => "context_limit",
+          "implementation" => "responses_compaction_v2",
+          "phase" => "mid_turn",
+          "strategy" => "memento"
+        })
+
+      compact =
+        websocket_input_payload(
+          setup,
+          input ++
+            [
+              %{"type" => "function_call_output", "call_id" => "call_fresh", "output" => ""},
+              %{"type" => "compaction_trigger"}
+            ],
+          %{"client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata)}}
+        )
+
+      {{item_frame, state, compact_task, compact_monitor}, logs} =
+        with_info_log(fn ->
+          assert {:ok, next_state} =
+                   CodexResponsesSocket.handle_in({compact, [opcode: :text]}, state)
+
+          [task] = Enum.to_list(next_state.tasks)
+          monitor = Process.monitor(task)
+
+          assert {:push, {:text, frame}, next_state} =
+                   receive_native_collect_socket_push(next_state)
+
+          {frame, next_state, task, monitor}
+        end)
+
+      assert CodexPooler.JSON.decode!(item_frame)["type"] == "response.output_item.done", logs
+      assert {:push, {:text, completed_frame}, state} = receive_native_collect_socket_push(state)
+      assert CodexPooler.JSON.decode!(completed_frame)["type"] == "response.completed"
+      assert {:ok, state} = receive_socket_turn_done(state)
+
+      assert_receive {:DOWN, ^compact_monitor, :process, ^compact_task, _},
+                     @handoff_detection_timeout_ms
+
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert length(FakeUpstream.requests(upstream)) == 2
+
+      assert Enum.sort(Enum.map(request_logs(setup.pool.id), & &1.status)) == [
+               "succeeded",
+               "succeeded"
+             ]
+
+      assert length(pool_attempts(setup.pool.id)) == 2
+      request_ids = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id))
+
+      assert Repo.aggregate(
+               from(l in RequestClientRetryLink, where: l.predecessor_request_id in ^request_ids),
+               :count
+             ) == 0
+
+      assert :ok = CodexResponsesSocket.terminate(:closed, state)
+
+      {:ok, duplicate_state} =
+        owner_socket(auth, "fresh-compact-duplicate", "fresh-compact-session")
+
+      assert {:push, {:text, duplicate}, duplicate_state} =
+               CodexResponsesSocket.handle_in({compact, [opcode: :text]}, duplicate_state)
+
+      assert CodexPooler.JSON.decode!(duplicate)["error"]["code"] == "duplicate_turn"
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert length(FakeUpstream.requests(upstream)) == 2
+      assert :ok = FakeUpstream.verify!(upstream)
+      assert :ok = CodexResponsesSocket.terminate(:closed, duplicate_state)
+    end
+  end
+
   test "socket preflight admits projected full-history compaction retry after stream close" do
     compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-retry-compact"}
 
