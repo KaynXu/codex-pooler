@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
   alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
 
   # Dialyzer cannot prove the JSON-decoded websocket terminal auth signatures that
   # UpstreamWebsocketSession classifies at runtime, so it marks this retry branch
@@ -611,6 +612,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
 
   defp create_same_assignment_retry_context(context) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{
+           admitted_attempt_bind:
+             DirectCleanup.attempt_callback(
+               context.request_options.runtime.direct_cleanup,
+               context.reserved.request
+             ),
            model: context.model,
            pricing_snapshot: Map.get(context.reserved, :pricing_snapshot),
            upstream_identity: context.identity,

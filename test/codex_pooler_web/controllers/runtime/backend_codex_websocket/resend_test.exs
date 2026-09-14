@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -111,22 +112,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert_socket_response_tasks_released!()
   end
 
-  @tag :owner_task_exception
-  test "response task exception after visible output fails the turn and admits the byte-identical resend" do
-    previous_owner_forwarding =
-      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+  for retry_kind <- [:none, :auth_refresh, :first_event] do
+    @tag :owner_task_exception
+    @tag retry_kind: retry_kind
+    test "response task exception after #{retry_kind} retry fails the current attempt and admits the byte-identical resend",
+         %{retry_kind: retry_kind} do
+      {_result, logs} = with_log(fn -> assert_task_exception_resend(retry_kind) end)
+      assert logs =~ "websocket response task failed failure_kind=exception"
+      assert logs =~ "failure_reason=DBConnection.ConnectionError"
+      refute logs =~ "websocket response task exception finalization failed"
+    end
+  end
 
+  defp assert_task_exception_resend(retry_kind) do
+    barrier = make_ref()
+    CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+    CodexPooler.TestAppEnv.restore_on_exit(:settlement_pricing_test_fault)
+    on_exit(&stop_registered_websocket_owner_sessions/0)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
-
-    on_exit(fn ->
-      stop_registered_websocket_owner_sessions()
-      Application.delete_env(:codex_pooler, :settlement_pricing_test_fault)
-
-      case previous_owner_forwarding do
-        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
-        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
-      end
-    end)
 
     # Strict finite scenario: the first turn streams visible output and its
     # terminal on the single physical connection, then the response task dies
@@ -135,45 +138,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     upstream =
       start_upstream(
         # provenance: synthetic_adversarial
-        FakeUpstream.strict_sequence([
-          strict_native_request(
-            1,
-            FakeUpstream.websocket_text_frames([
-              CodexPooler.JSON.encode!(%{
-                "type" => "response.created",
-                "response" => %{"id" => "resp_task_exception_visible", "status" => "in_progress"}
-              }),
-              CodexPooler.JSON.encode!(%{
-                "type" => "response.output_text.delta",
-                "delta" => "visible before task exception"
-              }),
-              CodexPooler.JSON.encode!(%{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_task_exception_visible",
-                  "status" => "completed",
-                  "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
-                }
-              })
-            ])
-          ),
-          strict_native_request(
-            1,
-            FakeUpstream.websocket_text_frames([
-              CodexPooler.JSON.encode!(%{
-                "type" => "response.completed",
-                "response" => %{
-                  "id" => "resp_after_task_exception",
-                  "status" => "completed",
-                  "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
-                }
-              })
-            ])
-          )
-        ])
+        FakeUpstream.strict_sequence(
+          task_exception_retry_prefix(retry_kind) ++
+            [
+              strict_native_request(
+                if(retry_kind == :first_event, do: 2, else: 1),
+                FakeUpstream.barrier_websocket_frames(
+                  [
+                    CodexPooler.JSON.encode!(%{
+                      "type" => "response.created",
+                      "response" => %{
+                        "id" => "resp_task_exception_visible",
+                        "status" => "in_progress"
+                      }
+                    }),
+                    CodexPooler.JSON.encode!(%{
+                      "type" => "response.output_text.delta",
+                      "delta" => "visible before task exception"
+                    }),
+                    CodexPooler.JSON.encode!(%{
+                      "type" => "response.completed",
+                      "response" => %{
+                        "id" => "resp_task_exception_visible",
+                        "status" => "completed",
+                        "usage" => %{
+                          "input_tokens" => 3,
+                          "output_tokens" => 2,
+                          "total_tokens" => 5
+                        }
+                      }
+                    })
+                  ],
+                  notify: self(),
+                  release_ref: barrier
+                )
+              ),
+              strict_native_request(
+                if(retry_kind == :first_event, do: 2, else: 1),
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "type" => "response.completed",
+                    "response" => %{
+                      "id" => "resp_after_task_exception",
+                      "status" => "completed",
+                      "usage" => %{
+                        "input_tokens" => 3,
+                        "output_tokens" => 1,
+                        "total_tokens" => 4
+                      }
+                    }
+                  })
+                ])
+              )
+            ]
+        )
       )
 
-    setup = gateway_setup(upstream)
+    setup = task_exception_setup(upstream, retry_kind)
+
     assert :ok = Events.subscribe_pool(setup.pool)
     turn_state = Ecto.UUID.generate()
     thread_id = Ecto.UUID.generate()
@@ -199,13 +221,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     {_server, port} = start_public_endpoint_with_server!()
     {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
 
+    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+    assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^barrier}, 15_000
+
     Application.put_env(
       :codex_pooler,
       :settlement_pricing_test_fault,
       {setup.pool.id, %DBConnection.ConnectionError{message: "synthetic pool exhaustion"}}
     )
 
-    {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+    assert :ok = FakeUpstream.release_remaining_frames(upstream, barrier)
+    assert_receive {:fake_upstream_frame_barrier, 3, _handler, ^barrier}, 15_000
 
     {conn, _websocket, seen_types, failure_frame} =
       receive_public_websocket_until_error(conn, websocket, ref, [])
@@ -221,7 +247,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     Application.delete_env(:codex_pooler, :settlement_pricing_test_fault)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    attempts =
+      Repo.all(from(a in Attempt, where: a.request_id == ^request.id, order_by: a.attempt_number))
+
+    attempt = List.last(attempts)
+    assert attempt.attempt_number == if(retry_kind == :none, do: 1, else: 2)
+
+    assert Enum.all?(
+             attempts,
+             &(&1.pool_upstream_assignment_id == hd(attempts).pool_upstream_assignment_id)
+           )
+
+    if retry_kind != :none do
+      assert [first, _retry] = attempts
+      assert first.status == "retryable_failed"
+
+      assert first.network_error_code ==
+               if(retry_kind == :auth_refresh,
+                 do: "upstream_unauthorized",
+                 else: "websocket_connection_limit_reached"
+               )
+    end
+
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     refute is_nil(turn.first_visible_output_at)
 
@@ -267,6 +315,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
              request_error: request.last_error_code,
              request_usage: request.usage_status,
              attempt_status: attempt.status,
+             attempt_error: attempt.network_error_code,
              turn_status: turn.status,
              turn_error: turn.error_code,
              turn_final_attempt: turn.final_attempt_id,
@@ -276,6 +325,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
              request_error: "owner_task_exception",
              request_usage: "usage_unknown",
              attempt_status: "failed",
+             attempt_error: "owner_task_exception",
              turn_status: "failed",
              turn_error: "owner_task_exception",
              turn_final_attempt: attempt.id,
@@ -311,8 +361,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     # Health neutral: a task exception is not backend evidence.
     assert Repo.all(from(d in BridgeDemotion)) == []
     assert Repo.all(from(c in RoutingCircuitState)) == []
-    assert FakeUpstream.count(upstream) == 2
+    assert FakeUpstream.count(upstream) == if(retry_kind == :none, do: 2, else: 3)
     assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  defp task_exception_setup(upstream, :first_event) do
+    setup = gateway_setup(upstream)
+    fallback = gateway_upstream(setup.pool, upstream, "synthetic-fallback", compact?: false)
+    prime_routing_quota!(fallback.identity)
+
+    Map.put(
+      setup,
+      :model,
+      put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+    )
+  end
+
+  defp task_exception_setup(upstream, :auth_refresh) do
+    setup = gateway_setup(upstream)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "refresh_token",
+               plaintext: "synthetic-refresh-token"
+             })
+
+    setup
+  end
+
+  defp task_exception_setup(upstream, :none), do: gateway_setup(upstream)
+
+  defp task_exception_retry_prefix(:none), do: []
+
+  defp task_exception_retry_prefix(:auth_refresh) do
+    [
+      FakeUpstream.expect_request(
+        method: "GET",
+        respond:
+          FakeUpstream.websocket_upgrade_error(
+            %{"error" => %{"code" => "invalid_api_key"}},
+            status: 401,
+            headers: [{"x-openai-authorization-error", "invalid_api_key"}]
+          )
+      ),
+      FakeUpstream.expect_request(
+        method: "POST",
+        path: "/oauth/token",
+        respond: FakeUpstream.json_response(%{"access_token" => "synthetic-refreshed-token"})
+      )
+    ]
+  end
+
+  defp task_exception_retry_prefix(:first_event) do
+    [
+      strict_native_request(
+        1,
+        FakeUpstream.websocket_text_frames([
+          CodexPooler.JSON.encode!(%{
+            "type" => "error",
+            "status" => 400,
+            "code" => "websocket_connection_limit_reached"
+          })
+        ])
+      )
+    ]
   end
 
   @tag :provider_terminal_resend
