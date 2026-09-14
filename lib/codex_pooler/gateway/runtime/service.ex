@@ -687,8 +687,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp clear_native_compaction_admission(%RequestOptions{} = request_options) do
-    _result = RequestOptions.clear_native_compaction_admission(request_options)
-    :ok
+    case RequestOptions.clear_native_compaction_admission(request_options) do
+      :ok -> :ok
+      {:error, reason} -> log_compaction_admission_cleanup_failure(reason)
+    end
+  rescue
+    exception -> log_compaction_admission_cleanup_failure(exception.__struct__)
+  catch
+    kind, _reason -> log_compaction_admission_cleanup_failure(kind)
+  end
+
+  defp log_compaction_admission_cleanup_failure(reason) do
+    Logger.warning(
+      "native compaction reservation cleanup failed " <>
+        "reason_code=#{DiagnosticTaxonomy.reason_code(reason) || "unknown"}"
+    )
   end
 
   defp route_filter_input(auth, model, endpoint, payload, request_options, candidates) do
@@ -1973,6 +1986,74 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        ) do
     maybe_test_runtime_authorization_barrier(:reservation_lock, :before)
 
+    # Owner renewal locks this session too. Enter the capability phase before
+    # acquiring database locks, so renewal cannot prevent this control's reply.
+    # This is a preparation latch: reservation and send authority still follow,
+    # and every failed transaction clears this capability outside the lock.
+    with :ok <-
+           RequestOptions.mark_native_compaction_accounting_started(
+             request_options,
+             System.system_time(:millisecond)
+           ) do
+      reserve_turn_transaction(
+        auth,
+        model,
+        payload,
+        endpoint,
+        request_options,
+        route_state,
+        turn_claim,
+        authorized_correlation_id
+      )
+    end
+    |> case do
+      {:ok, reserved} ->
+        case request_options.runtime.compaction_retry_submit_hold do
+          %CompactionRetrySubmitHold{} = hold ->
+            {:ok, Map.put(reserved, :compaction_retry_submit_hold, hold)}
+
+          nil ->
+            {:ok, reserved}
+        end
+
+      {:error, reason} ->
+        cancel_compaction_retry_hold(request_options)
+        {:error, reason}
+    end
+  rescue
+    error in Ecto.ConstraintError ->
+      cancel_compaction_retry_hold(request_options)
+
+      case reservation_constraint_error(error, request_options) do
+        {:error, _gateway_error} = result ->
+          result
+
+        :reraise ->
+          clear_native_compaction_admission(request_options)
+          reraise(error, __STACKTRACE__)
+      end
+
+    error ->
+      clear_native_compaction_admission(request_options)
+      cancel_compaction_retry_hold(request_options)
+      reraise(error, __STACKTRACE__)
+  catch
+    kind, reason ->
+      clear_native_compaction_admission(request_options)
+      cancel_compaction_retry_hold(request_options)
+      :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  defp reserve_turn_transaction(
+         auth,
+         model,
+         payload,
+         endpoint,
+         request_options,
+         route_state,
+         turn_claim,
+         authorized_correlation_id
+       ) do
     Repo.transaction(fn ->
       request_options = lock_codex_session_before_reservation(request_options)
 
@@ -1994,47 +2075,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                payload,
                request_options,
                authorized_correlation_id
-             ),
-           :ok <-
-             RequestOptions.mark_native_compaction_accounting_started(
-               request_options,
-               System.system_time(:millisecond)
              ) do
         reserved
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> case do
-      {:ok, reserved} ->
-        case request_options.runtime.compaction_retry_submit_hold do
-          %CompactionRetrySubmitHold{} = hold ->
-            {:ok, Map.put(reserved, :compaction_retry_submit_hold, hold)}
-
-          nil ->
-            {:ok, reserved}
-        end
-
-      {:error, reason} ->
-        cancel_compaction_retry_hold(request_options)
-        {:error, reason}
-    end
-  rescue
-    error in Ecto.ConstraintError ->
-      cancel_compaction_retry_hold(request_options)
-
-      case reservation_constraint_error(error, request_options) do
-        {:error, _gateway_error} = result -> result
-        :reraise -> reraise(error, __STACKTRACE__)
-      end
-
-    error ->
-      cancel_compaction_retry_hold(request_options)
-      reraise(error, __STACKTRACE__)
-  catch
-    kind, reason ->
-      cancel_compaction_retry_hold(request_options)
-      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   defp cancel_compaction_retry_hold(%RequestOptions{
