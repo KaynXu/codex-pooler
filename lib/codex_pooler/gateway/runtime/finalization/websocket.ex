@@ -173,7 +173,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       |> Map.put(:collected_provider_failure, failure)
 
     finalization =
-      if native_full_history_compaction?(context.request_options) do
+      if native_full_history_compaction?(context.request_options) or
+           (native_collected_compaction?(context.request_options) and finalization.status == 502) do
         Map.put(
           finalization,
           :collected_provider_failure_event,
@@ -287,6 +288,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
        do: true
 
   defp native_full_history_compaction?(%RequestOptions{}), do: false
+
+  defp native_collected_compaction?(%RequestOptions{
+         payload_context: %{
+           compaction_trigger_bridge?: true,
+           compaction_result_mode: :native_websocket
+         },
+         transport: %{transport: "websocket", websocket_delivery_mode: mode}
+       })
+       when mode in [:collect_compaction, :collect_full_history],
+       do: true
+
+  defp native_collected_compaction?(%RequestOptions{}), do: false
 
   defp completed_result(
          %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options,
