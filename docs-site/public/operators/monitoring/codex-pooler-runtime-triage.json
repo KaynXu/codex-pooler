@@ -2819,6 +2819,60 @@
         "x": 0,
         "y": 156
       }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Instance Heartbeat Write Failure Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Failed instance-presence heartbeat writes on scraped pods. InstanceHeartbeat runs on every release role, but OBAN_MODE=worker and scheduler have no Prometheus reporter; this graph shows only the web/all share. An empty graph does not prove those roles are healthy. Check instance_presences.last_seen_at for durable presence freshness on every role.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(codex_pooler_instance_presence_heartbeat_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "failed writes",
+          "range": true,
+          "instant": false,
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 165
+      },
+      "id": 1
     }
   ]
 }

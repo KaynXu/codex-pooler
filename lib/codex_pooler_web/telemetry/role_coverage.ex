@@ -69,6 +69,14 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   @caveat_marker "OBAN_MODE"
 
   @unscraped_emissions %{
+    [:codex_pooler, :instance_presence, :heartbeat] => %{
+      entrypoints: [],
+      coverage: :partial,
+      fallback: "instance_presences.last_seen_at",
+      note:
+        "InstanceHeartbeat is supervised on every release role, outside the Oban perform call graph. " <>
+          "OBAN_MODE=worker and scheduler do not run the reporter, so only web/all failures are exported."
+    },
     [:codex_pooler, :accounting, :reservation, :pre_attempt_release] => %{
       entrypoints: [CodexPooler.Jobs.RuntimeStateCleanupWorker],
       coverage: :partial,

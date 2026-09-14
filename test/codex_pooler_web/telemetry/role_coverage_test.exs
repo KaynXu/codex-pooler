@@ -277,6 +277,20 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   end
 
   describe "derived role coverage" do
+    test "supervised heartbeat emission has manual partial coverage", context do
+      event = [:codex_pooler, :instance_presence, :heartbeat]
+
+      assert %{entrypoints: [], coverage: :partial, fallback: "instance_presences.last_seen_at"} =
+               Map.fetch!(RoleCoverage.unscraped_emissions(), event)
+
+      assert {CodexPooler.Platform.InstanceHeartbeat, :log_failure, 0} in Map.fetch!(
+               context.sites,
+               event
+             )
+
+      assert derived_entrypoints(context, event) == []
+    end
+
     test "every metric with a job-reachable emission is declared", context do
       undeclared =
         context
@@ -297,7 +311,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
     test "no declaration outlives the emission it was written for", context do
       derived = derived_events(context)
-      stale = Enum.reject(RoleCoverage.declared_events(), &(&1 in derived))
+
+      stale =
+        Enum.reject(RoleCoverage.unscraped_emissions(), fn {event, declaration} ->
+          if declaration.entrypoints == [],
+            do: Map.get(context.sites, event, []) != [] and event not in derived,
+            else: event in derived
+        end)
 
       assert stale == [],
              "no Oban job reaches an emission of #{inspect(stale)} any more; drop the " <>
@@ -422,7 +442,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # The same scan still sees the real application, so the probe is not
       # passing by scanning nothing but itself.
       assert derived |> Enum.map(&elem(&1, 0)) |> Enum.sort() ==
-               Enum.sort([event | RoleCoverage.declared_events()])
+               Enum.sort([event | job_declared_events()])
     end
   end
 
@@ -435,6 +455,12 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
   defp derived_events(context),
     do: context |> derive_unscraped_events() |> Enum.map(&elem(&1, 0))
+
+  defp job_declared_events do
+    for {event, declaration} <- RoleCoverage.unscraped_emissions(),
+        declaration.entrypoints != [],
+        do: event
+  end
 
   defp derived_entrypoints(%{graph: graph, roots: roots, sites: sites}, event) do
     sites = Map.fetch!(sites, event)

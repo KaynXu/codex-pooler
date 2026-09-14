@@ -237,6 +237,15 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &repo_query_tag_values/1,
         description: "Total Ecto repository queries by source and SQL command."
       ),
+      counter("codex_pooler.instance_presence.heartbeat_failure.count",
+        event_name: [:codex_pooler, :instance_presence, :heartbeat],
+        measurement: :failures,
+        tags: [],
+        description:
+          "Total instance heartbeat write failures on scraped roles. OBAN_MODE=worker and scheduler " <>
+            "run InstanceHeartbeat without a Prometheus reporter, so their failures are not measured here. " <>
+            "Use instance_presences.last_seen_at for durable presence freshness on every role."
+      ),
       counter("codex_pooler.admin.stats.reload.count",
         event_name: [:codex_pooler, :admin, :stats_live, :reload],
         measurement: :count,
