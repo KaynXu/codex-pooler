@@ -2858,21 +2858,19 @@
       "targets": [
         {
           "expr": "sum(rate(codex_pooler_instance_presence_heartbeat_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
-          "refId": "A",
+          "refId": "",
           "legendFormat": "failed writes",
           "range": true,
           "instant": false,
-          "editorMode": "code",
-          "queryType": "range"
+          "editorMode": "code"
         }
       ],
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 0,
-        "y": 165
-      },
-      "id": 1
+        "x": 12,
+        "y": 156
+      }
     }
   ]
 }
