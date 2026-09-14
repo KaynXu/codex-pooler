@@ -16,7 +16,8 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   test "consume and key pause or delete use separate backends without duplicate settlement" do
-    for mutation <- [:pause_api_key, :delete_api_key] do
+    for mutation <- [:pause_api_key, :delete_api_key],
+        order <- [:concurrent, :consume_first, :mutation_first] do
       fixture = committed_replay_fixture!()
 
       {:ok, armed} = Sandbox.unboxed_run(Repo, fn -> RequestReplay.arm(arm_input(fixture)) end)
@@ -24,28 +25,54 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
       allow_committed_owner(fixture)
 
       [consume, changed] =
-        run_concurrently([
-          fn -> RequestReplay.consume(input) end,
-          fn -> apply(CodexPooler.Access, mutation, [fixture.scope, fixture.api_key]) end
-        ])
+        run_concurrently(
+          [
+            fn -> RequestReplay.consume(input) end,
+            fn -> apply(CodexPooler.Access, mutation, [fixture.scope, fixture.api_key]) end
+          ],
+          order
+        )
 
       assert {:ok, _key} = changed
-      assert match?({:ok, _result}, consume) or match?({:error, _reason}, consume)
+
+      expected_generations =
+        case consume do
+          {:ok, result} ->
+            assert result.attempt.replay_generation == 1
+            [0, 1]
+
+          {:error, _reason} ->
+            [0]
+        end
+
+      case order do
+        :consume_first -> assert match?({:ok, _}, consume)
+        :mutation_first -> assert match?({:error, _}, consume)
+        :concurrent -> :ok
+      end
 
       Sandbox.unboxed_run(Repo, fn ->
         if mutation == :pause_api_key do
           assert {:ok, :closed} = RequestReplay.close(fixture.request.id, :owner_shutdown)
           assert terminal_ledger_count(fixture.request.id, "settlement") == 1
           assert terminal_ledger_count(fixture.request.id, "release") == 1
-          assert request_attempt_count(fixture.request.id) in 1..2
+          assert request_attempt_count(fixture.request.id) == length(expected_generations)
         else
           assert %{api_key_id: nil, status: "failed"} =
                    Repo.get!(CodexPooler.Accounting.Request, fixture.request.id)
 
-          assert request_attempt_count(fixture.request.id) == 1
+          assert request_attempt_count(fixture.request.id) == length(expected_generations)
           assert terminal_ledger_count(fixture.request.id, "settlement") == 1
           assert terminal_ledger_count(fixture.request.id, "release") == 1
         end
+
+        assert Repo.all(
+                 from(a in Attempt,
+                   where: a.request_id == ^fixture.request.id,
+                   order_by: a.replay_generation,
+                   select: a.replay_generation
+                 )
+               ) == expected_generations
       end)
 
       cleanup_fixture(fixture)
@@ -537,7 +564,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     :ok = Sandbox.allow(Repo, database_owner, owner)
   end
 
-  defp run_concurrently(operations) do
+  defp run_concurrently(operations, order \\ :concurrent) do
     parent = self()
     ref = make_ref()
 
@@ -553,8 +580,28 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
       end)
 
     assert length(Enum.uniq(backends)) == length(tasks)
-    Enum.each(tasks, &send(&1.pid, {:run, ref}))
-    Enum.map(tasks, &Task.await(&1, 15_000))
+
+    case order do
+      :concurrent ->
+        Enum.each(tasks, &send(&1.pid, {:run, ref}))
+        Enum.map(tasks, &Task.await(&1, 15_000))
+
+      :consume_first ->
+        run_ordered(tasks, ref, 0)
+
+      :mutation_first ->
+        run_ordered(tasks, ref, 1)
+    end
+  end
+
+  defp run_ordered(tasks, ref, first_index) do
+    first = Enum.at(tasks, first_index)
+    second = Enum.at(tasks, 1 - first_index)
+    send(first.pid, {:run, ref})
+    first_result = Task.await(first, 15_000)
+    send(second.pid, {:run, ref})
+    second_result = Task.await(second, 15_000)
+    if first_index == 0, do: [first_result, second_result], else: [second_result, first_result]
   end
 
   defp run_concurrent_operation(parent, ref, operation) do
