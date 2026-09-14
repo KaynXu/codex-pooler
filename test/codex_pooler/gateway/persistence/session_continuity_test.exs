@@ -710,14 +710,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     initial_session = Repo.get!(CodexSession, session.id)
     initial_lease = active_lease!(session.id)
 
-    assert DateTime.diff(
-             initial_session.owner_lease_expires_at,
-             initial_session.updated_at,
-             :second
-           ) ==
-             45
+    assert initial_session.owner_lease_expires_at == initial_lease.expires_at
 
-    assert DateTime.diff(initial_lease.expires_at, initial_lease.renewed_at, :second) == 45
+    assert DateTime.diff(initial_lease.expires_at, initial_lease.renewed_at, :microsecond) ==
+             45_000_000
 
     update_gateway_settings(%{"bridge_owner_lease_ttl_seconds" => 120})
 
@@ -739,14 +735,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert renewed_session.id == session.id
     assert renewed_lease.id == initial_lease.id
 
-    assert DateTime.diff(
-             renewed_session.owner_lease_expires_at,
-             renewed_session.updated_at,
-             :second
-           ) ==
-             120
+    # Reacquisition uses the locked DB clock; session.updated_at uses the app clock.
+    assert renewed_session.owner_lease_expires_at == renewed_lease.expires_at
 
-    assert DateTime.diff(renewed_lease.expires_at, renewed_lease.renewed_at, :second) == 120
+    assert DateTime.diff(renewed_lease.expires_at, renewed_lease.renewed_at, :microsecond) ==
+             120_000_000
 
     assert DateTime.compare(
              renewed_session.owner_lease_expires_at,

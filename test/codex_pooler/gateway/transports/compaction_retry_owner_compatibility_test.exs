@@ -418,7 +418,8 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
   end
 
   defp failed_predecessor!(setup, auth, session, options) do
-    now = DateTime.utc_now()
+    # Retry eligibility and native request finalization both use the database clock.
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()")
 
     assert {:ok, %{request: request}} =
              Accounting.claim_websocket_turn(auth, setup.model, %{
