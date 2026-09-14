@@ -32,6 +32,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Events
+  alias CodexPooler.Gateway.Persistence.RuntimeCleanup
+  alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
@@ -153,10 +155,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
           {:ok, AbsentInstanceRecovery.summary()} | {:error, term()}
   def recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []) do
-    AbsentInstanceRecovery.recover_absent_instance_attempts(
-      DateTime.truncate(now, :microsecond),
-      opts
-    )
+    now = DateTime.truncate(now, :microsecond)
+
+    with {:ok, absent} <- AbsentInstanceRecovery.recover_absent_instance_attempts(now, opts),
+         {:ok, executions} <- __MODULE__.DeadExecutionRecovery.recover(now, opts) do
+      {:ok, Map.merge(absent, executions)}
+    end
   end
 
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
@@ -466,6 +470,64 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     request
     |> finalize_request_with_disposition(attempt, attrs)
     |> strip_finalization_disposition()
+  end
+
+  @doc false
+  @spec recover_dead_execution(Request.t(), Attempt.t(), DateTime.t()) ::
+          {:ok, :recovered | :noop} | {:error, term()}
+  def recover_dead_execution(request, candidate, timestamp) do
+    Repo.transaction(fn ->
+      {request, attempt, _reservation, settlement, entitlement} =
+        lock_finalization_rows(request, candidate)
+
+      latest_id =
+        Repo.one(
+          from a in Attempt,
+            where: a.request_id == ^request.id,
+            order_by: [desc: a.attempt_number],
+            limit: 1,
+            select: a.id
+        )
+
+      if recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) do
+        finalize_dead_execution(request, attempt, timestamp)
+      else
+        :noop
+      end
+    end)
+  end
+
+  defp recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) do
+    request.status in @dispatchable_request_statuses and
+      attempt.status in @retryable_attempt_statuses and latest_id == candidate.id and
+      attempt.replay_generation == candidate.replay_generation and
+      attempt.owner_execution_id == candidate.owner_execution_id and
+      is_nil(settlement) and is_nil(entitlement) and ExecutionIdentity.status(attempt) == :dead
+  end
+
+  defp finalize_dead_execution(request, attempt, timestamp) do
+    code = "dead_execution_recovered"
+
+    case finalize_request(request, attempt, %{
+           request_status: "failed",
+           attempt_status: "failed",
+           response_status_code: 499,
+           last_error_code: code,
+           error_message: "request execution ended before settlement",
+           usage: %{status: "usage_unknown", source: code},
+           now: timestamp
+         }) do
+      {:ok, _result} ->
+        RuntimeCleanup.recover_stale_request_turn(request.id, attempt.id,
+          now: timestamp,
+          error_code: code
+        )
+
+        :recovered
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
   end
 
   @doc false
@@ -1103,6 +1165,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
     {owner_instance_id, owner_instance_boot_id} = attempt_owner(attrs)
 
+    execution =
+      if Map.has_key?(attrs, :owner_instance_id),
+        do: %{owner_process_id: nil, owner_execution_id: nil},
+        else: ExecutionIdentity.local()
+
     attempt_number =
       Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count, :id) + 1
 
@@ -1118,6 +1185,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       transport: request.transport,
       owner_instance_id: owner_instance_id,
       owner_instance_boot_id: owner_instance_boot_id,
+      owner_process_id: execution.owner_process_id,
+      owner_execution_id: execution.owner_execution_id,
       status: Map.get(attrs, :status, "in_progress"),
       started_at: timestamp,
       retryable: Map.get(attrs, :retryable, false),

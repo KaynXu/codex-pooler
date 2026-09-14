@@ -29,22 +29,39 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   @task_timeout 15_000
 
   test "cleanup worker emits each expired-owner interruption after commit exactly once" do
-    fixture = committed_interruption_fixture!(:active_attempt)
-    expire_owner!(fixture)
+    fixtures =
+      for mode <- [:active_attempt, :legacy_attempt, :without_attempt] do
+        fixture = committed_interruption_fixture!(mode)
+        expire_owner!(fixture)
+        fixture
+      end
 
     capture_outcomes(fn ->
       assert run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end) == :ok
 
-      assert_receive {:stream_outcome,
-                      %{
-                        outcome: "interrupted",
-                        downstream_transport: "websocket",
-                        upstream_transport: "websocket"
-                      }}
+      for fixture <- fixtures do
+        upstream_transport = if fixture.attempt, do: "websocket", else: "unknown"
 
-      assert_receive {:stream_outcome_transaction, false}
+        assert_receive {:stream_outcome,
+                        %{
+                          outcome: "interrupted",
+                          downstream_transport: "websocket",
+                          upstream_transport: ^upstream_transport
+                        }}
 
-      assert committed_interruption_state(fixture).turn_status == "interrupted"
+        assert_receive {:stream_outcome_transaction, false}
+        assert committed_interruption_state(fixture).turn_status == "interrupted"
+      end
+
+      [dead, legacy, _unattempted] = fixtures
+
+      assert run_unboxed(fn -> Repo.get!(Request, dead.request.id).last_error_code end) ==
+               "dead_execution_recovered"
+
+      assert run_unboxed(fn -> Repo.get!(Request, legacy.request.id).last_error_code end) ==
+               "owner_unavailable"
+
+      refute_received {:stream_outcome, _}
       assert run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end) == :ok
       refute_received {:stream_outcome, _}
     end)
@@ -335,6 +352,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
         else
           assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
 
+          maybe_clear_execution_identity!(mode, attempt)
           maybe_delete_reservation_ledger_entry!(mode, reserved.request)
 
           attempt
@@ -369,6 +387,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   end
 
   defp maybe_delete_reservation_ledger_entry!(_mode, _request), do: :ok
+
+  defp maybe_clear_execution_identity!(:legacy_attempt, attempt) do
+    Repo.update_all(from(a in Attempt, where: a.id == ^attempt.id),
+      set: [owner_execution_id: nil]
+    )
+  end
+
+  defp maybe_clear_execution_identity!(_mode, _attempt), do: :ok
 
   defp selected_context(setup, reserved, attempt, request_options) do
     %SelectedCandidateContext{

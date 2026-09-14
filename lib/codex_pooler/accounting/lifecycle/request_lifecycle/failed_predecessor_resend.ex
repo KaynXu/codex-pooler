@@ -22,7 +22,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestReplayEntitlement}
+  alias CodexPooler.Accounting.{
+    Attempt,
+    ClientRetry,
+    Request,
+    RequestClientRetryLink,
+    RequestReplayEntitlement
+  }
+
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
@@ -39,6 +46,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           required(:api_key_id) => Ecto.UUID.t(),
           required(:model_id) => Ecto.UUID.t(),
           required(:endpoint) => String.t() | nil,
+          optional(:codex_session_id) => Ecto.UUID.t(),
+          optional(:native_client_retry_witness) => ClientRetry.OriginalWitness.t() | nil,
           optional(:anchor_present?) => boolean()
         }
 
@@ -68,18 +77,28 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   def resolve(claim, scope) when is_binary(claim) and is_map(scope) do
     cond do
       not (WebsocketTurnIdentity.request_claim?(claim) or
-               ClientRetry.failed_predecessor_claim?(claim)) ->
+             ClientRetry.failed_predecessor_claim?(claim) or semantic_claim?(claim)) ->
         {:error, :unsupported_claim}
 
       Map.get(scope, :anchor_present?) == true ->
         {:error, :anchor_unavailable}
 
       true ->
-        resolve_chain(claim, nil, nil, scope, db_now(), 0)
+        resolve_chain(
+          claim,
+          nil,
+          nil,
+          Map.put(scope, :semantic_claim?, semantic_claim?(claim)),
+          db_now(),
+          0
+        )
     end
   end
 
   def resolve(_claim, _scope), do: {:error, :unsupported_claim}
+
+  defp semantic_claim?("codex-turn:" <> _digest), do: true
+  defp semantic_claim?(_claim), do: false
 
   defp resolve_chain(_claim, _predecessor, _shape, _scope, _now, depth)
        when depth > @max_chain_depth,
@@ -95,12 +114,41 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
       %Request{} = request ->
         with {:ok, request_shape} <- validate_predecessor(request, scope, now),
+             :ok <- validate_semantic_retry(request, scope),
              {:ok, derived} <-
                ClientRetry.deterministic_failed_predecessor_claim(claim, request.id) do
           resolve_chain(derived, request, request_shape, scope, now, depth + 1)
         end
     end
   end
+
+  # A turn claim does not bind payload bytes. Only exact durable execution
+  # recovery plus the original sealed payload witness permits this direct
+  # socket retry; payload-scoped continuation claims retain their own policy.
+  defp validate_semantic_retry(request, %{semantic_claim?: true} = scope) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    with %ClientRetry.OriginalWitness{version: 1, digest: digest, auth_epoch: epoch} <-
+           Map.get(scope, :native_client_retry_witness),
+         true <- ClientRetry.original_witness_eligible?(request),
+         true <- request.native_client_retry_digest == digest,
+         true <- request.native_client_retry_auth_epoch == epoch,
+         false <-
+           Repo.exists?(
+             from l in RequestClientRetryLink,
+               where:
+                 l.predecessor_request_id == ^request.id or l.successor_request_id == ^request.id
+           ),
+         true <- not is_nil(turn) and turn.codex_session_id == Map.get(scope, :codex_session_id),
+         true <- ClientRetry.verified_dead_execution?(turn, request, attempt) do
+      :ok
+    else
+      _invalid -> {:error, :terminal_predecessor}
+    end
+  end
+
+  defp validate_semantic_retry(_request, _scope), do: :ok
 
   defp lock_request_by_claim(claim) do
     Repo.one(
@@ -147,6 +195,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   # under the receive loop; nothing else is a verdict the client may retry
   # byte-identically through this path.
   defp failure_family(@task_exception_code), do: :task_exception
+  defp failure_family("dead_execution_recovered"), do: :dead_execution
   defp failure_family(@stream_error_code), do: :stream_cut
 
   defp failure_family(code) when is_binary(code) do
@@ -157,6 +206,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp predecessor_shape(_request, family) when family in [:provider_terminal, :task_exception],
     do: {:ok, family}
+
+  defp predecessor_shape(%Request{} = request, :dead_execution) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    if ClientRetry.verified_dead_execution?(turn, request, attempt),
+      do: {:ok, :task_exception},
+      else: {:error, :terminal_predecessor}
+  end
 
   # A stream cut may have delivered completed output items, so it is admitted
   # only with the evidence the client retry policy verifies for the same

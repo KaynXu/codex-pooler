@@ -954,11 +954,28 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{
          retry_policy: :native_compaction
-       }),
-       do: validate_compaction_lifecycle(turn, request, attempt)
+       }) do
+    if verified_compaction_execution_failure?(turn, request, attempt),
+      do: :ok,
+      else: validate_compaction_lifecycle(turn, request, attempt)
+  end
 
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input),
     do: validate_retry_lifecycle(turn, request, attempt)
+
+  # Local execution failures carry no provider terminal. Compaction still
+  # requires an unseen compact response; ordinary turn retries allow visible
+  # output and must not broaden this policy through their shared matchers.
+  defp verified_compaction_execution_failure?(
+         %CodexTurn{first_visible_output_at: nil} = turn,
+         %Request{endpoint: "/backend-api/codex/responses/compact"} = request,
+         %Attempt{usage_status: "usage_unknown"} = attempt
+       ) do
+    verified_task_exception?(turn, request, attempt) or
+      verified_dead_execution?(turn, request, attempt)
+  end
+
+  defp verified_compaction_execution_failure?(_turn, _request, _attempt), do: false
 
   defp validate_compaction_lifecycle(
          %CodexTurn{
@@ -1020,6 +1037,9 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defp validate_retry_lifecycle(turn, request, %Attempt{} = attempt) do
     cond do
       verified_task_exception?(turn, request, attempt) ->
+        :ok
+
+      verified_dead_execution?(turn, request, attempt) ->
         :ok
 
       verified_provider_terminal_failure?(turn, request, attempt) ->
@@ -1090,6 +1110,43 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: true
 
   defp verified_task_exception?(_turn, _request, _attempt), do: false
+
+  @doc false
+  @spec verified_dead_execution?(term(), term(), term()) :: boolean()
+  def verified_dead_execution?(
+        %CodexTurn{
+          status: "interrupted",
+          error_code: "dead_execution_recovered",
+          final_attempt_id: attempt_id,
+          transport_kind: "websocket",
+          completed_at: %DateTime{}
+        },
+        %Request{
+          status: "failed",
+          response_status_code: 499,
+          last_error_code: "dead_execution_recovered",
+          usage_status: "usage_unknown",
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          id: attempt_id,
+          status: "failed",
+          network_error_code: "dead_execution_recovered",
+          transport: "websocket",
+          replay_generation: 0,
+          usage_status: "usage_unknown",
+          owner_instance_id: owner,
+          owner_instance_boot_id: boot,
+          owner_process_id: pid,
+          owner_execution_id: execution,
+          completed_at: %DateTime{}
+        }
+      )
+      when is_binary(attempt_id) and is_binary(owner) and is_binary(boot) and is_binary(pid) and
+             is_binary(execution),
+      do: true
+
+  def verified_dead_execution?(_turn, _request, _attempt), do: false
 
   # Only the provider's own terminal failure finalization writes this shape:
   # turn, request, and attempt failed together with the same provider code on

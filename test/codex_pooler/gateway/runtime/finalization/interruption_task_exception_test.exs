@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, ClientRetry, LedgerEntry, PreAttemptRelease, Request}
+  alias CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend
   alias CodexPooler.Gateway.Payloads.{RequestOptions, WebsocketTurnIdentity}
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.{RoutingCircuitState, SessionContinuity}
@@ -117,6 +118,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     assert Repo.get!(CodexTurn, fixture.turn.id).status == "in_progress"
   end
 
+  test "a delayed task exception cannot settle another attempt or replay generation" do
+    fixture = fixture()
+    before = snapshot(fixture)
+
+    for receipt <- [
+          %{fixture.receipt | attempt_id: Ecto.UUID.generate()},
+          %{fixture.receipt | replay_generation: fixture.attempt.replay_generation + 1},
+          Map.drop(fixture.receipt, [:attempt_id, :replay_generation])
+        ] do
+      assert :ok = Interruption.finalize_task_exception_request(receipt, @reason)
+      assert snapshot(fixture) == before
+      assert Accounting.reservation_outstanding?(fixture.request)
+    end
+  end
+
   test "a request without an attempt yet fails through the reservation path" do
     fixture = fixture()
     Repo.delete!(fixture.attempt)
@@ -160,6 +176,71 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     assert {:error, _reason} = claim(fixture)
   end
 
+  test "the byte-identical resend is admitted once after exact execution recovery" do
+    parent = self()
+
+    pid =
+      start_supervised!(
+        {Task,
+         fn ->
+           fixture = fixture(:request)
+           send(parent, {:execution_fixture, fixture})
+
+           receive do
+             :finish -> :ok
+           end
+         end}
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:execution_fixture, fixture}, 15_000
+    send(pid, :finish)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
+
+    assert {:ok, :recovered} =
+             Accounting.RequestLifecycle.recover_dead_execution(
+               fixture.request,
+               fixture.attempt,
+               DateTime.utc_now()
+             )
+
+    scope = %{
+      pool_id: fixture.request.pool_id,
+      api_key_id: fixture.request.api_key_id,
+      model_id: fixture.request.model_id,
+      endpoint: fixture.request.endpoint
+    }
+
+    for attrs <- [
+          [owner_execution_id: nil],
+          [owner_process_id: nil],
+          [owner_instance_boot_id: nil],
+          [replay_generation: 1]
+        ] do
+      before = snapshot(fixture)
+      update!(Attempt, fixture.attempt.id, attrs)
+      assert {:error, :terminal_predecessor} = claim(fixture)
+
+      assert {:error, :terminal_predecessor} =
+               FailedPredecessorResend.resolve(
+                 fixture.request.correlation_id,
+                 scope
+               )
+
+      restore!(before)
+    end
+
+    assert {:ok, %{predecessor_shape: :task_exception}} =
+             FailedPredecessorResend.resolve(
+               fixture.request.correlation_id,
+               scope
+             )
+
+    assert {:ok, %ClientRetry.SuccessorClaim{request: successor}} = claim(fixture)
+    assert successor.id != fixture.request.id
+    assert {:error, _} = claim(fixture)
+  end
+
   test "only the exact task-exception shape admits a successor" do
     fixture = fixture()
     assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
@@ -181,7 +262,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     assert {:ok, %ClientRetry.SuccessorClaim{}} = claim(fixture)
   end
 
-  defp fixture do
+  defp fixture(claim_kind \\ :turn) do
     setup = accounting_setup()
 
     {:ok, session} =
@@ -196,7 +277,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     }
 
     {:ok, identity} = WebsocketTurnIdentity.resolve(payload, session.id)
-    claim = identity.turn_claim_key
+
+    claim =
+      if claim_kind == :request,
+        do: WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload),
+        else: identity.turn_claim_key
+
     replay_claim_digest = :crypto.strong_rand_bytes(32)
 
     witness =

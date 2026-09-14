@@ -3635,7 +3635,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> Map.update(:response_task_results_ready, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_terminals_accepted, MapSet.new(), &MapSet.delete(&1, pid))
         |> Map.update(:response_task_completed_terminals, MapSet.new(), &MapSet.delete(&1, pid))
-        |> Map.update(:response_task_cleanup_results, %{}, &Map.delete(&1, pid))
         |> clear_downstream_delivery_evidence(pid)
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
@@ -3702,6 +3701,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
     end
   end
+
+  defp response_task_cleanup_result({:response_task_failure, {:error, _reason}}),
+    do: :task_exception
 
   defp response_task_cleanup_result(:ok), do: :ok
   defp response_task_cleanup_result({:ok, _result}), do: :ok
@@ -4114,10 +4116,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp do_remove_tracked_response_task(state, pid) when is_pid(pid) do
     if context = Map.get(Map.get(state, :direct_cleanup_contexts, %{}), pid) do
-      case DirectCleanup.cancel(context, "client_disconnected") do
-        :none -> :ok
-        result -> log_interrupt_failure(result, state)
-      end
+      result = finalize_removed_response_task(state, pid, context)
+      if result != :none, do: log_interrupt_failure(result, state)
     end
 
     {monitor, state} = pop_task_monitor(state, pid)
@@ -4132,12 +4132,31 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> DownstreamSession.clear_cleanup_witness(pid)
   end
 
+  defp finalize_removed_response_task(state, pid, context) do
+    if Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :task_exception do
+      # A DB outage can prevent the first finalization; delivery cleanup must
+      # preserve the verified task failure instead of recording a disconnect.
+      opts =
+        state.opts
+        |> RequestOptions.for_websocket()
+        |> RequestOptions.put_runtime_context(direct_cleanup: context)
+
+      finalize_response_task_exception(opts, state)
+    else
+      DirectCleanup.cancel(context, "client_disconnected")
+    end
+  end
+
   defp clear_direct_cleanup(state, pid) do
-    Enum.reduce([:direct_cleanup_contexts, :direct_cleanup_receipts], state, fn key, current ->
-      if Map.has_key?(current, key),
-        do: Map.update!(current, key, &Map.delete(&1, pid)),
-        else: current
-    end)
+    Enum.reduce(
+      [:direct_cleanup_contexts, :direct_cleanup_receipts, :response_task_cleanup_results],
+      state,
+      fn key, current ->
+        if Map.has_key?(current, key),
+          do: Map.update!(current, key, &Map.delete(&1, pid)),
+          else: current
+      end
+    )
   end
 
   defp remove_tracked_response_task(state, pid, monitor)
@@ -4491,6 +4510,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp cleanup_direct_response(state, pid, context) do
+    if Map.get(Map.get(state, :response_task_cleanup_results, %{}), pid) == :task_exception do
+      opts =
+        state.opts
+        |> RequestOptions.for_websocket()
+        |> RequestOptions.put_runtime_context(direct_cleanup: context)
+
+      finalize_response_task_exception(opts, state)
+    else
+      cancel_direct_response(state, pid, context)
+    end
+  end
+
+  defp cancel_direct_response(state, pid, context) do
     case DirectCleanup.cancel(context, "client_disconnected") do
       :none ->
         case Map.get(Map.get(state, :direct_cleanup_receipts, %{}), pid) do

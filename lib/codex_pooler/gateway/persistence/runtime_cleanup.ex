@@ -5,7 +5,6 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
@@ -249,35 +248,15 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   end
 
   defp recover_expired_owner_session_locked(candidate) do
-    owner_snapshot =
-      Map.take(candidate, [:owner_instance_id, :owner_lease_token, :owner_lease_expires_at])
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_transport(websocket_owner_lease_token: candidate.owner_lease_token)
 
-    case Accounting.close_request_replays_for_session(
-           candidate.session_id,
-           owner_snapshot,
-           :owner_shutdown
-         ) do
-      {:ok, :stale_owner} ->
-        :stale_owner
-
-      {:ok, _summary} ->
-        opts =
-          %{}
-          |> RequestOptions.for_websocket()
-          |> RequestOptions.put_transport(
-            websocket_owner_lease_token: candidate.owner_lease_token
-          )
-
-        case Interruption.recover_expired_owner_lifecycle(
-               candidate,
-               opts
-             ) do
-          {:ok, result} -> {:recovered, result}
-          {:error, reason} -> Repo.rollback(reason)
-        end
-
-      {:error, reason} ->
-        Repo.rollback(reason)
+    case Interruption.recover_expired_owner_lifecycle(candidate, opts) do
+      {:ok, :stale_owner} -> :stale_owner
+      {:ok, result} -> {:recovered, result}
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 

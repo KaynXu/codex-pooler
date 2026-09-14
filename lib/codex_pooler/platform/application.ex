@@ -15,6 +15,7 @@ defmodule CodexPooler.Application do
     _boot_id = Identity.mint_boot_id!()
 
     children = [
+      CodexPooler.Platform.ExecutionRegistry,
       CodexPoolerWeb.Telemetry,
       CodexPooler.Repo,
       CodexPooler.Telemetry.RelayRuntime,

@@ -322,6 +322,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       attempt = latest_attempt_for_update(receipt.request_id)
 
       if direct_receipt_matches?(session, request, receipt) and
+           task_exception_attempt_matches?(attempt, receipt) and
            request.status in ["accepted", "in_progress"] do
         fail_task_exception_locked(turn, request, attempt, reason)
       else
@@ -332,6 +333,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       {:ok, _} -> :ok
       {:error, error} -> {:error, error}
     end
+  end
+
+  defp task_exception_attempt_matches?(nil, _receipt), do: true
+
+  defp task_exception_attempt_matches?(%Attempt{} = attempt, receipt) do
+    attempt.id == Map.get(receipt, :attempt_id) and
+      attempt.replay_generation == Map.get(receipt, :replay_generation)
   end
 
   defp fail_task_exception_locked(turn, request, attempt, reason) do
@@ -519,12 +527,73 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
          session.owner_lease_token == candidate.owner_lease_token and
          session.owner_lease_expires_at == candidate.owner_lease_expires_at and
          DateTime.compare(candidate.owner_lease_expires_at, now()) != :gt do
+      # Keep the session lock before entering the shared finalization lock order.
+      # Replay entitlement must still exist when execution recovery tests it.
+      recovered_outcomes = recover_dead_session_executions(session.id, opts)
+
+      close_expired_owner_replays!(candidate)
+
       case interrupt_session_transaction(candidate.session_id, opts, "owner_unavailable", true) do
-        {:ok, result} -> result
-        {:error, reason} -> Repo.rollback(reason)
+        {:ok, result} ->
+          %{result | interrupted_outcomes: recovered_outcomes ++ result.interrupted_outcomes}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
     else
-      Repo.rollback(:stale_owner_cleanup)
+      :stale_owner
+    end
+  end
+
+  defp close_expired_owner_replays!(candidate) do
+    owner_snapshot =
+      Map.take(candidate, [:owner_instance_id, :owner_lease_token, :owner_lease_expires_at])
+
+    case Accounting.close_request_replays_for_session(
+           candidate.session_id,
+           owner_snapshot,
+           :owner_shutdown
+         ) do
+      {:ok, _summary} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp recover_dead_session_executions(session_id, opts) do
+    requests =
+      Repo.all(
+        from request in Request,
+          join: turn in CodexTurn,
+          on: turn.request_id == request.id,
+          where: turn.codex_session_id == ^session_id and turn.status == ^@turn_in_progress,
+          select: request
+      )
+
+    requests
+    |> Enum.map(&recover_dead_request_execution(&1, opts))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp recover_dead_request_execution(request, opts) do
+    attempt =
+      Repo.one(
+        from attempt in Attempt,
+          where: attempt.request_id == ^request.id,
+          order_by: [desc: attempt.attempt_number],
+          limit: 1
+      )
+
+    if attempt do
+      case Accounting.RequestLifecycle.recover_dead_execution(request, attempt, now()) do
+        {:ok, :recovered} ->
+          interruption_marker("interrupted", opts, bounded_transport(attempt.transport))
+
+        {:ok, :noop} ->
+          nil
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
     end
   end
 

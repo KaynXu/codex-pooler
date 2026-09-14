@@ -98,6 +98,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
       RequestLogFacts.record_request_created!(request)
       :ok = bind_direct_cleanup(opts, request)
+      link_semantic_execution_retry!(opts, client_resend, request, timestamp)
 
       case client_resend do
         nil -> %{request: request}
@@ -113,6 +114,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         reraise(error, __STACKTRACE__)
       end
   end
+
+  defp link_semantic_execution_retry!(opts, %{predecessor_request_id: id}, request, timestamp) do
+    case attr(opts, :correlation_id) do
+      "codex-turn:" <> _digest ->
+        ClientRetry.insert_link!(%Request{id: id}, request, timestamp)
+
+      _payload_claim ->
+        :ok
+    end
+  end
+
+  defp link_semantic_execution_retry!(_opts, nil, _request, _timestamp), do: :ok
 
   # Runtime writes lock the codex session before `api_keys`. A resend claim that
   # authorized the key first held it while waiting on a session an HTTP
@@ -139,6 +152,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       api_key_id: api_key.id,
       model_id: model.id,
       endpoint: attr(opts, :endpoint),
+      codex_session_id: session.id,
+      native_client_retry_witness: attr(opts, :native_client_retry_witness),
       anchor_present?: attr(opts, :anchor_present?) == true
     }
 

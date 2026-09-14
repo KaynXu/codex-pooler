@@ -17,6 +17,9 @@ defmodule CodexPooler.Accounting.Attempt do
     field :transport, :string
     field :owner_instance_id, :string
     field :owner_instance_boot_id, :string
+    field :owner_process_id, :string
+    field :owner_execution_id, :binary_id
+    field :owner_execution_checked_at, :utc_datetime_usec
     field :status, :string
     field :started_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec

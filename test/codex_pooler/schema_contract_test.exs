@@ -168,6 +168,7 @@ defmodule CodexPooler.SchemaContractTest do
           "gateway_idempotency_keys_active_key_uq",
           "routing_circuit_states_active_assignment_uq",
           "models_pool_exposed_uq",
+          "attempts_open_execution_index",
           "ledger_entries_settlement_request_uq",
           "ledger_entries_api_key_recorded_occurred_idx",
           "request_log_facts_latest_upstream_identity_request_idx",
@@ -213,6 +214,13 @@ defmodule CodexPooler.SchemaContractTest do
              "WHERE (status = 'active'::text)"
 
     assert indexes["api_key_policy_model_active_uq"] =~ "lower(model_identifier)"
+
+    assert indexes["attempts_open_execution_index"] =~
+             "COALESCE(owner_execution_checked_at, started_at)"
+
+    assert indexes["attempts_open_execution_index"] =~
+             "WHERE ((status = ANY (ARRAY['queued'::text, 'in_progress'::text])) AND (owner_execution_id IS NOT NULL))"
+
     assert indexes["ledger_entries_settlement_request_uq"] =~ "entry_kind = 'settlement'"
     assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~ "api_key_id"
     assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~ "occurred_at DESC"
@@ -499,6 +507,12 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert column_type("ledger_entries", "input_tokens") == "bigint"
     assert column_type("ledger_entries", "total_tokens") == "bigint"
+    assert column_type("attempts", "owner_process_id") == "character varying(64)"
+    assert column_type("attempts", "owner_execution_id") == "uuid"
+
+    assert column_type("attempts", "owner_execution_checked_at") ==
+             "timestamp with time zone"
+
     assert column_type("daily_rollups", "admitted_request_count") == "bigint"
     assert column_type("hourly_model_usage_rollups", "request_count") == "bigint"
     assert column_type("hourly_model_usage_rollups", "total_tokens") == "bigint"
