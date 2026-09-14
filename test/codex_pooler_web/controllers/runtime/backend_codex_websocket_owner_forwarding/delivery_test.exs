@@ -406,19 +406,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DeliveryTe
 
     logs =
       capture_log(fn ->
+        socket_state_key = make_ref()
+        Process.put(socket_state_key, state)
+
         try do
           payload = websocket_payload(setup, input_marker)
 
           assert {:ok, state} =
                    CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
+          Process.put(socket_state_key, state)
+          task_monitors = Map.new(state.tasks, &{&1, Process.monitor(&1)})
+
           assert {:push, {:text, terminal}, state} = receive_owner_socket_push(state)
 
           assert %{"id" => "resp_owner_observer_failure"} = CodexPooler.JSON.decode!(terminal)
           assert {:ok, state} = receive_owner_socket_complete(state)
-          flush_socket_done(state)
+          state = settle_owner_socket_turn(state)
+          Process.put(socket_state_key, state)
+          assert MapSet.size(state.tasks) == 0
+
+          # Owner completion precedes task finalization and the delivery ack.
+          # Observe the executor's exit before detach uses the shared sandbox.
+          Enum.each(task_monitors, fn {pid, monitor} ->
+            assert_receive {:DOWN, ^monitor, :process, ^pid, reason},
+                           @handoff_detection_timeout_ms
+
+            assert reason in [:normal, :noproc]
+          end)
+
+          assert_socket_response_tasks_released!()
         after
-          CodexResponsesSocket.terminate(:closed, state)
+          CodexResponsesSocket.terminate(:closed, Process.delete(socket_state_key))
         end
       end)
 
