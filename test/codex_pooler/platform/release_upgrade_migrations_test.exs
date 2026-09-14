@@ -32,13 +32,15 @@ defmodule CodexPooler.ReleaseUpgradeMigrationsTest do
         assert Postgres.storage_status(options) == :down
       end)
 
+      # The parent test invocation already selected the project runtime. Reuse
+      # that exact Mix executable so the isolated rehearsal also works in the
+      # release CI image, which intentionally does not install mise.
+      mix = System.find_executable("mix") || raise "mix executable not found"
+
       {output, rc} =
         System.cmd(
-          "mise",
+          mix,
           [
-            "x",
-            "--",
-            "mix",
             "run",
             "--no-start",
             "--no-compile",

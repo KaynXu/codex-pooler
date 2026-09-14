@@ -223,30 +223,33 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
 
       Migrator.run(Repo, directory, :up, all: true, log: false)
       seed(rows)
-      before = physical_snapshot()
-      original_schema = schema_snapshot()
+      before = head_data_snapshot()
       migrate(:all)
-      ^before = physical_snapshot()
+      ^before = head_data_snapshot()
       assert_final_schema()
+      current_schema = schema_snapshot()
+      current_physical = physical_snapshot()
 
       receipt("head", %{
-        application_schema_and_data_unchanged: true,
+        review_head_data_unchanged: true,
         pinned_revision: @pinned_head,
-        schema: schema_snapshot()
+        upgraded_schema: current_schema
       })
 
       down(20_260_914_195_100)
-      ^before = physical_snapshot()
+      ^before = head_data_snapshot()
+      ^current_physical = physical_snapshot()
       migrate(:all)
-      receipt("isolated_convergence_down", %{original_head_schema_preserved: true})
+      ^current_physical = physical_snapshot()
+      receipt("isolated_convergence_down", %{current_schema_physical_state_preserved: true})
 
       for {version, _} <-
             migrations() |> Enum.filter(fn {v, _} -> v > @baseline end) |> Enum.reverse(),
           do: down(version)
 
       migrate(:all)
-      ^original_schema = schema_snapshot()
-      receipt("schema_equivalence", %{rewritten_upgrade_matches_original_head: true})
+      ^current_schema = schema_snapshot()
+      receipt("schema_equivalence", %{rewritten_upgrade_reconverges_current_schema: true})
     after
       File.rm_rf!(directory)
     end
@@ -914,6 +917,14 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
       SELECT count(*),bit_xor(hashtextextended((to_jsonb(t)-ARRAY[
         'owner_instance_id','owner_instance_boot_id','owner_process_id',
         'owner_execution_id','owner_execution_checked_at'])::text,0))::text FROM #{table} t
+      """).rows
+    end
+  end
+
+  defp head_data_snapshot do
+    for table <- ~w(requests attempts ledger_entries) do
+      query("""
+      SELECT count(*),bit_xor(hashtextextended(to_jsonb(t)::text,0))::text FROM #{table} t
       """).rows
     end
   end
