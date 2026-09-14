@@ -6,8 +6,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    BridgeSessionAlias,
+    CodexSession,
+    CodexTurn
+  }
+
   alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
   alias CodexPooler.Gateway.Routing.SessionContinuity, as: RoutingContinuity
   alias CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat
   alias CodexPooler.Gateway.Websocket
@@ -217,16 +225,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
     state = turn_state()
     {:ok, session} = start_session(setup, state)
     lease = active_lease!(session.id)
+
+    opts =
+      RequestOptions.build(%{accepted_turn_state: state}, "/backend-api/codex/responses", %{})
+
+    {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
+    lease = Repo.reload!(lease)
     {:ok, _stale} = InstancePresence.record_heartbeat(first, DateTime.add(now(), -10, :minute))
     end_instance!(:http_incarnation_first)
     second = start_instance!(:http_incarnation_second)
     assert second.node_name == first.node_name
     refute second.boot_id == first.boot_id
 
-    opts =
-      RequestOptions.build(%{accepted_turn_state: state}, "/backend-api/codex/responses", %{})
-
-    {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
     assert attached.continuity.codex_session.owner_instance_boot_id == first.boot_id
     result = SessionLeaseHeartbeat.run(attached, fn -> :dispatched end)
 
@@ -262,6 +272,121 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
       assert after_lease.lease_token == before.lease_token
       assert DateTime.compare(after_lease.expires_at, before.expires_at) == :gt
     end
+  end
+
+  for witnessed <- [false, true] do
+    @tag witnessed: witnessed
+    test "completion cannot renew known-absent ownership with witness=#{witnessed}", %{
+      witnessed: witnessed
+    } do
+      setup = accounting_setup()
+      remote = Identity.new("sample-owner@remote", "boot-#{unique()}")
+      {:ok, _} = InstancePresence.record_heartbeat(remote, now())
+      {:ok, session} = start_session(setup, turn_state(), remote)
+      before_lease = active_lease!(session.id)
+      before_session = Repo.reload!(session)
+
+      before_aliases =
+        Repo.aggregate(
+          from(a in BridgeSessionAlias,
+            where: a.codex_session_id == ^session.id
+          ),
+          :count
+        )
+
+      {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.add(now(), -10, :minute))
+      opts = RequestOptions.build(%{codex_session: session}, "/backend-api/codex/responses", %{})
+
+      opts =
+        if witnessed do
+          {:ok, witness} =
+            OwnerWitness.new(session)
+
+          RequestOptions.put_session_owner_witness(opts, witness)
+        else
+          opts
+        end
+
+      assert {:error, :owner_unavailable} =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"id" => "resp_absent_completion"},
+                 opts
+               )
+
+      assert Repo.reload!(before_lease) == before_lease
+      assert Repo.reload!(session) == before_session
+
+      assert Repo.aggregate(
+               from(a in BridgeSessionAlias,
+                 where: a.codex_session_id == ^session.id
+               ),
+               :count
+             ) == before_aliases
+    end
+  end
+
+  test "fresh HTTP attach replaces an unexpired lease whose owner is known absent" do
+    setup = accounting_setup()
+    local = start_instance!(:http_fresh_takeover_local)
+    remote = Identity.new("sample-owner@remote", "boot-#{unique()}")
+    {:ok, _} = InstancePresence.record_heartbeat(remote, now())
+    key = turn_state()
+    {:ok, session} = start_session(setup, key, remote)
+    before_lease = active_lease!(session.id)
+
+    {:ok, old_witness} =
+      OwnerWitness.new(session)
+
+    old_options =
+      RequestOptions.build(%{codex_session: session}, "/backend-api/codex/responses", %{})
+      |> RequestOptions.put_session_owner_witness(old_witness)
+
+    old_aliases =
+      Repo.aggregate(
+        from(a in BridgeSessionAlias,
+          where: a.codex_session_id == ^session.id
+        ),
+        :count
+      )
+
+    {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.add(now(), -10, :minute))
+    opts = RequestOptions.build(%{accepted_turn_state: key}, "/backend-api/codex/responses", %{})
+    assert {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
+    assert attached.continuity.codex_session.id == session.id
+    assert attached.continuity.codex_session.owner_instance_boot_id == local.boot_id
+    refute attached.continuity.codex_session.owner_lease_token == before_lease.lease_token
+    assert Repo.reload!(before_lease).status == "released"
+
+    assert Repo.aggregate(
+             from(l in BridgeOwnerLease,
+               where: l.codex_session_id == ^session.id and l.status == "active"
+             ),
+             :count
+           ) == 1
+
+    assert :dispatched = SessionLeaseHeartbeat.run(attached, fn -> :dispatched end)
+    replacement = Repo.reload!(session)
+    replacement_lease = active_lease!(session.id)
+
+    assert {:error, :stale_owner} =
+             SessionContinuity.register_codex_session_continuity(
+               session,
+               %{},
+               %{"id" => "resp_stale_after_takeover"},
+               old_options
+             )
+
+    assert Repo.reload!(session) == replacement
+    assert active_lease!(session.id) == replacement_lease
+
+    assert Repo.aggregate(
+             from(a in BridgeSessionAlias,
+               where: a.codex_session_id == ^session.id
+             ),
+             :count
+           ) == old_aliases
   end
 
   # A VM start mints one incarnation and the real heartbeat publishes it. Every

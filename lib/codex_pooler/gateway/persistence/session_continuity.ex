@@ -315,6 +315,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp renew_validated_owner!(session, lease, opts, now) do
+    case OwnerLease.validate_renewal_presence(lease, now) do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+
     expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
     renewed_lease =

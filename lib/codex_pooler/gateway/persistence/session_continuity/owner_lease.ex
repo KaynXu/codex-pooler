@@ -78,17 +78,25 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
     case active_for_update(session.id) do
       %BridgeOwnerLease{} = lease ->
-        if own_lease?(lease, owner) do
-          lease
-          |> Ecto.Changeset.change(%{
-            pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-            renewed_at: now,
-            expires_at: expires_at,
-            updated_at: now
-          })
-          |> Repo.update!()
-        else
-          lease
+        locked_now = db_now()
+
+        cond do
+          validate_renewal_presence(lease, locked_now) == {:error, :owner_unavailable} ->
+            release!(lease, "owner_unavailable_takeover", nil, locked_now)
+            insert_takeover!(session, owner, opts, locked_now)
+
+          own_lease?(lease, owner) ->
+            lease
+            |> Ecto.Changeset.change(%{
+              pool_upstream_assignment_id: session.pool_upstream_assignment_id,
+              renewed_at: locked_now,
+              expires_at: DateTime.add(locked_now, bridge_owner_lease_ttl_seconds(opts), :second),
+              updated_at: locked_now
+            })
+            |> Repo.update!()
+
+          true ->
+            lease
         end
 
       nil ->
@@ -155,6 +163,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
         now = db_now()
 
         case validate_owner_token_snapshot(session, lease, session.owner_lease_token, now) do
+          :ok -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+        case validate_renewal_presence(lease, now) do
           :ok -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -500,7 +513,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   # A request holding a valid token may execute on a different replica. Only
   # shared evidence that the named incarnation stopped publishing revokes its
   # liveness; a different local incarnation or a missing row proves nothing.
-  defp validate_renewal_presence(%BridgeOwnerLease{} = lease, now) do
+  @spec validate_renewal_presence(BridgeOwnerLease.t(), DateTime.t()) ::
+          :ok | {:error, :owner_unavailable}
+  def validate_renewal_presence(%BridgeOwnerLease{} = lease, now) do
     identity =
       InstancePresence.Identity.owner(lease.owner_instance_id, lease.owner_instance_boot_id)
 
