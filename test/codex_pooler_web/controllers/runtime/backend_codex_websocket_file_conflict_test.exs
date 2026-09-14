@@ -133,7 +133,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
       assert %{
                "type" => "error",
                "status" => 409,
-               "error" => %{"code" => ^expected, "param" => "file_id"}
+               "error" => %{
+                 "code" => ^expected,
+                 "type" => "invalid_request_error",
+                 "param" => "file_id"
+               }
              } = error
 
       refute Map.has_key?(error["error"], "recovery_kind")
