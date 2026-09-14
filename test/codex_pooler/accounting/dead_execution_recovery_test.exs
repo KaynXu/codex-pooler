@@ -308,6 +308,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
     assert_receive {:last_attempt, {request, attempt}}, 15_000
     send(pid, :finish)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
+    CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
     now = DateTime.add(DateTime.utc_now(), 1)
 
     assert {:ok, %{dead_execution_attempts_recovered: 0}} =
@@ -332,6 +333,40 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
 
     {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
     {reserved.request, attempt}
+  end
+
+  test "exact death never recovers a superseded attempt or a generation-one attempt" do
+    setup = accounting_setup()
+    {request, first} = reserve_attempt(setup)
+    {:ok, latest} = Accounting.create_attempt(request, setup.assignment)
+    :ok = ExecutionIdentity.complete()
+    CodexPooler.ExecutionProofSupport.publish_terminal!(latest)
+
+    assert {:ok, :noop} =
+             Accounting.RequestLifecycle.recover_dead_execution(
+               request,
+               first,
+               DateTime.utc_now()
+             )
+
+    replay = latest |> Ecto.Changeset.change(replay_generation: 1) |> Repo.update!()
+
+    assert {:ok, :noop} =
+             Accounting.RequestLifecycle.recover_dead_execution(
+               request,
+               replay,
+               DateTime.utc_now()
+             )
+
+    assert Repo.reload!(request).status == "in_progress"
+    latest = replay |> Ecto.Changeset.change(replay_generation: 0) |> Repo.update!()
+
+    assert {:ok, :recovered} =
+             Accounting.RequestLifecycle.recover_dead_execution(
+               request,
+               latest,
+               DateTime.utc_now()
+             )
   end
 
   for transport <- ["http_sse", "websocket"] do
@@ -413,13 +448,17 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
       assert Repo.reload!(attempt).status == "in_progress"
       assert ExecutionIdentity.status(attempt) == :dead
       assert RuntimeCleanup.active_runtime_request?(request, now)
+      CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
 
       assert {:ok, %{dead_execution_attempts_recovered: 0}} =
                DeadExecutionRecovery.recover(now, minimum_age_seconds: 120)
 
       for stale <- [
             %{attempt | replay_generation: attempt.replay_generation + 1},
-            %{attempt | owner_execution_id: Ecto.UUID.generate()}
+            %{attempt | owner_execution_id: Ecto.UUID.generate()},
+            %{attempt | owner_instance_id: "another@example.invalid"},
+            %{attempt | owner_instance_boot_id: Ecto.UUID.generate()},
+            %{attempt | owner_process_id: "<0.999999.0>"}
           ] do
         assert {:ok, :noop} =
                  Accounting.RequestLifecycle.recover_dead_execution(request, stale, now)

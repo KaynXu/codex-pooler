@@ -197,6 +197,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     send(pid, :finish)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
 
+    CodexPooler.ExecutionProofSupport.publish_terminal!(fixture.attempt)
+
     assert {:ok, :recovered} =
              Accounting.RequestLifecycle.recover_dead_execution(
                fixture.request,

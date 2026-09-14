@@ -10,20 +10,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     RequestReplayEntitlement
   }
 
-  alias CodexPooler.Platform.ExecutionIdentity
+  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
+  alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Repo
 
-  @spec recover(DateTime.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @type summary :: %{dead_execution_attempts_recovered: non_neg_integer()}
+  @spec recover(DateTime.t(), keyword()) :: {:ok, summary()} | {:error, term(), summary()}
   def recover(now, opts \\ []) do
     cutoff = DateTime.add(now, -Keyword.get(opts, :minimum_age_seconds, 120), :second)
     limit = Keyword.get(opts, :limit, 100)
 
-    cutoff
-    |> candidates(limit)
-    |> Enum.reduce_while(
-      {:ok, %{dead_execution_attempts_recovered: 0}},
-      &recover_candidate(&1, &2, now)
-    )
+    {summary, failures} =
+      cutoff
+      |> candidates(limit)
+      |> Enum.reduce(
+        {%{dead_execution_attempts_recovered: 0}, []},
+        &recover_candidate(&1, &2, now)
+      )
+
+    if failures == [],
+      do: {:ok, summary},
+      else: {:error, {:dead_execution_candidates_failed, Enum.reverse(failures)}, summary}
   end
 
   defp candidates(cutoff, limit) do
@@ -33,7 +40,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
       from a in Attempt,
         as: :attempt,
         where:
-          a.status in ["queued", "in_progress"] and not is_nil(a.owner_execution_id) and
+          a.status in ["queued", "in_progress"] and a.replay_generation == 0 and
+            not is_nil(a.owner_execution_id) and
             a.started_at <= ^cutoff,
         where:
           fragment(
@@ -95,7 +103,23 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     )
   end
 
-  defp recover_candidate({request, attempt}, {:ok, summary}, now) do
+  defp recover_candidate({request, attempt}, {summary, failures}, now) do
+    case recover_candidate(request, attempt, now) do
+      {:ok, :recovered} ->
+        {%{
+           summary
+           | dead_execution_attempts_recovered: summary.dead_execution_attempts_recovered + 1
+         }, failures}
+
+      {:ok, :noop} ->
+        {summary, failures}
+
+      {:error, reason} ->
+        {summary, [{attempt.id, reason} | failures]}
+    end
+  end
+
+  defp recover_candidate(request, attempt, now) do
     # Persist scheduling progress so another replica or a later job advances
     # past active executions instead of repeatedly selecting the oldest batch.
     from(a in Attempt,
@@ -103,22 +127,34 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     )
     |> Repo.update_all(set: [owner_execution_checked_at: now])
 
+    caller_owned_transaction? = Repo.in_transaction?()
+
     result =
-      if ExecutionIdentity.status(attempt) == :dead,
+      if ExecutionTerminalProofs.terminal?(attempt),
         do: RequestLifecycle.recover_dead_execution(request, attempt, now),
         else: {:ok, :noop}
 
     case result do
       {:ok, :recovered} ->
-        {:cont,
-         {:ok,
-          %{dead_execution_attempts_recovered: summary.dead_execution_attempts_recovered + 1}}}
+        unless caller_owned_transaction? do
+          Streaming.emit_stream_outcome(
+            "interrupted",
+            bounded_transport(request.transport),
+            bounded_transport(attempt.transport)
+          )
+        end
 
-      {:ok, :noop} ->
-        {:cont, {:ok, summary}}
+        result
 
-      {:error, _} = error ->
-        {:halt, error}
+      other ->
+        other
     end
+  rescue
+    exception -> {:error, exception.__struct__}
+  catch
+    :exit, _reason -> {:error, :execution_recovery_unavailable}
   end
+
+  defp bounded_transport(transport) when transport in ["http_sse", "websocket"], do: transport
+  defp bounded_transport(_), do: "unknown"
 end

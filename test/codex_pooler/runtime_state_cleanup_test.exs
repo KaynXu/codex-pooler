@@ -247,6 +247,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
         monitor = Process.monitor(pid)
         send(starter, :finish)
         assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
+        CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
       end
 
       attempt =
@@ -679,6 +680,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
       send(executor, :finish)
       assert_receive {:DOWN, ^monitor, :process, ^executor, :normal}, 15_000
       assert ExecutionIdentity.status(fixture.attempt) == :dead
+      CodexPooler.ExecutionProofSupport.publish_committed_terminal!(fixture.attempt)
       first = unquote(first)
       second = unquote(if(first == :owner, do: :scanner, else: :owner))
 

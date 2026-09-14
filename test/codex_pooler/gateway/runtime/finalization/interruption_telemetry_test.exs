@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
+  alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
@@ -89,7 +90,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     expire_owner!(fixture)
 
     capture_outcomes(fn ->
-      assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime]}} =
+      assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime], _summary}} =
                run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
 
       refute_received {:stream_outcome, _}
@@ -318,6 +319,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   defp committed_interruption_fixture!(mode) do
     fixture = build_committed_interruption_fixture!(mode)
     register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture) end)
+
+    if mode == :active_attempt,
+      do: CodexPooler.ExecutionProofSupport.publish_committed_terminal!(fixture.attempt)
+
     fixture
   end
 
@@ -367,6 +372,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
 
       assert {:ok, turn} =
                SessionContinuity.start_codex_turn(session, reserved.request, request_options)
+
+      ExecutionIdentity.complete()
 
       Map.merge(setup, %{
         session: session,

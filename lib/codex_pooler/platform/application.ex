@@ -18,6 +18,7 @@ defmodule CodexPooler.Application do
       CodexPooler.Platform.ExecutionRegistry,
       CodexPoolerWeb.Telemetry,
       CodexPooler.Repo,
+      CodexPooler.Platform.ExecutionProofPublisher,
       CodexPooler.Telemetry.RelayRuntime,
       CodexPooler.Platform.InstanceHeartbeat,
       CodexPooler.Jobs.UpstreamEnqueue.GatewayReconciliationGate,

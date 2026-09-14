@@ -804,6 +804,7 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
     send(child, :finish)
     assert_receive {:DOWN, ^monitor, :process, ^child, :normal}, 15_000
     assert ExecutionIdentity.status(attempt) == :dead
+    CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
 
     case failure do
       :dead_execution ->

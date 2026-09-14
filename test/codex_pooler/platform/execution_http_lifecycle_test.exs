@@ -1,5 +1,5 @@
 defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
-  use ExUnit.Case, async: false
+  use CodexPooler.DataCase, async: false
   import ExUnit.CaptureLog
   alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Platform.InstancePresence.Identity
@@ -53,11 +53,13 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
         assert_receive {:stream_liveness, :alive}
         assert Process.alive?(pid)
         assert ExecutionIdentity.status(first) == :dead
+        CodexPooler.ExecutionProofSupport.publish_terminal!(first)
         :ok = :gen_tcp.send(socket, "GET /public HTTP/1.1\r\nHost: localhost\r\n\r\n")
         assert_receive {:execution, ^pid, second}, 15_000
         assert receive_response(socket) =~ "200 OK"
         assert second.owner_execution_id != first.owner_execution_id
         assert ExecutionIdentity.status(second) == :dead
+        CodexPooler.ExecutionProofSupport.publish_terminal!(second)
       end)
 
     assert logs =~ "late gateway stream failed"
@@ -73,6 +75,7 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
         monitor = Process.monitor(pid)
         assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 15_000
         assert ExecutionIdentity.status(identity) == :dead
+        CodexPooler.ExecutionProofSupport.publish_terminal!(identity)
       end)
 
     assert logs =~ "synthetic database outage"

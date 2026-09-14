@@ -111,6 +111,7 @@ config :codex_pooler, dev_seeds_enabled: true
 # that need presence rows write them through `CodexPooler.Platform.InstancePresence`
 # inside their own sandbox connection instead.
 config :codex_pooler, CodexPooler.Platform.InstanceHeartbeat, enabled: false
+config :codex_pooler, CodexPooler.Platform.ExecutionProofPublisher, enabled: false
 
 # Impeccable live state is read from disk at render time. Point the test env at
 # a directory that never exists so a helper running in the developer's checkout

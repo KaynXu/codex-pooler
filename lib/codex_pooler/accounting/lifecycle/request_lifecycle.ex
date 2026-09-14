@@ -34,6 +34,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   alias CodexPooler.Events
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Platform.ExecutionIdentity
+  alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
@@ -155,13 +156,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
           {:ok, AbsentInstanceRecovery.summary()} | {:error, term()}
   def recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []) do
-    now = DateTime.truncate(now, :microsecond)
-
-    with {:ok, absent} <- AbsentInstanceRecovery.recover_absent_instance_attempts(now, opts),
-         {:ok, executions} <- __MODULE__.DeadExecutionRecovery.recover(now, opts) do
-      {:ok, Map.merge(absent, executions)}
-    end
+    AbsentInstanceRecovery.recover_absent_instance_attempts(
+      DateTime.truncate(now, :microsecond),
+      opts
+    )
   end
+
+  @spec recover_dead_execution_attempts(DateTime.t(), keyword()) ::
+          {:ok, map()} | {:error, term(), map()}
+  def recover_dead_execution_attempts(now \\ DateTime.utc_now(), opts \\ []),
+    do: __MODULE__.DeadExecutionRecovery.recover(DateTime.truncate(now, :microsecond), opts)
 
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
@@ -500,9 +504,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   defp recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) do
     request.status in @dispatchable_request_statuses and
       attempt.status in @retryable_attempt_statuses and latest_id == candidate.id and
-      attempt.replay_generation == candidate.replay_generation and
-      attempt.owner_execution_id == candidate.owner_execution_id and
-      is_nil(settlement) and is_nil(entitlement) and ExecutionIdentity.status(attempt) == :dead
+      same_execution?(attempt, candidate) and
+      is_nil(settlement) and is_nil(entitlement) and
+      ExecutionTerminalProofs.terminal?(attempt)
+  end
+
+  defp same_execution?(attempt, candidate) do
+    attempt.replay_generation == 0 and candidate.replay_generation == 0 and
+      Map.take(attempt, [
+        :owner_execution_id,
+        :owner_instance_id,
+        :owner_instance_boot_id,
+        :owner_process_id
+      ]) ==
+        Map.take(candidate, [
+          :owner_execution_id,
+          :owner_instance_id,
+          :owner_instance_boot_id,
+          :owner_process_id
+        ])
   end
 
   defp finalize_dead_execution(request, attempt, timestamp) do

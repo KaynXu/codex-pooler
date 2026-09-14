@@ -86,6 +86,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
         Process.exit(task, :kill)
         assert_receive {:DOWN, ^monitor, :process, ^task, :killed}, 15_000
         assert ExecutionIdentity.status(attempt) == :dead
+        CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
 
         assert {:ok, :recovered} =
                  RequestLifecycle.recover_dead_execution(request, attempt, DateTime.utc_now())

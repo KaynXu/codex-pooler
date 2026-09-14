@@ -168,6 +168,7 @@ defmodule CodexPooler.Platform.ExecutionIdentityTest do
     assert :dead == ExecutionRegistry.status(id, self(), registry)
     assert :unknown == ExecutionRegistry.register(id, registry)
     assert :unknown == ExecutionRegistry.complete(id, registry)
+    assert :ok == ExecutionRegistry.acknowledge([id], registry)
     send(registry, {:expire, id})
     assert :unknown == ExecutionRegistry.status(id, self(), registry)
     send(registry, {:DOWN, make_ref(), :process, self(), :normal})

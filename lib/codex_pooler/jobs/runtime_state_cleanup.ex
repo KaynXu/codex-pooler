@@ -7,6 +7,7 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
   alias CodexPooler.Catalog
   alias CodexPooler.Files
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
+  alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
 
@@ -39,6 +40,8 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
       # window, so an attempt orphaned by a kill, a crash, or a drain that could
       # not reach it stops holding its reservation in minutes.
       {:absent_instances, fn -> Accounting.recover_absent_instance_attempts(now) end},
+      {:dead_executions, fn -> Accounting.recover_dead_execution_attempts(now) end},
+      {:execution_proofs, fn -> ExecutionTerminalProofs.prune(now) end},
       {:instance_presence, fn -> InstancePresence.prune(now) end},
       {:catalog_sync_runs, fn -> Catalog.cleanup_stale_sync_runs(now) end},
       {:account_reconciliation, fn -> AccountReconciliation.cleanup_stale_state(now) end}
@@ -57,6 +60,9 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
     summary =
       Enum.reduce(results, %{}, fn
         {_name, {:ok, step_summary}}, acc when is_map(step_summary) ->
+          Map.merge(acc, step_summary)
+
+        {_name, {:error, _reason, step_summary}}, acc when is_map(step_summary) ->
           Map.merge(acc, step_summary)
 
         {_name, _result}, acc ->
@@ -78,7 +84,7 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
             "#{inspect(Enum.map(failures, &elem(&1, 0)))}, summary #{inspect(summary)}"
         )
 
-        {:error, {:runtime_state_cleanup_steps_failed, Enum.map(failures, &elem(&1, 0))}}
+        {:error, {:runtime_state_cleanup_steps_failed, Enum.map(failures, &elem(&1, 0)), summary}}
     end
   end
 
