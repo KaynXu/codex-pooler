@@ -17,6 +17,11 @@ config :codex_pooler,
   ecto_repos: [CodexPooler.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :codex_pooler, CodexPooler.Repo,
+  migration_lock: :pg_advisory_lock,
+  migration_advisory_lock_retry_interval_ms: 1_000,
+  migration_advisory_lock_max_tries: 10
+
 config :codex_pooler,
        CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
        mode: :off

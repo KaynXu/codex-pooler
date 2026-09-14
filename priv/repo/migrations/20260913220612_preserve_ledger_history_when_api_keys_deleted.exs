@@ -1,35 +1,100 @@
 defmodule CodexPooler.Repo.Migrations.PreserveLedgerHistoryWhenApiKeysDeleted do
   use Ecto.Migration
 
-  def up do
-    execute("SET LOCAL lock_timeout = '10s'")
-    execute("SET LOCAL statement_timeout = '60s'")
-    execute(delta_function(true))
+  @disable_ddl_transaction true
 
-    execute("""
-    ALTER TABLE public.ledger_entries
-      ALTER COLUMN api_key_id DROP NOT NULL,
-      DROP CONSTRAINT ledger_entries_api_key_id_fkey,
-      ADD CONSTRAINT ledger_entries_api_key_id_fkey
-        FOREIGN KEY (api_key_id) REFERENCES public.api_keys(id) ON DELETE SET NULL
-    """)
+  def up do
+    transaction(fn ->
+      repo().query!(delta_function(true), [], log: false)
+
+      repo().query!(
+        """
+        ALTER TABLE public.ledger_entries
+          ALTER COLUMN api_key_id DROP NOT NULL,
+          DROP CONSTRAINT ledger_entries_api_key_id_fkey,
+          ADD CONSTRAINT ledger_entries_api_key_id_fkey
+            FOREIGN KEY (api_key_id) REFERENCES public.api_keys(id) ON DELETE SET NULL NOT VALID
+        """,
+        [],
+        log: false
+      )
+    end)
+
+    validate("ledger_entries_api_key_id_fkey")
   end
 
   def down do
-    execute("SET LOCAL lock_timeout = '10s'")
-    execute("SET LOCAL statement_timeout = '60s'")
-
     # Once a key is deleted its history cannot regain the original required
-    # owner. Refuse that rollback instead of deleting the retained ledger.
-    execute("""
-    ALTER TABLE public.ledger_entries
-      ALTER COLUMN api_key_id SET NOT NULL,
-      DROP CONSTRAINT ledger_entries_api_key_id_fkey,
-      ADD CONSTRAINT ledger_entries_api_key_id_fkey
-        FOREIGN KEY (api_key_id) REFERENCES public.api_keys(id) ON DELETE CASCADE
-    """)
+    # owner. Refuse before any schema or function mutation.
+    transaction(fn ->
+      # Block deletions and ledger writers during the preflight, but permit
+      # readers throughout its scan. NOWAIT releases partial locks on failure.
+      repo().query!(
+        "LOCK TABLE public.api_keys, public.ledger_entries IN SHARE ROW EXCLUSIVE MODE NOWAIT",
+        [],
+        log: false
+      )
 
-    execute(delta_function(false))
+      repo().query!(
+        """
+        DO $rollback$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM public.ledger_entries WHERE api_key_id IS NULL) THEN
+            RAISE EXCEPTION 'cannot restore required API key ownership with retained null-key history'
+              USING ERRCODE = '23502';
+          END IF;
+        END
+        $rollback$
+        """,
+        [],
+        log: false,
+        timeout: :infinity
+      )
+
+      # PostgreSQL 18 supports native NOT NULL NOT VALID. Atomically switch both
+      # delete behavior and nullability without an exclusive scan or helper CHECK.
+      # An interrupted validation leaves coherent old semantics and is restartable.
+      repo().query!(
+        """
+        ALTER TABLE public.ledger_entries
+          DROP CONSTRAINT IF EXISTS ledger_entries_api_key_id_not_null,
+          ADD CONSTRAINT ledger_entries_api_key_id_not_null NOT NULL api_key_id NOT VALID,
+          DROP CONSTRAINT ledger_entries_api_key_id_fkey,
+          ADD CONSTRAINT ledger_entries_api_key_id_fkey
+            FOREIGN KEY (api_key_id) REFERENCES public.api_keys(id) ON DELETE CASCADE NOT VALID
+        """,
+        [],
+        log: false
+      )
+
+      repo().query!(delta_function(false), [], log: false)
+    end)
+
+    validate("ledger_entries_api_key_id_not_null")
+    validate("ledger_entries_api_key_id_fkey")
+  end
+
+  defp transaction(fun) do
+    execute(fn ->
+      {:ok, _} =
+        repo().transaction(
+          fn ->
+            repo().query!("SET LOCAL lock_timeout = '10s'", [], log: false)
+            repo().query!("SET LOCAL statement_timeout = '30min'", [], log: false)
+            fun.()
+          end,
+          timeout: :infinity
+        )
+    end)
+  end
+
+  defp validate(constraint) do
+    transaction(fn ->
+      repo().query!("ALTER TABLE public.ledger_entries VALIDATE CONSTRAINT #{constraint}", [],
+        log: false,
+        timeout: :infinity
+      )
+    end)
   end
 
   defp delta_function(preserve_history?) do

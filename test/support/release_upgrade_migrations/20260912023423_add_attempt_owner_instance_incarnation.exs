@@ -14,9 +14,7 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptOwnerInstanceIncarnation do
   # join targets, and both are null on rows and attempts written before this
   # change: a null never equals an attempt's owner, so the old shape is out of
   # the ownership pass by SQL semantics and stays with the six-hour sweep.
-  def up do
-    execute("SET LOCAL lock_timeout = '10s'")
-
+  def change do
     alter table(:attempts) do
       add :owner_instance_boot_id, :string
     end
@@ -30,29 +28,14 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptOwnerInstanceIncarnation do
              name: :instance_presences_incarnation_idx
            )
 
-    # Do not scan attempts here while the column DDL holds an exclusive lock.
-  end
-
-  def down do
-    execute("SET LOCAL lock_timeout = '10s'")
-
-    # The convergence migration intentionally retains inherited indexes on down.
-    # Remove the dependent index explicitly before removing its ownership column.
-    drop_if_exists index(:attempts, [:owner_instance_id, :owner_instance_boot_id, :started_at],
-                     name: :attempts_open_owner_incarnation_idx
-                   )
-
-    drop index(:instance_presences, [:node_name, :boot_id],
-           name: :instance_presences_incarnation_idx
+    drop index(:attempts, [:owner_instance_id, :started_at],
+           name: :attempts_open_owner_instance_idx,
+           where: "status IN ('queued', 'in_progress') AND owner_instance_id IS NOT NULL"
          )
 
-    alter table(:instance_presences) do
-      remove :boot_id
-      remove :node_name
-    end
-
-    alter table(:attempts) do
-      remove :owner_instance_boot_id
-    end
+    create index(:attempts, [:owner_instance_id, :owner_instance_boot_id, :started_at],
+             name: :attempts_open_owner_incarnation_idx,
+             where: "status IN ('queued', 'in_progress') AND owner_instance_boot_id IS NOT NULL"
+           )
   end
 end

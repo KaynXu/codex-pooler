@@ -26,27 +26,13 @@ defmodule CodexPooler.Repo.Migrations.AddSessionOwnerInstanceIncarnation do
   # and ages out within one owner-lease TTL. The columns are deliberately kept
   # out of the existing `codex_sessions_check` all-or-nothing owner group for
   # that reason.
-  def up do
-    execute("SET LOCAL lock_timeout = '10s'")
-
+  def change do
     alter table(:codex_sessions) do
       add :owner_instance_boot_id, :string
     end
 
     alter table(:bridge_owner_leases) do
       add :owner_instance_boot_id, :string
-    end
-  end
-
-  def down do
-    execute("SET LOCAL lock_timeout = '10s'")
-
-    alter table(:bridge_owner_leases) do
-      remove :owner_instance_boot_id
-    end
-
-    alter table(:codex_sessions) do
-      remove :owner_instance_boot_id
     end
   end
 end

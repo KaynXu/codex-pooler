@@ -1,9 +1,7 @@
 defmodule CodexPooler.Repo.Migrations.AddInstancePresenceAndAttemptOwner do
   use Ecto.Migration
 
-  def up do
-    execute("SET LOCAL lock_timeout = '10s'")
-
+  def change do
     create table(:instance_presences, primary_key: false) do
       add :instance_id, :string, primary_key: true
       add :started_at, :utc_datetime_usec, null: false
@@ -21,16 +19,9 @@ defmodule CodexPooler.Repo.Migrations.AddInstancePresenceAndAttemptOwner do
       add :owner_instance_id, :string
     end
 
-    # The final incarnation index is built concurrently after all ownership columns exist.
-  end
-
-  def down do
-    execute("SET LOCAL lock_timeout = '10s'")
-
-    alter table(:attempts) do
-      remove :owner_instance_id
-    end
-
-    drop table(:instance_presences)
+    create index(:attempts, [:owner_instance_id, :started_at],
+             name: :attempts_open_owner_instance_idx,
+             where: "status IN ('queued', 'in_progress') AND owner_instance_id IS NOT NULL"
+           )
   end
 end
