@@ -3,11 +3,9 @@ defmodule CodexPooler.Platform.InstanceHeartbeat do
   Publishes this instance's presence row on an interval.
 
   The heartbeat is a recovery hint, never a request-path dependency: a failed
-  write is logged at debug and retried on the next tick, and the process never
-  takes the supervision tree down with it. A missed beat only delays recovery
-  of this instance's orphaned attempts, while a write that keeps succeeding is
-  what protects a live instance from having its in-flight work finalized by
-  another replica.
+  write is logged at warning and counted through telemetry, then retried on
+  the next tick. Stale presence is not proof of death: database unavailability
+  and pool starvation can prevent a live owner from publishing.
 
   The process runs in every release role, because any role that serves HTTP
   can own an in-flight stream.
@@ -53,7 +51,10 @@ defmodule CodexPooler.Platform.InstanceHeartbeat do
   end
 
   defp write(identity) do
-    InstancePresence.record_heartbeat(identity)
+    case InstancePresence.record_heartbeat(identity) do
+      {:ok, _instance} -> :ok
+      {:error, _reason} -> log_failure()
+    end
   rescue
     _error -> log_failure()
   catch
@@ -63,7 +64,8 @@ defmodule CodexPooler.Platform.InstanceHeartbeat do
   # The instance id is left out of the log line on purpose; the count of missed
   # beats is what matters and the identity is already durable in the row.
   defp log_failure do
-    Logger.debug("instance presence heartbeat write failed")
+    Logger.warning("instance presence heartbeat write failed")
+    :telemetry.execute([:codex_pooler, :instance_presence, :heartbeat], %{failures: 1}, %{})
     :error
   end
 

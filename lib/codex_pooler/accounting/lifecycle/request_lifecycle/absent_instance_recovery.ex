@@ -48,12 +48,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
           {:ok, summary()} | {:error, term()}
   def recover_absent_instance_attempts(now, opts \\ []) do
-    cutoff = InstancePresence.absent_cutoff(now, opts)
+    presence_now = InstancePresence.database_now()
+    cutoff = InstancePresence.absent_cutoff(presence_now, opts)
     limit = Keyword.get(opts, :limit, 100)
 
-    now
-    |> absent_instance_attempts(cutoff, limit, opts)
-    |> Enum.reduce_while({:ok, initial_summary()}, &recover(&1, &2, now, opts))
+    if InstancePresence.observer_fresh?(presence_now, opts) do
+      now
+      |> absent_instance_attempts(cutoff, limit, opts)
+      |> Enum.reduce_while({:ok, initial_summary()}, &recover(&1, &2, now, opts))
+    else
+      {:ok, initial_summary()}
+    end
   end
 
   # An attempt qualifies only when its request still holds a recorded
@@ -130,10 +135,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   defp settle(%Request{} = request, %Attempt{} = attempt, now, opts) do
     owner = Identity.owner(attempt.owner_instance_id, attempt.owner_instance_boot_id)
 
-    if InstancePresence.absent?(owner, now, opts) do
-      finalize(request, attempt, now)
-    else
-      {:ok, :noop}
+    presence_now = InstancePresence.database_now()
+
+    cond do
+      not InstancePresence.observer_fresh?(presence_now, opts) ->
+        {:ok, :noop}
+
+      not InstancePresence.absent?(owner, presence_now, opts) ->
+        {:ok, :noop}
+
+      not is_nil(attempt.owner_execution_id) or not is_nil(attempt.owner_process_id) ->
+        RequestLifecycle.recover_absent_execution(request, attempt, now, opts)
+
+      true ->
+        finalize(request, attempt, now)
     end
   end
 

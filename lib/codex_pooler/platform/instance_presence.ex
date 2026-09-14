@@ -4,10 +4,9 @@ defmodule CodexPooler.Platform.InstancePresence do
 
   Every instance publishes one row keyed by its identity and refreshes
   `last_seen_at` on an interval (`CodexPooler.Platform.InstanceHeartbeat`).
-  Recovery paths that must decide whether work owned by another instance can
-  still be finishing read this table instead of node-local process state: a
-  killed pod, a crashed VM, and a drain that ran out of budget all stop
-  refreshing, while node-local registries only ever see the current node.
+  Recovery uses this table to find stale-owner candidates. A stale heartbeat
+  cannot distinguish a killed VM from a live VM unable to reach PostgreSQL.
+  Modern execution recovery therefore requires exact execution-death evidence.
 
   Identity is the node name *and* the VM incarnation that minted it
   (`CodexPooler.Platform.InstancePresence.Identity`). The node name alone
@@ -26,11 +25,10 @@ defmodule CodexPooler.Platform.InstancePresence do
   because node names are unique per *running* VM only when distribution names
   them so. Presence is therefore safe to miss and never safe to invent.
 
-  The liveness window is eight heartbeat intervals. It has to outlast a
-  scheduler stall, a brief database outage, and the full rollout drain budget,
-  because an instance that is still draining is still serving; two minutes
-  clears the 50–85 s drain budget with room to spare while keeping recovery on
-  a minutes-scale instead of the six-hour backstop.
+  The candidate window is eight heartbeat intervals and exceeds the rollout
+  drain budget. It is not an outage-safety guarantee. Recovery requires a
+  fresh observer; modern attempts additionally require exact death evidence.
+  Unreachable executions remain unknown and retain the six-hour fallback.
   """
 
   import Ecto.Query
@@ -57,7 +55,7 @@ defmodule CodexPooler.Platform.InstancePresence do
   def local_identity, do: Identity.local()
 
   @spec record_heartbeat(Identity.t(), DateTime.t()) :: {:ok, Instance.t()} | {:error, term()}
-  def record_heartbeat(identity \\ local_identity(), now \\ now())
+  def record_heartbeat(identity \\ local_identity(), now \\ database_now())
 
   def record_heartbeat(%Identity{} = identity, %DateTime{} = now) do
     now = DateTime.truncate(now, :microsecond)
@@ -88,25 +86,72 @@ defmodule CodexPooler.Platform.InstancePresence do
   Whether `identity` has a presence row that stopped being refreshed.
 
   Unknown incarnations and incarnations still inside the liveness window answer
-  `false`: only a row that exists and is stale proves that VM is gone. An owner
+  `false`: an existing stale row is only an absence candidate. An owner
   that names no incarnation — `nil`, or an attempt written before incarnations
   existed — answers `false` as well.
   """
   @spec absent?(Identity.t() | nil, DateTime.t(), keyword()) :: boolean()
   def absent?(identity, now, opts \\ [])
 
-  def absent?(%Identity{node_name: node_name, boot_id: boot_id}, %DateTime{} = now, opts) do
+  def absent?(
+        %Identity{node_name: node_name, boot_id: boot_id} = identity,
+        %DateTime{} = now,
+        opts
+      ) do
+    cutoff = absent_cutoff(now, opts)
+
+    identity != local_identity() and
+      Repo.exists?(
+        from instance in Instance,
+          where:
+            instance.node_name == ^node_name and instance.boot_id == ^boot_id and
+              instance.last_seen_at <= ^cutoff
+      )
+  end
+
+  def absent?(_identity, %DateTime{}, _opts), do: false
+
+  @doc "A stale observer cannot authorize another incarnation's absence recovery."
+  @spec observer_fresh?(DateTime.t(), keyword()) :: boolean()
+  def observer_fresh?(now, opts \\ []) do
+    local = local_identity()
     cutoff = absent_cutoff(now, opts)
 
     Repo.exists?(
       from instance in Instance,
-        where:
-          instance.node_name == ^node_name and instance.boot_id == ^boot_id and
-            instance.last_seen_at <= ^cutoff
+        where: instance.instance_id == ^local.instance_id and instance.last_seen_at > ^cutoff
     )
   end
 
-  def absent?(_identity, %DateTime{}, _opts), do: false
+  @doc "Exact reachable VM identity; missing connectivity remains unknown."
+  @spec status(Identity.t() | nil) :: :alive | :dead | :unknown
+  def status(%Identity{} = identity) do
+    case Enum.find([node() | Node.list()], &(Atom.to_string(&1) == identity.node_name)) do
+      nil ->
+        :unknown
+
+      target when target == node() ->
+        compare_identity(identity, local_identity())
+
+      target ->
+        compare_identity(identity, :erpc.call(target, __MODULE__, :local_identity, [], 1_000))
+    end
+  catch
+    _, _ -> :unknown
+  end
+
+  def status(_identity), do: :unknown
+
+  defp compare_identity(identity, identity), do: :alive
+  defp compare_identity(%Identity{node_name: "nonode@nohost"}, %Identity{}), do: :unknown
+  defp compare_identity(%Identity{node_name: name}, %Identity{node_name: name}), do: :dead
+  defp compare_identity(_expected, _actual), do: :unknown
+
+  @spec database_now() :: DateTime.t()
+  def database_now do
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+    now
+  end
 
   @doc """
   Removes presence rows for instances that have been gone far longer than any
@@ -131,6 +176,4 @@ defmodule CodexPooler.Platform.InstancePresence do
       _invalid -> @liveness_window_seconds
     end
   end
-
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

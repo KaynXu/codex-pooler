@@ -46,23 +46,12 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   @doc """
   Whether this request still has an in-progress turn held by a live owner.
 
-  An unexpired lease is evidence of work in flight only while the VM holding it
-  still exists. Ownership names a node name *and* the incarnation that minted
-  it, and an incarnation whose presence row stopped being refreshed is gone, so
-  its lease stops counting and the orphan behind it becomes reachable. Before
-  this, a container that restarted in place renewed its predecessor's lease
-  under the node name they share, and this guard read that renewed lease as
-  live work: it protected an attempt whose owner had been destroyed eleven
-  minutes earlier, which is the one condition the absent-instance pass tests
-  that was answering about the wrong thing.
-
-  Absence stays one-directional, exactly as it is for presence itself. Only a
-  row that exists *and* is stale demotes a lease. An owner with no presence row
-  at all, and an owner carrying no incarnation — every session and lease
-  written before incarnations existed — are unknown rather than gone, so they
-  keep their work and fall through to the six-hour sweep. A session that
-  genuinely moved to another replica names that replica's live incarnation and
-  is untouched.
+  An unexpired lease protects its work unless a fresh observer can establish
+  that the exact owner incarnation ended. Stale presence alone cannot do so:
+  a live VM can lose database access while still streaming. Local live owners,
+  unreachable owners, and legacy owners with no incarnation retain the lease
+  guard. A reachable distributed successor can establish that its predecessor
+  incarnation no longer owns the node name.
   """
   @spec active_runtime_request?(request_ref(), DateTime.t(), keyword()) :: boolean()
   def active_runtime_request?(%{id: request_id}, %DateTime{} = now, opts) do
@@ -72,65 +61,51 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   # Ownership is evidenced two ways and either one is enough, so they are asked
   # separately and the cheap `or` stops at the first that holds.
   def active_runtime_request?(request_id, %DateTime{} = now, opts) when is_binary(request_id) do
-    cutoff = InstancePresence.absent_cutoff(now, opts)
-
-    held_by_live_session_owner?(request_id, now, cutoff) or
-      held_by_live_lease_owner?(request_id, now, cutoff)
+    held_by_live_session_owner?(request_id, now, opts) or
+      held_by_live_lease_owner?(request_id, now, opts)
   end
 
   def active_runtime_request?(_request_ref, %DateTime{}, _opts), do: false
 
   # The session's own owner stamp is still in the future and the VM it names is
   # not provably absent.
-  defp held_by_live_session_owner?(request_id, now, cutoff) do
-    Repo.exists?(
+  defp held_by_live_session_owner?(request_id, now, opts) do
+    Repo.all(
       from turn in CodexTurn,
         join: session in CodexSession,
-        as: :session,
         on: session.id == turn.codex_session_id,
         where:
           turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status() and
-            session.owner_lease_expires_at > ^now and
-            not exists(absent_session_owner(cutoff))
+            session.owner_lease_expires_at > ^now,
+        select: {session.owner_instance_id, session.owner_instance_boot_id}
     )
+    |> Enum.any?(&owner_may_be_alive?(&1, opts))
   end
 
   # An active owner lease has not expired and the VM holding it is not provably
   # absent.
-  defp held_by_live_lease_owner?(request_id, now, cutoff) do
-    Repo.exists?(
+  defp held_by_live_lease_owner?(request_id, now, opts) do
+    Repo.all(
       from turn in CodexTurn,
         join: lease in BridgeOwnerLease,
-        as: :lease,
         on:
           lease.codex_session_id == turn.codex_session_id and
             lease.status == ^@owner_lease_active and lease.expires_at > ^now,
-        where:
-          turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status() and
-            not exists(absent_lease_owner(cutoff))
+        where: turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status(),
+        select: {lease.owner_instance_id, lease.owner_instance_boot_id}
     )
+    |> Enum.any?(&owner_may_be_alive?(&1, opts))
   end
 
-  # Each of these is "this owner is provably absent": a presence row for that
-  # exact incarnation exists and has gone stale. An owner carrying no
-  # incarnation matches no row, so it is never absent and keeps its work, which
-  # is the one-directional rule expressed in SQL rather than as a shape check.
-  defp absent_session_owner(cutoff) do
-    from presence in InstancePresence.Instance,
-      where:
-        presence.node_name == parent_as(:session).owner_instance_id and
-          presence.boot_id == parent_as(:session).owner_instance_boot_id and
-          presence.last_seen_at <= ^cutoff,
-      select: 1
-  end
+  # Database freshness selects a candidate; exact reachable VM identity is
+  # the authority. An RPC failure or non-distributed name collision is unknown.
+  defp owner_may_be_alive?({node_name, boot_id}, opts) do
+    identity = InstancePresence.Identity.owner(node_name, boot_id)
+    presence_now = InstancePresence.database_now()
 
-  defp absent_lease_owner(cutoff) do
-    from presence in InstancePresence.Instance,
-      where:
-        presence.node_name == parent_as(:lease).owner_instance_id and
-          presence.boot_id == parent_as(:lease).owner_instance_boot_id and
-          presence.last_seen_at <= ^cutoff,
-      select: 1
+    not (InstancePresence.observer_fresh?(presence_now, opts) and
+           InstancePresence.absent?(identity, presence_now, opts) and
+           InstancePresence.status(identity) == :dead)
   end
 
   @spec recover_stale_request_turn(request_ref(), attempt_ref(), keyword()) :: :ok

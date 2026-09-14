@@ -480,6 +480,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   @spec recover_dead_execution(Request.t(), Attempt.t(), DateTime.t()) ::
           {:ok, :recovered | :noop} | {:error, term()}
   def recover_dead_execution(request, candidate, timestamp) do
+    recover_execution(request, candidate, timestamp, :terminal, [])
+  end
+
+  @doc false
+  @spec recover_absent_execution(Request.t(), Attempt.t(), DateTime.t(), keyword()) ::
+          {:ok, :recovered | :noop} | {:error, term()}
+  def recover_absent_execution(request, candidate, timestamp, opts) do
+    recover_execution(request, candidate, timestamp, :absent, opts)
+  end
+
+  defp recover_execution(request, candidate, timestamp, authority, opts) do
     Repo.transaction(fn ->
       {request, attempt, _reservation, settlement, entitlement} =
         lock_finalization_rows(request, candidate)
@@ -493,8 +504,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
             select: a.id
         )
 
-      if recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) do
-        finalize_dead_execution(request, attempt, timestamp)
+      if recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) and
+           execution_recovery_authorized?(attempt, authority, opts) do
+        finalize_dead_execution(request, attempt, timestamp, authority)
       else
         :noop
       end
@@ -505,8 +517,21 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     request.status in @dispatchable_request_statuses and
       attempt.status in @retryable_attempt_statuses and latest_id == candidate.id and
       same_execution?(attempt, candidate) and
-      is_nil(settlement) and is_nil(entitlement) and
-      ExecutionTerminalProofs.terminal?(attempt)
+      is_nil(settlement) and is_nil(entitlement)
+  end
+
+  defp execution_recovery_authorized?(attempt, :terminal, _opts),
+    do: ExecutionTerminalProofs.terminal?(attempt)
+
+  defp execution_recovery_authorized?(attempt, :absent, opts) do
+    presence_now = InstancePresence.database_now()
+
+    owner =
+      InstancePresence.Identity.owner(attempt.owner_instance_id, attempt.owner_instance_boot_id)
+
+    InstancePresence.observer_fresh?(presence_now, opts) and
+      InstancePresence.absent?(owner, presence_now, opts) and
+      ExecutionIdentity.status(attempt) == :dead
   end
 
   defp same_execution?(attempt, candidate) do
@@ -525,8 +550,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         ])
   end
 
-  defp finalize_dead_execution(request, attempt, timestamp) do
-    code = "dead_execution_recovered"
+  defp finalize_dead_execution(request, attempt, timestamp, authority) do
+    code =
+      if authority == :absent, do: "absent_instance_recovered", else: "dead_execution_recovered"
 
     case finalize_request(request, attempt, %{
            request_status: "failed",

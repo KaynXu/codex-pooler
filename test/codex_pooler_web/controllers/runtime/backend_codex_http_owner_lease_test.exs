@@ -68,7 +68,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   alias CodexPooler.Gateway.Runtime.{Service, SessionLeaseHeartbeat}
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Platform.InstancePresence
-  alias CodexPooler.Platform.InstancePresence.Identity
   alias CodexPooler.Repo
   alias CodexPoolerWeb.GatewayControllerHelpers
   alias Ecto.Adapters.SQL.Sandbox
@@ -162,8 +161,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
        %{conn: conn} do
     release_ref = make_ref()
 
-    remote =
-      Identity.new("sample-retired@remote", "retired-#{System.unique_integer([:positive])}")
+    peer_name = :"http_lease_owner_#{System.unique_integer([:positive])}"
+    peer = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+    remote = peer.identity
 
     on_exit(fn ->
       CodexPooler.UnboxedFixture.run_unboxed(fn ->
@@ -233,6 +233,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
             DateTime.add(DateTime.utc_now(), -10, :minute)
           )
 
+        CodexPooler.InstancePresencePeer.stop_presence_peer!(peer)
+        _successor = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+
         send(upstream_pid, {:fake_upstream_release_gate, release_ref})
         response = Task.await(task, @detection_budget)
         assert_receive {:DOWN, ^monitor, :process, _, :normal}, @detection_budget
@@ -262,8 +265,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   end
 
   test "concurrent fresh HTTP attaches converge on one replacement for an absent incarnation" do
-    remote =
-      Identity.new("sample-retired@remote", "parallel-#{System.unique_integer([:positive])}")
+    peer_name = :"http_lease_owner_#{System.unique_integer([:positive])}"
+    peer = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+    remote = peer.identity
 
     on_exit(fn ->
       CodexPooler.UnboxedFixture.run_unboxed(fn ->
@@ -291,6 +295,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     {:ok, _} =
       InstancePresence.record_heartbeat(remote, DateTime.add(DateTime.utc_now(), -10, :minute))
+
+    CodexPooler.InstancePresencePeer.stop_presence_peer!(peer)
+    _successor = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
 
     blocker = lock_owner_session!(session.id)
     parent = self()

@@ -21,9 +21,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   The VM that owns a session: its node name and the incarnation that minted it.
 
   `boot_id` is `nil` only when the incarnation is genuinely unknown — an owner
-  named as a bare node string by a caller that is not that node. Unknown is
-  never treated as a match, so an unknown incarnation can neither claim a lease
-  nor be proved absent.
+  named as a bare node string by a caller that is not that node. Two legacy
+  owners with the same node name and nil incarnation still match; a known
+  incarnation never matches nil. Unknown ownership cannot be proved absent.
   """
   @type owner :: %{node_name: String.t(), boot_id: String.t() | nil}
 
@@ -518,15 +518,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   end
 
   # A request holding a valid token may execute on a different replica. Only
-  # shared evidence that the named incarnation stopped publishing revokes its
-  # liveness; a different local incarnation or a missing row proves nothing.
+  # a stale heartbeat plus exact evidence of a distributed successor revokes
+  # its liveness. Missing connectivity and non-distributed name collisions are
+  # unknown; the exact local incarnation always remains live.
   @spec validate_renewal_presence(BridgeOwnerLease.t(), DateTime.t()) ::
           :ok | {:error, :owner_unavailable}
   def validate_renewal_presence(%BridgeOwnerLease{} = lease, now) do
     identity =
       InstancePresence.Identity.owner(lease.owner_instance_id, lease.owner_instance_boot_id)
 
-    if InstancePresence.absent?(identity, now),
+    if InstancePresence.absent?(identity, now) and InstancePresence.status(identity) == :dead,
       do: {:error, :owner_unavailable},
       else: :ok
   end

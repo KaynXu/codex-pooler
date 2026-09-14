@@ -6,6 +6,70 @@ defmodule CodexPooler.Platform.InstancePresenceTest do
   alias CodexPooler.Platform.InstancePresence.{Identity, Instance}
   alias CodexPooler.Repo
 
+  setup do
+    boot_id = Identity.boot_id()
+    on_exit(fn -> :persistent_term.put({Identity, :boot_id}, boot_id) end)
+    :ok
+  end
+
+  test "the local live incarnation remains present when its published heartbeat is stale" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    local = Identity.local()
+    {:ok, _} = InstancePresence.record_heartbeat(local, DateTime.add(now, -180, :second))
+
+    refute InstancePresence.absent?(local, now)
+  end
+
+  test "observer freshness requires its own successful heartbeat" do
+    now = InstancePresence.database_now()
+    local = Identity.local()
+    refute InstancePresence.observer_fresh?(now)
+    {:ok, _} = InstancePresence.record_heartbeat(local, DateTime.add(now, -180, :second))
+    refute InstancePresence.observer_fresh?(now)
+    {:ok, _} = InstancePresence.record_heartbeat(local)
+    assert InstancePresence.observer_fresh?(InstancePresence.database_now())
+  end
+
+  test "non-distributed VM name collision stays unknown" do
+    identity = Identity.new("nonode@nohost", Ecto.UUID.generate())
+    assert InstancePresence.status(identity) == :unknown
+    assert InstancePresence.status(Identity.local()) == :alive
+  end
+
+  test "a real PostgreSQL heartbeat write failure warns and emits a failure count" do
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :telemetry.attach(
+      handler,
+      [:codex_pooler, :instance_presence, :heartbeat],
+      &__MODULE__.capture_failure/4,
+      self()
+    )
+
+    logs =
+      ExUnit.CaptureLog.capture_log(fn ->
+        pid =
+          start_supervised!(
+            {InstanceHeartbeat,
+             enabled: true,
+             interval_ms: :timer.minutes(5),
+             name: :heartbeat_invalid_row,
+             identity: %Identity{instance_id: nil, node_name: "sample", boot_id: "sample"}}
+          )
+
+        :sys.get_state(pid)
+        stop_supervised!(InstanceHeartbeat)
+      end)
+
+    assert logs =~ "instance presence heartbeat write failed"
+    assert_receive {:heartbeat_failure, %{failures: 1}, %{}}
+  end
+
+  @doc false
+  def capture_failure(_event, measurements, metadata, parent),
+    do: send(parent, {:heartbeat_failure, measurements, metadata})
+
   defp identity, do: Identity.new("codex_pooler@10.0.0.#{unique()}", "boot-#{unique()}")
 
   defp unique, do: System.unique_integer([:positive])

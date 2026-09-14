@@ -11,7 +11,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
     BridgeOwnerLease,
     BridgeSessionAlias,
     CodexSession,
-    CodexTurn
+    CodexTurn,
+    RuntimeCleanup
   }
 
   alias CodexPooler.Gateway.Persistence.SessionContinuity
@@ -22,6 +23,38 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
   alias CodexPooler.Platform.{InstanceHeartbeat, InstancePresence}
   alias CodexPooler.Platform.InstancePresence.Identity
   alias CodexPooler.Repo
+
+  setup do
+    boot_id = Identity.boot_id()
+    on_exit(fn -> :persistent_term.put({Identity, :boot_id}, boot_id) end)
+    :ok
+  end
+
+  test "local heartbeat starvation preserves acquire and renewal of the exact owner lease" do
+    setup = accounting_setup()
+    local = start_instance!(:session_owner_stale_local)
+    key = turn_state()
+    {:ok, session} = start_session(setup, key)
+    lease = active_lease!(session.id)
+    dispatched_at = DateTime.add(now(), -180, :second)
+    %{request: request, attempt: attempt} = dispatch_open_attempt!(setup, dispatched_at)
+    _turn = turn_row(session, request, attempt, dispatched_at)
+    {:ok, _} = InstancePresence.record_heartbeat(local, DateTime.add(now(), -180, :second))
+
+    assert RuntimeCleanup.active_runtime_request?(request, now())
+
+    assert {:ok, renewed} =
+             SessionContinuity.renew_owner_token(
+               session,
+               session.owner_lease_token,
+               RequestOptions.for_websocket(%{})
+             )
+
+    assert renewed.owner_lease_token == lease.lease_token
+    assert {:ok, reattached} = start_session(setup, key)
+    assert reattached.owner_lease_token == lease.lease_token
+    assert Repo.reload!(lease).status == "active"
+  end
 
   describe "session ownership names a VM" do
     test "a successor under the same node name cannot renew its predecessor's lease" do
@@ -95,18 +128,32 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
   end
 
   describe "the liveness guard judges a lease by its holder" do
-    test "an orphan behind an absent incarnation's unexpired lease is recovered" do
+    test "a legacy orphan behind an absent incarnation's unexpired lease is recovered" do
       setup = accounting_setup()
       now = now()
       dispatched_at = DateTime.add(now, -10, :minute)
 
-      first = start_instance!(:session_owner_orphan_first)
+      name = :"lease_presence_#{unique()}"
+      first_peer = start_presence_peer!(name)
+      first = first_peer.identity
+      {:ok, _} = InstancePresence.record_heartbeat(first)
 
       # The attempt is dispatched by the VM that owns the session, and the
       # session and its lease are minted by the ordinary start path, so the
       # lease under test is the one production writes.
       %{request: request, attempt: attempt} = dispatch_open_attempt!(setup, dispatched_at)
-      {:ok, session} = start_session(setup, turn_state())
+
+      attempt =
+        attempt
+        |> Ecto.Changeset.change(
+          owner_instance_id: first.node_name,
+          owner_instance_boot_id: first.boot_id,
+          owner_execution_id: nil,
+          owner_process_id: nil
+        )
+        |> Repo.update!()
+
+      {:ok, session} = start_session(setup, turn_state(), first)
       turn = turn_row(session, request, attempt, dispatched_at)
 
       lease = active_lease!(session.id)
@@ -117,9 +164,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
       # through the same upsert the heartbeat uses rather than waiting out the
       # liveness window.
       {:ok, _stale} = InstancePresence.record_heartbeat(first, dispatched_at)
-      end_instance!(:session_owner_orphan_first)
+      stop_presence_peer!(first_peer)
 
-      second = start_instance!(:session_owner_orphan_second)
+      second = start_presence_peer!(name).identity
+      {:ok, _} = InstancePresence.record_heartbeat()
       assert second.node_name == first.node_name
 
       assert {:ok, %{absent_instance_attempts_recovered: 1}} =
@@ -221,9 +269,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
 
   test "an HTTP request cannot renew an absent incarnation owner lease" do
     setup = accounting_setup()
-    first = start_instance!(:http_incarnation_first)
+    name = :"lease_presence_#{unique()}"
+    first_peer = start_presence_peer!(name)
+    first = first_peer.identity
+    {:ok, _} = InstancePresence.record_heartbeat(first)
     state = turn_state()
-    {:ok, session} = start_session(setup, state)
+    {:ok, session} = start_session(setup, state, first)
     lease = active_lease!(session.id)
 
     opts =
@@ -232,8 +283,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
     {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
     lease = Repo.reload!(lease)
     {:ok, _stale} = InstancePresence.record_heartbeat(first, DateTime.add(now(), -10, :minute))
-    end_instance!(:http_incarnation_first)
-    second = start_instance!(:http_incarnation_second)
+    stop_presence_peer!(first_peer)
+    second = start_presence_peer!(name).identity
     assert second.node_name == first.node_name
     refute second.boot_id == first.boot_id
 
@@ -244,7 +295,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
     assert result == {:error, :owner_unavailable}
   end
 
-  for presence <- [:live, :unknown, :legacy] do
+  for presence <- [:live, :unknown, :legacy, :stale_unreachable] do
     @tag renewal_presence: presence
     test "HTTP renewal preserves #{presence} remote ownership", %{renewal_presence: presence} do
       setup = accounting_setup()
@@ -259,6 +310,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
       {:ok, session} = start_session(setup, state, remote)
       if presence == :legacy, do: strip_incarnation!(session)
       before = active_lease!(session.id)
+
+      if presence == :stale_unreachable do
+        {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.add(now(), -180, :second))
+      end
 
       opts =
         RequestOptions.build(%{accepted_turn_state: state}, "/backend-api/codex/responses", %{})
@@ -280,8 +335,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
       witnessed: witnessed
     } do
       setup = accounting_setup()
-      remote = Identity.new("sample-owner@remote", "boot-#{unique()}")
-      {:ok, _} = InstancePresence.record_heartbeat(remote, now())
+      name = :"lease_presence_#{unique()}"
+      peer = start_presence_peer!(name)
+      remote = peer.identity
+      {:ok, _} = InstancePresence.record_heartbeat(remote)
       {:ok, session} = start_session(setup, turn_state(), remote)
       before_lease = active_lease!(session.id)
       before_session = Repo.reload!(session)
@@ -295,6 +352,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
         )
 
       {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.add(now(), -10, :minute))
+      stop_presence_peer!(peer)
+      _successor = start_presence_peer!(name)
       opts = RequestOptions.build(%{codex_session: session}, "/backend-api/codex/responses", %{})
 
       opts =
@@ -329,9 +388,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
 
   test "fresh HTTP attach replaces an unexpired lease whose owner is known absent" do
     setup = accounting_setup()
-    local = start_instance!(:http_fresh_takeover_local)
-    remote = Identity.new("sample-owner@remote", "boot-#{unique()}")
-    {:ok, _} = InstancePresence.record_heartbeat(remote, now())
+    name = :"lease_presence_#{unique()}"
+    peer = start_presence_peer!(name)
+    remote = peer.identity
+    {:ok, _} = InstancePresence.record_heartbeat(remote)
     key = turn_state()
     {:ok, session} = start_session(setup, key, remote)
     before_lease = active_lease!(session.id)
@@ -352,6 +412,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
       )
 
     {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.add(now(), -10, :minute))
+    stop_presence_peer!(peer)
+    _successor = start_presence_peer!(name)
+    local = Identity.local()
     opts = RequestOptions.build(%{accepted_turn_state: key}, "/backend-api/codex/responses", %{})
     assert {:ok, attached} = RoutingContinuity.attach_codex_session(setup.auth, %{}, opts)
     assert attached.continuity.codex_session.id == session.id
@@ -410,6 +473,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionOwnerIncarnationTest do
   end
 
   defp end_instance!(name), do: :ok = stop_supervised!(name)
+
+  defp start_presence_peer!(name), do: CodexPooler.InstancePresencePeer.start_presence_peer!(name)
+  defp stop_presence_peer!(peer), do: CodexPooler.InstancePresencePeer.stop_presence_peer!(peer)
 
   defp start_session(setup, turn_state, owner \\ nil)
 
