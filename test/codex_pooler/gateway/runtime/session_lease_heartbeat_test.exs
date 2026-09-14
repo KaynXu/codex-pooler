@@ -31,6 +31,43 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
   # bound is the only way the synchronous renewal can end.
   @parked_renewal_call_timeout_ms 50
 
+  test "a healthy owner survives cumulative PostgreSQL renewal latency beyond one second" do
+    %{session: session, token: token} = owner_session_fixture()
+    request_options = http_request_options(session, token, ttl_seconds: 90)
+
+    # Two actual PostgreSQL updates each spend 600 ms in a transaction-local
+    # trigger. This exercises cumulative database work, not a mocked renewal
+    # or a parked process; the sandbox owns and rolls back both DDL and rows.
+    Repo.query!("""
+    CREATE FUNCTION pg_temp.heartbeat_update_latency() RETURNS trigger AS $$
+    BEGIN
+      PERFORM pg_sleep(0.6);
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    for relation <- ["codex_sessions", "bridge_owner_leases"] do
+      Repo.query!("""
+      CREATE TRIGGER heartbeat_update_latency BEFORE UPDATE ON #{relation}
+      FOR EACH ROW EXECUTE FUNCTION pg_temp.heartbeat_update_latency()
+      """)
+    end
+
+    started_at = System.monotonic_time(:millisecond)
+
+    assert :dispatched =
+             SessionLeaseHeartbeat.run(request_options, fn -> :dispatched end)
+
+    assert System.monotonic_time(:millisecond) - started_at >= 1_200
+    renewed_session = Repo.get!(CodexSession, session.id)
+    renewed_lease = active_lease!(session.id)
+    assert renewed_session.owner_lease_token == token
+    assert renewed_lease.lease_token == token
+    assert renewed_session.owner_lease_expires_at == renewed_lease.expires_at
+    assert DateTime.compare(renewed_lease.expires_at, session.owner_lease_expires_at) == :gt
+  end
+
   test "run renews synchronously before a deferred callback and advances both PostgreSQL deadlines" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token, ttl_seconds: 90)
@@ -91,12 +128,12 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
              )
   end
 
-  test "the synchronous renewal call keeps its 1 s bound unless a start option overrides it" do
+  test "the synchronous renewal budget follows the bounded lease cadence plus the reply allowance" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token)
 
     assert {:ok, default} = SessionLeaseHeartbeat.start(request_options, schedule?: false)
-    assert %{renew_call_timeout_ms: 1_000} = :sys.get_state(default)
+    assert %{renew_call_timeout_ms: 16_000} = :sys.get_state(default)
     assert :ok = SessionLeaseHeartbeat.stop(default)
 
     assert {:ok, overridden} =
@@ -107,6 +144,28 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
 
     assert %{renew_call_timeout_ms: 5_000} = :sys.get_state(overridden)
     assert :ok = SessionLeaseHeartbeat.stop(overridden)
+
+    for ttl <- [1, 2, 3] do
+      parent = self()
+
+      assert {:ok, short_lease} =
+               SessionLeaseHeartbeat.start(http_request_options(session, token, ttl_seconds: ttl),
+                 schedule?: false,
+                 renew_call_timeout_ms: :invalid,
+                 renew: fn _, _, _, opts ->
+                   send(parent, {:short_lease_budget, opts})
+                   {:ok, session}
+                 end
+               )
+
+      assert %{renew_call_timeout_ms: timeout} = :sys.get_state(short_lease)
+      assert timeout == div(ttl * 1_000, 3) + 1_000
+      assert :ok = GenServer.call(short_lease, :renew_now)
+      assert_receive {:short_lease_budget, opts}, @detection_timeout
+      assert opts[:timeout_ms] == div(ttl * 1_000, 3)
+      assert opts[:lock_timeout_ms] == div(opts[:timeout_ms], 2)
+      assert :ok = SessionLeaseHeartbeat.stop(short_lease)
+    end
   end
 
   test "a synchronous renewal bounds its lock wait below the call and logs one lock timeout" do
@@ -145,7 +204,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
                  end)
       end)
 
-    assert_received {:synchronous_renewal_options, [lock_timeout_ms: 800]}
+    assert_received {:synchronous_renewal_options, [lock_timeout_ms: 7_500, timeout_ms: 15_000]}
 
     assert [line] = renewal_failure_lines(logs)
     assert line =~ "phase=synchronous reason=lock_timeout"

@@ -12,16 +12,11 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
 
   @call_timeout 1_000
-  # The caller waits this long for the synchronous pre-dispatch renewal before
-  # it gives the renewal up as owner_unavailable. Production keeps the 1 s
-  # bound: a longer wait would hold the renewal's pool connection behind a
-  # locked session row. A start option overrides it.
-  @renew_call_timeout_ms 1_000
-  # The synchronous renewal's database lock wait ends this long before the call
-  # bound, so a held session or lease row lock fails inside PostgreSQL and the
-  # heartbeat replies, rather than the caller killing it mid-transaction. The
-  # margin covers pool checkout, BEGIN, and the lock-timeout statements.
-  @renew_lock_timeout_margin_ms 200
+  # A synchronous renewal may use one bounded renewal interval for database
+  # work, with the ordinary process-call allowance left for its reply. The
+  # database deadline includes checkout, statements, diagnostics and COMMIT;
+  # row acquisition uses only half of it. Neither allowance extends the lease
+  # or replaces the authoritative expiry and presence checks after locking.
   @http_transports ["http_json", "http_sse", "http_compact_json"]
 
   defstruct [
@@ -62,6 +57,8 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
 
   def run(%RequestOptions{} = request_options, callback) when is_function(callback, 1) do
     start_opts = [schedule?: false] ++ test_start_options()
+    call_timeout_ms = renew_call_timeout_ms(start_opts, request_options)
+    start_opts = Keyword.put(start_opts, :renew_call_timeout_ms, call_timeout_ms)
 
     case start(request_options, start_opts) do
       :ignore ->
@@ -70,7 +67,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
       {:ok, heartbeat} ->
         session_id = request_options.continuity.codex_session.id
 
-        case renew_now(heartbeat, renew_call_timeout_ms(start_opts), session_id) do
+        case renew_now(heartbeat, call_timeout_ms, session_id) do
           :ok -> run_callback(heartbeat, callback)
           {:error, reason} -> {:error, reason}
         end
@@ -266,7 +263,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
          renew: Keyword.get(opts, :renew, &SessionContinuity.renew_owner_token/4),
          renewal_delay:
            Keyword.get(opts, :renewal_delay, &OwnerRenewalSchedule.staggered_delay/1),
-         renew_call_timeout_ms: renew_call_timeout_ms(opts),
+         renew_call_timeout_ms: renew_call_timeout_ms(opts, request_options),
          test_observer: test_observer(request_options)
        }}
     else
@@ -281,10 +278,16 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     end
   end
 
-  defp renew_call_timeout_ms(opts) do
+  defp renew_call_timeout_ms(opts, request_options) do
     case Keyword.get(opts, :renew_call_timeout_ms) do
-      timeout when is_integer(timeout) and timeout > 0 -> timeout
-      _value -> @renew_call_timeout_ms
+      timeout when is_integer(timeout) and timeout > 0 ->
+        timeout
+
+      _value ->
+        OwnerRenewalSchedule.base_interval_ms(
+          renewal_interval_ms(opts),
+          ttl_seconds(request_options) * 1_000
+        ) + @call_timeout
     end
   end
 
@@ -332,13 +335,16 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
   # Only the synchronous pre-dispatch renewal has a caller waiting on a bound.
   # A scheduled renewal keeps waiting for the lock: its lease is still live, and
   # failing it on a transient wait would stop the heartbeat mid-request.
-  defp renewal_lock_options(state, :synchronous),
-    do: [lock_timeout_ms: renew_lock_timeout_ms(state.renew_call_timeout_ms)]
+  defp renewal_lock_options(state, :synchronous) do
+    reply_allowance_ms = min(@call_timeout, max(div(state.renew_call_timeout_ms, 5), 1))
+
+    timeout_ms =
+      min(max(state.renew_call_timeout_ms - reply_allowance_ms, 1), state.renewal_interval_ms)
+
+    [lock_timeout_ms: max(div(timeout_ms, 2), 1), timeout_ms: timeout_ms]
+  end
 
   defp renewal_lock_options(_state, :scheduled), do: []
-
-  defp renew_lock_timeout_ms(call_timeout_ms),
-    do: max(call_timeout_ms - @renew_lock_timeout_margin_ms, max(div(call_timeout_ms, 2), 1))
 
   defp classify_renewal({:ok, %CodexSession{}}), do: :ok
   defp classify_renewal({:error, :stale_owner}), do: {:error, :stale_owner, :stale_owner}

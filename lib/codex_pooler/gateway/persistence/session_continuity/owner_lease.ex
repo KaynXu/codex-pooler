@@ -28,7 +28,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   @type owner :: %{node_name: String.t(), boot_id: String.t() | nil}
 
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
-  @type renewal_option :: {:lock_timeout_ms, pos_integer()}
+  @type renewal_option :: {:lock_timeout_ms, pos_integer()} | {:timeout_ms, pos_integer()}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()
 
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
@@ -204,8 +204,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts),
     do: renew_owner_token(session_ref, owner_lease_token, opts, [])
 
-  # `lock_timeout_ms` bounds the total time the renewal may wait for the session
-  # and lease row locks. PostgreSQL applies `lock_timeout` per statement, so the
+  # `timeout_ms` supplies DBConnection's absolute deadline for the complete
+  # operation through COMMIT. Checkout time consumes that budget once acquired;
+  # the heartbeat's outer call also bounds waiting for a connection.
+  # `lock_timeout_ms` separately
+  # bounds acquisition of both rows, starting after BEGIN rather than charging
+  # checkout against the row budget. PostgreSQL applies lock_timeout per statement, so the
   # remaining budget is set again before each lock wait; exhausting it rolls the
   # renewal back cleanly as `:lock_timeout` instead of leaving the caller to kill
   # a process that is still inside the transaction. The timed-out lock statement
@@ -221,35 +225,38 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
           | {:error, :stale_owner | :owner_unavailable | {:lock_timeout, LockWaitDiagnostics.t()}}
   def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts, renewal_opts)
       when is_list(renewal_opts) do
-    lock_deadline = lock_deadline(renewal_opts)
+    Repo.transaction(
+      fn ->
+        lock_deadline = lock_deadline(renewal_opts)
 
-    Repo.transaction(fn ->
-      with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
-             active_snapshot_for_update(session_ref, lock_deadline),
-           now <- db_now(),
-           :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now),
-           :ok <- validate_renewal_presence(lease, now) do
-        expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
+        with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
+               active_snapshot_for_update(session_ref, lock_deadline),
+             now <- db_now(),
+             :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now),
+             :ok <- validate_renewal_presence(lease, now) do
+          expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
-        renewed_lease =
-          lease
-          |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
+          renewed_lease =
+            lease
+            |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
+            |> Repo.update!()
+
+          session
+          |> Ecto.Changeset.change(%{
+            owner_instance_id: renewed_lease.owner_instance_id,
+            owner_instance_boot_id: renewed_lease.owner_instance_boot_id,
+            owner_lease_token: renewed_lease.lease_token,
+            owner_lease_expires_at: expires_at,
+            last_heartbeat_at: now,
+            updated_at: now
+          })
           |> Repo.update!()
-
-        session
-        |> Ecto.Changeset.change(%{
-          owner_instance_id: renewed_lease.owner_instance_id,
-          owner_instance_boot_id: renewed_lease.owner_instance_boot_id,
-          owner_lease_token: renewed_lease.lease_token,
-          owner_lease_expires_at: expires_at,
-          last_heartbeat_at: now,
-          updated_at: now
-        })
-        |> Repo.update!()
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end,
+      transaction_options(renewal_opts)
+    )
     |> unwrap_owner_token_renewal()
   rescue
     error in Postgrex.Error ->
@@ -569,6 +576,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
       _no_bound ->
         nil
+    end
+  end
+
+  defp transaction_options(renewal_opts) do
+    case Keyword.get(renewal_opts, :timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        [timeout: timeout, deadline: System.monotonic_time(:millisecond) + timeout]
+
+      _no_bound ->
+        []
     end
   end
 

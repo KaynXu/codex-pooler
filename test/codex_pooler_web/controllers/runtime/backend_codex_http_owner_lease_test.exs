@@ -89,10 +89,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   # ttl; this is the reason the three renewal tests run for about 3.5 s.
   @beyond_initial_ttl_ms @owner_ttl_seconds * 1_000 + 400
   # The database-failure test terminates the blocked renewal's backend. The
-  # synchronous renewal call waits for that failure rather than giving up at its
-  # 1 s production bound, which the detection path can outlast under N=4 load and
-  # which has its own timeout test; it stays below the detection budget.
+  # synchronous renewal call waits for that failure within a deliberate test
+  # bound, separate from the production lease-derived budget.
   @blocked_renewal_call_timeout_ms 10_000
+
+  test "healthy HTTP ownership survives a finite session lock wait beyond the former call budget",
+       %{conn: conn} do
+    upstream =
+      start_upstream(FakeUpstream.json_response(completed_response("resp_healthy_lock_wait")))
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    session_key = unique_session_key("healthy-lock-wait")
+    session = precreate_session!(setup, session_key)
+    observer = database_observer!()
+    barrier_ref = make_ref()
+
+    task =
+      controller_request(conn, setup, session_key, http_payload(setup), self(),
+        ttl_seconds: 30,
+        barrier: {barrier_ref, {:heartbeat, :before}}
+      )
+
+    assert_receive {:runtime_authorization_barrier, ^barrier_ref, :heartbeat, :before, task_pid},
+                   @detection_budget
+
+    blocker = lock_owner_session!(session.id)
+    send(task_pid, {:runtime_authorization_release, barrier_ref})
+    waiter_backend = await_blocked_backend!(observer, blocker.backend_pid)
+    assert waiter_backend != blocker.backend_pid
+    assert_zero_work!(setup)
+    assert FakeUpstream.count(upstream) == 0
+
+    # The observed real row wait must outlast both the old 800 ms lock budget
+    # and 1 s caller budget; match the finite commit pressure seen in production.
+    Process.send_after(self(), {:release_healthy_lock, barrier_ref}, 3_800)
+
+    try do
+      assert_receive {:release_healthy_lock, ^barrier_ref}, @detection_budget
+      assert_zero_work!(setup)
+      assert FakeUpstream.count(upstream) == 0
+    after
+      release_owner_lock!(blocker)
+    end
+
+    assert %{"id" => "resp_healthy_lock_wait"} =
+             json_response(Task.await(task, @detection_budget), 200)
+
+    assert FakeUpstream.count(upstream) == 1
+    assert [request] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
+    assert request.status == "succeeded"
+
+    assert [%{status: "succeeded"}] =
+             Repo.all(from a in Attempt, where: a.request_id == ^request.id)
+
+    assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^request.id), :count) == 1
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == session.owner_lease_token
+    assert_backend_released!(observer, waiter_backend)
+  end
 
   setup do
     Sandbox.mode(Repo, :auto)

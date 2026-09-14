@@ -18,6 +18,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   }
 
   alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, ExpiredSessions}
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.OwnerWitness
+  alias CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -37,6 +39,286 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   # renewal case waits it out once while the blocker holds its row, so a case
   # runs for about one second. The same window bounds the blocked observation.
   @bounded_renewal_lock_timeout_ms 1_000
+
+  test "latency task cleanup leaves its linked caller alive" do
+    parent = self()
+    marker = make_ref()
+
+    {caller, monitor} =
+      spawn_monitor(fn ->
+        task = Task.async(fn -> receive do: (:finish -> :ok) end)
+        send(parent, {:latency_cleanup_started, marker, task.pid})
+        stop_latency_task!(task)
+      end)
+
+    on_exit(fn -> if Process.alive?(caller), do: Process.exit(caller, :kill) end)
+    assert_receive {:latency_cleanup_started, ^marker, task_pid}, 15_000
+    assert_receive {:DOWN, ^monitor, :process, ^caller, reason}, 15_000
+    assert reason == :normal
+    refute Process.alive?(task_pid)
+  end
+
+  test "diagnostic processing cannot keep a renewal connection past its total deadline" do
+    fixture = unboxed_owner_session_fixture("renewal-diagnostic-deadline", 1)
+    parent = self()
+    ref = make_ref()
+    handler = {__MODULE__, ref}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        fn _, _, metadata, _ ->
+          if Process.get({__MODULE__, :delay_diagnostics}) == ref and
+               metadata.query == "SELECT set_config('statement_timeout', $1, true)" do
+            send(parent, {:diagnostics_started, ref, self()})
+
+            receive do
+              {:release_diagnostics, ^ref} -> :ok
+            after
+              15_000 -> raise "diagnostic barrier was not released"
+            end
+          end
+        end,
+        nil
+      )
+
+    blocker =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            lock_renewal_row!(:session, fixture.session.id)
+            send(parent, {:diagnostic_holder_ready, ref, backend_pid!()})
+
+            receive do
+              {:release_diagnostic_holder, ^ref} -> :ok
+            after
+              15_000 -> raise "diagnostic holder was not released"
+            end
+          end)
+        end)
+      end)
+
+    on_exit(fn -> stop_latency_task!(blocker) end)
+    assert_receive {:diagnostic_holder_ready, ^ref, blocker_backend}, 5_000
+
+    logs =
+      ExUnit.CaptureLog.capture_log(fn ->
+        renewal =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              Process.put({__MODULE__, :delay_diagnostics}, ref)
+              send(parent, {:diagnostic_waiter_ready, ref, backend_pid!()})
+
+              try do
+                SessionContinuity.renew_owner_token(
+                  fixture.session.id,
+                  fixture.token,
+                  request_options(bridge_owner_lease_ttl_seconds: 120),
+                  lock_timeout_ms: 300,
+                  timeout_ms: 600
+                )
+              rescue
+                _ in [DBConnection.ConnectionError, Postgrex.Error] ->
+                  {:error, :database_unavailable}
+              end
+            end)
+          end)
+
+        on_exit(fn -> stop_latency_task!(renewal) end)
+
+        try do
+          assert_receive {:diagnostic_waiter_ready, ^ref, waiter_backend}, 5_000
+          assert observe_renewal_lock_wait!(waiter_backend, blocker_backend) == "codex_sessions"
+          assert_receive {:diagnostics_started, ^ref, diagnostic_pid}, 5_000
+
+          # Delay the client-side diagnostic phase past the total deadline. The
+          # real connection timer must release its backend even while that phase
+          # cannot issue its next statement; release is observed before unblocking.
+          deadline = System.monotonic_time(:millisecond) + 5_000
+          await_latency_backend_released!(waiter_backend, deadline)
+          send(diagnostic_pid, {:release_diagnostics, ref})
+          assert {:error, _} = Task.await(renewal, 5_000)
+        after
+          stop_latency_task!(renewal)
+        end
+      end)
+
+    assert logs =~ "disconnected"
+    send(blocker.pid, {:release_diagnostic_holder, ref})
+    assert {:ok, :ok} = Task.await(blocker, 5_000)
+    stop_latency_task!(blocker)
+    assert unboxed_get_session!(fixture.session.id).owner_lease_token == fixture.token
+  end
+
+  test "the database deadline bounds COMMIT and leaves the old owner state intact" do
+    fixture = unboxed_owner_session_fixture("renewal-commit-deadline", 1)
+    function = "renewal_commit_deadline_#{System.unique_integer([:positive])}"
+
+    CodexPooler.UnboxedFixture.register_unboxed_cleanup!(fn ->
+      Repo.query!("DROP TRIGGER IF EXISTS #{function} ON codex_sessions")
+      Repo.query!("DROP FUNCTION IF EXISTS #{function}()")
+    end)
+
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("""
+      CREATE FUNCTION #{function}() RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_sleep(2);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+      """)
+
+      Repo.query!("""
+      CREATE CONSTRAINT TRIGGER #{function} AFTER UPDATE ON codex_sessions
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+      WHEN (NEW.id = '#{fixture.session.id}'::uuid)
+      EXECUTE FUNCTION #{function}()
+      """)
+    end)
+
+    before_session = unboxed_get_session!(fixture.session.id)
+    before_lease = unboxed_active_lease!(fixture.session.id)
+    started_at = System.monotonic_time(:millisecond)
+
+    logs =
+      ExUnit.CaptureLog.capture_log(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          failure =
+            try do
+              SessionContinuity.renew_owner_token(
+                fixture.session.id,
+                fixture.token,
+                request_options(bridge_owner_lease_ttl_seconds: 120),
+                lock_timeout_ms: 100,
+                timeout_ms: 300
+              )
+            rescue
+              error in [DBConnection.ConnectionError, Postgrex.Error] -> error
+            end
+
+          assert match?(%DBConnection.ConnectionError{}, failure) or
+                   match?(%Postgrex.Error{postgres: %{code: :query_canceled}}, failure)
+        end)
+      end)
+
+    assert logs =~ "disconnected"
+    assert System.monotonic_time(:millisecond) - started_at < 2_000
+    assert unboxed_get_session!(fixture.session.id) == before_session
+    assert unboxed_active_lease!(fixture.session.id) == before_lease
+
+    assert {:ok, %CodexSession{}} =
+             Sandbox.unboxed_run(Repo, fn ->
+               Repo.transaction(fn ->
+                 Repo.one!(
+                   from session in CodexSession,
+                     where: session.id == ^fixture.session.id,
+                     lock: "FOR UPDATE NOWAIT"
+                 )
+               end)
+             end)
+  end
+
+  test "synchronous renewal survives a healthy transaction retaining the session lock during commit" do
+    fixture = unboxed_owner_session_fixture("renewal-commit-latency", 1)
+    parent = self()
+    ref = make_ref()
+    function = "renewal_commit_latency_#{System.unique_integer([:positive])}"
+
+    CodexPooler.UnboxedFixture.register_unboxed_cleanup!(fn ->
+      Repo.query!("DROP TRIGGER IF EXISTS #{function} ON codex_sessions")
+      Repo.query!("DROP FUNCTION IF EXISTS #{function}()")
+    end)
+
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.query!("""
+      CREATE FUNCTION #{function}() RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_sleep(3.8);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+      """)
+
+      Repo.query!("""
+      CREATE CONSTRAINT TRIGGER #{function} AFTER UPDATE ON codex_sessions
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+      WHEN (NEW.id = '#{fixture.session.id}'::uuid AND NEW.updated_at = OLD.updated_at)
+      EXECUTE FUNCTION #{function}()
+      """)
+    end)
+
+    # A deferred PostgreSQL trigger retains the real row lock during COMMIT.
+    # Its 3.8 s work models finite commit latency without altering durability.
+    blocker =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            Repo.query!("UPDATE codex_sessions SET updated_at = updated_at WHERE id = $1", [
+              Ecto.UUID.dump!(fixture.session.id)
+            ])
+
+            send(parent, {:commit_holder_ready, ref, backend_pid!()})
+          end)
+        end)
+      end)
+
+    on_exit(fn -> stop_latency_task!(blocker) end)
+    assert_receive {:commit_holder_ready, ^ref, blocker_backend_pid}, 5_000
+
+    renewal =
+      Task.async(fn ->
+        Process.put({SessionLeaseHeartbeat, :renew}, fn session, token, opts, renewal_opts ->
+          Sandbox.unboxed_run(Repo, fn ->
+            send(parent, {:commit_waiter_ready, ref, backend_pid!()})
+            SessionContinuity.renew_owner_token(session, token, opts, renewal_opts)
+          end)
+        end)
+
+        {:ok, witness} = OwnerWitness.new(fixture.session)
+
+        opts =
+          RequestOptions.build(
+            [codex_session: fixture.session, transport: "http_json"],
+            "/backend-api/codex/responses",
+            %{}
+          )
+
+        opts = RequestOptions.put_session_owner_witness(opts, witness)
+        SessionLeaseHeartbeat.run(opts, fn -> :dispatched end)
+      end)
+
+    on_exit(fn -> stop_latency_task!(renewal) end)
+
+    try do
+      assert_receive {:commit_waiter_ready, ^ref, waiter_backend_pid}, 5_000
+      assert waiter_backend_pid != blocker_backend_pid
+
+      assert observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid) ==
+               "codex_sessions"
+
+      assert [["COMMIT", "Timeout", "PgSleep"]] =
+               Sandbox.unboxed_run(Repo, fn ->
+                 Repo.query!(
+                   "SELECT query, wait_event_type, wait_event FROM pg_stat_activity WHERE pid = $1",
+                   [blocker_backend_pid]
+                 ).rows
+               end)
+
+      assert :dispatched = Task.await(renewal, 15_000)
+      assert {:ok, _} = Task.await(blocker, 15_000)
+      session = unboxed_get_session!(fixture.session.id)
+      lease = unboxed_active_lease!(fixture.session.id)
+      assert session.owner_lease_token == fixture.token
+      assert lease.lease_token == fixture.token
+      assert session.owner_lease_expires_at == lease.expires_at
+    after
+      stop_latency_task!(renewal)
+      stop_latency_task!(blocker)
+    end
+  end
 
   describe "session continuity baseline characterization" do
     @tag :session_continuity_pin
@@ -1770,6 +2052,29 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   defp report_atomic_renewal(record) do
     if path = System.get_env("SESSION_CONTINUITY_MANUAL_QA_PATH") do
       File.write!(path, CodexPooler.JSON.encode!(record) <> "\n", [:append])
+    end
+  end
+
+  defp stop_latency_task!(task) do
+    monitor = Process.monitor(task.pid)
+    Process.unlink(task.pid)
+    if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+
+    assert_receive {:DOWN, ^monitor, :process, _, _}, 15_000
+  end
+
+  defp await_latency_backend_released!(backend_pid, deadline) do
+    rows =
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.query!("SELECT state FROM pg_stat_activity WHERE pid = $1", [backend_pid]).rows
+      end)
+
+    unless rows == [] or rows == [["idle"]] do
+      assert System.monotonic_time(:millisecond) < deadline, "renewal backend remained held"
+      marker = make_ref()
+      Process.send_after(self(), {:observe_latency_backend, marker}, 10)
+      assert_receive {:observe_latency_backend, ^marker}, 5_000
+      await_latency_backend_released!(backend_pid, deadline)
     end
   end
 
