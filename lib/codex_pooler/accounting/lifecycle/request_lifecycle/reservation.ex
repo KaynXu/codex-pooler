@@ -570,11 +570,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     reason = attr(opts, :last_error_code) || "policy_denied"
 
     Repo.transaction(fn ->
+      # A deletion after authentication clears attribution, not rejection history.
+      # Hold a surviving key through insertion so deletion cannot race the foreign key.
+      persisted_api_key = Access.lock_api_key_for_read(api_key.id)
+
       attrs =
         denied_request_attrs(%{
           auth: auth,
           pool: pool,
-          api_key: api_key,
+          api_key_id: persisted_api_key && persisted_api_key.id,
           model: model,
           requested_model: requested_model,
           endpoint: endpoint,
@@ -595,7 +599,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp denied_request_attrs(context) do
     %{
       pool_id: context.pool.id,
-      api_key_id: context.api_key.id,
+      api_key_id: context.api_key_id,
       model_id: context.model && context.model.id,
       requested_model:
         blank_to_nil(context.requested_model) ||

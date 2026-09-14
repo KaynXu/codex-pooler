@@ -121,6 +121,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
     {:ok, %{api_key: api_key, raw_key: original_raw_key}} =
       Access.create_api_key(scope, pool, %{display_name: "Action key"})
 
+    history = CodexPooler.PoolerFixtures.request_fixture(%{pool: pool, api_key: api_key})
+
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
 
     view |> element("#disable-api-key-#{api_key.id}") |> render_click()
@@ -144,6 +146,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
 
     view |> element("#delete-api-key-#{api_key.id}") |> render_click()
     assert has_element?(view, "#api-key-delete-dialog[open]")
+    assert has_element?(view, "#api-key-delete-dialog", "Request history is retained")
     assert render(view) =~ rotated_api_key.key_prefix
 
     view
@@ -169,6 +172,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
 
     refute has_element?(view, "#api-key-row-#{api_key.id}")
     refute Repo.get(APIKey, api_key.id)
+    retained = Repo.get!(CodexPooler.Accounting.Request, history.id)
+    assert retained.api_key_id == nil
+    assert retained.pool_id == pool.id
+    assert retained.status == "succeeded"
   end
 
   defp extract_raw_key!(html) do

@@ -132,9 +132,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"error" => %{"code" => "api_key_runtime_epoch_stale"}} = json_response(conn, 401)
     assert FakeUpstream.count(upstream) == 0
 
-    assert [%Request{status: "rejected", last_error_code: "api_key_runtime_epoch_stale"}] =
+    assert [
+             %Request{status: "rejected", last_error_code: "api_key_runtime_epoch_stale"} =
+               request
+           ] =
              Repo.all(Request)
 
+    assert request.api_key_id == setup.api_key.id
     assert Repo.aggregate(Attempt, :count) == 0
     assert Repo.aggregate(LedgerEntry, :count) == 0
   end
@@ -174,7 +178,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = Task.await(task, 15_000)
 
     assert %{"error" => %{"code" => ^code}} = json_response(conn, 401)
-    assert [%Request{status: "rejected", last_error_code: ^code}] = Repo.all(Request)
+    assert [%Request{status: "rejected", last_error_code: ^code} = request] = Repo.all(Request)
+    assert request.api_key_id == setup.api_key.id
     assert Repo.aggregate(Attempt, :count) == 0
     assert Repo.aggregate(LedgerEntry, :count) == 0
     assert FakeUpstream.count(upstream) == 0
@@ -200,6 +205,106 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_sse_race(setup, upstream, "pool_inactive", fn setup ->
       Repo.update!(Ecto.Changeset.change(setup.pool, status: "disabled"))
     end)
+  end
+
+  @tag :native_sse_deleted
+  test "native SSE physical key deletion after authentication retains a rejected request without reservation" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    supervisor = start_supervised!(Task.Supervisor)
+    parent = self()
+    ref = make_ref()
+
+    # Keep fixture creation transactional until its exact cleanup is registered.
+    fixture_task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        unboxed_run(fn ->
+          Repo.transaction(fn ->
+            setup = gateway_setup(upstream)
+            send(parent, {:fixture_prepared, ref, setup, self()})
+
+            receive do
+              {:commit_fixture, ^ref} -> setup
+            after
+              15_000 -> Repo.rollback(:fixture_commit_timeout)
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:fixture_prepared, ^ref, setup, fixture_pid}, 15_000
+    creator_id = setup.api_key.created_by_user_id
+
+    on_exit(fn ->
+      CodexPooler.UnboxedFixture.run_unboxed(fn ->
+        cleanup_unboxed_pool!(setup)
+        CodexPooler.AccountsFixtures.delete_unreferenced_fixture_owners!([creator_id])
+      end)
+    end)
+
+    send(fixture_pid, {:commit_fixture, ref})
+    assert {:ok, ^setup} = Task.await(fixture_task, 15_000)
+
+    request_task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        unboxed_run(fn ->
+          Repo.checkout(fn ->
+            [[backend_pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:request_backend, ref, backend_pid})
+
+            Process.put(
+              {CodexPooler.Gateway.Runtime.Service, :runtime_authorization_barrier},
+              {parent, ref, {:reserve, :before}}
+            )
+
+            Phoenix.ConnTest.build_conn()
+            |> auth(setup)
+            |> post("/backend-api/codex/responses", %{
+              "model" => setup.model.exposed_model_id,
+              "input" => native_text_input("physical deletion controller race"),
+              "stream" => true
+            })
+          end)
+        end)
+      end)
+
+    request_monitor = Process.monitor(request_task.pid)
+    assert_receive {:request_backend, ^ref, request_backend}, 15_000
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, request_pid},
+                   15_000
+
+    deletion_backend =
+      CodexPooler.UnboxedFixture.run_unboxed(fn ->
+        Repo.checkout(fn ->
+          [[backend_pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+          Repo.delete!(setup.api_key)
+          assert Repo.get(Access.APIKey, setup.api_key.id) == nil
+          backend_pid
+        end)
+      end)
+
+    assert deletion_backend != request_backend
+    send(request_pid, {:runtime_authorization_release, ref})
+    conn = Task.await(request_task, 15_000)
+    assert_receive {:DOWN, ^request_monitor, :process, _, :normal}, 15_000
+
+    assert %{
+             "error" => %{
+               "code" => "api_key_missing",
+               "type" => "invalid_request_error",
+               "message" => "api key is required"
+             }
+           } = json_response(conn, 401)
+
+    assert [%Request{} = request] =
+             Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
+
+    assert request.status == "rejected"
+    assert request.last_error_code == "api_key_missing"
+    assert request.api_key_id == nil
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.pool_id == ^setup.pool.id), :count) == 0
+    assert FakeUpstream.count(upstream) == 0
   end
 
   @code_mode_turn_metadata_projection_routes [

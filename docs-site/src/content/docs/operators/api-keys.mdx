@@ -274,12 +274,12 @@ The current actions are:
     </tr>
     <tr>
       <td>Delete</td>
-      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key and related request history from this instance. Connections still open with the key close as well. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
+      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key. Request history is retained under its Pool without a link to the deleted key. Connections still open with the key close as well. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
   </tbody>
 </table>
 
-Prefer pause for temporary containment, rotate for suspected exposure, revoke for permanent credential retirement, and delete only when the key and its related local history should be removed.
+Prefer pause for temporary containment, rotate for suspected exposure, revoke for permanent credential retirement, and delete to permanently remove the credential. Deleting a key does not purge request history.
 
 ## Responses WebSocket lifecycle
 
@@ -303,7 +303,7 @@ That drain has no deadline of its own. A request already running when the change
 
 Draining rather than cutting is deliberate. Ending a response mid-stream would leave the client with a truncated answer and no terminal, and would leave its accounting unbalanced. If you are revoking a credential you believe is compromised and need certainty that nothing is still running, watch for the connection to close rather than assuming revocation alone ended it.
 
-Delete also removes the key's request history, including the record of a request that is still running. When that record matters, pause or revoke the key first, wait for its connections to close, and delete it afterwards.
+Delete retains request history, including the record of a request that is still running, with the deleted key's association cleared. A request authenticated just before deletion is rechecked before reservation; if deletion wins that ordering, the request is rejected without upstream work and its rejection remains in the Pool's request history.
 
 Resuming a paused key, re-enabling its Pool, or moving its expiry later makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection. After a move, that fresh connection authenticates in the key's new Pool.
 

@@ -86,7 +86,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             Delete {@api_key.display_name}?
           </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            It stops working immediately, and its request history goes with it. This cannot be undone.
+            It stops working immediately. Request history is retained without a link to this key.
+            Deleting the key cannot be undone.
           </p>
         </div>
 
