@@ -71,8 +71,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
 
     on_exit(fn ->
       assert not Process.alive?(peer)
-      assert {_output, exit_code} = System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true)
-      assert exit_code != 0
+      CodexPooler.InstancePresencePeer.assert_os_process_absent!(os_pid)
     end)
 
     :ok = :peer.call(peer, :code, :add_paths, [:code.get_path()])
@@ -169,6 +168,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
     send(owner, :stop)
     assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 15_000
     CodexPooler.PeerRegistry.assert_peer_absent!(peer_name, peer_node: remote)
+    CodexPooler.InstancePresencePeer.assert_os_process_absent!(os_pid)
 
     CodexPooler.TestDiagnostics.puts(
       "presence starvation: failed_writes=#{failures} age_seconds=#{age} live_unknown_preserved=true terminal_recovered=true"

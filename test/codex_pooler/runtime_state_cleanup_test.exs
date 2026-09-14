@@ -901,6 +901,9 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
         owner_instance_boot_id: absent_instance.boot_id
       })
 
+    # A real successful observer heartbeat is required before stale target
+    # presence can authorize the legacy recovery path.
+    assert {:ok, _observer} = InstancePresence.record_heartbeat()
     assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
     assert summary.absent_instance_attempts_recovered == 1
     assert is_integer(summary.instance_presence_rows_pruned)

@@ -3,6 +3,45 @@ defmodule CodexPooler.InstancePresencePeer do
   import ExUnit.Callbacks
   import ExUnit.Assertions
   alias CodexPooler.Platform.InstancePresence.Identity
+
+  @spec assert_os_process_absent!(String.t(), keyword()) :: :ok
+  def assert_os_process_absent!(os_pid, opts \\ []) do
+    budget = Keyword.get(opts, :budget_ms, 15_000)
+    probe = Keyword.get(opts, :probe, &os_process_probe/1)
+    await_os_process_absent(os_pid, probe, System.monotonic_time(:millisecond) + budget)
+  end
+
+  defp await_os_process_absent(os_pid, probe, deadline) do
+    if classify_os_process_probe(probe.(os_pid)) != :absent do
+      assert System.monotonic_time(:millisecond) < deadline,
+             "owned peer OS process survived shutdown detection budget"
+
+      receive do
+      after
+        25 -> :ok
+      end
+
+      await_os_process_absent(os_pid, probe, deadline)
+    else
+      :ok
+    end
+  end
+
+  @spec classify_os_process_probe({String.t(), integer()}) :: :present | :absent | :unknown
+  def classify_os_process_probe({_output, 0}), do: :present
+
+  def classify_os_process_probe({output, exit_code}) when exit_code > 0 do
+    if Regex.match?(~r/\A(?:kill: )?\(?[0-9]+\)?: [Nn]o such process\s*\z/, output),
+      do: :absent,
+      else: :unknown
+  end
+
+  def classify_os_process_probe(_result), do: :unknown
+
+  defp os_process_probe(os_pid) do
+    System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true, env: [{"LC_ALL", "C"}])
+  end
+
   @spec start_presence_peer!(atom()) :: map()
   def start_presence_peer!(name) do
     on_exit(fn -> CodexPooler.PeerRegistry.assert_peer_absent!(name) end)
