@@ -31,8 +31,7 @@ defmodule CodexPooler.PeerRegistryTest do
   end
 
   test "keeps polling across real elapsed time rather than sampling once" do
-    started = System.monotonic_time(:millisecond)
-    names = fn -> if elapsed_since(started) < @flip_after_ms, do: @registered, else: @absent end
+    names = timed_replies(@registered, @absent)
 
     assert {:ok, detail} =
              PeerRegistry.await_peer_absent(@peer,
@@ -73,12 +72,8 @@ defmodule CodexPooler.PeerRegistryTest do
   end
 
   test "a node still in the connected list keeps the wait open after epmd is clean" do
-    started = System.monotonic_time(:millisecond)
     peer_node = :"peer_registry_probe@nowhere.invalid"
-
-    connected = fn ->
-      if elapsed_since(started) < @flip_after_ms, do: [peer_node], else: []
-    end
+    connected = timed_replies([peer_node], [])
 
     assert {:ok, detail} =
              PeerRegistry.await_peer_absent(@peer,
@@ -146,5 +141,16 @@ defmodule CodexPooler.PeerRegistryTest do
     end
   end
 
-  defp elapsed_since(started), do: System.monotonic_time(:millisecond) - started
+  defp timed_replies(before, after_reply) do
+    clock_key = {__MODULE__, make_ref()}
+
+    fn ->
+      now = System.monotonic_time(:millisecond)
+      # Start after the wait helper's own clock, at the first observation. A
+      # scheduler delay during test setup must not consume the fixture's wait.
+      started = Process.get(clock_key) || now
+      Process.put(clock_key, started)
+      if now - started < @flip_after_ms, do: before, else: after_reply
+    end
+  end
 end
