@@ -7,10 +7,10 @@ defmodule CodexPooler.CommittedWriteGuard do
   its own, a `:peer` node or a child `mix` VM, survives into every later test of the same
   `mix test` invocation and surfaces there as a failure in a file that has nothing to do with it.
   Every table of the schema is watched, so rows no user path reaches, such as an identity created
-  without a creator or a pricing snapshot, count as much as an owner's graph. A table with a
-  `singleton` column is also compared by content, so an update to the instance settings or the
-  bootstrap state that nothing puts back fails as well; timestamps and `lock_version` are left out
-  of that comparison, because putting a value back through the domain API rewrites them.
+  without a creator or a pricing snapshot, count as much as an owner's graph. Every watched
+  table is also compared by normalized content, so updates that nothing puts back fail even
+  when row counts stay constant. Timestamp-typed columns are excluded from that comparison;
+  `lock_version` remains included.
 
   ## Cost on the sandboxed path
 
@@ -339,7 +339,8 @@ defmodule CodexPooler.CommittedWriteGuard do
     conn
   end
 
-  # Every table is compared by normalized row content, including timestamps and lock_version.
+  # Every table is compared by normalized row content, excluding timestamp-typed columns.
+  # lock_version remains included.
   # This catches updates to non-singleton rows as well as singleton state changes.
   defp watched_tables!(conn) do
     %Postgrex.Result{rows: rows} =
