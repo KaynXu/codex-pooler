@@ -236,6 +236,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                 }
               }}
 
+    assert CodexPooler.JSON.decode!(response.resp_body) ==
+             CodexPooler.CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay).full_supported_values_example
+
     # Only the bounded parsed enumeration crosses; the surrounding provider
     # prose stays unrelayed and unpersisted on every path.
     refute response.resp_body =~ @provider_sentinel

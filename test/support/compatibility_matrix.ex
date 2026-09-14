@@ -202,7 +202,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :pool_model_serving_modes,
       contract:
-        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a terminal HTTP failure returns a server-owned message, relaying only the sanitized rejection type, code, and param already persisted as attempt metadata for the same non-429 4xx window, and the fixed server_error body when no sanitized type exists. That message names the relayed param and code with the same constructor the non-Full relay uses, so serving mode does not decide how much a client is told, while the provider-message-derived supported-values suffix stays exclusive to the non-Full relay; a non-rate-limit 4xx records upstream_status without raw upstream text, exactly as the same rejection does under Auto or Lite, because the resolved serving mode is carried by the routing metadata on the request and the attempt and is never encoded in the error code; a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
+        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a terminal HTTP failure returns a server-owned message, relaying only the sanitized rejection type, code, and param already persisted as attempt metadata for the same non-429 4xx window, and the fixed server_error body when no sanitized type exists. Auto, Lite, Full relay the same bounded supported-values list from persisted attempt metadata. That message names the relayed param and code with the same constructor the non-Full relay uses; a non-rate-limit 4xx records upstream_status without raw upstream text, exactly as the same rejection does under Auto or Lite, because the resolved serving mode is carried by the routing metadata on the request and the attempt and is never encoded in the error code; a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
     },
     %{
       slug: :backend_responses_envelope,
@@ -290,7 +290,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :upstream_validation_rejection_relay,
       contract:
-        "an ordinary Responses or Chat HTTP request whose upstream answers HTTP 400 with a direct error object of type invalid_request_error and an allowlisted parameter-validation code relays type, code, a bounded field-path param or null, and a Pooler-authored message built from code and param, never the provider message, which for unsupported_value and invalid_value may append at most 12 identifier-shaped supported values taken only from a strictly shaped trailing provider list with every earlier quoted value, including the rejected value, excluded; translated Chat Completions map the param back to the Chat field the client sent only for renames the adapter performs; a native streaming request receives that native JSON error envelope instead of an empty body while a materialized native body keeps its existing passthrough, and public /v1 Responses and Chat Completions receive the same OpenAI error object; every other status, type, code, detail body, the explicit Full override, compact routes, model-unavailability and misalignment projections, and websocket frames keep their existing behavior, while accounting codes, retries, routing health, and metrics are unchanged"
+        "an ordinary Responses or Chat HTTP request whose upstream answers HTTP 400 with a direct error object of type invalid_request_error and an allowlisted parameter-validation code relays type, code, a bounded field-path param or null, and a Pooler-authored message built from code and param, never the provider message, which for unsupported_value and invalid_value may append at most 12 identifier-shaped supported values taken only from a strictly shaped trailing provider list with every earlier quoted value, including the rejected value, excluded; translated Chat Completions map the param back to the Chat field the client sent only for renames the adapter performs; a native streaming request receives that native JSON error envelope instead of an empty body while a materialized native body keeps its existing passthrough, and public /v1 Responses and Chat Completions receive the same OpenAI error object; Auto, Lite, Full relay the same bounded supported-values list from persisted attempt metadata. Every other status, type, code, detail body, compact routes, model-unavailability and misalignment projections, and websocket frames keep their existing behavior, while accounting codes, retries, routing health, and metrics are unchanged"
     },
     %{
       slug: :pooler_authored_error_type,
@@ -1100,8 +1100,18 @@ defmodule CodexPooler.CompatibilityMatrix do
       relayed_fields: ~w(type code param message),
       param: "bounded_field_path_or_null",
       message: "pooler_authored_from_code_and_param",
+      full_supported_values_example: %{
+        "error" => %{
+          "type" => "invalid_request_error",
+          "code" => "unsupported_value",
+          "param" => "reasoning.effort",
+          "message" =>
+            "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+        }
+      },
       supported_values: %{
         codes: ~w(unsupported_value invalid_value),
+        serving_modes: ~w(auto lite full),
         source: "strict_trailing_provider_list",
         token_pattern: "[A-Za-z0-9_.-]{1,32}",
         max_values: 12,

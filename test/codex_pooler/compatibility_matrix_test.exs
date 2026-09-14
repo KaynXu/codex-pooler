@@ -752,6 +752,44 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.retry == false
       assert fixture.routing_health == :unchanged
     end
+
+    test "Full supported-values response example agrees with both published references" do
+      fixture = CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay)
+      full = CompatibilityMatrix.fixture!(:pool_model_serving_modes).full_rejection_diagnostic
+
+      assert fixture.supported_values.relayed_under_explicit_full_override
+      assert full.supported_values_suffix_relayed
+      assert fixture.supported_values.serving_modes == ~w(auto lite full)
+
+      mode_contract =
+        Enum.map_join(fixture.supported_values.serving_modes, ", ", &String.capitalize/1) <>
+          " relay the same bounded supported-values list from persisted attempt metadata."
+
+      for slug <- [:pool_model_serving_modes, :upstream_validation_rejection_relay] do
+        assert CompatibilityMatrix.by_slug!(slug).contract =~ mode_contract
+      end
+
+      assert fixture.full_supported_values_example == %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "unsupported_value",
+                 "param" => "reasoning.effort",
+                 "message" =>
+                   "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+               }
+             }
+
+      for page <- ~w(responses-lite-vs-full runtime-routes) do
+        path = Path.join("docs-site/src/content/docs/reference", page <> ".mdx")
+        assert File.read!(path) =~ mode_contract
+        examples = Regex.scan(~r/```json\n(.*?)\n```/s, File.read!(path), capture: :all_but_first)
+
+        assert Enum.any?(examples, fn [json] ->
+                 CodexPooler.JSON.decode(json) == {:ok, fixture.full_supported_values_example}
+               end),
+               "#{path} must publish the executable Full supported-values response example"
+      end
+    end
   end
 
   describe "Responses tool compatibility contract" do
