@@ -568,6 +568,268 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
     end
   end
 
+  for close_early <- [false, true] do
+    @tag close_early: close_early
+    test "distinct sockets preserve the winning compact when contender closes early=#{close_early}",
+         %{close_early: close_early} do
+      parent = self()
+      release_ref = make_ref()
+      compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-overlap-summary"}
+
+      terminal = fn id, output ->
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"id" => id, "status" => "completed", "output" => output}
+        })
+      end
+
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              respond:
+                FakeUpstream.websocket_text_frames([terminal.("resp_overlap_ordinary", [])])
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true, forbidden: ["previous_response_id"]],
+              respond:
+                FakeUpstream.barrier_websocket_frames(
+                  [
+                    CodexPooler.JSON.encode!(%{
+                      "type" => "response.output_item.done",
+                      "item" => compact_item
+                    }),
+                    terminal.("resp_overlap_compact", [compact_item])
+                  ],
+                  notify: parent,
+                  release_ref: release_ref
+                )
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              respond:
+                FakeUpstream.websocket_text_frames([terminal.("resp_overlap_followup", [])])
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+      port = start_public_endpoint!()
+      turn_state = "compact-overlap-#{System.unique_integer([:positive])}"
+
+      metadata = %{
+        "turn_id" => "overlap-turn",
+        "window_id" => "overlap-window",
+        "context_window_id" => Ecto.UUID.generate(),
+        "window_number" => 1,
+        "request_kind" => "turn"
+      }
+
+      ordinary =
+        websocket_payload(setup, "synthetic overlap", %{
+          "client_metadata" => %{"x-codex-turn-metadata" => metadata}
+        })
+
+      compact_metadata =
+        Map.merge(metadata, %{
+          "request_kind" => "compaction",
+          "compaction" => %{
+            "trigger" => "auto",
+            "reason" => "context_limit",
+            "implementation" => "responses_compaction_v2",
+            "phase" => "mid_turn",
+            "strategy" => "memento"
+          }
+        })
+
+      compact =
+        websocket_input_payload(
+          setup,
+          [
+            %{"type" => "message", "role" => "user", "content" => "synthetic overlap"},
+            %{"type" => "function_call_output", "call_id" => "call_overlap", "output" => ""},
+            %{"type" => "compaction_trigger"}
+          ],
+          %{"client_metadata" => %{"x-codex-turn-metadata" => compact_metadata}}
+        )
+
+      winner =
+        Task.async(fn ->
+          {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+          try do
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, ordinary)
+            {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            assert CodexPooler.JSON.decode!(frame)["type"] == "response.completed"
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact)
+            {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            decoded = CodexPooler.JSON.decode!(frame)
+
+            assert decoded["type"] == "response.output_item.done",
+                   inspect(
+                     Map.take(decoded, ["type", "status"])
+                     |> Map.put("code", get_in(decoded, ["error", "code"]))
+                   )
+
+            {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            assert CodexPooler.JSON.decode!(frame)["type"] == "response.completed"
+            send(parent, :winning_compact_completed)
+
+            receive do
+              :next_turn -> :ok
+            after
+              @handoff_detection_timeout_ms -> flunk("followup was not released")
+            end
+
+            next_metadata = Map.put(metadata, "turn_id", "overlap-next-turn")
+
+            next =
+              websocket_payload(setup, "synthetic fresh turn", %{
+                "client_metadata" => %{"x-codex-turn-metadata" => next_metadata}
+              })
+
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, next)
+            {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            assert CodexPooler.JSON.decode!(frame)["type"] == "response.completed"
+            Mint.HTTP.close(conn)
+            :ok
+          after
+            Mint.HTTP.close(conn)
+          end
+        end)
+
+      winner_monitor = Process.monitor(winner.pid)
+      on_exit(fn -> stop_compact_socket_task(winner.pid) end)
+
+      assert_receive {:fake_upstream_frame_barrier, 0, _handler, ^release_ref},
+                     @handoff_detection_timeout_ms
+
+      [session_id] =
+        Repo.all(
+          from(t in CodexTurn,
+            join: r in Request,
+            on: r.id == t.request_id,
+            where: r.pool_id == ^setup.pool.id,
+            distinct: true,
+            select: t.codex_session_id
+          )
+        )
+
+      {:ok, owner_pid} = WebsocketOwnerSession.lookup(session_id)
+      owner_before = :sys.get_state(owner_pid)
+      assert owner_before.active_turn.collect?
+      assert is_tuple(owner_before.active_turn.first_compact_request_identity)
+
+      rejection_handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(rejection_handler) end)
+
+      :ok =
+        :telemetry.attach(
+          rejection_handler,
+          [:codex_pooler, :gateway, :native_compaction, :rejection],
+          fn _, _, _, _ -> send(parent, {:contender_socket_rejected, self()}) end,
+          nil
+        )
+
+      contender =
+        Task.async(fn ->
+          {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+          try do
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact)
+            {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            decoded = CodexPooler.JSON.decode!(frame)
+            assert decoded["error"]["code"] == "duplicate_turn"
+            assert decoded["status"] == 409
+            send(parent, :contender_rejected)
+
+            receive do
+              :close_contender -> :ok
+            after
+              @handoff_detection_timeout_ms -> flunk("contender close not released")
+            end
+
+            Mint.HTTP.close(conn)
+            :ok
+          after
+            Mint.HTTP.close(conn)
+          end
+        end)
+
+      contender_monitor = Process.monitor(contender.pid)
+      on_exit(fn -> stop_compact_socket_task(contender.pid) end)
+      assert_receive :contender_rejected, @handoff_detection_timeout_ms
+      assert_receive {:contender_socket_rejected, contender_socket}, @handoff_detection_timeout_ms
+      contender_socket_monitor = Process.monitor(contender_socket)
+      :telemetry.detach(rejection_handler)
+      refute contender_socket == owner_before.downstream.pid
+      owner_after = :sys.get_state(owner_pid)
+      assert owner_after.downstream == owner_before.downstream
+      assert owner_after.downstream_epoch == owner_before.downstream_epoch
+      assert owner_after.active_turn.downstream == owner_before.active_turn.downstream
+
+      if close_early do
+        send(contender.pid, :close_contender)
+        assert :ok = Task.await(contender, @handoff_detection_timeout_ms)
+
+        assert_receive {:DOWN, ^contender_monitor, :process, _, :normal},
+                       @handoff_detection_timeout_ms
+
+        assert_receive {:DOWN, ^contender_socket_monitor, :process, ^contender_socket, _},
+                       @handoff_detection_timeout_ms
+      end
+
+      assert length(FakeUpstream.requests(upstream)) == 2
+
+      compact_requests =
+        Repo.all(
+          from(r in Request,
+            where:
+              r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
+          )
+        )
+
+      assert [request] = compact_requests
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
+      assert :ok = FakeUpstream.release_remaining_frames(upstream, release_ref)
+
+      assert_receive {:fake_upstream_frame_barrier, 1, _, ^release_ref},
+                     @handoff_detection_timeout_ms
+
+      assert_receive {:fake_upstream_frame_barrier, 2, _, ^release_ref},
+                     @handoff_detection_timeout_ms
+
+      assert_receive :winning_compact_completed, @handoff_detection_timeout_ms
+
+      unless close_early do
+        send(contender.pid, :close_contender)
+        assert :ok = Task.await(contender, @handoff_detection_timeout_ms)
+
+        assert_receive {:DOWN, ^contender_monitor, :process, _, :normal},
+                       @handoff_detection_timeout_ms
+
+        assert_receive {:DOWN, ^contender_socket_monitor, :process, ^contender_socket, _},
+                       @handoff_detection_timeout_ms
+      end
+
+      send(winner.pid, :next_turn)
+      assert :ok = Task.await(winner, @handoff_detection_timeout_ms)
+      assert_receive {:DOWN, ^winner_monitor, :process, _, :normal}, @handoff_detection_timeout_ms
+      assert Repo.reload!(request).status == "succeeded"
+      entries = pool_ledger_entries(setup.pool.id) |> Enum.filter(&(&1.request_id == request.id))
+
+      for kind <- ["reservation", "release", "settlement"],
+          do: assert(Enum.count(entries, &(&1.entry_kind == kind)) == 1)
+
+      assert length(FakeUpstream.requests(upstream)) == 3
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
+  end
+
   test "socket preflight admits projected full-history compaction retry after stream close" do
     compact_item = %{"type" => "compaction", "encrypted_content" => "synthetic-retry-compact"}
 
@@ -900,5 +1162,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
     after
       CodexResponsesSocket.terminate(:closed, next_state)
     end
+  end
+
+  defp stop_compact_socket_task(pid) do
+    monitor = Process.monitor(pid)
+    if Process.alive?(pid), do: Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, _}, @handoff_detection_timeout_ms
   end
 end

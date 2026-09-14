@@ -1500,7 +1500,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           not suspended_replay_attachable?(state.suspended_replay) ->
         {:reply, {:error, :owner_busy}, state}
 
-      replay_active?(state, state.downstream) ->
+      replay_active?(state, state.downstream) or native_collection_active?(state) ->
         epoch = DownstreamState.next_downstream_epoch(state.downstream_epoch)
 
         candidate = %{
@@ -3476,7 +3476,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp apply_valid_reconnect_control_v2(
          %{active_turn: %{descriptor: descriptor} = active_turn} = state,
          %RemoteReconnectControlV2{action: :preflight, intent: :active_reattach} = control
-       ) do
+       )
+       when is_map(descriptor) do
     with true <- control.downstream.epoch == state.downstream_epoch + 1,
          true <- replay_descriptor_match?(descriptor, control),
          true <- descriptor.downstream_status == :lost,
@@ -4109,6 +4110,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         downstream_epoch: downstream.epoch
     }
   end
+
+  # Native collection returns a result bound to its original downstream. A
+  # competing socket may be examined by preflight, but cannot steal that
+  # binding merely by attaching, even before a replay descriptor is available.
+  defp native_collection_active?(%{
+         active_turn: %{collect?: true, first_compact_request_identity: identity}
+       })
+       when is_tuple(identity), do: true
+
+  defp native_collection_active?(_state), do: false
 
   defp replay_active?(
          %{
