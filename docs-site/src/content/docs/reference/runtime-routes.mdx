@@ -420,9 +420,11 @@ policy is derived from its configured fields:
    value, passes through this policy.
 2. **Allow up to** permits only known efforts at or below the selected ceiling:
    `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
-   The selected model's effective known levels narrow the permitted set. An
-   omitted effort resolves to the permitted model default, or the highest
-   permitted known effort.
+   The Pool model's known levels (the union across the Pool's assignments,
+   as `/v1/models` lists them) narrow the permitted set; admission happens
+   before routing, so it cannot know which assignment will serve. An omitted
+   effort resolves to the permitted model default, or the highest permitted
+   known effort.
 3. **Always use** applies the legacy exact configured effort. It remains
    compatible even when the configured effort is absent from model metadata.
 
@@ -448,9 +450,10 @@ visible, and public `/v1/models` remains unchanged.
 
 `minimal` and `ultra` remain distinct for policy evaluation. Backend Codex
 compatibility rewrites `minimal` to `low` and `ultra` to `max` before upstream
-dispatch. When the selected model's catalog lists reasoning levels without
-`max`, `ultra` becomes the highest listed level instead, and it never becomes
-`none` or `minimal`. `none` and every other explicit effort are forwarded
+dispatch. When the serving assignment's own source model lists reasoning
+levels without `max`, `ultra` becomes the highest level that assignment
+lists (the Pool-wide union only when the assignment has no levels of its
+own), and it never becomes `none` or `minimal`. `none` and every other explicit effort are forwarded
 unchanged, even when the model catalog does not list them, so the upstream
 decides whether that model accepts the value. Safe reasoning summaries retain
 requested, applied, and effective values and name the rewrite as
