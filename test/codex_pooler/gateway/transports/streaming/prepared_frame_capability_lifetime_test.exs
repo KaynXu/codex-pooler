@@ -120,6 +120,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedFrameCapabilityLifeti
     assert {:error, :consumed} = Capability.validate(capability, token)
   end
 
+  # findings#221: a consumed capability answers `:consumed` for a bounded
+  # window after dispatch, then is reclaimed instead of living until the
+  # sealing socket exits.
+  test "a consumed capability is reclaimed after its bounded retention" do
+    capability = Capability.issue(consumed_retention_ms: 50)
+    token = frame_token()
+    assert :ok = Capability.seal(capability, token)
+    assert {:ok, nil} = Capability.consume_for_dispatch(capability, token)
+    monitor = Process.monitor(capability.server)
+    assert {:error, :consumed} = Capability.validate(capability, token)
+    assert_receive {:DOWN, ^monitor, :process, _server, :normal}, 1_000
+    assert {:error, :invalid} = Capability.validate(capability, token)
+    assert {:error, :invalid} = Capability.consume(capability, token)
+  end
+
   test "release is bound to the capability's own reference" do
     capability = Capability.issue()
     token = frame_token()
