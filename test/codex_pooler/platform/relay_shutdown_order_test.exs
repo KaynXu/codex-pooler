@@ -148,6 +148,81 @@ defmodule CodexPooler.Platform.RelayShutdownOrderTest do
     refute_received {:claim, _}
   end
 
+  test "release helper resolves the marker from CODEX_POOLER_DRAIN_MARKER_PATH before quiescing",
+       context do
+    marker = Path.join(System.tmp_dir!(), "relay-shutdown-env-#{Ecto.UUID.generate()}")
+    previous = System.get_env("CODEX_POOLER_DRAIN_MARKER_PATH")
+
+    on_exit(fn ->
+      File.rm(marker)
+
+      if previous,
+        do: System.put_env("CODEX_POOLER_DRAIN_MARKER_PATH", previous),
+        else: System.delete_env("CODEX_POOLER_DRAIN_MARKER_PATH")
+    end)
+
+    runtime = start_paused_runtime(context)
+    callbacks = :sys.get_state(runtime).callbacks
+
+    # The production default is the release environment variable; a missing or
+    # blank variable must fail before the consumer is quiesced, because quiesce
+    # is permanent for that process (findings#216). The ETS claim gate closes
+    # before the state flips, so both are checked.
+    System.delete_env("CODEX_POOLER_DRAIN_MARKER_PATH")
+
+    assert_raise System.EnvError, fn ->
+      Release.prepare_shutdown(
+        relay: runtime,
+        budget_ms: 1000,
+        drain: fn _ -> flunk("drained") end
+      )
+    end
+
+    System.put_env("CODEX_POOLER_DRAIN_MARKER_PATH", "")
+
+    assert_raise ArgumentError, ~r/drain marker/, fn ->
+      Release.prepare_shutdown(
+        relay: runtime,
+        budget_ms: 1000,
+        drain: fn _ -> flunk("drained") end
+      )
+    end
+
+    refute :sys.get_state(runtime).quiesced?
+    assert :ets.lookup(callbacks, :quiesced) != [{:quiesced, true}]
+    refute File.exists?(marker)
+
+    System.put_env("CODEX_POOLER_DRAIN_MARKER_PATH", marker)
+
+    assert %{remaining: remaining} =
+             Release.prepare_shutdown(
+               relay: runtime,
+               budget_ms: 1000,
+               drain: fn remaining ->
+                 assert File.exists?(marker)
+                 assert :sys.get_state(runtime).quiesced?
+                 %{remaining: remaining}
+               end
+             )
+
+    assert remaining in 1..1000
+  end
+
+  defp start_paused_runtime(context) do
+    runtime =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "web",
+         name: nil,
+         start_paused: true,
+         claim_fun: fn _, _ -> {:ok, []} end}
+      )
+
+    Sandbox.allow(Repo, context.sandbox_owner, runtime)
+    runtime
+  end
+
   defp await_gate_closed(table, deadline) do
     if :ets.lookup(table, :quiesced) != [{:quiesced, true}] do
       assert System.monotonic_time(:millisecond) < deadline

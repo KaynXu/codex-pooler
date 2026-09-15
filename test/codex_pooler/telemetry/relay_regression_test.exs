@@ -575,4 +575,50 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
              "#{inspect(metric.event_name)} declares tags #{inspect(unknown)} that the relay drops"
     end
   end
+
+  # Valid values, one per forwarded key, with the per-family vocabularies where
+  # two families share a key name. A family whose `tag_values/1` derived a
+  # declared tag from a key the relay does not forward would render that tag
+  # the same for a forwarded-only metadata map and for an empty one.
+  @forwarded_samples %{
+    scope: "account",
+    decision: "anchored_confirmed",
+    source: "provider_usage",
+    outcome: "interrupted",
+    phase: "turn_interrupted",
+    transport: "websocket",
+    downstream_transport: "http_sse",
+    upstream_transport: "websocket",
+    via: "job_relay"
+  }
+  @family_samples %{
+    [:codex_pooler, :saved_reset, :convergence] => %{
+      source: "reconciliation",
+      outcome: "confirmed_by_quota"
+    }
+  }
+
+  test "every relayed metric family derives each declared tag from a forwarded key" do
+    relayed = MapSet.new(RelayRuntime.relayed_events())
+    assert Map.keys(@forwarded_samples) |> Enum.sort() == Enum.sort(RelayRuntime.label_keys())
+
+    for metric <- CodexPoolerWeb.Telemetry.prometheus_metrics(),
+        MapSet.member?(relayed, metric.event_name) do
+      samples = Map.merge(@forwarded_samples, Map.get(@family_samples, metric.event_name, %{}))
+      forwarded = metric.tag_values.(samples)
+      absent = metric.tag_values.(%{})
+
+      for tag <- metric.tags do
+        # Every declared tag is itself a forwarded key, so its rendered value
+        # must be exactly the sample under that key: a different value means
+        # the sample is out of this family's vocabulary (fix the table) or the
+        # tag reads another key, forwarded or not (fix `tag_values/1`).
+        assert Map.get(forwarded, tag) == Map.fetch!(samples, tag),
+               "#{inspect(metric.event_name)} tag #{tag} rendered #{inspect(Map.get(forwarded, tag))} for sample #{inspect(Map.fetch!(samples, tag))}: out-of-vocabulary sample or the tag reads a different key"
+
+        assert Map.get(forwarded, tag) != Map.get(absent, tag),
+               "#{inspect(metric.event_name)} tag #{tag} renders the same with and without its forwarded key"
+      end
+    end
+  end
 end

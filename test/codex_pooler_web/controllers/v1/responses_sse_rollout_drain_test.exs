@@ -755,6 +755,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
       assert response.status == 503
       assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
       assert FakeUpstream.requests(upstream) == []
+      assert FakeUpstream.sse_outcomes(upstream) == []
       VirtualDeadline.advance(deadline, 200)
       assert %{http_streams_seen: 0} = Task.await(drain_task, @await_timeout_ms)
     else
@@ -766,6 +767,12 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
       VirtualDeadline.advance(deadline, 400)
       assert_receive {:rollout_drain_deadline_wait, ^deadline, _}, @await_timeout_ms
       response = Task.await(request_task, @await_timeout_ms)
+      # Release only once the handler has observed the client close on its own
+      # socket; releasing on the FIN's heels can let one tail write succeed on
+      # a half-closed socket and record nothing.
+      assert_receive {:fake_upstream_client_gone, 1, ^upstream_pid, ^release_ref},
+                     @await_timeout_ms
+
       send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
       assert List.last(stream_event_types(response.resp_body)) == "error"
       VirtualDeadline.advance(deadline, 200)
@@ -774,6 +781,20 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
                Task.await(drain_task, @await_timeout_ms)
 
       assert latest_request(setup.pool.id).last_error_code == "owner_drained"
+
+      # The held tail (chunk 2) really met the closed client: the fake records
+      # exactly one expected client close for this owner, so the comment above
+      # is load-bearing rather than narrative (findings#226).
+      assert_receive {:fake_upstream_client_closed, 2, ^upstream_pid, ^release_ref},
+                     @await_timeout_ms
+
+      assert [
+               %{
+                 outcome: :client_closed_expected,
+                 owner: "responses_sse_rollout_drain:admitted_cutoff",
+                 chunk_index: 2
+               }
+             ] = FakeUpstream.sse_outcomes(upstream)
     end
   end
 

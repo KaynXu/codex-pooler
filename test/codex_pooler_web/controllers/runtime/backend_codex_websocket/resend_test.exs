@@ -129,7 +129,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     # A second connect-phase failure class through the real path: the upstream
     # accepts and closes the handshake. Any connect-phase failure either fails
     # over to the next candidate or finalizes; neither ever retries the same
-    # assignment (findings#208).
+    # assignment (findings#208). Like the two refused-connect tests below, this
+    # drives `execute_websocket_response/4`, the internal gateway entry with a
+    # writer callback where the connect-phase policy is decided, not the
+    # public socket.
     port = accept_and_close_listener!(2)
     placeholder = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
     setup = placeholder |> gateway_setup() |> with_failover_candidate!(placeholder)
@@ -172,6 +175,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   test "a refused connect on a route with no failover candidate finalizes one attempt" do
     # Same retry-safe refusal, but the route plan has no later candidate, so
     # retry policy is off (`allow_retry?` false) and no same-assignment retry runs.
+    # Driven through `execute_websocket_response/4` (internal gateway entry),
+    # not the public socket.
     port = reserve_closed_port!()
     setup = gateway_setup(%FakeUpstream{url: "http://127.0.0.1:#{port}"})
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -203,6 +208,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     # another candidate: the dispatcher fails over to it. The refused
     # assignment is never retried, so a pool whose second identity is healthy
     # keeps serving when the first one's endpoint is down (findings#208).
+    # Driven through `execute_websocket_response/4` (internal gateway entry),
+    # not the public socket.
     port = reserve_closed_port!()
     placeholder = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
     setup = placeholder |> gateway_setup() |> with_failover_candidate!(placeholder)

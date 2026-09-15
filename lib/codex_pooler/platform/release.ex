@@ -33,6 +33,14 @@ defmodule CodexPooler.Release do
         System.fetch_env!("CODEX_POOLER_DRAIN_MARKER_PATH")
       end)
 
+    # `fetch_env!` accepts an empty value; a blank path would quiesce and then
+    # fail at the touch, leaving a live node permanently quiesced with no
+    # readiness withdrawal (findings#216).
+    if not is_binary(marker) or String.trim(marker) == "" do
+      raise ArgumentError,
+            "drain marker path must name the marker file (default source: CODEX_POOLER_DRAIN_MARKER_PATH)"
+    end
+
     :ok =
       RelayRuntime.quiesce(
         Keyword.get(opts, :relay, RelayRuntime),
