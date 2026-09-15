@@ -630,14 +630,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     do: headers
 
   # The Codex backend names its server-assigned request id `x-oai-request-id`
-  # (observed directly against the provider on 2026-09-15); the released Codex
-  # client reads that name too. `x-request-id` and `openai-request-id` are the
-  # names other OpenAI surfaces use. Reading only the latter two left every
-  # attempt without a provider id for seventy days (findings#218).
-  @upstream_request_id_headers ~w(x-oai-request-id x-request-id openai-request-id)
+  # (observed directly against the provider); `x-request-id` and
+  # `openai-request-id` are the names other OpenAI surfaces use. The order
+  # matches the released Codex client (`x-request-id` first, then
+  # `x-oai-request-id`), so the id the Pooler stores is the one a user reads in
+  # their Codex log when both are present. Reading only the last two names
+  # had left every attempt without a provider id. A blank value is absent.
+  @upstream_request_id_headers ~w(x-request-id x-oai-request-id openai-request-id)
 
   defp upstream_request_id(response_or_headers) do
-    Enum.find_value(@upstream_request_id_headers, &header(response_or_headers, &1))
+    Enum.find_value(@upstream_request_id_headers, fn name ->
+      case header(response_or_headers, name) do
+        value when is_binary(value) and value != "" -> value
+        _blank -> nil
+      end
+    end)
   end
 
   defp header(%Req.Response{headers: headers}, key) do

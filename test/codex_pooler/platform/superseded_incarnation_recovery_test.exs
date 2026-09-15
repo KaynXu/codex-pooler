@@ -15,10 +15,11 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
   alias CodexPooler.UnboxedFixture
 
   @peer_timeout_ms 15_000
-  # Cleanup tasks must outlive the detection budget they wait on, otherwise the
-  # unboxed task times out first and the row cleanup registered before it is
-  # skipped as collateral.
-  @cleanup_timeout_ms @peer_timeout_ms + 10_000
+  # Every unboxed cleanup gets a task timeout above the detection budgets it
+  # may wait on (an OS-process wait plus a connection wait, each bounded by
+  # @peer_timeout_ms), so a slow peer is reported by its own assertion instead
+  # of `Task.await` timing out first.
+  @cleanup_timeout_ms @peer_timeout_ms * 2 + 5_000
 
   test "a hard-killed named owner is recovered once its in-place successor publishes presence" do
     %{user: owner} = CodexPooler.AccountsFixtures.committed_bootstrap_owner_fixture!()
@@ -63,17 +64,26 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     refute first_identity.node_name == "nonode@nohost"
     assert [] == :peer.call(first_peer, Node, :list, [])
 
-    UnboxedFixture.register_unboxed_cleanup!(fn ->
-      Repo.delete_all(
-        from instance in InstancePresence.Instance,
-          where: instance.node_name == ^first_identity.node_name
-      )
+    UnboxedFixture.register_unboxed_cleanup!(
+      fn ->
+        # This cleanup runs before the first peer's own (registered later, so
+        # earlier in LIFO order): the hard-killed peer's proof publisher may
+        # still hold a backend mid-statement on these very rows, so its
+        # backends are ended here first.
+        terminate_peer_connections!(first_identity.boot_id)
 
-      Repo.delete_all(
-        from proof in CodexPooler.Platform.ExecutionTerminalProof,
-          where: proof.owner_instance_id == ^first_identity.node_name
-      )
-    end)
+        Repo.delete_all(
+          from instance in InstancePresence.Instance,
+            where: instance.node_name == ^first_identity.node_name
+        )
+
+        Repo.delete_all(
+          from proof in CodexPooler.Platform.ExecutionTerminalProof,
+            where: proof.owner_instance_id == ^first_identity.node_name
+        )
+      end,
+      @cleanup_timeout_ms
+    )
 
     {request, attempt, _worker} =
       :peer.call(first_peer, CodexPooler.DisconnectedExecutionPeer, :start, [setup])
@@ -247,12 +257,15 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
       end)
 
     unless existed? do
-      UnboxedFixture.register_unboxed_cleanup!(fn ->
-        Repo.delete_all(
-          from instance in InstancePresence.Instance,
-            where: instance.instance_id == ^local.instance_id
-        )
-      end)
+      UnboxedFixture.register_unboxed_cleanup!(
+        fn ->
+          Repo.delete_all(
+            from instance in InstancePresence.Instance,
+              where: instance.instance_id == ^local.instance_id
+          )
+        end,
+        @cleanup_timeout_ms
+      )
     end
 
     {:ok, _} = UnboxedFixture.run_unboxed(fn -> InstancePresence.record_heartbeat(local) end)

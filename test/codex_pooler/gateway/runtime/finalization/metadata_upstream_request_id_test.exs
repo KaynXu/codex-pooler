@@ -17,7 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataUpstreamRequestIdTest
              Metadata.response_metadata(response, nil, opts)
   end
 
-  test "the HTTP response writer still prefers the other request-id names and drops an absent one" do
+  test "the HTTP response writer prefers x-request-id like the released client, then x-oai-request-id" do
     opts = RequestOptions.build(%{}, @endpoint, %{})
 
     both = %Req.Response{
@@ -25,10 +25,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataUpstreamRequestIdTest
       headers: %{"x-request-id" => ["req_a"], "x-oai-request-id" => ["req_b"]}
     }
 
-    assert Metadata.response_metadata(both, nil, opts)["upstream_request_id"] in [
-             "req_a",
-             "req_b"
-           ]
+    assert Metadata.response_metadata(both, nil, opts)["upstream_request_id"] == "req_a"
+
+    # A blank first-choice header is absent and must not shadow a populated one.
+    blank_first = %Req.Response{
+      status: 200,
+      headers: %{"x-request-id" => [""], "x-oai-request-id" => ["req_b"]}
+    }
+
+    assert Metadata.response_metadata(blank_first, nil, opts)["upstream_request_id"] == "req_b"
 
     none = %Req.Response{status: 200, headers: %{"content-type" => ["application/json"]}}
     refute Map.has_key?(Metadata.response_metadata(none, nil, opts), "upstream_request_id")

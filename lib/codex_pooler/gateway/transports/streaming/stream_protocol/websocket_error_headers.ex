@@ -3,7 +3,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
 
   @type headers :: %{optional(String.t()) => String.t()}
 
-  @metadata_header_names ~w(openai-request-id x-openai-request-id x-request-id)
+  # `x-oai-request-id` is the name the Codex backend actually uses for its
+  # request id; the attempt metadata writer reads it, so the frame allowlist
+  # must let it through as well.
+  @metadata_header_names ~w(openai-request-id x-openai-request-id x-oai-request-id x-request-id)
   @quota_header_prefixes ~w(x-ratelimit-limit- x-ratelimit-remaining- x-ratelimit-reset-)
   @quota_window_header_suffixes ~w(
     -primary-reset-at
