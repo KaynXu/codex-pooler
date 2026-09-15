@@ -31,7 +31,10 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
 
     start_supervised!(
       # One fixed name: the file is synchronous, so no two tests hold it at once
-      # and long sessions do not mint an atom per run.
+      # and long sessions do not mint an atom per run. The publisher drains the
+      # global ExecutionRegistry, so a proof another sandboxed test left pending
+      # could be acknowledged here while its write rolls back; both files that
+      # start the real publisher are `async: false` for that reason.
       {ExecutionProofPublisher, enabled: true, name: :execution_http_lifecycle_publisher}
     )
 

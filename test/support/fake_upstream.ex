@@ -580,12 +580,6 @@ defmodule CodexPooler.FakeUpstream do
 
   def close_before_headers, do: :close_before_headers
 
-  # What a zero-timeout recv reports once the peer closed.
-  @client_gone_recv_reasons [:closed, :econnreset]
-  # What a write to a peer that went away can report, Bandit's own closure set
-  # plus the broken pipe a half-closed socket yields.
-  @client_gone_write_reasons [:closed, :enotconn, :einval, :econnaborted, :econnreset, :epipe]
-
   @doc """
   Holds an SSE reply at chunk `barrier_after` until the owning test releases it.
 
@@ -1718,6 +1712,11 @@ defmodule CodexPooler.FakeUpstream do
   defp notify_chunk_sent(nil, _index), do: :ok
   defp notify_chunk_sent(pid, index), do: send(pid, {:fake_upstream_chunk_sent, index})
 
+  # What a zero-timeout recv reports once the peer closed.
+  @client_gone_recv_reasons [:closed, :econnreset]
+  # What a write to a peer that went away can report, Bandit's own closure set
+  # plus the broken pipe a half-closed socket yields.
+  @client_gone_write_reasons [:closed, :enotconn, :einval, :econnaborted, :econnreset, :epipe]
   # The client going away (`:closed`, or the reset the kernel reports for the
   # same event) is the one write failure a cancellation scenario may expect:
   # it ends the tail with one bounded outcome and a notification, never an

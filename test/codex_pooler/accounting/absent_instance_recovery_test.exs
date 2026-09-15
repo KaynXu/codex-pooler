@@ -464,6 +464,10 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
   # because a settlement that raises inside this test's own sandbox transaction
   # would abort it; the failing settlement is a real PostgreSQL trigger on the
   # attempts row, so the failure comes from the database, not from a stub.
+  # The trigger DDL takes ACCESS EXCLUSIVE on `attempts`, so this file can
+  # never become async, and the committed in_progress attempts live until
+  # `cleanup_unboxed_pool!/1` deletes the pool graph (attempts and ledger
+  # entries included) in on_exit.
   describe "fairness across passes" do
     test "a persistently failing oldest candidate does not starve later candidates across passes" do
       graph = committed_graph!()
