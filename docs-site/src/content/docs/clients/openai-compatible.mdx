@@ -485,8 +485,9 @@ message is never forwarded; for `unsupported_value` and `invalid_value` the
 message may list up to 12 supported values when upstream reports them as simple
 identifiers, never the rejected value. Chat Completions requests receive the
 Chat field they sent where Codex Pooler renamed it, for example
-`reasoning_effort`, `max_tokens`, `verbosity`, or `response_format`; other
-paths name the upstream Responses field. Other statuses, types, and codes keep
+`reasoning_effort`, `max_tokens`, `verbosity`, or `response_format`, and the
+message names that same Chat field; other paths name the upstream Responses
+field. Other statuses, types, and codes keep
 the generic redaction.
 
 Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In

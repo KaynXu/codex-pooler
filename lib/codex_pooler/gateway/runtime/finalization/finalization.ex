@@ -642,12 +642,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         %{status: status, headers: headers, body: canonical_failure_body(request_options)}
 
       {:mode_scoped, true} ->
-        %{
-          status: status,
-          headers: headers,
-          body: full_failure_body(relayable_rejection_error, validation_rejection),
-          public_input_file_upstream_404?: marker
-        }
+        full_failure_result(
+          status,
+          headers,
+          relayable_rejection_error,
+          validation_rejection,
+          marker
+        )
 
       {:mode_scoped, false} when is_map(validation_rejection) ->
         validation_rejection_result(status, headers, body, validation_rejection)
@@ -708,28 +709,64 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     if Metadata.rejection_metadata_status?(status), do: rejection_error, else: %{}
   end
 
-  defp full_failure_body(%{type: type} = rejection_error, validation_rejection)
+  # A Full body is rendered once here for the native route and carried as a
+  # structured `public_full_rejection` for the public `/v1` sender, which
+  # re-renders `param` and `message` from the same constructor through the
+  # caller-facing parameter mapper (codex-pooler-findings#219). Rendering the
+  # message from the provider param and mapping only `param` afterwards left a
+  # Chat client reading `"param": "reasoning_effort"` next to a message naming
+  # `reasoning.effort`. The structured rejection is a projection input only;
+  # the persisted attempt metadata keeps the provider parameter evidence.
+  defp full_failure_result(
+         status,
+         headers,
+         %{type: type} = rejection_error,
+         validation_rejection,
+         marker
+       )
        when is_binary(type) do
-    code = relayed_rejection_code(rejection_error)
+    rejection = full_rejection(rejection_error, validation_rejection)
 
-    # `param` is set unconditionally: a rejection carrying a type but no param
-    # emits an explicit `"param": null`, which is what the provider's own error
-    # bodies do and what an OpenAI SDK expects to read.
-    param = Map.get(rejection_error, :param)
+    %{
+      status: status,
+      headers: headers,
+      body: full_failure_body(type, rejection),
+      public_full_rejection: rejection,
+      public_input_file_upstream_404?: marker
+    }
+  end
 
+  defp full_failure_result(status, headers, _rejection_error, _validation_rejection, marker) do
+    %{
+      status: status,
+      headers: headers,
+      body: @canonical_full_failure_body,
+      public_input_file_upstream_404?: marker
+    }
+  end
+
+  # `param` is set unconditionally: a rejection carrying a type but no param
+  # emits an explicit `"param": null`, which is what the provider's own error
+  # bodies do and what an OpenAI SDK expects to read.
+  defp full_rejection(rejection_error, validation_rejection) do
+    %{
+      code: relayed_rejection_code(rejection_error),
+      param: Map.get(rejection_error, :param),
+      supported_values: relayed_supported_values(validation_rejection),
+      supported_values_state: nil
+    }
+  end
+
+  defp full_failure_body(type, %{code: code, param: param} = rejection) do
     %{
       "error" => %{
         "type" => type,
         "code" => code,
         "param" => param,
-        "message" =>
-          full_failure_message(code, param, relayed_supported_values(validation_rejection))
+        "message" => full_failure_message(rejection)
       }
     }
   end
-
-  defp full_failure_body(_rejection_error, _validation_rejection),
-    do: @canonical_full_failure_body
 
   # Present only when `ValidationRejection.fetch/2` admitted this rejection, so
   # a 401, a 404, a compact route, an unrecognized code, and every rejection
@@ -764,13 +801,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   # carried here even though rendering never reads it: the type is what keeps
   # the four outcomes distinguishable at rest, and a caller that omits the key
   # is a caller that has not decided which of them it is looking at.
-  defp full_failure_message(code, param, supported_values) do
-    %{
-      code: code,
-      param: param,
-      supported_values: supported_values,
-      supported_values_state: nil
-    }
+  defp full_failure_message(rejection) do
+    rejection
     |> ValidationRejection.error()
     |> Map.fetch!("message")
   end

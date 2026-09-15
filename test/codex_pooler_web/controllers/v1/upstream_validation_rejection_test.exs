@@ -115,6 +115,11 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
             method: "POST",
             path: "/backend-api/codex/responses",
             respond: validation_rejection(400, "unsupported_value", "reasoning.effort")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond: validation_rejection(400, "unsupported_value", "reasoning.effort")
           )
         ])
       )
@@ -122,21 +127,40 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     setup = gateway_setup(upstream)
     put_full_override!(setup)
 
-    response =
-      conn
-      |> auth(setup)
-      |> post("/v1/chat/completions", %{
-        "model" => setup.model.exposed_model_id,
-        "messages" => [%{"role" => "user", "content" => @prompt_sentinel}],
-        "reasoning_effort" => "high",
-        "stream" => true
-      })
+    for stream? <- [true, false] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/chat/completions", %{
+          "model" => setup.model.exposed_model_id,
+          "messages" => [%{"role" => "user", "content" => @prompt_sentinel}],
+          "reasoning_effort" => "high",
+          "stream" => stream?
+        })
 
-    assert json_response(response, 400)["error"]["param"] == "reasoning_effort"
-    refute response.resp_body =~ @provider_sentinel
-    refute response.resp_body =~ @prompt_sentinel
+      # The relayed `param` and the Pooler-authored message must name the same
+      # Chat field the client sent (codex-pooler-findings#219): a message that
+      # still says `reasoning.effort` next to `"param": "reasoning_effort"` is
+      # the provider-form leak this test pins.
+      assert json_response(response, 400) == %{
+               "error" => %{
+                 "message" =>
+                   "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high",
+                 "type" => "invalid_request_error",
+                 "code" => "unsupported_value",
+                 "param" => "reasoning_effort"
+               }
+             },
+             "stream #{stream?}"
+
+      refute response.resp_body =~ "reasoning.effort", "stream #{stream?}"
+      refute response.resp_body =~ @provider_sentinel
+      refute response.resp_body =~ @prompt_sentinel
+    end
+
     FakeUpstream.verify!(upstream)
-    assert_failed_validation_accounting!(setup, 1)
+    assert_failed_validation_accounting!(setup, 2)
   end
 
   test "POST /v1/responses keeps non-allowlisted and non-400 rejections redacted", %{conn: conn} do

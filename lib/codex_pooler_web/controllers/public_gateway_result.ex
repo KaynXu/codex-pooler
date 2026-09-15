@@ -82,8 +82,32 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     })
   end
 
-  defp do_send(conn, {:ok, %{body: body} = result}, _success_normalizer, opts) do
-    GatewayHelpers.send_gateway_result(conn, %{result | body: map_validation_param(body, opts)})
+  # A Full validation rejection carries its structured rejection next to the
+  # native body, so the public `param` and `message` are rebuilt together from
+  # the caller-facing parameter mapper (codex-pooler-findings#219). The relayed
+  # `type` and `code` stay as the Full body rendered them; only the two fields
+  # that name the parameter are re-rendered, and both from one constructor.
+  defp do_send(
+         conn,
+         {:ok,
+          %{body: %{"error" => %{} = error} = body, public_full_rejection: %{} = rejection} =
+            result},
+         _success_normalizer,
+         opts
+       ) do
+    param_mapper = Keyword.get(opts, :validation_param, &Function.identity/1)
+    public = PublicResponse.validation_rejection_error(rejection, param_mapper)
+
+    error =
+      error
+      |> Map.put("param", public["param"])
+      |> Map.put("message", public["message"])
+
+    GatewayHelpers.send_gateway_result(conn, %{result | body: Map.put(body, "error", error)})
+  end
+
+  defp do_send(conn, {:ok, %{body: _body} = result}, _success_normalizer, _opts) do
+    GatewayHelpers.send_gateway_result(conn, result)
   end
 
   defp do_send(conn, {:error, %{status: status} = reason}, _success_normalizer, _opts) do
@@ -102,12 +126,4 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   defp public_error_status(_status, %{public_input_file_upstream_404?: true}), do: 404
   defp public_error_status(404, _result), do: 502
   defp public_error_status(status, _result), do: status
-
-  defp map_validation_param(%{"error" => %{"param" => param}} = body, opts)
-       when is_binary(param) do
-    mapper = Keyword.get(opts, :validation_param, &Function.identity/1)
-    put_in(body, ["error", "param"], mapper.(param))
-  end
-
-  defp map_validation_param(body, _opts), do: body
 end
