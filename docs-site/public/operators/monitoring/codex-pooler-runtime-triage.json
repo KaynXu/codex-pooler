@@ -2725,7 +2725,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Affinity writes refused by the updated_at fence, by pod, bounded operation, and affinity kind. The fence is correct and a low cluster-wide rate is ordinary reordering between nodes. A sustained rate concentrated on one pod is the symptom to act on: that replica's clock runs behind its peers, so it loses every affinity write it attempts and stops contributing prompt-cache steering while still serving traffic normally. Routing, retries, settlement, and accounting are unaffected; compare the pod's clock against its peers.",
+      "description": "Affinity writes refused by the updated_at fence, by pod, bounded operation, and affinity kind. The fence orders writers on the event clock each writer stamps from its own node clock, so it is correct and a low cluster-wide rate is ordinary reordering between nodes. The pod label names the writer that was refused, not the writer that caused it: a sustained rate concentrated on one pod means that pod's clock lags its peers and it loses every affinity write it attempts, while a sustained rate spread across every pod but one means the remaining pod's clock runs ahead and its stamps refuse everyone else's writes. Either way the affected pods stop contributing prompt-cache steering while serving traffic normally; routing, retries, settlement, and accounting are unaffected. Compare the pods' clocks against each other.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
