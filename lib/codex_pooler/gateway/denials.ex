@@ -37,9 +37,7 @@ defmodule CodexPooler.Gateway.Denials do
         payload: payload,
         opts: opts
       }) do
-    status = policy_status(reason)
-    reason_code = to_string(reason)
-    message = policy_message(reason)
+    %{status: status, code: reason_code, message: message} = denial = policy_denial_error(reason)
 
     _ignored =
       Accounting.record_denied_request(
@@ -56,8 +54,30 @@ defmodule CodexPooler.Gateway.Denials do
         )
       )
 
-    {:error, error(status, reason_code, message)}
+    {:error, denial}
   end
+
+  @doc """
+  The one status and message for an API-key policy reason, as a marked denial.
+  `PreDispatch` and `log_policy/1` both answer a reason through this mapping,
+  so the same condition cannot surface with two statuses or two messages
+  (findings#221). A reason without a dedicated message keeps its atom as the
+  wire code and the generic policy message.
+  """
+  @spec policy_denial_error(atom()) :: map()
+  def policy_denial_error(reason) when is_atom(reason),
+    do: policy_error(policy_status(reason), Atom.to_string(reason), policy_message(reason))
+
+  @doc """
+  A policy denial the Pooler authors (never relayed from an upstream), marked
+  by construction so `/v1` renders its own code and message instead of the
+  upstream redaction. Every producer of such a denial builds it here, so a
+  new producer cannot forget the marker (findings#221).
+  """
+  @spec policy_error(pos_integer(), String.t(), String.t(), String.t() | nil) :: map()
+  def policy_error(status, code, message, param \\ nil)
+      when is_integer(status) and is_binary(code) and is_binary(message),
+      do: Map.put(error(status, code, message, param), :pooler_policy, true)
 
   @spec log_gateway(Context.t(), CodexPooler.Accounting.Request.t() | nil) :: {:error, map()}
   def log_gateway(context, turn_claim \\ nil)
@@ -231,7 +251,8 @@ defmodule CodexPooler.Gateway.Denials do
   defp policy_message(:api_key_disabled), do: "api key is disabled"
   defp policy_message(:api_key_policy_malformed), do: "api key policy is invalid"
   defp policy_message(:model_not_allowed), do: "api key is not allowed to use this model"
+  defp policy_message(_reason), do: "api key policy denied this request"
 
-  defp error(status, code, message, param \\ nil),
+  defp error(status, code, message, param),
     do: %{status: status, code: code, message: message, param: param}
 end

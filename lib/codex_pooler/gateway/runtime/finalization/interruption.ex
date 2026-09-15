@@ -383,6 +383,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         |> complete_task_exception_turn!(turn, attempt, reason, now)
 
       true ->
+        # The reservation is already settled or released, so only the request
+        # row is written here; an armed replay entitlement left behind by an
+        # earlier release would otherwise stay open until the sweep (findings#221).
+        _ = Accounting.revoke_armed_replay_entitlement!(request.id, attempt, now)
+
         request
         |> Ecto.Changeset.change(%{
           status: "failed",
@@ -1058,12 +1063,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
              released_after_attempt: attempt
            }) do
         {:ok, _released} ->
+          # The armed entitlement that produced this terminal attempt has no
+          # reservation left to consume; close it so the sweep does not
+          # re-select it every pass (findings#221).
+          _ = Accounting.revoke_armed_replay_entitlement!(request.id, attempt, now)
           :ok
 
         {:error, error} ->
           rollback_interrupted_accounting(error, opts, attempt, caller_owned_transaction?)
       end
     else
+      # No reservation left to release, but the terminal attempt may still be
+      # the eligible attempt of an armed entitlement (findings#221).
+      _ = Accounting.revoke_armed_replay_entitlement!(request.id, attempt, now)
       release_unattempted_request!(request, nil, opts, reason, now, caller_owned_transaction?)
     end
   end

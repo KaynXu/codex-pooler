@@ -81,7 +81,7 @@ defmodule CodexPooler.Gateway.DenialsTest do
         ] do
       code = Atom.to_string(reason)
 
-      assert {:error, %{status: ^status, code: ^code, message: ^message}} =
+      assert {:error, %{status: ^status, code: ^code, message: ^message, pooler_policy: true}} =
                Denials.log_policy(%Denials.Context{
                  auth: auth,
                  model: setup.model,
@@ -242,5 +242,56 @@ defmodule CodexPooler.Gateway.DenialsTest do
              })
 
     assert Repo.get_by!(Request, correlation_id: "ordinary-denial-frame").status == "rejected"
+  end
+
+  test "the shared policy constructor marks every Pooler-authored denial" do
+    # Every producer of a policy denial builds it here, so `/v1` unredacts by
+    # construction and a producer cannot forget the marker (findings#221).
+    assert %{
+             status: 403,
+             code: "image_generation_disabled",
+             message: "off",
+             param: nil,
+             pooler_policy: true
+           } =
+             Denials.policy_error(403, "image_generation_disabled", "off")
+
+    assert %{param: "model", pooler_policy: true} =
+             Denials.policy_error(403, "model_not_allowed", "no", "model")
+  end
+
+  test "a policy reason has one status and message wherever it is answered" do
+    # `PreDispatch` and `log_policy/1` share this mapping, so a disabled or
+    # missing key cannot surface as a 403 on one path and a 401 on the other
+    # (findings#221).
+    assert %{
+             status: 401,
+             code: "api_key_missing",
+             message: "api key is required",
+             pooler_policy: true
+           } =
+             Denials.policy_denial_error(:api_key_missing)
+
+    assert %{status: 401, code: "api_key_disabled", message: "api key is disabled"} =
+             Denials.policy_denial_error(:api_key_disabled)
+
+    assert %{
+             status: 403,
+             code: "model_not_allowed",
+             message: "api key is not allowed to use this model"
+           } =
+             Denials.policy_denial_error(:model_not_allowed)
+
+    assert %{status: 403, code: "api_key_policy_malformed", message: "api key policy is invalid"} =
+             Denials.policy_denial_error(:api_key_policy_malformed)
+
+    # An unforeseen reason keeps its code and the generic policy message.
+    assert %{
+             status: 403,
+             code: "some_future_reason",
+             message: "api key policy denied this request",
+             pooler_policy: true
+           } =
+             Denials.policy_denial_error(:some_future_reason)
   end
 end

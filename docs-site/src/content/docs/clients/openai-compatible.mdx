@@ -450,8 +450,9 @@ a reader sees. The status and the type never disagree: a `5xx` response or frame
 is never typed `invalid_request_error`. Errors relayed from the Codex backend
 follow the rules in the next section.
 
-API-key policy denials that Codex Pooler authors (`api_key_missing`,
-`api_key_disabled`, `api_key_policy_malformed`, `model_not_allowed`) keep their
+Policy denials that Codex Pooler authors (`api_key_missing`,
+`api_key_disabled`, `api_key_policy_malformed`, `model_not_allowed`,
+`image_generation_disabled`) keep their
 own code and message on `/v1/*`, exactly as on `/backend-api/codex/*`; they are
 never rewritten to `server_error` or `upstream request failed`, because no
 upstream was involved.

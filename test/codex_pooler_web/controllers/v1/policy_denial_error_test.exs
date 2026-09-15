@@ -8,13 +8,63 @@ defmodule CodexPoolerWeb.V1.PolicyDenialErrorTest do
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Denials
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.PublicGatewayResult
 
   # A Pooler-authored policy decision used to reach `/v1` as
   # `403 server_error "upstream request failed"`, blaming the upstream for a
   # denial the upstream never saw, while `/backend-api/codex/*` rendered the
   # real code and message (findings#221). Upstream-originated 401/403/429
   # stay redacted; `upstream_validation_rejection_test.exs` pins that side.
+  # Control through the public renderer itself: an upstream-shaped 401/403
+  # gateway error carrying provider wording, and even one of the five codes,
+  # is redacted unless it carries the Pooler's own marker (findings#221).
+  test "the public renderer redacts unmarked gateway errors and renders marked policy denials",
+       %{conn: conn} do
+    for {status, code} <- [
+          {403, "account_deactivated"},
+          {403, "model_not_allowed"},
+          {401, "api_key_disabled"}
+        ] do
+      response =
+        conn
+        |> Phoenix.ConnTest.recycle()
+        |> PublicGatewayResult.send(
+          {:error,
+           %{status: status, code: code, message: "synthetic provider wording", param: nil}},
+          &Function.identity/1
+        )
+
+      assert %{"error" => error} = json_response(response, status)
+      assert error["type"] == "server_error"
+      assert error["message"] == "upstream request failed"
+      refute response.resp_body =~ "synthetic provider wording"
+    end
+
+    marked =
+      conn
+      |> Phoenix.ConnTest.recycle()
+      |> PublicGatewayResult.send(
+        {:error,
+         Denials.policy_error(
+           403,
+           "model_not_allowed",
+           "api key is not allowed to use this model"
+         )},
+        &Function.identity/1
+      )
+
+    assert json_response(marked, 403) == %{
+             "error" => %{
+               "code" => "model_not_allowed",
+               "type" => "invalid_request_error",
+               "message" => "api key is not allowed to use this model",
+               "param" => nil
+             }
+           }
+  end
+
   for {endpoint, payload_fun} <- [
         {"/v1/responses",
          quote(

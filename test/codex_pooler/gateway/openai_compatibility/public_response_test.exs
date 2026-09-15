@@ -5,23 +5,43 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
 
   describe "Pooler-authored policy denials on /v1" do
-    # The exemption is keyed on the wire code; the codes are the four
-    # `Denials.log_policy/1` renders (findings#221).
-    test "the four API-key policy denial codes are not redacted, everything else is" do
-      for code <- ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed),
+    # The exemption is keyed on the `pooler_policy` marker `Denials.log_policy/1`
+    # sets by construction, never on the wire code (findings#221).
+    test "Pooler-authored policy denials are not redacted, the same codes without the marker are" do
+      for code <- PublicResponse.unredacted_policy_denial_codes(),
           status <- [401, 403] do
         refute PublicResponse.redacted_gateway_error?(%{
                  status: status,
                  code: code,
-                 message: "own"
+                 message: "own",
+                 pooler_policy: true
                })
 
         refute PublicResponse.redacted_gateway_error?(%{
                  status: status,
                  code: String.to_atom(code),
-                 message: "own"
+                 message: "own",
+                 pooler_policy: true
+               })
+
+        # An upstream-derived error that happens to carry one of the four
+        # codes carries no marker and stays redacted: privacy by construction,
+        # not by the accident of today's provider vocabulary.
+        assert PublicResponse.redacted_gateway_error?(%{
+                 status: status,
+                 code: code,
+                 message: "provider prose that must not leak"
                })
       end
+
+      # A string-keyed marker, the only shape a decoded provider or client body
+      # could carry, is not the marker.
+      assert PublicResponse.redacted_gateway_error?(%{
+               "pooler_policy" => true,
+               status: 403,
+               code: "model_not_allowed",
+               message: "provider prose that must not leak"
+             })
 
       # Quota denials share the 503 status and the redaction with upstream failures.
       assert PublicResponse.redacted_gateway_error?(%{
@@ -49,6 +69,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
 
       assert PublicResponse.unredacted_policy_denial_codes() ==
                matrix.public_error_redaction.pooler_policy_denials_unredacted
+
+      assert matrix.public_error_redaction.pooler_policy_denial_marker == "pooler_policy"
     end
   end
 

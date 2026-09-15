@@ -151,7 +151,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        when is_binary(enforced_model) do
     if native_image_request?(endpoint, request_options) and
          canonical_model_identifier(requested_model) != canonical_model_identifier(enforced_model) do
-      {:error, error(403, "model_not_allowed", "api key is not allowed to use this model")}
+      {:error,
+       Denials.policy_error(403, "model_not_allowed", "api key is not allowed to use this model")}
     else
       {:ok, enforced_model}
     end
@@ -207,7 +208,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
     if image_generation_permission_denied?(auth, opts) do
       {:error,
-       error(
+       Denials.policy_error(
          403,
          "image_generation_disabled",
          "Image generation is disabled for this pool"
@@ -1149,7 +1150,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:error, reason}
 
       {:error, _reason} ->
-        {:error, error(403, "model_not_allowed", "api key is not allowed to use this model")}
+        {:error,
+         Denials.policy_error(
+           403,
+           "model_not_allowed",
+           "api key is not allowed to use this model"
+         )}
     end
   end
 

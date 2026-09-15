@@ -106,25 +106,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   # the upstream: its 401/403 status, code and message are the Pooler's own
   # decision, so `/v1` renders them the way the backend routes do instead of
   # blaming the upstream with `server_error` / "upstream request failed"
-  # (findings#221). The list is the wire vocabulary of `Denials.log_policy/1`
-  # kept as a dependency-free literal (a compile-time read of the Access
-  # precedence list would be a compile-connected hub dependency, and that
-  # list also carries reasons that are never wire codes); the matrix and
-  # `PublicResponseTest` pin it. Every other gateway error, including the
-  # quota 503s and every upstream-derived 401/403/429, keeps the redaction.
-  @unredacted_policy_denial_codes ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed)
+  # (findings#221). The exemption is keyed on the `pooler_policy` marker that
+  # `Denials.log_policy/1` sets by construction, never on the wire code: an
+  # upstream error that happened to carry one of these codes stays redacted.
+  # The list below is the documented vocabulary of that marker (the reasons
+  # `Access` policy checks return plus the image-generation denial), kept as a
+  # dependency-free literal for the matrix and the docs; the marker, not the
+  # list, decides rendering, so a new marked reason renders before it is
+  # listed here. Every other gateway error, including the quota 503s and every
+  # upstream-derived 401/403/429, keeps the redaction.
+  @unredacted_policy_denial_codes ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed image_generation_disabled)
 
   @doc false
   @spec unredacted_policy_denial_codes() :: [String.t()]
   def unredacted_policy_denial_codes, do: @unredacted_policy_denial_codes
 
-  defp pooler_policy_denial?(error) do
-    case field(error, "code") do
-      code when is_atom(code) -> Atom.to_string(code) in @unredacted_policy_denial_codes
-      code when is_binary(code) -> code in @unredacted_policy_denial_codes
-      _code -> false
-    end
-  end
+  # Atom key only: a decoded provider or client body can never carry it.
+  defp pooler_policy_denial?(error), do: Map.get(error, :pooler_policy) == true
 
   defp input_file_capability_error?(404, opts),
     do: Keyword.get(opts, :input_file_upstream_404?) === true

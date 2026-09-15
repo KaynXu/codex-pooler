@@ -272,6 +272,11 @@ defmodule CodexPooler.Accounting do
     finalize_request_with_disposition(request, attempt, opts)
   end
 
+  @spec revoke_armed_replay_entitlement!(Ecto.UUID.t(), Attempt.t() | nil, DateTime.t()) ::
+          :revoked | :noop
+  defdelegate revoke_armed_replay_entitlement!(request_id, attempt, timestamp),
+    to: RequestLifecycle
+
   @spec finalize_reservation_failure(Request.t(), map()) :: request_result()
   def finalize_reservation_failure(%Request{} = request, opts \\ %{}) do
     opts = Map.new(opts)

@@ -838,6 +838,58 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     )
   end
 
+  @doc """
+  Revokes the request's armed replay entitlement without touching the
+  request, attempt or turn, for callers that finalize those rows themselves
+  (a task exception or an interruption whose reservation is already released,
+  a post-attempt release). The entitlement must be armed for `attempt`
+  (its eligible attempt); anything else is left alone. Must run inside the
+  caller's transaction, after the request locks the caller already holds;
+  the entitlement row lock is taken last, as every replay transaction does.
+  `terminal_at` is clamped above `armed_at`, which the replay module stamps
+  from the database clock, so a lagging application clock cannot fail the
+  lifecycle tuple inside a finalization (findings#221).
+  """
+  @spec revoke_armed_replay_entitlement!(Ecto.UUID.t(), Attempt.t() | nil, DateTime.t()) ::
+          :revoked | :noop
+  def revoke_armed_replay_entitlement!(request_id, attempt, %DateTime{} = timestamp)
+      when is_binary(request_id) do
+    unless Repo.in_transaction?() do
+      raise ArgumentError, "revoke_armed_replay_entitlement!/3 must run inside a transaction"
+    end
+
+    query =
+      from replay in RequestReplayEntitlement,
+        where: replay.request_id == ^request_id and replay.status == "armed",
+        lock: "FOR UPDATE"
+
+    query =
+      case attempt do
+        %Attempt{id: id} -> from replay in query, where: replay.eligible_attempt_id == ^id
+        _none -> query
+      end
+
+    query
+    |> Repo.one()
+    |> case do
+      %RequestReplayEntitlement{armed_at: %DateTime{} = armed_at} = entitlement ->
+        terminal_at =
+          if DateTime.compare(timestamp, armed_at) == :gt,
+            do: timestamp,
+            else: DateTime.add(armed_at, 1, :microsecond)
+
+        :ok =
+          close_replay_entitlement(entitlement, terminal_at, %{
+            replay_entitlement_close_status: "revoked"
+          })
+
+        :revoked
+
+      nil ->
+        :noop
+    end
+  end
+
   defp close_replay_entitlement(nil, _timestamp, _attrs), do: :ok
 
   defp close_replay_entitlement(%RequestReplayEntitlement{} = entitlement, timestamp, attrs) do

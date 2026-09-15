@@ -3285,8 +3285,10 @@ defmodule CodexPooler.CompatibilityMatrix do
           "api_key_missing",
           "api_key_disabled",
           "api_key_policy_malformed",
-          "model_not_allowed"
+          "model_not_allowed",
+          "image_generation_disabled"
         ],
+        pooler_policy_denial_marker: "pooler_policy",
         server_class_surfaces: ["responses_json", "responses_sse_terminal", "chat_streaming"],
         server_class_message: "upstream request failed",
         server_class_type: "server_error",

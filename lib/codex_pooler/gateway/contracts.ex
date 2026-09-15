@@ -42,7 +42,11 @@ defmodule CodexPooler.Gateway.Contracts do
           optional(:public_compaction_error?) => boolean(),
           optional(:retryable) => boolean(),
           optional(:requires_new_upstream_session) => boolean(),
-          optional(:recovery) => recovery_contract()
+          optional(:recovery) => recovery_contract(),
+          # Set by construction on every Pooler-authored policy denial
+          # (`Denials.policy_error/4`); read only by the `/v1` redaction
+          # exemption, never rendered or persisted (findings#221).
+          optional(:pooler_policy) => true
         }
   @type body_result :: %{
           required(:status) => pos_integer(),
