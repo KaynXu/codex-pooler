@@ -414,6 +414,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
             lock: "FOR UPDATE"
         )
 
+      # A request that already completed keeps its outcome and failure reason:
+      # a second reservation-failure finalization (a drain racing a task
+      # exception, an interruption racing a rejection) must not rewrite a
+      # terminal row or re-count its release (findings#221).
+      ensure_request_dispatchable!(request)
+
       timestamp = ClientRetry.completion_timestamp(request, now(attrs))
 
       request =
@@ -433,7 +439,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           source_event_id: LedgerEntries.reservation_source_event_id(request.id)
         )
 
-      release =
+      {release, release_status} =
         request
         |> LedgerEntries.reservation_failure_release_attrs(
           reservation,
@@ -442,20 +448,23 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           pre_attempt_phase,
           timestamp
         )
-        |> LedgerEntries.create_or_get!()
+        |> LedgerEntries.create_or_get_with_status!()
 
-      %{request: request, attempt: nil, release: release}
+      %{request: request, attempt: nil, release: release, release_status: release_status}
     end)
     |> unwrap_transaction()
     |> tap_pre_attempt_release_count(pre_attempt_phase, last_error_code)
+    |> strip_release_status()
     |> tap_request_finalized_events_unless_stale()
   end
 
-  # Counted only once the release is committed, and counted apart from every
-  # settlement of a dispatched attempt: a pre-attempt abandonment that used to
-  # surface only as a six-hour backstop row is a live series here.
+  # Counted only once the release is committed and only for the write that
+  # created it, and counted apart from every settlement of a dispatched
+  # attempt: a pre-attempt abandonment that used to surface only as a
+  # six-hour backstop row is a live series here. An immutable release that
+  # already existed is not a second abandonment.
   defp tap_pre_attempt_release_count(
-         {:ok, %{request: request}} = result,
+         {:ok, %{request: request, release_status: :inserted}} = result,
          pre_attempt_phase,
          last_error_code
        ) do
@@ -464,6 +473,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   defp tap_pre_attempt_release_count(result, _pre_attempt_phase, _last_error_code), do: result
+
+  defp strip_release_status({:ok, %{} = value}), do: {:ok, Map.delete(value, :release_status)}
+  defp strip_release_status(result), do: result
 
   defp tap_request_finalized_events_unless_stale({:ok, %{stale_generation?: true}} = result),
     do: result

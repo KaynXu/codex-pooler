@@ -142,6 +142,52 @@ defmodule CodexPooler.Accounting.PreAttemptReleaseTest do
       assert release.details["release_reason"] == "client_disconnected"
     end
 
+    # findings#221: a second reservation-failure finalization must not rewrite
+    # a completed request's outcome or failure reason, and the immutable
+    # release it finds must not be counted as a second abandonment.
+    test "a second reservation-failure finalization keeps the first outcome and counts once" do
+      setup = accounting_setup()
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{
+                   "model" => setup.model.exposed_model_id,
+                   "max_output_tokens" => 10,
+                   "stream" => true
+                 },
+                 %{correlation_id: "pre-attempt-double-finalize"}
+               )
+
+      events = attach_pre_attempt_release_telemetry!()
+
+      assert {:ok, _released} =
+               Accounting.finalize_reservation_failure(reserved.request, %{
+                 response_status_code: 499,
+                 last_error_code: "client_disconnected",
+                 usage_status: "usage_unknown",
+                 pre_attempt_phase: PreAttemptRelease.turn_interrupted()
+               })
+
+      assert_receive {^events, %{count: 1}, %{phase: "turn_interrupted"}}
+      first = Repo.reload!(reserved.request)
+      assert %Request{status: "failed", last_error_code: "client_disconnected"} = first
+
+      assert {:error, %{code: :request_already_finalized}} =
+               Accounting.finalize_reservation_failure(reserved.request, %{
+                 response_status_code: 503,
+                 last_error_code: "owner_drained",
+                 usage_status: "usage_unknown",
+                 pre_attempt_phase: PreAttemptRelease.turn_interrupted()
+               })
+
+      assert Repo.reload!(reserved.request) == first
+      assert [%LedgerEntry{} = release] = release_entries(reserved.request)
+      assert release.details["release_reason"] == "client_disconnected"
+      refute_received {^events, _measurements, _metadata}
+    end
+
     test "a settlement-time release carries no phase key at all" do
       setup = accounting_setup()
 
