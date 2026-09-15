@@ -5,6 +5,7 @@ defmodule CodexPooler.Application do
 
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Platform.InstancePresence.Identity
+  alias CodexPooler.Telemetry.RelayRuntime
 
   @impl true
   def start(_type, _args) do
@@ -51,6 +52,7 @@ defmodule CodexPooler.Application do
 
   @impl true
   def prep_stop(state) do
+    :ok = RelayRuntime.quiesce()
     _summary = RolloutDrain.drain_for_shutdown()
     state
   end

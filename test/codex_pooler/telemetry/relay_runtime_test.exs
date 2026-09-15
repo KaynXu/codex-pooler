@@ -1,6 +1,8 @@
 defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Accounting.PreAttemptRelease
+  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -29,7 +31,10 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     }
   end
 
-  test "captures each source contract with its bounded relay event", %{table: table} do
+  test "captures each source contract with its bounded relay event", %{
+    table: table,
+    runtime: runtime
+  } do
     events = [
       {[:codex_pooler, :quota, :cycle, :decision], "quota_cycle_decision", %{scope: :account}},
       {[:codex_pooler, :saved_reset, :convergence], "saved_reset_convergence", %{source: "x"}},
@@ -45,13 +50,16 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
         Map.put(metadata, :oversized, String.duplicate("x", 200))
       )
 
+      :sys.get_state(runtime)
+
       assert [{{^relay, _labels, _values}, 1}] =
                Enum.filter(:ets.tab2list(table), fn {{name, _, _}, _} -> name == relay end)
     end)
   end
 
   test "synchronized callbacks preserve emission multiplicity and original samples", %{
-    table: table
+    table: table,
+    runtime: runtime
   } do
     coordinator = self()
     gate = make_ref()
@@ -83,6 +91,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
     Enum.each(tasks, &send(&1.pid, gate))
     Enum.each(tasks, &Task.await(&1, 10_000))
+    :sys.get_state(runtime)
 
     assert [{{"saved_reset_convergence", _labels, measurements}, count}] = :ets.tab2list(table)
     assert count == writers * iterations
@@ -153,6 +162,395 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
            )
 
     assert :ets.info(table) == :undefined
+  end
+
+  test "producer shutdown flushes the final captured sample", %{runtime: runtime} do
+    Streaming.emit_stream_outcome(
+      "interrupted",
+      "http_sse",
+      "websocket"
+    )
+
+    assert Repo.aggregate(RelayEvent, :count) == 0
+    :ok = GenServer.stop(runtime)
+    assert [%RelayEvent{event: "stream_outcome", count: 1}] = Repo.all(RelayEvent)
+  end
+
+  for finish_first? <- [true, false] do
+    @tag finish_first?: finish_first?
+    test "callback completion versus close transfers each sample once, completion first=#{finish_first?}",
+         %{sandbox_owner: owner, finish_first?: finish_first?} do
+      parent = self()
+
+      runtime =
+        start_supervised!(
+          {RelayRuntime,
+           enabled: true,
+           role: "worker",
+           start_paused: true,
+           name: nil,
+           before_capture_complete: fn ->
+             send(parent, {:admitted, self()})
+
+             receive do
+               :finish -> :ok
+             end
+           end},
+          id: make_ref()
+        )
+
+      Sandbox.allow(Repo, owner, runtime)
+      GenServer.call(runtime, :activate)
+
+      emitter =
+        Task.async(fn ->
+          PreAttemptRelease.emit(
+            "stale_sweep",
+            "http_sse",
+            "stale_reservation_recovered"
+          )
+        end)
+
+      assert_receive {:admitted, callback}
+
+      if finish_first? do
+        send(callback, :finish)
+        Task.await(emitter)
+      end
+
+      log = ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(runtime) end)
+
+      if finish_first? do
+        assert [%RelayEvent{count: 1}] = Repo.all(RelayEvent)
+        refute log =~ "unflushed_samples"
+      else
+        assert log =~ "unflushed_samples=1"
+        send(callback, :finish)
+        Task.await(emitter)
+        assert Repo.all(RelayEvent) == []
+
+        assert %{rows: [[1]]} =
+                 Repo.query!(
+                   "SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'"
+                 )
+      end
+    end
+  end
+
+  test "pending callback capacity is bounded and overflow is counted", %{sandbox_owner: owner} do
+    parent = self()
+
+    runtime =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "worker",
+         start_paused: true,
+         name: nil,
+         max_pending_callbacks: 1,
+         before_capture_complete: fn ->
+           send(parent, {:admitted, self()})
+
+           receive do
+             :finish -> :ok
+           end
+         end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, runtime)
+    GenServer.call(runtime, :activate)
+
+    emitter =
+      Task.async(fn ->
+        PreAttemptRelease.emit(
+          "stale_sweep",
+          "http_sse",
+          "stale_reservation_recovered"
+        )
+      end)
+
+    assert_receive {:admitted, callback}
+
+    PreAttemptRelease.emit(
+      "stale_sweep",
+      "http_sse",
+      "stale_reservation_recovered"
+    )
+
+    send(callback, :finish)
+    Task.await(emitter)
+    ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(runtime) end)
+
+    assert %{rows: [[1]]} =
+             Repo.query!(
+               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
+             )
+  end
+
+  test "sharded pending capacity stays global under concurrent admissions", %{
+    sandbox_owner: owner
+  } do
+    parent = self()
+
+    runtime =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "worker",
+         start_paused: true,
+         name: nil,
+         max_pending_callbacks: 64,
+         before_capture_complete: fn ->
+           send(parent, {:admission_result, :held, self()})
+
+           receive do
+             :finish -> :ok
+           end
+         end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, runtime)
+    GenServer.call(runtime, :activate)
+
+    tasks =
+      for _ <- 1..128 do
+        Task.async(fn ->
+          PreAttemptRelease.emit(
+            "stale_sweep",
+            "http_sse",
+            "stale_reservation_recovered"
+          )
+
+          send(parent, {:admission_result, :finished, self()})
+        end)
+      end
+
+    results =
+      for _ <- 1..128 do
+        assert_receive {:admission_result, outcome, pid}, 15_000
+        {outcome, pid}
+      end
+
+    state = :sys.get_state(runtime)
+
+    rows =
+      for {shard, _, pending, _} <- :ets.tab2list(state.callbacks), is_integer(shard), do: pending
+
+    assert length(rows) == 64
+    assert Enum.all?(rows, &(map_size(&1) <= 1))
+    held = Enum.filter(results, &(elem(&1, 0) == :held))
+    assert length(held) <= 64
+    assert Enum.sum(Enum.map(rows, &map_size/1)) == length(held)
+    for {_, pid} <- held, do: send(pid, :finish)
+    Enum.each(tasks, &Task.await(&1, 15_000))
+    ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(runtime) end)
+
+    assert %{rows: [[dropped]]} =
+             Repo.query!(
+               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
+             )
+
+    assert dropped + length(held) == 128
+  end
+
+  test "failed final flush records known shutdown loss", %{sandbox_owner: owner} do
+    pid =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "worker",
+         start_paused: true,
+         name: nil,
+         insert_fun: fn _, _, _, _, _ -> {:error, :synthetic_unavailable} end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, pid)
+    GenServer.call(pid, :activate)
+
+    PreAttemptRelease.emit(
+      "stale_sweep",
+      "http_sse",
+      "stale_reservation_recovered"
+    )
+
+    log = ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(pid) end)
+    assert log =~ "unflushed_samples=1"
+
+    assert %{rows: [[1]]} =
+             Repo.query!(
+               "SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'"
+             )
+  end
+
+  test "returned loss checkpoint errors warn with bounded sample count", %{sandbox_owner: owner} do
+    pid =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "worker",
+         start_paused: true,
+         name: nil,
+         insert_fun: fn _, _, _, _, _ -> {:error, :unavailable} end,
+         loss_fun: fn _, _, _ -> {:error, :unavailable} end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, pid)
+    GenServer.call(pid, :activate)
+
+    PreAttemptRelease.emit(
+      "stale_sweep",
+      "http_sse",
+      "stale_reservation_recovered"
+    )
+
+    log = ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(pid) end)
+    assert log =~ "loss persistence unavailable samples=1"
+  end
+
+  test "shutdown waits for a held final insert and persists its exact multiplicity", %{
+    sandbox_owner: owner
+  } do
+    parent = self()
+
+    pid =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "worker",
+         start_paused: true,
+         name: nil,
+         insert_fun: fn event, labels, count, values, writer ->
+           send(parent, {:inserting, self(), count})
+
+           receive do
+             :release -> Relay.insert(event, labels, count, values, writer)
+           end
+         end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, pid)
+    GenServer.call(pid, :activate)
+
+    for _ <- 1..7,
+        do:
+          PreAttemptRelease.emit(
+            "stale_sweep",
+            "http_sse",
+            "stale_reservation_recovered"
+          )
+
+    stopping = Task.async(fn -> GenServer.stop(pid) end)
+    assert_receive {:inserting, ^pid, 7}
+    send(pid, :release)
+    assert :ok = Task.await(stopping)
+    assert [%RelayEvent{count: 7}] = Repo.all(RelayEvent)
+  end
+
+  test "held claim completes before quiesce acknowledgement and no later claim starts", %{
+    sandbox_owner: owner
+  } do
+    parent = self()
+
+    web =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "web",
+         start_paused: true,
+         name: nil,
+         claim_fun: fn _, _ ->
+           send(parent, {:claiming, self()})
+
+           receive do
+             :release -> {:ok, []}
+           end
+         end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, web)
+    send(web, :drain)
+    assert_receive {:claiming, ^web}
+    quiesce = Task.async(fn -> GenServer.call(web, :quiesce) end)
+    send(web, :release)
+    assert :ok = Task.await(quiesce)
+    send(web, :drain)
+    :sys.get_state(web)
+    refute_received {:claiming, _}
+  end
+
+  test "consumer quiesce acknowledges before later drain messages can claim", %{
+    sandbox_owner: owner
+  } do
+    parent = self()
+
+    web =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "web",
+         start_paused: true,
+         name: nil,
+         claim_fun: fn _, _ ->
+           send(parent, :claimed)
+           {:ok, []}
+         end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, web)
+    assert :ok = GenServer.call(web, :quiesce)
+    send(web, :drain)
+    :sys.get_state(web)
+    refute_received :claimed
+  end
+
+  test "blocked consumer heartbeat cannot keep claim admission open after quiesce", %{
+    sandbox_owner: owner
+  } do
+    parent = self()
+
+    web =
+      start_supervised!(
+        {RelayRuntime,
+         enabled: true,
+         role: "web",
+         name: nil,
+         start_paused: true,
+         claim_fun: fn _, _ ->
+           send(parent, :claimed)
+           {:ok, []}
+         end,
+         consumer_heartbeat_fun: fn _, closed ->
+           if closed do
+             {:error, :unavailable}
+           else
+             send(parent, {:heartbeat_blocked, self()})
+
+             receive do
+               :release -> {:error, :unavailable}
+             end
+           end
+         end},
+        id: make_ref()
+      )
+
+    Sandbox.allow(Repo, owner, web)
+    send(web, :drain)
+    assert_receive :claimed
+    assert_receive {:heartbeat_blocked, ^web}
+    send(web, :drain)
+    log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = RelayRuntime.quiesce(web, 10) end)
+    assert log =~ "claim gate closed"
+    send(web, :release)
+    send(web, :drain)
+    :sys.get_state(web)
+    refute_received :claimed
   end
 
   test "stale writer requeues until its own heartbeat is refreshed", %{

@@ -8,7 +8,9 @@ defmodule CodexPooler.Gateway.OperationalStatus do
     marker_draining?() or RolloutDrain.draining?()
   end
 
-  defp marker_draining? do
+  @doc false
+  @spec marker_draining?() :: boolean()
+  def marker_draining? do
     case drain_marker_path() do
       path when is_binary(path) and path != "" -> File.exists?(path)
       _path -> false

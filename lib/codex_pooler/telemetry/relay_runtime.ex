@@ -4,6 +4,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   require Logger
 
+  alias CodexPooler.Gateway.OperationalStatus
   alias CodexPooler.Telemetry.Relay
 
   @events %{
@@ -13,6 +14,39 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     [:codex_pooler, :gateway, :stream, :outcome] => "stream_outcome"
   }
   @source_events Map.new(@events, fn {source, event} -> {event, source} end)
+
+  @spec quiesce(GenServer.server(), timeout()) :: :ok
+  def quiesce(server \\ __MODULE__, timeout \\ 5_000) do
+    case GenServer.whereis(server) do
+      nil ->
+        :ok
+
+      pid ->
+        close_consumer_gate(pid)
+        GenServer.call(pid, :quiesce, timeout)
+    end
+  catch
+    :exit, _ ->
+      Logger.warning("telemetry relay quiesce acknowledgement unavailable; claim gate closed")
+      :ok
+  end
+
+  # The table is owned by the runtime and disappears on any exit, including kill.
+  # Lookup happens only at shutdown and avoids persistent state surviving a PID.
+  defp close_consumer_gate(pid) do
+    for table <- :ets.all(),
+        :ets.info(table, :owner) == pid,
+        :ets.info(table, :name) == :relay_callbacks,
+        [{:producer, false}] == :ets.lookup(table, :producer) do
+      :ets.insert(table, {:quiesced, true})
+    end
+  rescue
+    error in ArgumentError ->
+      if Process.alive?(pid), do: reraise(error, __STACKTRACE__), else: :ok
+  end
+
+  def child_spec(opts),
+    do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, shutdown: 6_000}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -35,11 +69,32 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
     role = Keyword.get(opts, :role, System.get_env("OBAN_MODE", "all"))
     producer? = role in ["worker", "scheduler"]
+    quiesced? = not producer? and OperationalStatus.marker_draining?()
     capacity = :atomics.new(2, signed: false)
     capture = {table, capacity, Keyword.get(opts, :max_series, 10_000)}
+    callbacks = :ets.new(:relay_callbacks, [:public, :set])
+    max_pending = Keyword.get(opts, :max_pending_callbacks, 10_000)
+    shards = min(max_pending, 64)
+    for shard <- 0..(shards - 1), do: :ets.insert(callbacks, {shard, :open, %{}, 0})
+
+    :ets.insert(callbacks, [{:producer, producer?}, {:quiesced, quiesced?}, {:capture_open, true}])
+
+    handler_config = %{
+      capture: capture,
+      callbacks: callbacks,
+      runtime: self(),
+      before_complete: Keyword.get(opts, :before_capture_complete),
+      max_pending: max_pending,
+      shards: shards
+    }
 
     if producer? do
-      :telemetry.attach_many(handler, Map.keys(@events), &__MODULE__.handle_event/4, capture)
+      :telemetry.attach_many(
+        handler,
+        Map.keys(@events),
+        &__MODULE__.handle_event/4,
+        handler_config
+      )
     end
 
     flush_ms = Keyword.get(opts, :flush_ms, 5_000)
@@ -49,6 +104,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       Keyword.get(opts, :cleanup_fun, fn ->
         Relay.expire_counted()
         Relay.prune()
+        Relay.prune_heartbeats()
       end)
 
     cleanup_interval_ms = Keyword.get(opts, :cleanup_interval_ms, 60_000)
@@ -56,7 +112,11 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     state = %{
       table: table,
       capture: capture,
+      callbacks: callbacks,
+      callback_shards: shards,
       producer?: producer?,
+      quiesced?: quiesced?,
+      overflow_reported: 0,
       pending: [],
       drain_again?: false,
       claim_more?: false,
@@ -67,8 +127,11 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       drain_ms: drain_ms,
       cleanup_fun: cleanup_fun,
       insert_fun: Keyword.get(opts, :insert_fun, &Relay.insert/5),
+      loss_fun: Keyword.get(opts, :loss_fun, &Relay.checkpoint_loss/3),
       claim_fun: Keyword.get(opts, :claim_fun, &Relay.claim/2),
       heartbeat_fun: Keyword.get(opts, :heartbeat_fun, &Relay.refresh_heartbeat/1),
+      consumer_heartbeat_fun:
+        Keyword.get(opts, :consumer_heartbeat_fun, &Relay.consumer_heartbeat/2),
       cleanup_interval_ms: cleanup_interval_ms
     }
 
@@ -77,19 +140,153 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       else: {:ok, state, {:continue, :schedule}}
   end
 
-  @spec handle_event([atom()], map(), map(), tuple()) :: :ok
-  def handle_event(event, measurements, metadata, capture) do
+  @spec handle_event([atom()], map(), map(), map()) :: :ok
+  def handle_event(event, measurements, metadata, config) do
     with false <- Process.get({__MODULE__, :draining}, false),
          relay_event when is_binary(relay_event) <- Map.get(@events, event) do
-      values = sample_values(relay_event, measurements)
+      values =
+        sample_values(relay_event, measurements)
+        |> Map.put(:count_weight, Map.get(measurements, :count, 1))
 
-      # Counter metrics count emissions, while distributions need each original sample.
-      accumulate(capture, {relay_event, labels(metadata), values}, 1)
+      key = {relay_event, labels(metadata), values}
+      token = make_ref()
+      shard = :erlang.phash2(token, config.shards)
+
+      shard_cap =
+        div(config.max_pending, config.shards) +
+          if(shard < rem(config.max_pending, config.shards), do: 1, else: 0)
+
+      capture_callback(config, shard, token, key, shard_cap)
     end
 
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp capture_callback(config, shard, token, key, shard_cap) do
+    case admit_callback(config.callbacks, shard, token, key, shard_cap) do
+      :ok ->
+        if is_function(config.before_complete, 0), do: config.before_complete.()
+        complete_callback(config.callbacks, shard, token)
+        send(config.runtime, {:capture_ready, shard})
+
+      :overflow ->
+        :ok
+
+      :closed ->
+        :ok
+    end
+  end
+
+  defp admit_callback(table, shard, token, key, max_pending) do
+    row =
+      if :ets.lookup(table, :capture_open) == [{:capture_open, true}],
+        do: :ets.lookup(table, shard),
+        else: []
+
+    case row do
+      [{^shard, :open, pending, dropped} = old] when map_size(pending) < max_pending ->
+        if replace_callbacks(
+             table,
+             old,
+             {shard, :open, Map.put(pending, token, {:pending, key}), dropped}
+           ), do: :ok, else: admit_callback(table, shard, token, key, max_pending)
+
+      [{^shard, :open, pending, dropped} = old] ->
+        if replace_callbacks(table, old, {shard, :open, pending, dropped + 1}),
+          do: :overflow,
+          else: admit_callback(table, shard, token, key, max_pending)
+
+      _ ->
+        :closed
+    end
+  end
+
+  defp complete_callback(table, shard, token) do
+    case :ets.lookup(table, shard) do
+      [{^shard, :open, pending, dropped} = old] ->
+        mark_ready(table, shard, token, old, pending, dropped)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp mark_ready(table, shard, token, old, pending, dropped) do
+    case Map.get(pending, token) do
+      {:pending, key} ->
+        unless replace_callbacks(
+                 table,
+                 old,
+                 {shard, :open, Map.put(pending, token, {:ready, key}), dropped}
+               ),
+               do: complete_callback(table, shard, token)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp replace_callbacks(
+         table,
+         {shard, mode, pending, dropped},
+         {shard, next_mode, next_pending, next_dropped}
+       ) do
+    :ets.select_replace(table, [
+      {{shard, :"$1", :"$2", :"$3"},
+       [
+         {:"=:=", :"$1", {:const, mode}},
+         {:"=:=", :"$2", {:const, pending}},
+         {:"=:=", :"$3", dropped}
+       ], [{{shard, {:const, next_mode}, {:const, next_pending}, next_dropped}}]}
+    ]) == 1
+  end
+
+  defp collect_callbacks(state, close? \\ false)
+
+  defp collect_callbacks(state, true) do
+    :ets.insert(state.callbacks, {:capture_open, false})
+
+    Enum.reduce(0..(state.callback_shards - 1), 0, fn shard, lost ->
+      lost + close_callback_shard(state, shard)
+    end)
+  end
+
+  defp collect_callbacks(state, false) do
+    for shard <- 0..(state.callback_shards - 1), do: collect_callback_shard(state, shard)
+    0
+  end
+
+  defp close_callback_shard(state, shard) do
+    [{^shard, _mode, pending, dropped}] = :ets.take(state.callbacks, shard)
+    :ets.insert(state.callbacks, {shard, :closed, %{}, 0})
+    {_table, capacity, _max} = state.capture
+    :atomics.add(capacity, 2, dropped)
+
+    Enum.reduce(pending, 0, fn
+      {_, {:ready, key}}, lost ->
+        accumulate(state.capture, key, 1)
+        lost
+
+      {_, {:pending, _key}}, lost ->
+        lost + 1
+    end)
+  end
+
+  defp collect_callback_shard(state, shard) do
+    [{^shard, mode, pending, dropped} = old] = :ets.lookup(state.callbacks, shard)
+    {ready, waiting} = Enum.split_with(pending, fn {_, {status, _}} -> status == :ready end)
+    remaining = Map.new(waiting)
+
+    if replace_callbacks(state.callbacks, old, {shard, mode, remaining, 0}) do
+      {_table, capacity, _max} = state.capture
+      :atomics.add(capacity, 2, dropped)
+      for {_, {:ready, key}} <- ready, do: accumulate(state.capture, key, 1)
+      0
+    else
+      collect_callback_shard(state, shard)
+    end
   end
 
   defp sample_values("saved_reset_convergence", measurements) do
@@ -138,6 +335,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       Process.send_after(self(), :heartbeat, state.heartbeat_ms)
       Process.send_after(self(), :flush, state.flush_ms)
     else
+      safe_consumer_heartbeat(state, false)
       Process.send_after(self(), :drain, state.drain_ms)
       Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
     end
@@ -151,10 +349,40 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def terminate(_reason, state), do: :telemetry.detach(state.handler)
+  def handle_call(:quiesce, _from, %{producer?: true} = state), do: {:reply, :ok, state}
+  def handle_call(:quiesce, _from, %{quiesced?: true} = state), do: {:reply, :ok, state}
+
+  def handle_call(:quiesce, _from, state) do
+    send(self(), :quiesced_heartbeat)
+    {:reply, :ok, %{state | quiesced?: true, drain_again?: false, claim_more?: false}}
+  end
 
   @impl true
+  def terminate(_reason, state) do
+    :telemetry.detach(state.handler)
+
+    if state.producer? do
+      final_flush(state)
+    else
+      safe_consumer_heartbeat(state, true)
+      remaining = Enum.reduce(state.pending, 0, &(&1.count + &2))
+      if remaining > 0, do: safe_loss(state, "shutdown_unflushed", remaining)
+    end
+
+    :ok
+  end
+
+  @impl true
+  def handle_info({:capture_ready, shard}, state) do
+    collect_callback_shard(state, shard)
+    {:noreply, state}
+  end
+
+  def handle_info(:quiesced_heartbeat, state) do
+    safe_consumer_heartbeat(state, true)
+    {:noreply, state}
+  end
+
   def handle_info(:heartbeat, %{producer?: false} = state), do: {:noreply, state}
 
   def handle_info(:heartbeat, state) do
@@ -166,6 +394,45 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   def handle_info(:flush, %{producer?: false} = state), do: {:noreply, state}
 
   def handle_info(:flush, state) do
+    state = flush(state)
+    Process.send_after(self(), :flush, state.flush_ms)
+    {:noreply, state}
+  end
+
+  def handle_info(:drain, %{producer?: true} = state), do: {:noreply, state}
+  def handle_info(:drain, %{quiesced?: true} = state), do: {:noreply, state}
+
+  def handle_info(:drain, state) do
+    if :ets.lookup(state.callbacks, :quiesced) == [{:quiesced, true}] do
+      {:noreply, %{state | quiesced?: true}}
+    else
+      state = drain(state)
+      safe_consumer_heartbeat(state, false)
+      emit_health()
+      delay = if state.drain_again?, do: 0, else: state.drain_ms
+      Process.send_after(self(), :drain, delay)
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:cleanup, state) do
+    state.cleanup_fun.()
+    Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
+    {:noreply, state}
+  rescue
+    error ->
+      # Expiry, loss accounting and pruning share one transaction; a failure
+      # here silently disables relay retention until it succeeds, so it must
+      # be visible. Only the exception module crosses into the log.
+      Logger.warning("telemetry relay cleanup failed reason=#{inspect(error.__struct__)}")
+      Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
+      {:noreply, state}
+  end
+
+  defp flush(state) do
+    collect_callbacks(state)
+
     try do
       :ets.tab2list(state.table)
       |> Enum.each(fn {key, _count} ->
@@ -176,38 +443,27 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       end)
 
       {_table, capacity, _max} = state.capture
-      dropped = :atomics.exchange(capacity, 2, 0)
-      if dropped > 0, do: Logger.warning("telemetry relay buffer full dropped_events=#{dropped}")
-    after
-      Process.send_after(self(), :flush, state.flush_ms)
+      dropped = :atomics.get(capacity, 2)
+
+      if dropped > state.overflow_reported,
+        do:
+          Logger.warning(
+            "telemetry relay buffer full dropped_events=#{dropped - state.overflow_reported}"
+          )
+
+      if dropped > 0, do: safe_loss(state, "buffer_overflow", dropped)
+    rescue
+      _ -> :ok
     end
 
-    {:noreply, state}
-  end
-
-  def handle_info(:drain, %{producer?: true} = state), do: {:noreply, state}
-
-  def handle_info(:drain, state) do
-    state = drain(state)
-    delay = if state.drain_again?, do: 0, else: state.drain_ms
-    Process.send_after(self(), :drain, delay)
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info(:cleanup, state) do
-    state.cleanup_fun.()
-    Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
-    {:noreply, state}
-  rescue
-    _ ->
-      Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
-      {:noreply, state}
+    {_table, capacity, _max} = state.capture
+    %{state | overflow_reported: :atomics.get(capacity, 2)}
   end
 
   defp drain(state) do
     {pending, claim_more?} =
-      if state.pending == [] do
+      if state.pending == [] and :ets.lookup(state.callbacks, :quiesced) != [{:quiesced, true}] and
+           not OperationalStatus.marker_draining?() do
         case state.claim_fun.(100, state.owner) do
           {:ok, rows} -> {rows, length(rows) == 100}
           _ -> {[], false}
@@ -245,8 +501,82 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     _ -> {:error, :unavailable}
   end
 
+  defp safe_consumer_heartbeat(state, quiesced) do
+    quiesced = quiesced or :ets.lookup(state.callbacks, :quiesced) == [{:quiesced, true}]
+    state.consumer_heartbeat_fun.(state.owner, quiesced)
+  rescue
+    error ->
+      # The consumer heartbeat feeds the fresh-consumer gauge; a silent write
+      # failure would look exactly like a dead consumer.
+      Logger.warning(
+        "telemetry relay consumer heartbeat failed reason=#{inspect(error.__struct__)}"
+      )
+
+      :ok
+  end
+
+  defp safe_loss(state, reason, count) do
+    case state.loss_fun.(state.owner, reason, count) do
+      {:ok, :ok} ->
+        :ok
+
+      {:error, _} ->
+        Logger.warning("telemetry relay loss persistence unavailable samples=#{count}")
+    end
+  rescue
+    _ -> Logger.warning("telemetry relay loss persistence unavailable samples=#{count}")
+  end
+
+  defp emit_health do
+    health = Relay.health()
+
+    :telemetry.execute(
+      [:codex_pooler, :telemetry_relay, :health],
+      Map.drop(health, [:losses]),
+      %{}
+    )
+
+    for [reason, rows, samples] <- health.losses do
+      :telemetry.execute(
+        [:codex_pooler, :telemetry_relay, :loss],
+        %{rows: rows, samples: samples},
+        %{reason: reason}
+      )
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp final_flush(state) do
+    deadline = System.monotonic_time(:millisecond) + 3_000
+    pending_loss = collect_callbacks(state, true)
+    Process.put({__MODULE__, :flush_deadline}, deadline)
+    state = flush(state)
+
+    remaining =
+      Enum.reduce(:ets.tab2list(state.table), pending_loss, fn {_key, count}, total ->
+        total + count
+      end)
+
+    if remaining > 0 do
+      safe_loss(state, "shutdown_unflushed", remaining)
+      Logger.warning("telemetry relay shutdown unflushed_samples=#{remaining}")
+    end
+  rescue
+    _ -> Logger.warning("telemetry relay shutdown loss persistence unavailable")
+  after
+    Process.delete({__MODULE__, :flush_deadline})
+  end
+
   defp flush_snapshot(state, {event, labels, values} = key, count) do
-    case state.insert_fun.(event, labels, count, values, state.owner) do
+    deadline = Process.get({__MODULE__, :flush_deadline})
+
+    result =
+      if is_integer(deadline) and System.monotonic_time(:millisecond) >= deadline,
+        do: {:error, :shutdown_deadline},
+        else: state.insert_fun.(event, labels, count, values, state.owner)
+
+    case result do
       {:ok, _} ->
         {_table, capacity, _max} = state.capture
         :atomics.sub(capacity, 1, 1)
@@ -269,7 +599,10 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
         :telemetry.execute(
           event,
-          Map.merge(%{count: row.count}, measurements),
+          Map.merge(
+            %{count: Map.get(measurements, :count_weight, 1)},
+            Map.delete(measurements, :count_weight)
+          ),
           Map.put(labels, :via, "job_relay")
         )
     end
@@ -285,20 +618,33 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     Process.delete({__MODULE__, :draining})
   end
 
+  # Every tag the relayed metric families declare. A relayed event carrying a
+  # key outside this list would silently render as `unknown` on the consumer,
+  # so the reporter tests assert each relayed metric's tags stay within it.
+  @label_keys [
+    :scope,
+    :decision,
+    :source,
+    :outcome,
+    :phase,
+    :transport,
+    :downstream_transport,
+    :upstream_transport,
+    :via
+  ]
+
+  @doc false
+  @spec label_keys() :: [atom()]
+  def label_keys, do: @label_keys
+
+  @doc false
+  @spec relayed_events() :: [[atom()]]
+  def relayed_events, do: Map.keys(@events)
+
   defp labels(metadata),
     do:
       metadata
-      |> Map.take([
-        :scope,
-        :decision,
-        :source,
-        :outcome,
-        :phase,
-        :transport,
-        :downstream_transport,
-        :upstream_transport,
-        :via
-      ])
+      |> Map.take(@label_keys)
       |> Map.put_new(:via, "in_process")
       |> Map.new(fn {k, v} -> {k, bounded(v)} end)
 
@@ -311,6 +657,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       normalized =
         case key do
           "count" -> :count
+          "count_weight" -> :count_weight
           "applied_to_canonical_ms" -> :applied_to_canonical_ms
           "canonical_to_lifecycle_ms" -> :canonical_to_lifecycle_ms
           "applied_to_lifecycle_ms" -> :applied_to_lifecycle_ms

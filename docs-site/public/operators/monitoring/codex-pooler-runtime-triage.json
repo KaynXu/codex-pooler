@@ -2871,6 +2871,191 @@
         "x": 12,
         "y": 156
       }
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "id": 0,
+      "panels": [],
+      "title": "Job Telemetry Relay",
+      "gridPos": {
+        "x": 0,
+        "y": 165,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Relay Unclaimed Backlog",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Shared unclaimed rows and samples, including expired backlog. Values are replicated observations: max avoids counting each app observer again. job_relay remains shadowed; in_process panels stay authoritative.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(codex_pooler_telemetry_relay_backlog_rows{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "rows",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "max(codex_pooler_telemetry_relay_backlog_samples{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "samples",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 166
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Relay Fresh Consumers",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Non-quiesced consumers with a heartbeat in the last 60 seconds. This is consumer health, not the writer database-access insert gate. A missing series means no scraped observer, not zero backlog.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(codex_pooler_telemetry_relay_consumers_fresh{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "fresh consumers",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 166
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Relay Known Lost Samples",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Durable cumulative loss totals by fixed reason. max avoids duplicate observer counts. Includes expired unclaimed, buffer overflow and shutdown unflushed samples when persistence succeeds. Hard kills, unavailable loss persistence and post-claim/pre-scrape loss remain unquantified.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (reason) (codex_pooler_telemetry_relay_loss_samples{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "{{reason}} samples",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "max by (reason) (codex_pooler_telemetry_relay_loss_rows{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "{{reason}} rows",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 174
+      }
     }
   ]
 }

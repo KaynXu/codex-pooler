@@ -191,6 +191,37 @@ defmodule CodexPoolerWeb.Telemetry do
     # Prometheus Core 1.2.1 enumerates metric.tags and invokes metric.tag_values.
     # Keep this split until the reporter supports Telemetry.Metrics 1.2 function-valued tags.
     [
+      last_value("codex_pooler.telemetry_relay.backlog.rows",
+        event_name: [:codex_pooler, :telemetry_relay, :health],
+        measurement: :backlog_rows,
+        description:
+          "Shared unclaimed relay rows, including expired backlog. Read once per web observer; use max across replicas, never sum."
+      ),
+      last_value("codex_pooler.telemetry_relay.backlog.samples",
+        event_name: [:codex_pooler, :telemetry_relay, :health],
+        measurement: :backlog_samples,
+        description: "Shared unclaimed relay samples. Use max across replicas, never sum."
+      ),
+      last_value("codex_pooler.telemetry_relay.consumers.fresh",
+        event_name: [:codex_pooler, :telemetry_relay, :health],
+        measurement: :fresh_consumers,
+        description:
+          "Shared count of non-quiesced consumers reporting within 60 seconds. Consumer health does not gate producer insertion."
+      ),
+      last_value("codex_pooler.telemetry_relay.loss.rows",
+        event_name: [:codex_pooler, :telemetry_relay, :loss],
+        measurement: :rows,
+        tags: [:reason],
+        description:
+          "Durable shared cumulative known lost rows by fixed reason. Use max across replicas, never sum; database-unavailable hard-stop loss remains unknown."
+      ),
+      last_value("codex_pooler.telemetry_relay.loss.samples",
+        event_name: [:codex_pooler, :telemetry_relay, :loss],
+        measurement: :samples,
+        tags: [:reason],
+        description:
+          "Durable shared cumulative known lost samples by fixed reason. Use max across replicas, never sum; post-claim pre-scrape loss remains unquantified."
+      ),
       counter("phoenix.endpoint.stop.count",
         event_name: [:phoenix, :endpoint, :stop],
         measurement: :duration,
@@ -499,7 +530,7 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &stream_finalization_tag_values/1,
         description: "Finalized gateway streams by bounded usage and transport metadata."
       ),
-      counter("codex_pooler.gateway.stream.outcome.count",
+      sum("codex_pooler.gateway.stream.outcome.count",
         event_name: [:codex_pooler, :gateway, :stream, :outcome],
         measurement: :count,
         tags: [:outcome, :downstream_transport, :upstream_transport, :via],
@@ -522,7 +553,7 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :count,
         description: "Websocket bridge precommit buffer overflows."
       ),
-      counter("codex_pooler.quota.cycle.decision.count",
+      sum("codex_pooler.quota.cycle.decision.count",
         event_name: [:codex_pooler, :quota, :cycle, :decision],
         measurement: :count,
         tags: [:scope, :decision, :source, :via],
@@ -533,7 +564,7 @@ defmodule CodexPoolerWeb.Telemetry do
             "cycles, and no reporter runs for OBAN_MODE=worker or scheduler, so this counter " <>
             "carries the request-path share only; read the quota window rows for the rest."
       ),
-      counter("codex_pooler.saved_reset.convergence.count",
+      sum("codex_pooler.saved_reset.convergence.count",
         event_name: [:codex_pooler, :saved_reset, :convergence],
         measurement: :count,
         tags: [:source, :outcome, :via],
@@ -586,7 +617,7 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &circuit_transition_tag_values/1,
         description: "Routing circuit status transitions by bounded route and reason class."
       ),
-      counter("codex_pooler.accounting.reservation.pre_attempt_release.count",
+      sum("codex_pooler.accounting.reservation.pre_attempt_release.count",
         event_name: PreAttemptRelease.telemetry_event(),
         measurement: :count,
         tags: [:phase, :transport, :via],

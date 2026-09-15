@@ -6,6 +6,98 @@ defmodule CodexPooler.Telemetry.Relay do
   @heartbeat_stale_seconds 60
   @cleanup_batch_size 100
 
+  @spec record_loss(String.t(), non_neg_integer(), non_neg_integer()) :: :ok
+  def record_loss(reason, rows, samples)
+      when reason in ["expired_unclaimed", "buffer_overflow", "shutdown_unflushed"] do
+    Repo.query!(
+      """
+      INSERT INTO telemetry_relay_losses(reason, rows, samples) VALUES ($1,$2,$3)
+      ON CONFLICT(reason) DO UPDATE SET rows=telemetry_relay_losses.rows+EXCLUDED.rows,
+        samples=telemetry_relay_losses.samples+EXCLUDED.samples
+      """,
+      [reason, rows, samples]
+    )
+
+    :ok
+  end
+
+  @spec checkpoint_loss(String.t(), String.t(), non_neg_integer()) ::
+          {:ok, :ok} | {:error, term()}
+  def checkpoint_loss(owner, reason, total)
+      when is_binary(owner) and reason in ["buffer_overflow", "shutdown_unflushed"] and
+             is_integer(total) and total >= 0 do
+    Repo.transaction(
+      fn ->
+        Repo.query!(
+          "INSERT INTO telemetry_relay_loss_checkpoints(owner,reason,samples,updated_at) VALUES ($1,$2,0,clock_timestamp()) ON CONFLICT DO NOTHING",
+          [owner, reason]
+        )
+
+        %{rows: [[previous]]} =
+          Repo.query!(
+            "SELECT samples FROM telemetry_relay_loss_checkpoints WHERE owner=$1 AND reason=$2 FOR UPDATE",
+            [owner, reason]
+          )
+
+        delta = max(total - previous, 0)
+        if delta > 0, do: record_loss(reason, 0, delta)
+
+        Repo.query!(
+          "UPDATE telemetry_relay_loss_checkpoints SET samples=GREATEST(samples,$3),updated_at=clock_timestamp() WHERE owner=$1 AND reason=$2",
+          [owner, reason, total]
+        )
+
+        :ok
+      end,
+      timeout: 1_000,
+      deadline: System.monotonic_time(:millisecond) + 1_000
+    )
+  end
+
+  @spec consumer_heartbeat(String.t(), boolean()) :: :ok
+  def consumer_heartbeat(owner, quiesced \\ false) do
+    Repo.query!(
+      "INSERT INTO telemetry_relay_consumers(owner,heartbeat_at,quiesced) VALUES ($1,clock_timestamp(),$2) ON CONFLICT(owner) DO UPDATE SET heartbeat_at=EXCLUDED.heartbeat_at,quiesced=EXCLUDED.quiesced",
+      [owner, quiesced]
+    )
+
+    :ok
+  end
+
+  @spec health() :: map()
+  def health do
+    %{rows: [[rows, samples]]} =
+      Repo.query!(
+        "SELECT count(*),COALESCE(sum(count),0)::bigint FROM telemetry_relay_events WHERE claimed_at IS NULL"
+      )
+
+    %{rows: [[consumers]]} =
+      Repo.query!(
+        "SELECT count(*) FROM telemetry_relay_consumers WHERE NOT quiesced AND heartbeat_at > clock_timestamp()-interval '60 seconds'"
+      )
+
+    %{rows: losses} = Repo.query!("SELECT reason,rows,samples FROM telemetry_relay_losses")
+    %{backlog_rows: rows, backlog_samples: samples, fresh_consumers: consumers, losses: losses}
+  end
+
+  @spec prune_heartbeats() :: :ok
+  def prune_heartbeats do
+    Repo.query!(
+      "DELETE FROM telemetry_relay_loss_checkpoints WHERE ctid IN (SELECT c.ctid FROM telemetry_relay_loss_checkpoints c WHERE c.updated_at<clock_timestamp()-interval '7 days' AND NOT EXISTS (SELECT 1 FROM telemetry_relay_heartbeats h WHERE h.owner=c.owner AND h.heartbeat_at>clock_timestamp()-interval '7 days') LIMIT 100 FOR UPDATE SKIP LOCKED)"
+    )
+
+    for {table, timestamp} <- [
+          {"telemetry_relay_heartbeats", "heartbeat_at"},
+          {"telemetry_relay_consumers", "heartbeat_at"}
+        ] do
+      Repo.query!(
+        "DELETE FROM #{table} WHERE ctid IN (SELECT ctid FROM #{table} WHERE #{timestamp}<clock_timestamp()-interval '7 days' LIMIT 100 FOR UPDATE SKIP LOCKED)"
+      )
+    end
+
+    :ok
+  end
+
   def refresh_heartbeat(owner) when is_binary(owner) do
     case Repo.query(
            "INSERT INTO telemetry_relay_heartbeats (owner, heartbeat_at) VALUES ($1, NOW()) ON CONFLICT (owner) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at",
@@ -19,7 +111,8 @@ defmodule CodexPooler.Telemetry.Relay do
   def heartbeat_fresh?(owner) when is_binary(owner) do
     case Repo.query(
            "SELECT heartbeat_at > NOW() - ($2 * INTERVAL '1 second') FROM telemetry_relay_heartbeats WHERE owner = $1",
-           [owner, @heartbeat_stale_seconds]
+           [owner, @heartbeat_stale_seconds],
+           query_options()
          ) do
       {:ok, %{rows: [[fresh]]}} -> fresh
       _ -> false
@@ -41,7 +134,17 @@ defmodule CodexPooler.Telemetry.Relay do
       measurements: measurements,
       inserted_at: DateTime.utc_now()
     })
-    |> Repo.insert()
+    |> Repo.insert(query_options())
+  end
+
+  defp query_options do
+    case Process.get({CodexPooler.Telemetry.RelayRuntime, :flush_deadline}) do
+      deadline when is_integer(deadline) ->
+        [deadline: deadline, timeout: max(deadline - System.monotonic_time(:millisecond), 1)]
+
+      _ ->
+        []
+    end
   end
 
   def claim(limit \\ 100, owner \\ "relay") do
@@ -91,11 +194,18 @@ defmodule CodexPooler.Telemetry.Relay do
             order_by: [asc: e.inserted_at, asc: e.id],
             limit: ^@cleanup_batch_size,
             lock: "FOR UPDATE SKIP LOCKED",
-            select: e.id
+            select: {e.id, e.count, e.claimed_at}
           )
           |> Repo.all()
 
-        Repo.delete_all(from e in RelayEvent, where: e.id in ^ids)
+        unclaimed = Enum.filter(ids, fn {_, _, claimed} -> is_nil(claimed) end)
+        lost_samples = Enum.reduce(unclaimed, 0, fn {_, count, _}, total -> total + count end)
+
+        if unclaimed != [],
+          do: record_loss("expired_unclaimed", length(unclaimed), lost_samples)
+
+        row_ids = Enum.map(ids, &elem(&1, 0))
+        Repo.delete_all(from e in RelayEvent, where: e.id in ^row_ids)
       end)
 
     result

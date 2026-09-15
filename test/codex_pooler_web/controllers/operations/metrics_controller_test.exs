@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Telemetry.AdmissionSampler
+  alias CodexPoolerWeb.Telemetry.PrometheusReporter
 
   defmodule FailingRepo do
     def insert(_struct, _opts),
@@ -53,7 +54,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   end
 
   test "allows open metrics access when bearer token is intentionally unset", %{conn: conn} do
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 200
     assert metrics_content_type?(conn)
@@ -68,7 +69,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
                InstanceSettings.clear_metrics_bearer_token(%{})
              )
 
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 200
     assert metrics_content_type?(conn)
@@ -77,7 +78,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   test "rejects metrics access when configured bearer token is missing", %{conn: conn} do
     configure_metrics_token!("metrics-secret")
 
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 401
     assert json_response(conn, 401)["error"]["code"] == "metrics_unauthorized"
@@ -89,7 +90,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     conn =
       conn
       |> put_req_header("authorization", "Bearer wrong-secret")
-      |> get(~p"/metrics")
+      |> scrape_metrics()
 
     assert conn.status == 401
     assert json_response(conn, 401)["error"]["code"] == "metrics_unauthorized"
@@ -101,7 +102,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     conn =
       conn
       |> put_req_header("authorization", "Bearer metrics-secret")
-      |> get(~p"/metrics")
+      |> scrape_metrics()
 
     assert conn.status == 200
     assert metrics_content_type?(conn)
@@ -137,7 +138,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       capture_result_and_log(fn ->
         conn
         |> put_req_header("x-forwarded-for", "198.51.100.20")
-        |> get(~p"/metrics")
+        |> scrape_metrics()
       end)
 
     assert conn.status == 200
@@ -169,7 +170,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       %{outcome: :ok, window: "24h", scope: "selected_pool", user_id: user.id}
     )
 
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 200
     assert metrics_content_type?(conn)
@@ -230,7 +231,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       }
     )
 
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 200
 
@@ -276,7 +277,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     baseline =
       build_conn()
-      |> get(~p"/metrics")
+      |> scrape_metrics()
       |> Map.fetch!(:resp_body)
 
     :telemetry.execute(
@@ -303,7 +304,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       }
     )
 
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 200
 
@@ -331,7 +332,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     event = [:codex_pooler, :saved_reset, :convergence]
     unsafe_id = Ecto.UUID.generate()
 
-    baseline = get(conn, ~p"/metrics").resp_body
+    baseline = scrape_metrics(conn).resp_body
 
     :telemetry.execute(
       event,
@@ -355,7 +356,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       %{source: "unbounded-source", outcome: "unbounded-outcome", account_id: unsafe_id}
     )
 
-    body = get(build_conn(), ~p"/metrics").resp_body
+    body = scrape_metrics(build_conn()).resp_body
 
     assert metric_sample(
              body,
@@ -434,7 +435,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     saturation_lines =
       conn
-      |> get(~p"/metrics")
+      |> scrape_metrics()
       |> Map.fetch!(:resp_body)
       |> String.split("\n", trim: true)
       |> Enum.filter(fn line ->
@@ -462,7 +463,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     fallback_baselines =
       conn
-      |> get(~p"/metrics")
+      |> scrape_metrics()
       |> Map.fetch!(:resp_body)
       |> String.split("\n", trim: true)
       |> Enum.reduce(
@@ -500,7 +501,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       %{max_frames: 64, max_bytes: 1_048_576}
     )
 
-    conn = get(build_conn(), ~p"/metrics")
+    conn = scrape_metrics(build_conn())
 
     assert conn.status == 200
 
@@ -569,7 +570,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     metric_lines =
       build_conn()
-      |> get(~p"/metrics")
+      |> scrape_metrics()
       |> Map.fetch!(:resp_body)
       |> String.split("\n", trim: true)
 
@@ -613,7 +614,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
                raw_reason
              )
 
-    conn = get(conn, ~p"/metrics")
+    conn = scrape_metrics(conn)
 
     assert conn.status == 200
 
@@ -649,7 +650,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     rejected =
       conn
       |> put_req_header("authorization", "Bearer metrics-secret-v1")
-      |> get(~p"/metrics")
+      |> scrape_metrics()
 
     assert rejected.status == 401
     assert json_response(rejected, 401)["error"]["code"] == "metrics_unauthorized"
@@ -657,7 +658,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     allowed =
       build_conn()
       |> put_req_header("authorization", "Bearer metrics-secret-v2")
-      |> get(~p"/metrics")
+      |> scrape_metrics()
 
     assert allowed.status == 200
     assert metrics_content_type?(allowed)
@@ -667,12 +668,20 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     Application.put_env(:codex_pooler, InstanceSettings, repo: FailingRepo)
     InstanceSettings.reset_cache_for_test()
 
-    {conn, log} = capture_result_and_log(fn -> get(conn, ~p"/metrics") end)
+    {conn, log} = capture_result_and_log(fn -> scrape_metrics(conn) end)
 
     assert log =~ "instance settings db load failed warm_cache=false"
     assert conn.status == 401
     assert json_response(conn, 401)["error"]["code"] == "metrics_unauthorized"
     assert json_response(conn, 401)["error"]["message"] == "metrics bearer token is unavailable"
+  end
+
+  # The reporter serves the body of its last scheduled fold, so a scrape issued right
+  # after a telemetry emission only sees it once the next fold has run. Fold
+  # synchronously first so each scrape below observes every sample emitted before it.
+  defp scrape_metrics(conn) do
+    :ok = PrometheusReporter.fold()
+    get(conn, ~p"/metrics")
   end
 
   defp capture_result_and_log(fun) do
@@ -706,7 +715,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   defp histogram_bucket_baselines(conn, bucket_names) do
     conn
-    |> get(~p"/metrics")
+    |> scrape_metrics()
     |> Map.fetch!(:resp_body)
     |> String.split("\n", trim: true)
     |> Enum.reduce(Map.new(bucket_names, &{&1, 0}), fn line, baselines ->

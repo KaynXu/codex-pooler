@@ -9,8 +9,48 @@ defmodule CodexPooler.Release do
   """
 
   alias CodexPooler.Catalog
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Telemetry.RelayRuntime
 
   @app :codex_pooler
+
+  @doc "Quiesces relay claims before readiness withdrawal within the existing drain budget."
+  @spec prepare_shutdown(keyword()) :: map()
+  def prepare_shutdown(opts \\ []) do
+    started = System.monotonic_time(:millisecond)
+
+    budget =
+      Keyword.get_lazy(
+        opts,
+        :budget_ms,
+        &RolloutDrain.configured_timeout_ms/0
+      )
+
+    # Resolve the marker path before quiescing: quiesce is permanent for the
+    # consumer, so a misconfigured path must fail before it, not after.
+    marker =
+      Keyword.get_lazy(opts, :marker, fn ->
+        System.fetch_env!("CODEX_POOLER_DRAIN_MARKER_PATH")
+      end)
+
+    :ok =
+      RelayRuntime.quiesce(
+        Keyword.get(opts, :relay, RelayRuntime),
+        min(budget, 5_000)
+      )
+
+    :ok = File.touch(marker)
+    remaining = max(budget - (System.monotonic_time(:millisecond) - started), 1)
+
+    drain =
+      Keyword.get(
+        opts,
+        :drain,
+        &RolloutDrain.drain_for_shutdown/1
+      )
+
+    drain.(remaining)
+  end
 
   # A release task runs with the runtime config of whatever `OBAN_MODE` its
   # container carries (the migration job renders `web`); its own PostgreSQL

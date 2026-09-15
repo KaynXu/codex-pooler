@@ -9,6 +9,10 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
 
   def scrape(name \\ __MODULE__), do: GenServer.call(name, :scrape, 30_000)
 
+  @doc false
+  @spec fold(GenServer.server()) :: :ok
+  def fold(name \\ __MODULE__), do: GenServer.call(name, :fold, 30_000)
+
   @impl true
   def init(opts) do
     prometheus_name = Keyword.get(opts, :prometheus_name, :prometheus_metrics)
@@ -16,7 +20,6 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
 
     state = %{
       body: state.body,
-      scrape_waiters: [],
       interval_ms: Keyword.get(opts, :interval_ms, @interval_ms),
       fold_notify: Keyword.get(opts, :fold_notify),
       prometheus_name: prometheus_name,
@@ -33,24 +36,18 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporter do
   end
 
   @impl true
-  def handle_call(:scrape, from, state) do
-    if state.scrape_waiters == [], do: send(self(), :scrape_batch)
-    {:noreply, %{state | scrape_waiters: [from | state.scrape_waiters]}}
-  end
+  def handle_call(:scrape, _from, state), do: {:reply, state.body, state}
+
+  def handle_call(:fold, _from, state), do: {:reply, :ok, fold_now(state)}
 
   @impl true
-  def handle_info(:scrape_batch, %{scrape_waiters: waiters} = state) do
+  def handle_info(:fold, state), do: {:noreply, fold_now(state), {:continue, :schedule}}
+
+  defp fold_now(state) do
     if is_function(state.before_scrape, 0), do: state.before_scrape.()
     body = TelemetryMetricsPrometheus.Core.scrape(state.prometheus_name)
-    Enum.each(waiters, &GenServer.reply(&1, body))
-    {:noreply, %{state | body: body, scrape_waiters: []}}
-  end
-
-  @impl true
-  def handle_info(:fold, state) do
-    body = TelemetryMetricsPrometheus.Core.scrape(state.prometheus_name)
     if is_pid(state.fold_notify), do: send(state.fold_notify, {:prometheus_folded, self()})
-    {:noreply, %{state | body: body}, {:continue, :schedule}}
+    %{state | body: body}
   end
 
   defp schedule(interval_ms), do: Process.send_after(self(), :fold, interval_ms)

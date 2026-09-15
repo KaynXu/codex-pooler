@@ -34,9 +34,11 @@ monitoring:
 
 The `release` label and scrape interval should match your own Prometheus Operator selectors and scrape budget. For fast OOM investigations, prefer a short interval for the app ServiceMonitor and keep broader Kubernetes collectors at their normal cadence. Worker and scheduler roles don't start the Prometheus reporter because they don't expose `/metrics`; use Kubernetes cgroup metrics and sampler logs for those pods.
 
-Selected background events reach the app reporter through a Postgres relay: pre-attempt reservation releases, saved-reset convergence, quota cycle decisions, and gateway stream outcomes. Direct events carry `via="in_process"`; relayed events carry `via="job_relay"`. The starter dashboard deliberately selects the direct share. To include background activity, aggregate both values explicitly. Relay delivery is best effort across process crashes and buffer overflow, so durable accounting and quota rows remain authoritative; a flat graph does not prove the behaviour is absent.
+Selected background events reach the app reporter through a Postgres relay: pre-attempt reservation releases, saved-reset convergence, quota cycle decisions, and gateway stream outcomes. Direct events carry `via="in_process"`; relayed events carry `via="job_relay"`. The starter dashboard deliberately selects the direct share; keep it authoritative until a production comparison validates the relayed share. Relay claims are at-most-once and never reclaimed. Unclaimed rows expire after one hour. The Job Telemetry Relay row reports backlog, fresh consumers, and durable known loss totals for expiry, buffer overflow, and shutdown leftovers. These shared values use `max` across app observers, not `sum`. Hard kills, unavailable loss persistence, and loss between claim and scrape remain unquantified; durable accounting and quota rows remain authoritative. Graceful shutdown quiesces consumers before readiness withdrawal and attempts a bounded final producer flush, but a flat graph still does not prove the behaviour is absent.
 
 ## Runtime triage dashboard
+
+The reporter folds and renders Prometheus metrics once per second and serves the cached body to scrape requests. Values can therefore lag the latest event by one fold interval; repeated scrapes do not trigger another render.
 
 Build your Grafana or Prometheus dashboard around the signals needed to correlate runtime pressure across memory, request handling, gateway admission, database access, and restarts:
 

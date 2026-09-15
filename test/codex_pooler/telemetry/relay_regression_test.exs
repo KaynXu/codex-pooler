@@ -1,12 +1,102 @@
 defmodule CodexPooler.Telemetry.RelayRegressionTest do
   use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Accounting.PreAttemptRelease
+  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
+  alias CodexPooler.Upstreams.Quota.Windows.Routing
+  alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias Ecto.Adapters.SQL.Sandbox
   alias TelemetryMetricsPrometheus.Core
 
   @quota [:codex_pooler, :quota, :cycle, :decision]
   @stream [:codex_pooler, :gateway, :stream, :outcome]
+
+  test "all four real emitters survive PostgreSQL and Core with equal labels and samples",
+       context do
+    worker = runtime(context, role: "worker")
+    registry = reporter()
+    now = DateTime.utc_now()
+    alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+
+    stale = %AccountQuotaWindow{
+      quota_scope: "account",
+      quota_key: "primary",
+      window_kind: "primary",
+      window_minutes: 300,
+      observed_at: DateTime.add(now, -7200),
+      last_sync_at: DateTime.add(now, -7200),
+      reset_at: DateTime.add(now, -3600),
+      source: "codex_usage_api"
+    }
+
+    current = %{
+      stale
+      | window_kind: "secondary",
+        window_minutes: 10_080,
+        observed_at: now,
+        last_sync_at: now,
+        reset_at: DateTime.add(now, 3600)
+    }
+
+    for _ <- 1..3 do
+      Routing.reject_superseded_primary_windows(
+        [stale, current],
+        now
+      )
+
+      PreAttemptRelease.emit(
+        "stale_sweep",
+        "http_sse",
+        "stale_reservation_recovered"
+      )
+
+      Streaming.emit_stream_outcome(
+        "interrupted",
+        "http_sse",
+        "websocket"
+      )
+
+      ConvergenceTelemetry.emit(
+        %{
+          "convergence_source" => "reconciliation",
+          "convergence_outcome" => "confirmed_by_quota",
+          "consumed_at" => DateTime.to_iso8601(DateTime.add(now, -5)),
+          "finished_at" => DateTime.to_iso8601(now),
+          "confirmation_timing" => %{
+            "version" => 1,
+            "canonical_confirmed_at" => DateTime.to_iso8601(DateTime.add(now, -2))
+          }
+        },
+        now
+      )
+    end
+
+    sync(worker, :flush)
+
+    assert Enum.sort(Enum.map(Repo.all(RelayEvent), & &1.event)) ==
+             ~w(pre_attempt_release quota_cycle_decision saved_reset_convergence stream_outcome)
+
+    stop_runtime(worker)
+    web = runtime(context, role: "web")
+    sync(web, :drain)
+    lines = Core.scrape(registry) |> String.split("\n")
+
+    direct =
+      lines
+      |> Enum.filter(&String.contains?(&1, "via=\"in_process\""))
+      |> Enum.map(&String.replace(&1, "via=\"in_process\"", "via=\"normalized\""))
+      |> Enum.sort()
+
+    relayed =
+      lines
+      |> Enum.filter(&String.contains?(&1, "via=\"job_relay\""))
+      |> Enum.map(&String.replace(&1, "via=\"job_relay\"", "via=\"normalized\""))
+      |> Enum.sort()
+
+    assert length(direct) > 4
+    assert direct == relayed
+  end
 
   test "worker and scheduler cannot consume rows before a web reporter observes them", context do
     for role <- ["worker", "scheduler"] do
@@ -176,6 +266,41 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
            ) == 2
   end
 
+  test "aggregate count weight never multiplies histogram observations", context do
+    worker = runtime(context, role: "worker")
+    registry = reporter()
+
+    for _ <- 1..2 do
+      :telemetry.execute(
+        [:codex_pooler, :saved_reset, :convergence],
+        %{count: 3, applied_to_canonical_ms: 5000},
+        %{source: "runtime_headers", outcome: "confirmed_by_quota"}
+      )
+    end
+
+    sync(worker, :flush)
+    stop_runtime(worker)
+    web = runtime(context, role: "web")
+    sync(web, :drain)
+
+    for via <- ["in_process", "job_relay"] do
+      assert sample(registry, "codex_pooler_saved_reset_convergence_count", via: via) == 6
+
+      assert sample(
+               registry,
+               "codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_count",
+               via: via
+             ) == 2
+
+      assert sample(
+               registry,
+               "codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_sum",
+               via: via
+             ) ==
+               10
+    end
+  end
+
   test "insert exception restores the taken snapshot and automatically retries", context do
     parent = self()
 
@@ -331,7 +456,19 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
     log = ExUnit.CaptureLog.capture_log(fn -> sync(worker, :flush) end)
     assert log =~ "telemetry relay buffer full dropped_events=18"
     assert Repo.aggregate(RelayEvent, :count) == 2
+
+    assert %{rows: [[18]]} =
+             Repo.query!(
+               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
+             )
+
     refute ExUnit.CaptureLog.capture_log(fn -> sync(worker, :flush) end) =~ "buffer full"
+
+    assert %{rows: [[18]]} =
+             Repo.query!(
+               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
+             )
+
     :telemetry.execute(@quota, %{count: 1}, quota_labels())
     sync(worker, :flush)
     assert Repo.aggregate(RelayEvent, :count) == 3
@@ -418,5 +555,24 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
     assert [line] = matches
     {value, ""} = line |> String.split(" ") |> List.last() |> Float.parse()
     value
+  end
+
+  test "every relayed metric family declares only labels the relay forwards" do
+    relayed = MapSet.new(RelayRuntime.relayed_events())
+
+    families =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> Enum.filter(&MapSet.member?(relayed, &1.event_name))
+
+    assert MapSet.new(families, & &1.event_name) == relayed
+
+    for metric <- families do
+      # Without :via the in_process and job_relay shares would merge into one series.
+      assert :via in metric.tags, "#{inspect(metric.event_name)} must declare :via"
+      unknown = Enum.reject(metric.tags, &(&1 in RelayRuntime.label_keys()))
+
+      assert unknown == [],
+             "#{inspect(metric.event_name)} declares tags #{inspect(unknown)} that the relay drops"
+    end
   end
 end

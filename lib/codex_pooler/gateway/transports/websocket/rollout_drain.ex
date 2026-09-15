@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   require Logger
 
   alias CodexPooler.Gateway.Transports.Streaming.{DeferredStreamDrain, DeferredStreamRegistry}
+  alias CodexPooler.Telemetry.RelayRuntime
 
   alias CodexPooler.Gateway.Transports.Websocket.{
     ActivityDrain,
@@ -63,6 +64,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           | {:activity_registry, GenServer.server()}
           | {:stream_registry, GenServer.server()}
           | {:owner_post_deadline_call_budget_ms, pos_integer()}
+          | {:relay, GenServer.server()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -92,10 +94,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   @spec drain_for_shutdown() :: summary()
   def drain_for_shutdown do
-    timeout_ms = shutdown_timeout_ms()
+    drain_for_shutdown(shutdown_timeout_ms())
+  end
 
+  @spec drain_for_shutdown(pos_integer(), [option()]) :: summary()
+  def drain_for_shutdown(timeout_ms, opts \\ []) do
     call_drain(
-      [],
+      opts,
       {:drain_for_shutdown, timeout_ms},
       timeout_ms,
       conservative_call_timeout_ms(timeout_ms)
@@ -139,7 +144,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
        shutdown_timeout_ms: nil,
        drain_policy: drain_policy(opts),
        activity_registry: activity_registry,
-       stream_registry: stream_registry
+       stream_registry: stream_registry,
+       relay: Keyword.get(opts, :relay, RelayRuntime)
      }}
   end
 
@@ -168,6 +174,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
         %{active_drain: active_drain} = state
       )
       when is_map(active_drain) do
+    quiesce_relay!(state)
     active_drain = %{active_drain | waiters: [from | active_drain.waiters]}
 
     {:noreply,
@@ -177,6 +184,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   end
 
   def handle_call({:drain_for_shutdown, timeout_ms}, from, state) do
+    quiesce_relay!(state)
+
     case shutdown_timeout_budget(state) do
       :not_started ->
         start_local_drain(timeout_ms, from, state, true, state.drain_policy)
@@ -492,6 +501,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
         GenServer.call(server, request, call_timeout)
     end
   end
+
+  # Only a shutdown drain closes relay claim admission: quiesce is permanent
+  # for the consumer's lifetime, and a pod that drains but keeps serving must
+  # keep consuming the shared relay. Every shutdown branch (fresh, joining an
+  # active drain, exhausted budget) passes through here.
+  defp quiesce_relay!(state), do: :ok = RelayRuntime.quiesce(state.relay, 5_000)
 
   defp start_local_drain(timeout_ms, from, state, shutdown?, drain_policy) do
     already_draining? = state.draining?

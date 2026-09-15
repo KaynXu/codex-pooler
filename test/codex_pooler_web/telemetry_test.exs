@@ -376,7 +376,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
                upstream_transport: nil
              })
 
-    assert %Telemetry.Metrics.Counter{
+    assert %Telemetry.Metrics.Sum{
              event_name: [:codex_pooler, :quota, :cycle, :decision],
              measurement: :count,
              tags: [:scope, :decision, :source, :via]
@@ -416,7 +416,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
       CodexPoolerWeb.Telemetry.prometheus_metrics()
       |> metric_by_name("codex_pooler.gateway.stream.outcome.count")
 
-    assert %Telemetry.Metrics.Counter{
+    assert %Telemetry.Metrics.Sum{
              event_name: [:codex_pooler, :gateway, :stream, :outcome],
              measurement: :count,
              tags: [:outcome, :downstream_transport, :upstream_transport, :via]
