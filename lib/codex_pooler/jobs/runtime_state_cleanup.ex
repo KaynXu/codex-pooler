@@ -95,6 +95,23 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
   # metadata: the configured metadata allowlist is deliberately small, and two
   # bookkeeping log lines are not a reason to widen it.
   defp log_failed_step({name, result}) do
-    Logger.warning("runtime state cleanup step #{name} failed: #{inspect(result)}")
+    Logger.warning(
+      "runtime state cleanup step #{name} failed: #{inspect(bounded_failure(result))}"
+    )
   end
+
+  # Failure payloads are bounded before they reach the log: a step returns
+  # atoms, ids and module names, but an accounting error can carry an
+  # `Ecto.Changeset`, whose changes must never be logged. Structs are reduced
+  # to their module name; everything else is already bounded.
+  defp bounded_failure(%{__struct__: module}), do: module
+  defp bounded_failure(list) when is_list(list), do: Enum.map(list, &bounded_failure/1)
+
+  defp bounded_failure(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&bounded_failure/1) |> List.to_tuple()
+
+  defp bounded_failure(map) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, bounded_failure(v)} end)
+
+  defp bounded_failure(other), do: other
 end

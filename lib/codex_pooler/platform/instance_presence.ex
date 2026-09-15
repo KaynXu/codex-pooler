@@ -122,7 +122,11 @@ defmodule CodexPooler.Platform.InstancePresence do
   that a stale row alone could never distinguish from a live owner whose
   heartbeat writes fail. Rows are compared by their own `started_at`, both
   written from the database clock. The anonymous `nonode@nohost` name is shared
-  by every undistributed VM and proves nothing.
+  by every undistributed VM and proves nothing. The premise is one name per
+  live VM: an operator who pins one fixed `RELEASE_NODE` for several VMs that
+  run concurrently against one database would defeat it (nothing in the chart
+  or the self-host compose does so, and such VMs would already collide on
+  epmd inside a shared network namespace).
   """
   @spec superseded?(Identity.t() | nil) :: boolean()
   def superseded?(%Identity{node_name: "nonode@nohost"}), do: false

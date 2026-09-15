@@ -30,8 +30,9 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
     port = start_public_endpoint!()
 
     start_supervised!(
-      {ExecutionProofPublisher,
-       enabled: true, name: :"execution_http_publisher_#{System.unique_integer([:positive])}"}
+      # One fixed name: the file is synchronous, so no two tests hold it at once
+      # and long sessions do not mint an atom per run.
+      {ExecutionProofPublisher, enabled: true, name: :execution_http_lifecycle_publisher}
     )
 
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])

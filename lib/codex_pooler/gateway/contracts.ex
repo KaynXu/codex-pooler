@@ -48,7 +48,11 @@ defmodule CodexPooler.Gateway.Contracts do
           required(:status) => pos_integer(),
           optional(:headers) => response_headers(),
           required(:body) => map(),
-          optional(:public_full_rejection) => validation_rejection()
+          optional(:public_full_rejection) => validation_rejection(),
+          # Full projection markers read by the public senders: an upstream
+          # 404 on an input file reference, and the stream-startup error code.
+          optional(:public_input_file_upstream_404?) => boolean(),
+          optional(:public_stream_startup_error_code) => String.t() | nil
         }
   # The structured rejection a public `/v1` sender re-renders through the
   # caller-facing parameter mapper: carried as `public_validation_rejection`

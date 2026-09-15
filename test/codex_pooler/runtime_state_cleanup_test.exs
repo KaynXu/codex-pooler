@@ -620,7 +620,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
           :stale_catalog_sync_runs_failed,
           :stale_account_reconciliations_failed
         ] do
-      assert Map.has_key?(summary, key), "il riepilogo non riporta #{key}"
+      assert Map.has_key?(summary, key), "the summary does not report #{key}"
     end
 
     assert summary.expired_files == 1
