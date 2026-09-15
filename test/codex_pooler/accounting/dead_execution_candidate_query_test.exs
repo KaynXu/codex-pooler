@@ -6,55 +6,82 @@ defmodule CodexPooler.Accounting.DeadExecutionCandidateQueryTest do
   alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery
   alias Ecto.Adapters.SQL
 
-  test "candidate scan stops after the eligible batch and advances past ineligible rows" do
-    setup = accounting_setup()
-    seed_candidates(setup)
-    handler = {__MODULE__, make_ref()}
-    on_exit(fn -> :telemetry.detach(handler) end)
+  for planner <- [:default, :bitmap] do
+    @tag planner: planner
+    test "candidate batch stays bounded and advances with #{planner} planning", %{
+      planner: planner
+    } do
+      setup = accounting_setup()
+      seed_candidates(setup)
+      if planner == :bitmap, do: query!("SET LOCAL enable_indexscan = off", [])
+      handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
 
-    :ok =
-      :telemetry.attach(handler, [:codex_pooler, :repo, :query], &__MODULE__.capture/4, self())
+      :ok =
+        :telemetry.attach(handler, [:codex_pooler, :repo, :query], &__MODULE__.capture/4, self())
 
-    now = DateTime.utc_now()
+      now = DateTime.utc_now()
 
-    assert {:ok, %{dead_execution_attempts_recovered: 0}} =
-             DeadExecutionRecovery.recover(now)
+      assert {:ok, %{dead_execution_attempts_recovered: 0}} =
+               DeadExecutionRecovery.recover(now)
 
-    assert_receive {:candidate_query, sql, params}
-    :telemetry.detach(handler)
+      assert_receive {:candidate_query, sql, params}
+      :telemetry.detach(handler)
 
-    # The first 300 open executions fail three independent eligibility checks.
-    # They must not consume the result limit or starve the eligible suffix.
-    assert %{rows: [[301, 400, 100]]} =
-             query!(
-               """
-               SELECT min((r.request_metadata->>'fixture_ordinal')::int),
-                      max((r.request_metadata->>'fixture_ordinal')::int),count(*)
-               FROM requests r JOIN attempts a ON a.request_id=r.id
-               WHERE a.owner_execution_checked_at IS NOT NULL
-               """,
-               []
-             )
+      # The first 300 open executions fail three independent eligibility checks.
+      # They must not consume the result limit or starve the eligible suffix.
+      assert %{rows: [[301, 400, 100]]} =
+               query!(
+                 """
+                 SELECT min((r.request_metadata->>'fixture_ordinal')::int),
+                        max((r.request_metadata->>'fixture_ordinal')::int),count(*)
+                 FROM requests r JOIN attempts a ON a.request_id=r.id
+                 WHERE a.owner_execution_checked_at IS NOT NULL
+                 """,
+                 []
+               )
 
-    # Explain the actual emitted production SQL, including its bound LIMIT.
-    # Restoring the scheduler timestamp makes the plan use the original ordering.
-    query!("UPDATE attempts SET owner_execution_checked_at=NULL", [])
+      # Explain the actual emitted production SQL, including its bound LIMIT.
+      # Restoring the scheduler timestamp makes the plan use the original ordering.
+      query!("UPDATE attempts SET owner_execution_checked_at=NULL", [])
 
-    %{rows: [[[%{"Plan" => plan}]]]} =
-      query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> sql, params)
+      %{rows: [[[%{"Plan" => plan}]]]} =
+        query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> sql, params)
 
-    nodes = plan_nodes(plan)
-    assert plan["Actual Rows"] == 100
+      nodes = plan_nodes(plan)
+      assert plan["Actual Rows"] == 100
 
-    for node <- nodes, node["Node Type"] in ["Sort", "Incremental Sort"] do
-      assert hd(node["Plans"])["Actual Rows"] <= 100
+      for node <- nodes, node["Node Type"] in ["Sort", "Incremental Sort"] do
+        # A top-N sort may inspect all 700 eligible rows before returning 100.
+        # It must still stay within the 1,000 open attempts, not sort history.
+        assert hd(node["Plans"])["Actual Rows"] <= 1_000
+      end
+
+      attempt_scan = Enum.find(nodes, &(&1["Relation Name"] == "attempts"))
+      assert attempt_scan
+
+      assert attempt_scan["Actual Rows"] + Map.get(attempt_scan, "Rows Removed by Filter", 0) <=
+               1_000
+
+      assert attempt_scan["Actual Loops"] == 1
+      assert Enum.any?(nodes, &(&1["Node Type"] == "Limit" and &1["Actual Rows"] == 100))
+      assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < 12_000
+
+      # Scheduling must advance beyond the first batch regardless of access path.
+      assert {:ok, %{dead_execution_attempts_recovered: 0}} = DeadExecutionRecovery.recover(now)
+      assert {:ok, %{dead_execution_attempts_recovered: 0}} = DeadExecutionRecovery.recover(now)
+
+      assert %{rows: [[301, 500, 200]]} =
+               query!(
+                 """
+                 SELECT min((r.request_metadata->>'fixture_ordinal')::int),
+                        max((r.request_metadata->>'fixture_ordinal')::int),count(*)
+                 FROM requests r JOIN attempts a ON a.request_id=r.id
+                 WHERE a.owner_execution_checked_at IS NOT NULL
+                 """,
+                 []
+               )
     end
-
-    attempt_scan = Enum.find(nodes, &(&1["Index Name"] == "attempts_open_execution_index"))
-    assert attempt_scan
-    assert attempt_scan["Actual Rows"] + attempt_scan["Rows Removed by Filter"] == 400
-    assert attempt_scan["Actual Loops"] == 1
-    assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < 12_000
   end
 
   test "age, identity, reservation state, and replay exclusions retain the eligible controls" do
