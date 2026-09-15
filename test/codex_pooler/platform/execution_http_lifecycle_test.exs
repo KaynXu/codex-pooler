@@ -1,8 +1,151 @@
 defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
   use CodexPooler.DataCase, async: false
   import ExUnit.CaptureLog
-  alias CodexPooler.Platform.ExecutionIdentity
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport
+  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.FakeUpstream
+  alias CodexPooler.Platform.{ExecutionIdentity, ExecutionProofPublisher}
   alias CodexPooler.Platform.InstancePresence.Identity
+
+  @detection_timeout_ms 15_000
+
+  # Real gateway boundary (findings#207): the executor identity a request
+  # records is the Bandit connection process that ran it, its terminal proof is
+  # published by the production publisher once the request completes, and a
+  # second request on the same keep-alive connection runs in the same process
+  # under a distinct execution UUID while the connection stays open. The
+  # synthetic-plug cases below keep exercising the transport corners; this one
+  # proves the identity the gateway actually publishes.
+  test "a real gateway request publishes its executor and a keep-alive successor gets a new execution" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_execution_keep_alive",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    start_supervised!(
+      {ExecutionProofPublisher,
+       enabled: true, name: :"execution_http_publisher_#{System.unique_integer([:positive])}"}
+    )
+
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+    on_exit(fn -> Mint.HTTP.close(conn) end)
+
+    {conn, 200, first_body} = gateway_request!(conn, setup, "execution-keep-alive-first")
+    assert %{"id" => "resp_execution_keep_alive"} = CodexPooler.JSON.decode!(first_body)
+    assert Mint.HTTP.open?(conn)
+
+    [first_attempt] = pool_attempts(setup)
+    local = Identity.local()
+    assert first_attempt.owner_instance_id == local.node_name
+    assert first_attempt.owner_instance_boot_id == local.boot_id
+    assert is_binary(first_attempt.owner_execution_id)
+    executor = first_attempt.owner_process_id |> String.to_charlist() |> :erlang.list_to_pid()
+    assert Process.alive?(executor)
+
+    # The completed execution is retired while its connection process lives on,
+    # and the publisher turns that registry tombstone into the durable proof.
+    # The registry retirement happens after the response bytes reach the
+    # client, so wait for the durable proof before reading the registry state.
+    :ok = CodexPooler.ExecutionProofSupport.await_terminal!(first_attempt)
+    assert ExecutionIdentity.status(first_attempt) == :dead
+
+    {conn, 200, second_body} = gateway_request!(conn, setup, "execution-keep-alive-second")
+    assert %{"id" => "resp_execution_keep_alive"} = CodexPooler.JSON.decode!(second_body)
+    assert Mint.HTTP.open?(conn)
+
+    assert [%Attempt{id: first_id}, second_attempt] = pool_attempts(setup)
+    assert first_id == first_attempt.id
+    assert second_attempt.owner_process_id == first_attempt.owner_process_id
+    assert is_binary(second_attempt.owner_execution_id)
+    refute second_attempt.owner_execution_id == first_attempt.owner_execution_id
+    assert Process.alive?(executor)
+    :ok = CodexPooler.ExecutionProofSupport.await_terminal!(second_attempt)
+    assert ExecutionIdentity.status(second_attempt) == :dead
+
+    assert FakeUpstream.count(upstream) == 2
+
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
+  end
+
+  defp pool_attempts(setup) do
+    Repo.all(
+      from attempt in Attempt,
+        join: request in Request,
+        on: request.id == attempt.request_id,
+        where: request.pool_id == ^setup.pool.id,
+        order_by: [asc: attempt.started_at, asc: attempt.id]
+    )
+  end
+
+  defp gateway_request!(conn, setup, marker) do
+    body =
+      CodexPooler.JSON.encode!(%{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input(marker),
+        "stream" => false
+      })
+
+    headers = [
+      {"authorization", setup.authorization},
+      {"content-type", "application/json"},
+      {"x-request-id", marker}
+    ]
+
+    {:ok, conn, ref} =
+      Mint.HTTP.request(conn, "POST", "/backend-api/codex/responses/compact", headers, body)
+
+    await_gateway_response!(
+      conn,
+      ref,
+      nil,
+      [],
+      System.monotonic_time(:millisecond) + @detection_timeout_ms
+    )
+  end
+
+  defp await_gateway_response!(conn, ref, status, body, deadline) do
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      message ->
+        case Mint.HTTP.stream(conn, message) do
+          :unknown ->
+            await_gateway_response!(conn, ref, status, body, deadline)
+
+          {:ok, conn, responses} ->
+            {status, body, done?} =
+              Enum.reduce(responses, {status, body, false}, fn
+                {:status, ^ref, response_status}, {_status, body, done?} ->
+                  {response_status, body, done?}
+
+                {:data, ^ref, data}, {status, body, done?} ->
+                  {status, [body, data], done?}
+
+                {:done, ^ref}, {status, body, _done?} ->
+                  {status, body, true}
+
+                _response, acc ->
+                  acc
+              end)
+
+            if done?,
+              do: {conn, status, IO.iodata_to_binary(body)},
+              else: await_gateway_response!(conn, ref, status, body, deadline)
+
+          {:error, _conn, reason, _responses} ->
+            flunk("gateway request failed: #{inspect(reason)}")
+        end
+    after
+      timeout -> flunk("timed out waiting for the gateway response")
+    end
+  end
 
   defmodule LifecyclePlug do
     def init(opts), do: opts

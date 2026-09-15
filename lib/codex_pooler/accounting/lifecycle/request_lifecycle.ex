@@ -154,7 +154,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
-          {:ok, AbsentInstanceRecovery.summary()} | {:error, term()}
+          {:ok, AbsentInstanceRecovery.summary()}
+          | {:error, term(), AbsentInstanceRecovery.summary()}
   def recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []) do
     AbsentInstanceRecovery.recover_absent_instance_attempts(
       DateTime.truncate(now, :microsecond),
@@ -531,7 +532,21 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
     InstancePresence.observer_fresh?(presence_now, opts) and
       InstancePresence.absent?(owner, presence_now, opts) and
-      ExecutionIdentity.status(attempt) == :dead
+      absent_execution_dead?(attempt, owner)
+  end
+
+  # Stale presence is candidate evidence, never proof: the owner may be alive
+  # with failing heartbeat writes (findings#214). Exact death comes from a
+  # reachable owner node reporting the execution gone, or, without BEAM
+  # connectivity to the owner (the production worker topology, findings#207),
+  # from a successor incarnation publishing presence under the same node name.
+  # A reachable owner reporting the execution alive vetoes both.
+  defp absent_execution_dead?(attempt, owner) do
+    case ExecutionIdentity.status(attempt) do
+      :dead -> true
+      :alive -> false
+      :unknown -> InstancePresence.superseded?(owner)
+    end
   end
 
   defp same_execution?(attempt, candidate) do

@@ -17,6 +17,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   @recovery_message "attempt recovered after its owning instance stopped reporting"
 
   @type summary :: %{required(:absent_instance_attempts_recovered) => non_neg_integer()}
+  @type failure :: {Ecto.UUID.t(), term()}
 
   @spec recovery_code() :: String.t()
   def recovery_code, do: @recovery_code
@@ -36,6 +37,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   would otherwise have proved its predecessor gone; the incarnation is what
   keeps the two VMs apart.
 
+  Stale presence alone settles only attempts that predate execution identity.
+  An attempt that records its executor is settled only with exact proof that
+  the execution is gone: a reachable owner node reporting it dead, or a
+  successor incarnation publishing presence under the same node name, which
+  is what an in-place restart after `SIGKILL` or an OOM kill produces and
+  needs no BEAM connectivity from the cleanup role. A pod that is replaced
+  under a new name without publishing terminal proofs (see dead-execution
+  recovery) remains unknown and waits for the six-hour sweep; a reachable
+  owner reporting the execution alive vetoes settlement (findings#207,
+  findings#214).
+
   The pass settles through the ordinary interrupted path the drain uses,
   releasing the reservation and interrupting the turn, but with its own error
   code so triage can separate a recovered orphan from a drained stream. It
@@ -44,18 +56,35 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   attempts this pass cannot reach, including attempts with no recorded owner,
   attempts written before incarnations existed, and owners that never published
   presence at all.
+
+  Fairness across passes is durable, not node-local. Every candidate the pass
+  examines is stamped with `owner_execution_checked_at` before it is settled,
+  and the batch is ordered by that stamp falling back to `started_at`, exactly
+  like dead-execution recovery. A candidate whose settlement keeps failing is
+  therefore examined once per pass and then sorts behind every candidate no
+  pass has reached yet, so a persistently failing oldest row cannot occupy the
+  head of every batch while healthy later rows stay stranded (findings#207).
+  Failures stay visible: the pass keeps settling the rest of its batch and
+  returns the collected candidate failures with the summary of what it did
+  settle, which the cleanup job reports as a failed step with its evidence.
   """
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
-          {:ok, summary()} | {:error, term()}
+          {:ok, summary()}
+          | {:error, {:absent_instance_candidates_failed, [failure()]}, summary()}
   def recover_absent_instance_attempts(now, opts \\ []) do
     presence_now = InstancePresence.database_now()
     cutoff = InstancePresence.absent_cutoff(presence_now, opts)
     limit = Keyword.get(opts, :limit, 100)
 
     if InstancePresence.observer_fresh?(presence_now, opts) do
-      now
-      |> absent_instance_attempts(cutoff, limit, opts)
-      |> Enum.reduce_while({:ok, initial_summary()}, &recover(&1, &2, now, opts))
+      {summary, failures} =
+        now
+        |> absent_instance_attempts(cutoff, limit, opts)
+        |> Enum.reduce({initial_summary(), []}, &recover(&1, &2, now, opts))
+
+      if failures == [],
+        do: {:ok, summary},
+        else: {:error, {:absent_instance_candidates_failed, Enum.reverse(failures)}, summary}
     else
       {:ok, initial_summary()}
     end
@@ -101,7 +130,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
           attempt.status in ^@open_attempt_statuses and
           not is_nil(attempt.owner_instance_boot_id) and attempt.started_at <= ^cutoff and
           presence.last_seen_at <= ^cutoff,
-      order_by: [asc: attempt.started_at, asc: attempt.id],
+      # Progress order: rows no pass has examined keep their dispatch time, so
+      # a row stamped by an earlier pass sorts after them.
+      order_by: [
+        asc: fragment("COALESCE(?, ?)", attempt.owner_execution_checked_at, attempt.started_at),
+        asc: attempt.id
+      ],
       limit: ^limit,
       select: {request, attempt}
   end
@@ -121,12 +155,44 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
       where: is_nil(release.id) and is_nil(replay.id)
   end
 
-  defp recover({request, attempt}, {:ok, summary}, now, opts) do
+  defp recover({request, attempt}, {summary, failures}, now, opts) do
+    stamp_examined!(attempt, now)
+
     case settle(request, attempt, now, opts) do
-      {:ok, :recovered} -> {:cont, {:ok, increment(summary)}}
-      {:ok, :noop} -> {:cont, {:ok, summary}}
-      {:error, reason} -> {:halt, {:error, reason}}
+      {:ok, :recovered} -> {increment(summary), failures}
+      {:ok, :noop} -> {summary, failures}
+      {:error, reason} -> {summary, [{attempt.id, reason} | failures]}
     end
+  rescue
+    # A settlement that raises is a candidate failure like a returned error: it
+    # is reported with the attempt it belongs to and the pass moves on. Nothing
+    # is swallowed; the cleanup job logs the collected failures as a failed step.
+    exception -> {summary, [{attempt.id, bounded_failure(exception)} | failures]}
+  catch
+    :exit, _reason ->
+      {summary, [{attempt.id, :absent_instance_recovery_unavailable} | failures]}
+  end
+
+  # A PostgreSQL error keeps its fixed-vocabulary SQLSTATE class beside the
+  # module (deadlock, lock timeout and constraint failures are different
+  # operator actions); every other exception is reported by module only.
+  defp bounded_failure(%Postgrex.Error{postgres: %{code: code}}) when is_atom(code),
+    do: {Postgrex.Error, code}
+
+  defp bounded_failure(exception), do: exception.__struct__
+
+  # Durable scheduling progress shared with dead-execution recovery. The row is
+  # stamped before settlement, so a failing settlement still moves it behind
+  # the rows no pass has reached yet. Only an open row is stamped: a row settled
+  # between the scan and this point keeps its terminal state untouched.
+  defp stamp_examined!(%Attempt{id: id}, now) do
+    _stamped =
+      Repo.update_all(
+        from(a in Attempt, where: a.id == ^id and a.status in ^@open_attempt_statuses),
+        set: [owner_execution_checked_at: now]
+      )
+
+    :ok
   end
 
   # The scan already proved the owner absent, but re-read presence immediately

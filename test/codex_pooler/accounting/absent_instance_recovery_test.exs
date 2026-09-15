@@ -2,6 +2,8 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountingTestSupport
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1, run_unboxed: 1]
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [cleanup_unboxed_pool!: 1]
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -214,6 +216,107 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
                Accounting.recover_absent_instance_attempts(now)
     end
 
+    # findings#207: an attempt that records its executor is never settled on
+    # stale presence alone (findings#214), and the cleanup role has no BEAM
+    # connectivity to app pods in production. A successor incarnation publishing
+    # under the same node name is the distribution-free proof that the previous
+    # VM is gone: one node name is held by one VM at a time.
+    test "a successor incarnation under the same node name proves a modern orphan's executor dead" do
+      setup = accounting_setup()
+      now = now()
+      dispatched_at = DateTime.add(now, -10, :minute)
+      node_name = "codex_pooler@10.42.#{System.unique_integer([:positive])}.7"
+      first = Identity.new(node_name, unique_boot_id())
+      second = Identity.new(node_name, unique_boot_id())
+
+      %{request: request, attempt: attempt, turn: turn} =
+        modern_orphan!(setup, first, dispatched_at)
+
+      # The predecessor's row is stale; no successor has published yet, so the
+      # executor is unknown and the row is left alone.
+      {:ok, _stale} = InstancePresence.record_heartbeat(first, dispatched_at)
+      {:ok, _} = InstancePresence.record_heartbeat()
+      assert ExecutionIdentity.status(attempt) == :unknown
+      refute InstancePresence.superseded?(first)
+
+      assert {:ok, %{absent_instance_attempts_recovered: 0}} =
+               Accounting.recover_absent_instance_attempts(now)
+
+      assert Repo.reload!(attempt).status == "in_progress"
+
+      # The container restarts in place: same node name, new incarnation,
+      # started after the predecessor. Its own open attempt must stay untouched.
+      {:ok, _fresh} = InstancePresence.record_heartbeat(second, now)
+
+      %{attempt: successor_attempt} =
+        modern_orphan!(setup, second, DateTime.add(now, -9, :minute))
+
+      assert InstancePresence.superseded?(first)
+      refute InstancePresence.superseded?(second)
+
+      assert {:ok, %{absent_instance_attempts_recovered: 1}} =
+               Accounting.recover_absent_instance_attempts(now)
+
+      assert %Request{status: "failed", last_error_code: "absent_instance_recovered"} =
+               Repo.get!(Request, request.id)
+
+      assert %Attempt{status: "failed", network_error_code: "absent_instance_recovered"} =
+               Repo.reload!(attempt)
+
+      assert %CodexTurn{status: "interrupted", error_code: "absent_instance_recovered"} =
+               Repo.reload!(turn)
+
+      assert ledger_kinds(request) == ["release", "reservation", "settlement"]
+      assert Repo.reload!(successor_attempt).status == "in_progress"
+
+      assert {:ok, %{absent_instance_attempts_recovered: 0}} =
+               Accounting.recover_absent_instance_attempts(now)
+    end
+
+    test "an incarnation that started before the orphan's owner never supersedes it" do
+      setup = accounting_setup()
+      now = now()
+      dispatched_at = DateTime.add(now, -10, :minute)
+      node_name = "codex_pooler@10.42.#{System.unique_integer([:positive])}.8"
+      older = Identity.new(node_name, unique_boot_id())
+      owner = Identity.new(node_name, unique_boot_id())
+
+      %{attempt: attempt} = modern_orphan!(setup, owner, dispatched_at)
+
+      # A lingering row from an earlier incarnation of the same name, still
+      # being refreshed (its VM is the one alive), does not prove the newer
+      # owner dead: only a row that started later is a successor.
+      {:ok, _} = InstancePresence.record_heartbeat(older, DateTime.add(dispatched_at, -1, :hour))
+      {:ok, _} = InstancePresence.record_heartbeat(older, now)
+      {:ok, _} = InstancePresence.record_heartbeat(owner, dispatched_at)
+      {:ok, _} = InstancePresence.record_heartbeat()
+      refute InstancePresence.superseded?(owner)
+
+      assert {:ok, %{absent_instance_attempts_recovered: 0}} =
+               Accounting.recover_absent_instance_attempts(now)
+
+      assert Repo.reload!(attempt).status == "in_progress"
+    end
+
+    test "the anonymous nonode@nohost name never supersedes an orphan" do
+      setup = accounting_setup()
+      now = now()
+      dispatched_at = DateTime.add(now, -10, :minute)
+      first = Identity.new("nonode@nohost", unique_boot_id())
+      second = Identity.new("nonode@nohost", unique_boot_id())
+
+      %{attempt: attempt} = modern_orphan!(setup, first, dispatched_at)
+      {:ok, _} = InstancePresence.record_heartbeat(first, dispatched_at)
+      {:ok, _} = InstancePresence.record_heartbeat(second, now)
+      {:ok, _} = InstancePresence.record_heartbeat()
+      refute InstancePresence.superseded?(first)
+
+      assert {:ok, %{absent_instance_attempts_recovered: 0}} =
+               Accounting.recover_absent_instance_attempts(now)
+
+      assert Repo.reload!(attempt).status == "in_progress"
+    end
+
     test "an attempt owned by the live instance is untouched" do
       setup = accounting_setup()
       now = now()
@@ -356,6 +459,109 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
     end
   end
 
+  # findings#207: a persistently failing oldest candidate must not occupy the
+  # head of every batch. The rows are committed and every pass runs unboxed,
+  # because a settlement that raises inside this test's own sandbox transaction
+  # would abort it; the failing settlement is a real PostgreSQL trigger on the
+  # attempts row, so the failure comes from the database, not from a stub.
+  describe "fairness across passes" do
+    test "a persistently failing oldest candidate does not starve later candidates across passes" do
+      graph = committed_graph!()
+      absent = committed_absent_owner!()
+      refresh_local_observer!()
+      now = now()
+      first_stale = DateTime.add(now, -180, :second)
+
+      [failing, second, third] = committed_candidates!(graph, absent, first_stale, 3)
+      install_failing_settlement!([failing.attempt.id])
+
+      # Causal control: the same passes with the durable progress marker
+      # cleared before each one reproduce the pre-fix oldest-first order. With
+      # one row per batch the failing head is reselected on every pass and the
+      # suffix never progresses.
+      for pass <- 1..3 do
+        clear_examined_marker!(failing.attempt.id)
+        pass_now = DateTime.add(now, pass, :second)
+        failing_id = failing.attempt.id
+
+        assert {:error,
+                {:absent_instance_candidates_failed,
+                 [{^failing_id, {Postgrex.Error, :raise_exception}}]},
+                %{absent_instance_attempts_recovered: 0}} = run_pass(pass_now, 1)
+
+        assert examined_at(failing.attempt.id) == pass_now
+      end
+
+      assert attempt_status(second.attempt.id) == "in_progress"
+      assert attempt_status(third.attempt.id) == "in_progress"
+
+      # Regression: the marker the last control pass left on the failing head
+      # sorts it behind the rows no pass has reached, so the next batch holds
+      # both healthy rows and the failing one only comes back once they settled.
+      assert {:ok, %{absent_instance_attempts_recovered: 2}} =
+               run_pass(DateTime.add(now, 4, :second), 2)
+
+      failing_id = failing.attempt.id
+
+      assert {:error,
+              {:absent_instance_candidates_failed,
+               [{^failing_id, {Postgrex.Error, :raise_exception}}]},
+              %{absent_instance_attempts_recovered: 0}} =
+               run_pass(DateTime.add(now, 5, :second), 2)
+
+      for candidate <- [second, third] do
+        assert %Request{status: "failed", last_error_code: "absent_instance_recovered"} =
+                 run_unboxed(fn -> Repo.get!(Request, candidate.request.id) end)
+
+        assert %Attempt{status: "failed", network_error_code: "absent_instance_recovered"} =
+                 run_unboxed(fn -> Repo.get!(Attempt, candidate.attempt.id) end)
+
+        assert %CodexTurn{status: "interrupted", error_code: "absent_instance_recovered"} =
+                 run_unboxed(fn -> Repo.get!(CodexTurn, candidate.turn.id) end)
+
+        assert run_unboxed(fn -> ledger_kinds(candidate.request) end) ==
+                 ["release", "reservation", "settlement"]
+      end
+
+      assert attempt_status(failing.attempt.id) == "in_progress"
+      assert run_unboxed(fn -> ledger_kinds(failing.request) end) == ["reservation"]
+
+      # Within one batch the failing head no longer halts the rest: a fresh
+      # batch of stale candidates settles its healthy rows in the same pass the
+      # head fails, and the head sorts behind the remainder on the next pass.
+      second_stale = DateTime.add(now, -170, :second)
+
+      [batch_failing, batch_second, batch_third] =
+        committed_candidates!(graph, absent, second_stale, 3)
+
+      install_failing_settlement!([batch_failing.attempt.id])
+      batch_failing_id = batch_failing.attempt.id
+
+      assert {:error,
+              {:absent_instance_candidates_failed,
+               [{^batch_failing_id, {Postgrex.Error, :raise_exception}}]},
+              %{absent_instance_attempts_recovered: 1}} =
+               run_pass(DateTime.add(now, 6, :second), 2)
+
+      assert attempt_status(batch_second.attempt.id) == "failed"
+      assert attempt_status(batch_third.attempt.id) == "in_progress"
+
+      assert {:error,
+              {:absent_instance_candidates_failed,
+               [{^failing_id, {Postgrex.Error, :raise_exception}}]},
+              %{absent_instance_attempts_recovered: 1}} =
+               run_pass(DateTime.add(now, 7, :second), 2)
+
+      assert attempt_status(batch_third.attempt.id) == "failed"
+      assert attempt_status(batch_failing.attempt.id) == "in_progress"
+      assert attempt_status(failing.attempt.id) == "in_progress"
+
+      CodexPooler.TestDiagnostics.puts(
+        "absent_instance_fairness control_passes=3 control_recovered=0 regression_recovered=4 failing_retained=2 terminal=ok"
+      )
+    end
+  end
+
   describe "attempt ownership" do
     test "a dispatched attempt records the incarnation this instance publishes" do
       instance = start_instance!(:absent_recovery_ownership)
@@ -405,6 +611,29 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
   end
 
   defp end_instance!(name), do: :ok = stop_supervised!(name)
+
+  # An open turn dispatched by `owner` that records an executor the way the
+  # gateway does, so the pass must reach the exact-execution authority.
+  defp modern_orphan!(setup, %Identity{} = owner, dispatched_at) do
+    dispatched =
+      dispatch_open_turn!(setup, dispatched_at, %{
+        owner_instance_id: owner.node_name,
+        owner_instance_boot_id: owner.boot_id
+      })
+
+    attempt =
+      dispatched.attempt
+      |> Ecto.Changeset.change(
+        owner_process_id: "<0.#{System.unique_integer([:positive])}.0>",
+        owner_execution_id: Ecto.UUID.generate()
+      )
+      |> Repo.update!()
+
+    %{dispatched | attempt: attempt}
+  end
+
+  defp unique_boot_id,
+    do: Base.encode32(:crypto.strong_rand_bytes(10), case: :lower, padding: false)
 
   defp dispatch_open_turn!(setup, dispatched_at, attempt_attrs \\ %{}) do
     {:ok, reserved} =
@@ -464,6 +693,125 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
     |> Enum.map(& &1.entry_kind)
     |> Enum.sort()
   end
+
+  # -- committed fixtures for the multi-pass fairness regression ---------------
+
+  # `accounting_setup/0` derives its unique keys while it commits, so the
+  # cleanup is registered straight after the commit, as the replay Postgres
+  # tests do; `cleanup_unboxed_pool!/1` removes the Pool graph, its pricing row,
+  # its upstream identity and the fixture owner it committed.
+  defp committed_graph! do
+    setup = run_unboxed(fn -> accounting_setup() end)
+    register_unboxed_cleanup!(fn -> cleanup_unboxed_pool!(setup) end)
+    setup
+  end
+
+  # An incarnation that published presence once, ten minutes ago, and never
+  # again: the shape every absent-instance candidate is judged against.
+  defp committed_absent_owner! do
+    unique = System.unique_integer([:positive])
+    owner = Identity.new("codex_pooler@10.0.0.#{unique}", "boot#{unique}")
+
+    register_unboxed_cleanup!(fn -> delete_presence!(owner.instance_id) end)
+
+    {:ok, _presence} =
+      run_unboxed(fn ->
+        InstancePresence.record_heartbeat(owner, DateTime.add(now(), -600, :second))
+      end)
+
+    owner
+  end
+
+  # The pass only authorizes another incarnation's absence while this observer
+  # is fresh. The heartbeat is disabled in the test environment, so the local
+  # row is written here and removed again unless it already existed.
+  defp refresh_local_observer! do
+    local = Identity.local()
+    existed? = run_unboxed(fn -> not is_nil(Repo.get(Instance, local.instance_id)) end)
+
+    unless existed? do
+      register_unboxed_cleanup!(fn -> delete_presence!(local.instance_id) end)
+    end
+
+    {:ok, _presence} = run_unboxed(fn -> InstancePresence.record_heartbeat(local) end)
+    :ok
+  end
+
+  # `count` open legacy attempts owned by `owner`, dispatched one second apart
+  # from `started_at` so the oldest-first order is unambiguous. Legacy rows
+  # carry no execution identity, so the pass settles them through the plain
+  # absent-instance finalizer rather than the exact-execution authority.
+  defp committed_candidates!(setup, owner, started_at, count) do
+    for index <- 0..(count - 1) do
+      dispatched_at = DateTime.add(started_at, index, :second)
+
+      run_unboxed(fn ->
+        dispatch_open_turn!(setup, dispatched_at, %{
+          owner_instance_id: owner.node_name,
+          owner_instance_boot_id: owner.boot_id,
+          owner_process_id: nil,
+          owner_execution_id: nil
+        })
+      end)
+    end
+  end
+
+  # A real database failure on the exact rows: settling any of `attempt_ids` to
+  # `failed` raises inside the finalizer's transaction. The trigger is dropped
+  # by a cleanup registered before it exists.
+  defp install_failing_settlement!(attempt_ids) do
+    suffix = System.unique_integer([:positive])
+    function = "absent_recovery_test_fail_#{suffix}"
+    ids = Enum.map_join(attempt_ids, ", ", &"'#{&1}'::uuid")
+
+    register_unboxed_cleanup!(fn ->
+      Repo.query!("DROP TRIGGER IF EXISTS #{function} ON attempts")
+      Repo.query!("DROP FUNCTION IF EXISTS #{function}()")
+    end)
+
+    run_unboxed(fn ->
+      Repo.query!("""
+      CREATE FUNCTION #{function}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.id IN (#{ids}) AND NEW.status = 'failed' THEN
+          RAISE EXCEPTION 'synthetic absent instance settlement failure';
+        END IF;
+        RETURN NEW;
+      END $$
+      """)
+
+      Repo.query!(
+        "CREATE TRIGGER #{function} BEFORE UPDATE ON attempts " <>
+          "FOR EACH ROW EXECUTE FUNCTION #{function}()"
+      )
+    end)
+
+    :ok
+  end
+
+  defp delete_presence!(instance_id) do
+    Repo.delete_all(from instance in Instance, where: instance.instance_id == ^instance_id)
+    :ok
+  end
+
+  defp run_pass(pass_now, limit),
+    do: run_unboxed(fn -> Accounting.recover_absent_instance_attempts(pass_now, limit: limit) end)
+
+  defp clear_examined_marker!(attempt_id) do
+    run_unboxed(fn ->
+      Repo.update_all(from(a in Attempt, where: a.id == ^attempt_id),
+        set: [owner_execution_checked_at: nil]
+      )
+    end)
+
+    :ok
+  end
+
+  defp examined_at(attempt_id),
+    do: run_unboxed(fn -> Repo.get!(Attempt, attempt_id).owner_execution_checked_at end)
+
+  defp attempt_status(attempt_id),
+    do: run_unboxed(fn -> Repo.get!(Attempt, attempt_id).status end)
 
   defp unique_correlation_id, do: "corr-absent-#{System.unique_integer([:positive])}"
 

@@ -20,10 +20,12 @@ defmodule CodexPooler.Platform.InstancePresence do
   when its row exists *and* has not been refreshed inside the liveness window;
   a missing row means "unknown", never "gone", so an instance that never
   published (an older release, a failed first write) keeps its work and falls
-  back to the six-hour stale-reservation sweep. A successor publishing under
-  the same node name is never taken as proof that its predecessor ended,
-  because node names are unique per *running* VM only when distribution names
-  them so. Presence is therefore safe to miss and never safe to invent.
+  back to the six-hour stale-reservation sweep. A stale row alone is never
+  proof that its owner ended (a live owner's heartbeat writes can fail); a
+  *later-started* incarnation publishing under the same node name is, because
+  a node name is held by one VM at a time, and `nonode@nohost`, the name every
+  undistributed VM shares, is excluded (`superseded?/1`). Presence is
+  therefore safe to miss and never safe to invent.
 
   The candidate window is eight heartbeat intervals and exceeds the rollout
   drain budget. It is not an outage-safety guarantee. Recovery requires a
@@ -110,6 +112,33 @@ defmodule CodexPooler.Platform.InstancePresence do
   end
 
   def absent?(_identity, %DateTime{}, _opts), do: false
+
+  @doc """
+  Whether a newer incarnation of the same node name has published presence.
+
+  A node name is held by one VM at a time (the pod address when clustered, the
+  pod hostname otherwise), so a successor incarnation publishing under it is
+  exact proof that the older VM is gone: it is the in-place container restart
+  that a stale row alone could never distinguish from a live owner whose
+  heartbeat writes fail. Rows are compared by their own `started_at`, both
+  written from the database clock. The anonymous `nonode@nohost` name is shared
+  by every undistributed VM and proves nothing.
+  """
+  @spec superseded?(Identity.t() | nil) :: boolean()
+  def superseded?(%Identity{node_name: "nonode@nohost"}), do: false
+
+  def superseded?(%Identity{node_name: node_name, boot_id: boot_id, instance_id: instance_id}) do
+    Repo.exists?(
+      from newer in Instance,
+        join: older in Instance,
+        on: older.node_name == newer.node_name,
+        where:
+          older.instance_id == ^instance_id and newer.node_name == ^node_name and
+            newer.boot_id != ^boot_id and newer.started_at > older.started_at
+    )
+  end
+
+  def superseded?(_identity), do: false
 
   @doc "A stale observer cannot authorize another incarnation's absence recovery."
   @spec observer_fresh?(DateTime.t(), keyword()) :: boolean()

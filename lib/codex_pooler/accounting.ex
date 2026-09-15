@@ -227,7 +227,7 @@ defmodule CodexPooler.Accounting do
     to: RequestLifecycle
 
   @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
+          {:ok, map()} | {:error, term(), map()}
   defdelegate recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []),
     to: RequestLifecycle
 

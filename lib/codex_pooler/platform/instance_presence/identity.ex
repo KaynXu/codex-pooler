@@ -21,9 +21,11 @@ defmodule CodexPooler.Platform.InstancePresence.Identity do
   because each incarnation owns its own row.
 
   `instance_id` is that row's key, `"<node>#<boot id>"`, one row per VM, so
-  incarnations coexist and each ages on its own schedule. Absence therefore
-  stays what it was: one row that stopped being refreshed, never an inference
-  drawn from a successor publishing under the same name. Keeping the key in a
+  incarnations coexist and each ages on its own schedule. Absence stays what
+  it was, one row that stopped being refreshed; exact death of a VM that
+  published no terminal proof is inferred only from a later-started successor
+  incarnation under the same node name (`InstancePresence.superseded?/1`),
+  never from the stale row alone. Keeping the key in a
   single column also keeps a previous release's heartbeat upsert (`ON CONFLICT
   (instance_id)`) working through a rollout, while the `node_name` and
   `boot_id` columns are what recovery joins an attempt's owner against.

@@ -134,6 +134,31 @@ defmodule CodexPooler.Platform.InstancePresenceTest do
     refute InstancePresence.absent?(second, now)
   end
 
+  test "a later-started incarnation of the same node name supersedes an earlier one" do
+    now = InstancePresence.database_now()
+    node_name = "codex_pooler@10.42.#{System.unique_integer([:positive])}.9"
+    first = Identity.new(node_name, unique_boot_id())
+    second = Identity.new(node_name, unique_boot_id())
+    anonymous = Identity.new("nonode@nohost", unique_boot_id())
+    anonymous_successor = Identity.new("nonode@nohost", unique_boot_id())
+
+    {:ok, _} = InstancePresence.record_heartbeat(first, DateTime.add(now, -600, :second))
+    refute InstancePresence.superseded?(first)
+
+    {:ok, _} = InstancePresence.record_heartbeat(second, now)
+    assert InstancePresence.superseded?(first)
+    # Only a later start counts, so the successor itself is never superseded by
+    # the earlier row, and equal timestamps fail closed.
+    refute InstancePresence.superseded?(second)
+    {:ok, _} = InstancePresence.record_heartbeat(Identity.new(node_name, unique_boot_id()), now)
+    refute InstancePresence.superseded?(second)
+
+    {:ok, _} = InstancePresence.record_heartbeat(anonymous, DateTime.add(now, -600, :second))
+    {:ok, _} = InstancePresence.record_heartbeat(anonymous_successor, now)
+    refute InstancePresence.superseded?(anonymous)
+    refute InstancePresence.superseded?(nil)
+  end
+
   test "absence needs a stale row: unknown and recently reporting incarnations are present" do
     instance = identity()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -210,4 +235,7 @@ defmodule CodexPooler.Platform.InstancePresenceTest do
     assert :ignore =
              InstanceHeartbeat.start_link(enabled: false, name: :instance_presence_disabled_test)
   end
+
+  defp unique_boot_id,
+    do: Base.encode32(:crypto.strong_rand_bytes(10), case: :lower, padding: false)
 end
