@@ -15,9 +15,12 @@ defmodule CodexPooler.Accounting.PreAttemptRelease do
   `detail_key/0` is written into every reservation-failure release entry so
   three states stay distinguishable, per the repository's sanitizer rule:
 
-    * the key is **absent** — the entry is not a pre-attempt release (a
-      settlement-time release carries an `attempt_id`), or it predates this
-      field;
+    * the key is **absent** — the entry is not a pre-attempt release: a
+      settlement-time release, or a reservation-failure release written after
+      a terminal attempt whose retry never started (both carry an
+      `attempt_id` and the `release` kind; only the settlement-time release
+      has a sibling `settlement` row for the same request, findings#221), or
+      it predates this field;
     * `"unrecorded"` — this *is* a pre-attempt release, and the caller declared
       no phase: we let the reservation go without an attempt and cannot say
       where;

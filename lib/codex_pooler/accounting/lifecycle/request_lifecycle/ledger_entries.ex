@@ -249,8 +249,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
           LedgerEntry.t(),
           String.t(),
           String.t() | nil,
-          String.t(),
-          DateTime.t()
+          String.t() | nil,
+          DateTime.t(),
+          Attempt.t() | nil
         ) :: ledger_attrs()
   def reservation_failure_release_attrs(
         request,
@@ -258,10 +259,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
         usage_status,
         last_error_code,
         pre_attempt_phase,
-        timestamp
+        timestamp,
+        released_after_attempt \\ nil
       ) do
     %{
       request_id: request.id,
+      attempt_id: released_after_attempt && released_after_attempt.id,
       pricing_snapshot_id: reservation.pricing_snapshot_id,
       pool_id: request.pool_id,
       api_key_id: request.api_key_id,
@@ -282,7 +285,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       source_event_id: release_source_event_id(request.id),
       occurred_at: timestamp,
       created_at: timestamp,
-      details: reservation_failure_release_details(request, last_error_code, pre_attempt_phase)
+      details:
+        reservation_failure_release_details(
+          request,
+          last_error_code,
+          pre_attempt_phase,
+          released_after_attempt
+        )
     }
   end
 
@@ -330,12 +339,22 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   # release — an explicit `unrecorded` when the caller declared nothing, never
   # an absent key, so the absent key keeps meaning "not a pre-attempt release,
   # or older than this field".
-  defp reservation_failure_release_details(request, last_error_code, pre_attempt_phase) do
+  defp reservation_failure_release_details(request, last_error_code, pre_attempt_phase, nil) do
     %{
       "reservation_source_event_id" => reservation_source_event_id(request.id),
       "release_reason" => last_error_code,
       "request_status" => request.status,
       PreAttemptRelease.detail_key() => PreAttemptRelease.phase(pre_attempt_phase)
+    }
+  end
+
+  # Released after a terminal attempt: the attempt id on the entry says so,
+  # and the pre-attempt phase key stays absent (findings#221).
+  defp reservation_failure_release_details(request, last_error_code, _phase, _attempt) do
+    %{
+      "reservation_source_event_id" => reservation_source_event_id(request.id),
+      "release_reason" => last_error_code,
+      "request_status" => request.status
     }
   end
 

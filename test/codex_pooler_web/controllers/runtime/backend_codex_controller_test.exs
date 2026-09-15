@@ -11334,7 +11334,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured.json, "max_output_tokens")
     refute Map.has_key?(captured.json, "temperature")
     refute Map.has_key?(captured.json, "top_p")
-    assert captured.json["reasoning"] == %{"effort" => "max"}
+    # The selected assignment's source model advertises levels up to xhigh, so
+    # ultra lands there rather than on a Pool-wide `max` (findings#221).
+    assert captured.json["reasoning"] == %{"effort" => "xhigh"}
     assert captured.json["prompt_cache_key"] == raw_prompt_cache_key
     refute Map.has_key?(captured.json, "prompt_cache_options")
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))

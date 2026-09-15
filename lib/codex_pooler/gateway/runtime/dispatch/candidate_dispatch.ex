@@ -151,7 +151,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
              context.payload,
              context.model,
              context.endpoint,
-             context.request_options
+             context.request_options,
+             assignment_id: context.assignment.id
            ),
          {:ok, context} <- persist_compaction_projection(context, request_options, operations),
          {:ok, token} <-

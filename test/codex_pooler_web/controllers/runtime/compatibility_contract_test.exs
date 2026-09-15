@@ -4056,8 +4056,26 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     end
   end
 
+  # Catalog sync derives the Pool-wide union from the assignment sources, so a
+  # test that changes the union must change the selected assignment's source
+  # the same way; the ultra rewrite reads the selected source (findings#221).
   defp put_catalog_reasoning_levels!(setup, levels) do
-    metadata = Map.put(setup.model.metadata, "supported_reasoning_levels", levels)
+    metadata =
+      update_in(
+        setup.model.metadata,
+        [Access.key("upstream_model", %{})],
+        &Map.put(&1, "supported_reasoning_levels", levels)
+      )
+
+    metadata =
+      Enum.reduce(Map.get(metadata, "source_assignment_ids", []), metadata, fn id, acc ->
+        update_in(
+          acc,
+          [Access.key("source_assignment_models", %{}), Access.key(id, %{})],
+          &Map.put(&1, "supported_reasoning_levels", levels)
+        )
+      end)
+
     model = setup.model |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
     Map.put(setup, :model, model)
   end

@@ -988,6 +988,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         # branch from that caller.
         release_unattempted_request!(
           request,
+          attempt,
           opts,
           reason,
           now,
@@ -995,7 +996,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         )
 
         complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
-        interruption_marker("interrupted", opts, "unknown")
+
+        interruption_marker("interrupted", opts, bounded_transport(attempt && attempt.transport))
 
       true ->
         complete_interrupted_turn!(
@@ -1023,7 +1025,44 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   # before reservation) has nothing to release and keeps the plain failure
   # write, because `finalize_reservation_failure/2` requires the reservation
   # row to exist.
-  defp release_unattempted_request!(request, opts, reason, now, caller_owned_transaction?) do
+  #
+  # A terminal attempt row (a retryable failure whose retry never started)
+  # means the reservation did reach dispatch: releasing it as a pre-attempt
+  # `turn_interrupted` would misdescribe the boundary and count a dispatched
+  # abandonment in the pre-attempt series. The reservation is still released
+  # in full (never settled: nothing was charged), but the release carries the
+  # attempt's id and no phase key (findings#221). This stays on the
+  # reservation-failure path on purpose: the disposition finalizer has a
+  # write-nothing arm for a stale replay generation, and an armed replay
+  # entitlement is exactly how a `retryable_failed` attempt arises.
+  defp release_unattempted_request!(
+         request,
+         %Attempt{} = attempt,
+         opts,
+         reason,
+         now,
+         caller_owned_transaction?
+       ) do
+    if Accounting.reservation_outstanding?(request) do
+      case Accounting.finalize_reservation_failure(request, %{
+             last_error_code: reason,
+             response_status_code: 499,
+             usage_status: "usage_unknown",
+             now: now,
+             released_after_attempt: attempt
+           }) do
+        {:ok, _released} ->
+          :ok
+
+        {:error, error} ->
+          rollback_interrupted_accounting(error, opts, attempt, caller_owned_transaction?)
+      end
+    else
+      release_unattempted_request!(request, nil, opts, reason, now, caller_owned_transaction?)
+    end
+  end
+
+  defp release_unattempted_request!(request, nil, opts, reason, now, caller_owned_transaction?) do
     if Accounting.reservation_outstanding?(request) do
       case Accounting.finalize_reservation_failure(request, %{
              last_error_code: reason,

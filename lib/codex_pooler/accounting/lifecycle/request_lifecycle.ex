@@ -404,7 +404,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     request_status = Map.get(attrs, :request_status, Map.get(attrs, :status, "failed"))
     last_error_code = blank_to_nil(Map.get(attrs, :last_error_code))
     usage_status = Map.get(attrs, :usage_status, @usage_not_applicable)
-    pre_attempt_phase = PreAttemptRelease.phase(Map.get(attrs, :pre_attempt_phase))
+
+    # A release written after a terminal attempt (`released_after_attempt:`)
+    # is not a pre-attempt release: it carries that attempt's id, no phase
+    # key, and never enters the pre-attempt series (findings#221).
+    released_after_attempt =
+      case Map.get(attrs, :released_after_attempt) do
+        %Attempt{} = attempt -> attempt
+        _other -> nil
+      end
+
+    pre_attempt_phase =
+      if released_after_attempt,
+        do: nil,
+        else: PreAttemptRelease.phase(Map.get(attrs, :pre_attempt_phase))
 
     Repo.transaction(fn ->
       request =
@@ -446,11 +459,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           usage_status,
           last_error_code,
           pre_attempt_phase,
-          timestamp
+          timestamp,
+          released_after_attempt
         )
         |> LedgerEntries.create_or_get_with_status!()
 
-      %{request: request, attempt: nil, release: release, release_status: release_status}
+      %{
+        request: request,
+        attempt: released_after_attempt,
+        release: release,
+        release_status: release_status
+      }
     end)
     |> unwrap_transaction()
     |> tap_pre_attempt_release_count(pre_attempt_phase, last_error_code)
@@ -463,6 +482,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   # attempt: a pre-attempt abandonment that used to surface only as a
   # six-hour backstop row is a live series here. An immutable release that
   # already existed is not a second abandonment.
+  defp tap_pre_attempt_release_count(result, nil, _last_error_code), do: result
+
   defp tap_pre_attempt_release_count(
          {:ok, %{request: request, release_status: :inserted}} = result,
          pre_attempt_phase,

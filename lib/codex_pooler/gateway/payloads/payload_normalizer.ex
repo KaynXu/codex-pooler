@@ -40,26 +40,38 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   @spec upstream_payload(map(), Model.t(), String.t(), RequestOptions.t()) ::
           {:ok, binary() | {:multipart, list()}}
           | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
-  def upstream_payload(payload, %Model{} = model, endpoint, %RequestOptions{} = request_options) do
-    case prepare_upstream_payload(payload, model, endpoint, request_options) do
+  def upstream_payload(
+        payload,
+        %Model{} = model,
+        endpoint,
+        %RequestOptions{} = request_options,
+        opts \\ []
+      ) do
+    case prepare_upstream_payload(payload, model, endpoint, request_options, opts) do
       {:ok, upstream_payload, _request_options} -> {:ok, upstream_payload}
       {:error, _reason} = error -> error
     end
   end
 
-  @spec prepare_upstream_payload(map(), Model.t(), String.t(), RequestOptions.t()) ::
+  @typedoc "`assignment_id:` the selected assignment, so catalog-gated rewrites read its levels."
+  @type prepare_option :: {:assignment_id, Ecto.UUID.t() | nil}
+
+  @spec prepare_upstream_payload(map(), Model.t(), String.t(), RequestOptions.t(), [
+          prepare_option()
+        ]) ::
           {:ok, binary() | {:multipart, list()}, RequestOptions.t()}
           | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
   def prepare_upstream_payload(
         payload,
         %Model{} = model,
         endpoint,
-        %RequestOptions{} = request_options
+        %RequestOptions{} = request_options,
+        opts \\ []
       ) do
     if multipart_endpoint?(endpoint) do
       multipart_payload(payload, model, request_options)
     else
-      json_payload(payload, model, endpoint, request_options)
+      json_payload(payload, model, endpoint, request_options, opts)
     end
   end
 
@@ -224,7 +236,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp validate_tool_choice(_payload, _request_options), do: :ok
 
-  defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options) do
+  defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options, opts) do
     payload =
       payload
       |> Map.new(fn {key, value} -> {to_string(key), value} end)
@@ -243,7 +255,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     payload = normalize_client_reasoning_effort(payload)
 
-    catalog_reasoning_levels = ModelMetadata.catalog_reasoning_levels(model)
+    # The selected assignment's levels, not the Pool-wide union: an `ultra`
+    # rewrite must land on a level this assignment's model advertises
+    # (findings#221).
+    catalog_reasoning_levels =
+      ModelMetadata.selected_reasoning_levels(model, Keyword.get(opts, :assignment_id))
 
     upstream_payload =
       payload

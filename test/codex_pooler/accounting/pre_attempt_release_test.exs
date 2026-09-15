@@ -295,6 +295,84 @@ defmodule CodexPooler.Accounting.PreAttemptReleaseTest do
     end
   end
 
+  describe "an interrupted turn after a terminal attempt" do
+    # The reservation reached dispatch: the attempt failed retryably and the
+    # retry never started before the client went away. That is not a
+    # pre-attempt boundary, so the release settles through the attempt and
+    # never enters the pre-attempt series (findings#221).
+    test "releases in full with the attempt id and no pre-attempt phase" do
+      setup = accounting_setup()
+      claim = "post-attempt-interrupt-#{System.unique_integer([:positive])}"
+
+      {:ok, session} =
+        Gateway.start_codex_session(setup.auth, %{
+          accepted_turn_state: "post-attempt-interrupt-#{System.unique_integer([:positive])}"
+        })
+
+      assert {:ok, %{request: claimed}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: claim
+               })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "input" => []},
+                 %{
+                   endpoint: "/backend-api/codex/responses",
+                   transport: "websocket",
+                   correlation_id: claim,
+                   turn_claim: claimed
+                 }
+               )
+
+      options = RequestOptions.for_websocket(%{request_id: claim, reason: "client_disconnected"})
+      assert {:ok, turn} = SessionContinuity.start_codex_turn(session, reserved.request, options)
+
+      assert {:ok, attempt} =
+               Accounting.create_attempt(reserved.request, setup.assignment, %{
+                 transport: "websocket"
+               })
+
+      # The real producer: a retryable upstream failure recorded on the
+      # attempt, reservation still live, retry never started.
+      assert {:ok, %Attempt{status: "retryable_failed"} = attempt} =
+               Accounting.record_retryable_attempt_failure(attempt, %{
+                 last_error_code: "upstream_request_failed",
+                 response_status_code: 502
+               })
+
+      assert Accounting.reservation_outstanding?(reserved.request)
+      events = attach_pre_attempt_release_telemetry!()
+
+      assert {:ok, %{interrupted_turn_count: 1}} =
+               Interruption.interrupt_codex_turn(session, options)
+
+      assert [%LedgerEntry{attempt_id: attempt_id} = release] = release_entries(reserved.request)
+      assert attempt_id == attempt.id
+      refute Map.has_key?(release.details, PreAttemptRelease.detail_key())
+      assert release.details["release_reason"] == "client_disconnected"
+      refute_received {^events, _measurements, _metadata}
+
+      # Released in full, never settled: nothing was charged for the abandoned turn.
+      assert Repo.aggregate(
+               from(l in LedgerEntry,
+                 where: l.request_id == ^reserved.request.id and l.entry_kind == "settlement"
+               ),
+               :count
+             ) == 0
+
+      request = Repo.reload!(reserved.request)
+      assert request.status == "failed"
+      assert request.last_error_code == "client_disconnected"
+      assert Repo.reload!(attempt).status == "retryable_failed"
+      assert Repo.reload!(turn).status == "interrupted"
+      refute Accounting.reservation_outstanding?(reserved.request)
+    end
+  end
+
   defp attempt_count(%Request{id: request_id}) do
     Repo.aggregate(from(attempt in Attempt, where: attempt.request_id == ^request_id), :count)
   end

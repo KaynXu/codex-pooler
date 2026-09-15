@@ -265,6 +265,28 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     |> reasoning_level_values()
   end
 
+  @doc """
+  Reasoning levels of the assignment actually selected for dispatch.
+
+  `catalog_reasoning_levels/1` reads the Pool-wide union, which is right before
+  routing (admission, `/models`) but wrong for an upstream rewrite: a `ultra`
+  request must be rewritten to the highest level *this* assignment's model
+  advertises, not to a level another assignment in the Pool contributed
+  (findings#221). Without a selected assignment, or for an assignment with no
+  source metadata, the union is the only answer.
+  """
+  @spec selected_reasoning_levels(Model.t(), Ecto.UUID.t() | nil) :: [String.t()]
+  def selected_reasoning_levels(%Model{} = model, nil), do: catalog_reasoning_levels(model)
+
+  def selected_reasoning_levels(%Model{} = model, assignment_id) when is_binary(assignment_id) do
+    # A preserved source whose sync failed is stored as `%{}`, which is truthy
+    # and would otherwise yield no levels at all; the union is the answer then.
+    case model |> selected_assignment_metadata(assignment_id) |> reasoning_level_values() do
+      [] -> catalog_reasoning_levels(model)
+      levels -> levels
+    end
+  end
+
   @spec reasoning_levels_and_default(Model.t()) :: {[String.t()], String.t() | nil}
   def reasoning_levels_and_default(%Model{} = model) do
     metadata = metadata(model)

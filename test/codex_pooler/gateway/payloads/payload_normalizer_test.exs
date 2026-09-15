@@ -1828,6 +1828,61 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "maps ultra to the selected assignment's highest level, not the Pool-wide union" do
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "ultra"}
+      }
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+      selected = Ecto.UUID.generate()
+      other = Ecto.UUID.generate()
+      unsynced = Ecto.UUID.generate()
+
+      # The union (written by catalog sync under `upstream_model`) tops out at
+      # `xhigh`, contributed by the other assignment; the selected assignment's
+      # model advertises only up to `high`. A preserved source whose sync failed
+      # is stored as `%{}` and must fall back to the union, not to the
+      # unknown-levels `max` (findings#221).
+      model = %Model{
+        upstream_model_id: "provider-model",
+        metadata: %{
+          "upstream_model" => %{"supported_reasoning_levels" => ~w(low medium high xhigh)},
+          "source_assignment_models" => %{
+            selected => %{"supported_reasoning_levels" => ~w(low medium high)},
+            other => %{"supported_reasoning_levels" => ~w(low medium high xhigh)},
+            unsynced => %{}
+          }
+        }
+      }
+
+      for request_options <- [http_options, websocket_options] do
+        endpoint = request_options.transport.upstream_endpoint
+
+        for {opts, expected} <- [
+              {[assignment_id: selected], "high"},
+              {[assignment_id: other], "xhigh"},
+              {[assignment_id: unsynced], "xhigh"},
+              {[assignment_id: Ecto.UUID.generate()], "xhigh"},
+              {[], "xhigh"}
+            ] do
+          assert {:ok, encoded} =
+                   PayloadNormalizer.upstream_payload(
+                     payload,
+                     model,
+                     endpoint,
+                     request_options,
+                     opts
+                   )
+
+          assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => expected},
+                 "#{inspect(opts)} on #{endpoint}"
+        end
+      end
+    end
+
     test "labels catalog-gated ultra rewrites and keeps explicit efforts outside the catalog" do
       model = %Model{
         upstream_model_id: "provider-model",
