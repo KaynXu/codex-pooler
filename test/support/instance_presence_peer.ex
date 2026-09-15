@@ -256,6 +256,7 @@ defmodule CodexPooler.InstancePresencePeer do
     send(peer.owner, :stop)
     assert_receive {:DOWN, ^monitor, :process, _, :normal}, 15_000
     CodexPooler.PeerRegistry.assert_peer_absent!(peer.name, peer_node: peer.remote)
+    :ok
   end
 
   alias CodexPooler.{Accounting, Repo}

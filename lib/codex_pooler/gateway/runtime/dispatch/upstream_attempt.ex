@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Admission
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -24,7 +25,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   @spec dispatch(PreparedContext.t(), callbacks()) :: dispatch_result()
   def dispatch(%PreparedContext{context: context} = prepared_context, callbacks) do
-    case CodexPooler.Gateway.Admission.checkpoint() do
+    case Admission.checkpoint() do
       :ok ->
         dispatch_admitted(prepared_context, callbacks)
 

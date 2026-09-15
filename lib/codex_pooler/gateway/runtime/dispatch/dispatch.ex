@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Accounting.PreAttemptRelease
+  alias CodexPooler.Gateway.Admission
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -132,7 +133,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   end
 
   defp drain_checkpoint(context) do
-    case CodexPooler.Gateway.Admission.checkpoint() do
+    case Admission.checkpoint() do
       :ok ->
         :ok
 

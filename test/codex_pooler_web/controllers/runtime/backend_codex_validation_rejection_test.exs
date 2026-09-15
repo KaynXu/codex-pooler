@@ -236,8 +236,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                 }
               }}
 
-    assert CodexPooler.JSON.decode!(response.resp_body) ==
-             CodexPooler.CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay).full_supported_values_example
+    full_supported_values_example =
+      CodexPooler.CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay).full_supported_values_example
+
+    assert CodexPooler.JSON.decode!(response.resp_body) == full_supported_values_example
 
     # Only the bounded parsed enumeration crosses; the surrounding provider
     # prose stays unrelayed and unpersisted on every path.
