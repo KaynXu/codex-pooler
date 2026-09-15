@@ -96,10 +96,35 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   def redacted_gateway_error?(%{} = error) do
     not public_recovery_error_token?(field(error, "code")) and
+      not pooler_policy_denial?(error) and
       public_failure_error?(error, error_status(error, []))
   end
 
   def redacted_gateway_error?(_error), do: false
+
+  # An API-key policy denial is authored by Codex Pooler, never relayed from
+  # the upstream: its 401/403 status, code and message are the Pooler's own
+  # decision, so `/v1` renders them the way the backend routes do instead of
+  # blaming the upstream with `server_error` / "upstream request failed"
+  # (findings#221). The list is the wire vocabulary of `Denials.log_policy/1`
+  # kept as a dependency-free literal (a compile-time read of the Access
+  # precedence list would be a compile-connected hub dependency, and that
+  # list also carries reasons that are never wire codes); the matrix and
+  # `PublicResponseTest` pin it. Every other gateway error, including the
+  # quota 503s and every upstream-derived 401/403/429, keeps the redaction.
+  @unredacted_policy_denial_codes ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed)
+
+  @doc false
+  @spec unredacted_policy_denial_codes() :: [String.t()]
+  def unredacted_policy_denial_codes, do: @unredacted_policy_denial_codes
+
+  defp pooler_policy_denial?(error) do
+    case field(error, "code") do
+      code when is_atom(code) -> Atom.to_string(code) in @unredacted_policy_denial_codes
+      code when is_binary(code) -> code in @unredacted_policy_denial_codes
+      _code -> false
+    end
+  end
 
   defp input_file_capability_error?(404, opts),
     do: Keyword.get(opts, :input_file_upstream_404?) === true

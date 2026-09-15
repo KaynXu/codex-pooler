@@ -4,14 +4,20 @@ defmodule CodexPooler.Gateway.ErrorClassification do
   # One classifier for every error envelope Codex Pooler authors itself, on
   # every public transport.
   #
-  # An OpenAI-compatible SDK branches on `type`, not on `status`.
+  # No released client branches on `error.type` (findings#221 corrects the
+  # earlier rationale in findings#184/#191). openai-node, openai-python and
+  # the Vercel AI SDK retry on the HTTP status (408, 409, 429, 5xx) and on
+  # connection errors, the first two also honouring an `x-should-retry`
+  # header; Codex retries 429, 5xx and transport errors at its HTTP client and
+  # decides stream and turn retries from its own error variant, not from the
+  # type. The type still matters: it is what a person reading the body or
+  # frame sees, and it must agree with the status the envelope carries.
   # `invalid_request_error` is the terminal, do-not-retry class: it says the
   # caller's request was malformed and will fail identically forever. Both
   # renderers used to reach that answer by defaulting to it — the websocket
   # adapter and `GatewayControllerHelpers.send_error/2` each special-cased one
-  # code and let everything else fall through — so an owner-lifecycle 503 told
-  # the client never to retry the one failure worth retrying
-  # (findings#184, findings#191).
+  # code and let everything else fall through — so an owner-lifecycle 503
+  # carried a type that contradicted its own status.
   #
   # A default is how both surfaces got there, so there is no default here: the
   # vocabulary is enumerated, a compile-time guard below fails the build when an

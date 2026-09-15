@@ -3281,6 +3281,12 @@ defmodule CodexPooler.CompatibilityMatrix do
         non_stream_errors: "json_error"
       },
       public_error_redaction: %{
+        pooler_policy_denials_unredacted: [
+          "api_key_missing",
+          "api_key_disabled",
+          "api_key_policy_malformed",
+          "model_not_allowed"
+        ],
         server_class_surfaces: ["responses_json", "responses_sse_terminal", "chat_streaming"],
         server_class_message: "upstream request failed",
         server_class_type: "server_error",

@@ -4,6 +4,52 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
 
+  describe "Pooler-authored policy denials on /v1" do
+    # The exemption is keyed on the wire code; the codes are the four
+    # `Denials.log_policy/1` renders (findings#221).
+    test "the four API-key policy denial codes are not redacted, everything else is" do
+      for code <- ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed),
+          status <- [401, 403] do
+        refute PublicResponse.redacted_gateway_error?(%{
+                 status: status,
+                 code: code,
+                 message: "own"
+               })
+
+        refute PublicResponse.redacted_gateway_error?(%{
+                 status: status,
+                 code: String.to_atom(code),
+                 message: "own"
+               })
+      end
+
+      # Quota denials share the 503 status and the redaction with upstream failures.
+      assert PublicResponse.redacted_gateway_error?(%{
+               status: 503,
+               code: "quota_exhausted",
+               message: "upstream quota is exhausted until its reset time"
+             })
+
+      # An upstream-derived 401/403/429 never carries one of the four codes and
+      # stays redacted whatever its message says.
+      for {status, code} <- [
+            {403, "upstream_status"},
+            {401, "upstream_unauthorized"},
+            {429, "upstream_rate_limited"},
+            {403, "provider_specific_code"}
+          ] do
+        assert PublicResponse.redacted_gateway_error?(%{
+                 status: status,
+                 code: code,
+                 message: "provider prose that must not leak"
+               })
+      end
+
+      assert PublicResponse.unredacted_policy_denial_codes() ==
+               CodexPooler.CompatibilityMatrix.fixture!(:v1_supported_surface).public_error_redaction.pooler_policy_denials_unredacted
+    end
+  end
+
   describe "generic error redaction" do
     test "preserves decoded-map projections across existing error classes" do
       generic_error = %{

@@ -424,10 +424,11 @@ WebSockets, Chat, compact, and batches do not accept this field.
 
 ### Error types on errors Codex Pooler authors
 
-Errors that Codex Pooler itself authors carry an `error.type` that says whether
-the failure is worth retrying. The same classification applies to HTTP error
-bodies on `/v1/*` and `/backend-api/codex/*` and to error frames on
-`GET /v1/responses`, so one code has one type on every surface.
+Errors that Codex Pooler itself authors carry an `error.type` that agrees with
+the HTTP status about whether the failure is worth retrying. The same
+classification applies to HTTP error bodies on `/v1/*` and
+`/backend-api/codex/*` and to error frames on `GET /v1/responses`, so one code
+has one type on every surface.
 
 - `server_error`: the failure is on the server side, including failures raised
   while the server hands a turn between connections. The same request can
@@ -437,10 +438,23 @@ bodies on `/v1/*` and `/backend-api/codex/*` and to error frames on
 - `invalid_request_error`: the client must change the request before retrying,
   or the connection was superseded by its own newer replacement.
 
-Branch on `error.type` for retry decisions and treat `error.code` as an open
-string, as described below. The status agrees with the type: a `5xx` response
-or frame is never typed `invalid_request_error`. Errors relayed from the Codex
-backend follow the rules in the next section.
+No released client branches on `error.type` for retries. openai-node,
+openai-python and the Vercel AI SDK retry on the HTTP status (`408`, `409`,
+`429`, `5xx`) and on connection errors, and the first two honour an
+`x-should-retry` response header that overrides the status in both directions.
+Codex retries `429`, `5xx` and transport errors at its HTTP client and decides
+stream and turn retries from its own error variant, not from the type. Keep that behaviour and use the type and `error.code` for diagnosis,
+treating `error.code` as an open string as described below; on the
+`GET /v1/responses` frame surface there is no HTTP status, and the type is what
+a reader sees. The status and the type never disagree: a `5xx` response or frame
+is never typed `invalid_request_error`. Errors relayed from the Codex backend
+follow the rules in the next section.
+
+API-key policy denials that Codex Pooler authors (`api_key_missing`,
+`api_key_disabled`, `api_key_policy_malformed`, `model_not_allowed`) keep their
+own code and message on `/v1/*`, exactly as on `/backend-api/codex/*`; they are
+never rewritten to `server_error` or `upstream request failed`, because no
+upstream was involved.
 
 ### Relayed terminal errors
 
