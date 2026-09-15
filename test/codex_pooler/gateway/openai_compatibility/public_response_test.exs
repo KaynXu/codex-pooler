@@ -45,8 +45,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
                })
       end
 
+      matrix = CodexPooler.CompatibilityMatrix.fixture!(:v1_supported_surface)
+
       assert PublicResponse.unredacted_policy_denial_codes() ==
-               CodexPooler.CompatibilityMatrix.fixture!(:v1_supported_surface).public_error_redaction.pooler_policy_denials_unredacted
+               matrix.public_error_redaction.pooler_policy_denials_unredacted
     end
   end
 

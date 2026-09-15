@@ -28,11 +28,35 @@ defmodule CodexPooler.Repo.Migrations.PreserveLedgerHistoryWhenApiKeysDeleted do
     # owner. Refuse before any schema or function mutation.
     transaction(fn ->
       # Block deletions and ledger writers during the preflight, but permit
-      # readers throughout its scan. NOWAIT releases partial locks on failure.
+      # readers throughout its scan. The pair is acquired as one retryable
+      # group: NOWAIT never queues behind a long application transaction, the
+      # exception block releases the partial lock before each 50 ms retry, and
+      # the ten-second deadline fails the migration before any schema change
+      # (the lock-group convention the release runbook records).
       repo().query!(
-        "LOCK TABLE public.api_keys, public.ledger_entries IN SHARE ROW EXCLUSIVE MODE NOWAIT",
+        """
+        DO $migration_lock$
+        DECLARE
+          deadline timestamptz := clock_timestamp() + interval '10 seconds';
+        BEGIN
+          LOOP
+            BEGIN
+              LOCK TABLE public.api_keys, public.ledger_entries
+                IN SHARE ROW EXCLUSIVE MODE NOWAIT;
+              EXIT;
+            EXCEPTION WHEN lock_not_available THEN
+              IF clock_timestamp() >= deadline THEN
+                RAISE;
+              END IF;
+            END;
+            PERFORM pg_sleep(0.05);
+          END LOOP;
+        END
+        $migration_lock$
+        """,
         [],
-        log: false
+        log: false,
+        timeout: :infinity
       )
 
       repo().query!(
