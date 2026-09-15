@@ -120,6 +120,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
         end
 
       {:error, response} ->
+        # A connect-phase failure keeps HEAD's policy: candidate failover while
+        # the route plan has another candidate, otherwise a single finalized
+        # attempt. It never takes the same-assignment retry (findings#208).
         Finalization.finalize_failed_websocket_response(
           context,
           Map.put(response, :started, started)

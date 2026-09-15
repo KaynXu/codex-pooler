@@ -882,7 +882,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     end
   end
 
-  @spec finalize_failed(SelectedCandidateContext.t(), map()) :: {:error, map()}
+  @spec finalize_failed(SelectedCandidateContext.t(), map()) ::
+          {:ok, map()} | {:error, map()} | {:retry, term()}
   def finalize_failed(context, %{reason: :client_disconnected} = finalization) do
     %{headers: headers, started: started} = finalization
 

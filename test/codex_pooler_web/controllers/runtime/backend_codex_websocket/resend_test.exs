@@ -124,6 +124,119 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     end
   end
 
+  @tag :websocket_connect_failover
+  test "a websocket handshake closed by the upstream never takes the same-assignment retry" do
+    # A second connect-phase failure class through the real path: the upstream
+    # accepts and closes the handshake. Any connect-phase failure either fails
+    # over to the next candidate or finalizes; neither ever retries the same
+    # assignment (findings#208).
+    port = accept_and_close_listener!(2)
+    placeholder = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
+    setup = placeholder |> gateway_setup() |> with_failover_candidate!(placeholder)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:error, %{code: "upstream_request_failed"}} =
+             execute_websocket_response(
+               auth,
+               task_exception_probe_payload(setup, "handshake close control"),
+               %{request_id: "task-exception-handshake-close", connect_timeout_ms: 2_000},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    refute_received {:websocket_frame, _frame}
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+
+    attempts =
+      Repo.all(from(a in Attempt, where: a.request_id == ^request.id, order_by: a.attempt_number))
+
+    assert [first | later] = attempts
+    first_assignment_id = first.pool_upstream_assignment_id
+    assert is_binary(first_assignment_id)
+
+    # No later attempt may land on the assignment that failed: that is the
+    # same-assignment retry this failure must not take.
+    refute Enum.any?(later, &(&1.pool_upstream_assignment_id == first_assignment_id))
+
+    # The kernel reports the mid-handshake close, never a refusal.
+    assert %{"phase" => "connect", "reason" => reason, "upstream_committed" => false} =
+             Map.take(
+               first.response_metadata["transport_failure"],
+               ~w(phase reason upstream_committed)
+             )
+
+    refute reason == "econnrefused"
+  end
+
+  @tag :websocket_connect_failover
+  test "a refused connect on a route with no failover candidate finalizes one attempt" do
+    # Same retry-safe refusal, but the route plan has no later candidate, so
+    # retry policy is off (`allow_retry?` false) and no same-assignment retry runs.
+    port = reserve_closed_port!()
+    setup = gateway_setup(%FakeUpstream{url: "http://127.0.0.1:#{port}"})
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:error, %{code: "upstream_request_failed"}} =
+             execute_websocket_response(
+               auth,
+               task_exception_probe_payload(setup, "no failover candidate control"),
+               %{request_id: "task-exception-no-failover", connect_timeout_ms: 2_000},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    refute_received {:websocket_frame, _frame}
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert {request.status, request.retry_count} == {"failed", 0}
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert {attempt.status, attempt.retryable} == {"failed", false}
+
+    assert %{"phase" => "connect", "reason" => "econnrefused", "upstream_committed" => false} =
+             Map.take(
+               attempt.response_metadata["transport_failure"],
+               ~w(phase reason upstream_committed)
+             )
+  end
+
+  @tag :websocket_connect_failover
+  test "a refused connect with a failover candidate moves to the next assignment, never the same one" do
+    # A refused connect proves nothing left the gateway, and the route plan has
+    # another candidate: the dispatcher fails over to it. The refused
+    # assignment is never retried, so a pool whose second identity is healthy
+    # keeps serving when the first one's endpoint is down (findings#208).
+    port = reserve_closed_port!()
+    placeholder = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
+    setup = placeholder |> gateway_setup() |> with_failover_candidate!(placeholder)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:error, %{code: "upstream_request_failed"}} =
+             execute_websocket_response(
+               auth,
+               task_exception_probe_payload(setup, "refused failover control"),
+               %{request_id: "task-exception-refused-failover", connect_timeout_ms: 2_000},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    refute_received {:websocket_frame, _frame}
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+
+    assert [first, second] =
+             Repo.all(
+               from(a in Attempt, where: a.request_id == ^request.id, order_by: a.attempt_number)
+             )
+
+    refute first.pool_upstream_assignment_id == second.pool_upstream_assignment_id
+    assert second.status == "failed"
+
+    for attempt <- [first, second] do
+      assert %{"phase" => "connect", "reason" => "econnrefused", "upstream_committed" => false} =
+               Map.take(
+                 attempt.response_metadata["transport_failure"],
+                 ~w(phase reason upstream_committed)
+               )
+    end
+  end
+
   defp assert_task_exception_resend(retry_kind) do
     barrier = make_ref()
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
@@ -135,65 +248,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     # terminal on the single physical connection, then the response task dies
     # by exception inside settlement; the client's byte-identical resend is a
     # fresh turn on the same connection. Any further send fails the fixture.
-    upstream =
-      start_upstream(
-        # provenance: synthetic_adversarial
-        FakeUpstream.strict_sequence(
-          task_exception_retry_prefix(retry_kind) ++
-            [
-              strict_native_request(
-                if(retry_kind == :first_event, do: 2, else: 1),
-                FakeUpstream.barrier_websocket_frames(
-                  [
-                    CodexPooler.JSON.encode!(%{
-                      "type" => "response.created",
-                      "response" => %{
-                        "id" => "resp_task_exception_visible",
-                        "status" => "in_progress"
-                      }
-                    }),
-                    CodexPooler.JSON.encode!(%{
-                      "type" => "response.output_text.delta",
-                      "delta" => "visible before task exception"
-                    }),
-                    CodexPooler.JSON.encode!(%{
-                      "type" => "response.completed",
-                      "response" => %{
-                        "id" => "resp_task_exception_visible",
-                        "status" => "completed",
-                        "usage" => %{
-                          "input_tokens" => 3,
-                          "output_tokens" => 2,
-                          "total_tokens" => 5
-                        }
-                      }
-                    })
-                  ],
-                  notify: self(),
-                  release_ref: barrier
-                )
-              ),
-              strict_native_request(
-                if(retry_kind == :first_event, do: 2, else: 1),
-                FakeUpstream.websocket_text_frames([
+    # provenance: synthetic_adversarial
+    upstream_mode =
+      FakeUpstream.strict_sequence(
+        task_exception_retry_prefix(retry_kind) ++
+          [
+            strict_native_request(
+              if(retry_kind == :first_event, do: 2, else: 1),
+              FakeUpstream.barrier_websocket_frames(
+                [
+                  CodexPooler.JSON.encode!(%{
+                    "type" => "response.created",
+                    "response" => %{
+                      "id" => "resp_task_exception_visible",
+                      "status" => "in_progress"
+                    }
+                  }),
+                  CodexPooler.JSON.encode!(%{
+                    "type" => "response.output_text.delta",
+                    "delta" => "visible before task exception"
+                  }),
                   CodexPooler.JSON.encode!(%{
                     "type" => "response.completed",
                     "response" => %{
-                      "id" => "resp_after_task_exception",
+                      "id" => "resp_task_exception_visible",
                       "status" => "completed",
                       "usage" => %{
                         "input_tokens" => 3,
-                        "output_tokens" => 1,
-                        "total_tokens" => 4
+                        "output_tokens" => 2,
+                        "total_tokens" => 5
                       }
                     }
                   })
-                ])
+                ],
+                notify: self(),
+                release_ref: barrier
               )
-            ]
-        )
+            ),
+            strict_native_request(
+              if(retry_kind == :first_event, do: 2, else: 1),
+              FakeUpstream.websocket_text_frames([
+                CodexPooler.JSON.encode!(%{
+                  "type" => "response.completed",
+                  "response" => %{
+                    "id" => "resp_after_task_exception",
+                    "status" => "completed",
+                    "usage" => %{
+                      "input_tokens" => 3,
+                      "output_tokens" => 1,
+                      "total_tokens" => 4
+                    }
+                  }
+                })
+              ])
+            )
+          ]
       )
 
+    upstream = start_upstream(upstream_mode)
     setup = task_exception_setup(upstream, retry_kind)
 
     assert :ok = Events.subscribe_pool(setup.pool)
@@ -259,16 +371,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
              &(&1.pool_upstream_assignment_id == hd(attempts).pool_upstream_assignment_id)
            )
 
-    if retry_kind != :none do
-      assert [first, _retry] = attempts
-      assert first.status == "retryable_failed"
-
-      assert first.network_error_code ==
-               if(retry_kind == :auth_refresh,
-                 do: "upstream_unauthorized",
-                 else: "websocket_connection_limit_reached"
-               )
-    end
+    assert_task_exception_first_attempt!(retry_kind, attempts)
 
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     refute is_nil(turn.first_visible_output_at)
@@ -362,20 +465,73 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert Repo.all(from(d in BridgeDemotion)) == []
     assert Repo.all(from(c in RoutingCircuitState)) == []
     assert FakeUpstream.count(upstream) == if(retry_kind == :none, do: 2, else: 3)
+
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
-  defp task_exception_setup(upstream, :first_event) do
-    setup = gateway_setup(upstream)
-    fallback = gateway_upstream(setup.pool, upstream, "synthetic-fallback", compact?: false)
-    prime_routing_quota!(fallback.identity)
+  defp assert_task_exception_first_attempt!(:none, _attempts), do: :ok
 
-    Map.put(
-      setup,
-      :model,
-      put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
-    )
+  defp assert_task_exception_first_attempt!(retry_kind, attempts) do
+    assert [first, _retry] = attempts
+    assert first.status == "retryable_failed"
+
+    expected_first_error =
+      case retry_kind do
+        :auth_refresh -> "upstream_unauthorized"
+        :first_event -> "websocket_connection_limit_reached"
+      end
+
+    assert first.network_error_code == expected_first_error
   end
+
+  # A port nothing listens on: bound once to learn its number and closed
+  # again, so every connect to it is refused until a listener takes it.
+  defp reserve_closed_port! do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+    :ok = :gen_tcp.close(listener)
+    port
+  end
+
+  # A listener that accepts `count` connections and closes each immediately
+  # without a byte of HTTP: the gateway sees the socket close mid-handshake.
+  defp accept_and_close(listener) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} -> :gen_tcp.close(socket)
+      {:error, _closed} -> :ok
+    end
+  end
+
+  defp accept_and_close_listener!(count) do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true])
+
+    {:ok, port} = :inet.port(listener)
+
+    # Not linked: a listener closed by the on_exit below ends the acceptor with
+    # an accept error, which must not take the test process down with it.
+    acceptor = spawn(fn -> Enum.each(1..count, fn _ -> accept_and_close(listener) end) end)
+
+    on_exit(fn ->
+      Process.exit(acceptor, :kill)
+      :gen_tcp.close(listener)
+    end)
+
+    port
+  end
+
+  defp task_exception_probe_payload(setup, marker) do
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input(marker),
+      "stream" => true,
+      "generate" => true
+    })
+  end
+
+  defp task_exception_setup(upstream, :first_event),
+    do: upstream |> gateway_setup() |> with_failover_candidate!(upstream)
 
   defp task_exception_setup(upstream, :auth_refresh) do
     setup = gateway_setup(upstream)
@@ -390,6 +546,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   end
 
   defp task_exception_setup(upstream, :none), do: gateway_setup(upstream)
+
+  # Adds a second route candidate on a fallback identity that shares the
+  # upstream. What a retry does with it depends on the failure class: the
+  # same-assignment retries (auth refresh, connection-limit first event) stay
+  # on the first assignment, while a connect-phase failure fails over to it.
+  defp with_failover_candidate!(setup, upstream) do
+    fallback = gateway_upstream(setup.pool, upstream, "synthetic-fallback", compact?: false)
+    prime_routing_quota!(fallback.identity)
+
+    Map.put(
+      setup,
+      :model,
+      put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+    )
+  end
 
   defp task_exception_retry_prefix(:none), do: []
 

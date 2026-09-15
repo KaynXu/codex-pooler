@@ -262,11 +262,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     to: Websocket,
     as: :finalize_terminal
 
+  # A failed websocket finalization may also ask the dispatcher to move to
+  # the next route candidate (`{:retry, code}`) or report an already
+  # finalized request (`{:ok, finalized}`); declaring only `{:error, map()}`
+  # hid the failover contract from callers (findings#208).
   @spec finalize_failed_websocket_response(
           SelectedCandidateContext.t(),
           failed_websocket_finalization()
         ) ::
-          {:error, map()}
+          {:ok, map()} | {:error, map()} | {:retry, term()}
   defdelegate finalize_failed_websocket_response(context, finalization),
     to: Websocket,
     as: :finalize_failed
