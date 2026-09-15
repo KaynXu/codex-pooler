@@ -15,6 +15,8 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     IdentitySlotLock
   }
 
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -220,6 +222,103 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     end)
   end
 
+  # Fenced reconciliation shape (findings #215): `lock_identity_rows!/1` takes
+  # the identity advisory mutex and then `FOR UPDATE`; the evidence writer in the
+  # same transaction re-enters that transaction-scoped mutex instead of
+  # self-blocking, and a concurrent evidence writer on another backend queues on
+  # the mutex, never on the row.
+  test "identity row locks re-enter the identity advisory mutex for same-transaction evidence" do
+    identity = committed_identity!(%{chatgpt_account_id: unique("acct_reentrant")})
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    parent = self()
+    barrier = make_ref()
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Repo.transaction(fn ->
+            backend_pid = backend_pid!()
+            locked = IdentitySlotLock.lock_identity_rows!([identity])
+            assert Enum.map(locked.identities, & &1.id) == [identity.id]
+
+            assert {:ok, %AccountQuotaWindow{}} =
+                     EvidenceStore.record_evidence(identity, evidence_attrs("22"), observed_at)
+
+            send(parent, {barrier, :holder, :locked, backend_pid})
+            await_release(barrier, true)
+            backend_pid
+          end)
+        end)
+      end)
+
+    assert_receive {^barrier, :holder, :locked, holder_backend_pid}, @detection_timeout_ms
+
+    waiter =
+      Task.async(fn ->
+        unboxed(fn ->
+          backend_pid = backend_pid!()
+          send(parent, {barrier, :waiter, :ready, backend_pid})
+
+          result =
+            EvidenceStore.record_evidence(
+              identity,
+              evidence_attrs("31"),
+              DateTime.add(observed_at, 1, :second)
+            )
+
+          send(parent, {barrier, :waiter, :recorded, backend_pid})
+          {backend_pid, result}
+        end)
+      end)
+
+    assert_receive {^barrier, :waiter, :ready, waiter_backend_pid}, @detection_timeout_ms
+    assert holder_backend_pid != waiter_backend_pid
+    blocking_pids = assert_waiting_on!(waiter_backend_pid, holder_backend_pid)
+    assert wait_event!(waiter_backend_pid) == "advisory"
+    # Queued on the mutex, never on the row: no granted identity row reference yet.
+    assert upstream_identity_row_share_locks(waiter_backend_pid) == 0
+
+    send(holder.pid, {barrier, :release})
+    assert {:ok, ^holder_backend_pid} = Task.await(holder, @detection_timeout_ms)
+    assert_receive {^barrier, :waiter, :recorded, ^waiter_backend_pid}, @detection_timeout_ms
+
+    assert {^waiter_backend_pid, {:ok, %AccountQuotaWindow{used_percent: used_percent}}} =
+             Task.await(waiter, @detection_timeout_ms)
+
+    assert Decimal.compare(used_percent, Decimal.new(31)) == :eq
+
+    CodexPooler.TestDiagnostics.puts(
+      "GREEN reentrant_advisory holder=#{holder_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} wait_event=advisory terminal=ok sqlstate_40P01=0"
+    )
+  end
+
+  defp evidence_attrs(used_percent) do
+    reset_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(604_800, :second)
+
+    %{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new(used_percent),
+      reset_at: reset_at,
+      source: "codex_rate_limit_event",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      metadata: %{}
+    }
+  end
+
+  defp wait_event!(backend_pid) do
+    unboxed(fn ->
+      %{rows: [[wait_event]]} =
+        SQL.query!(Repo, "SELECT wait_event FROM pg_stat_activity WHERE pid = $1", [backend_pid])
+
+      wait_event
+    end)
+  end
+
   defp assert_serialized!(first_attrs, second_attrs) do
     parent = self()
     barrier = make_ref()
@@ -375,6 +474,29 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   defp delete_identities_by_label!(label) do
     Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label == ^label)
     :ok
+  end
+
+  # A granted RowShareLock on `upstream_identities` means the backend already
+  # holds an identity row reference (`FOR UPDATE` / `FOR KEY SHARE`).
+  defp upstream_identity_row_share_locks(backend_pid) do
+    unboxed(fn ->
+      %{rows: [[count]]} =
+        SQL.query!(
+          Repo,
+          """
+          SELECT count(*)
+          FROM pg_locks
+          WHERE pid = $1
+            AND granted
+            AND locktype = 'relation'
+            AND relation = 'upstream_identities'::regclass
+            AND mode = 'RowShareLock'
+          """,
+          [backend_pid]
+        )
+
+      count
+    end)
   end
 
   defp backend_pid! do
