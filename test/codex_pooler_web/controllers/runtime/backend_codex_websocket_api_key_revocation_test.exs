@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
   import ExUnit.Callbacks
   import Phoenix.ConnTest
   import Plug.Conn
-  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 2]
+  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 2, pool_fixture: 1]
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -170,6 +170,62 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
       end
     end
 
+    # A Pool move advances the runtime epoch and its `api_key_updated` event
+    # reaches both Pools, so the socket authorized under the previous Pool
+    # closes on the move itself, delivered here over the same-node local
+    # PubSub (the peer relay path is covered by the lifecycle revocation
+    # file). The socket gate compares the event's topic Pool with the Pool it
+    # captured at init, not the payload's `pool_id` (which is the new Pool on
+    # both broadcasts); this test is what would catch that gate moving to the
+    # payload. The key itself stays usable on its new Pool (findings#204).
+    test "#{path} closes an idle websocket when its key moves to another Pool, before any pause" do
+      route_label = unquote(route_label)
+      path = unquote(path)
+      upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+      setup = gateway_setup(upstream)
+      register_committed_setup_cleanup!(setup)
+      target_pool = move_target_pool!()
+      port = start_public_endpoint!()
+
+      {conn, websocket, ref} =
+        public_websocket_connect!(port, setup, "idle-move-#{route_label}", path)
+
+      try do
+        {conn, websocket} = websocket_transport_barrier!(conn, websocket, ref)
+        epoch_before = setup.api_key.runtime_revocation_epoch
+
+        assert {:ok, moved_key} = move_from_task!(setup, target_pool)
+        assert moved_key.pool_id == target_pool.id
+        assert moved_key.status == "active"
+
+        # No client frame is sent: the move event alone prompts the reread that
+        # refuses the stale epoch and closes the socket.
+        {_conn, _websocket, frames} =
+          receive_websocket_frames_until_close!(conn, websocket, ref)
+
+        assert frames == [@api_key_close_frame]
+        assert moved_key.runtime_revocation_epoch == epoch_before + 1
+
+        # The move revoked the captured epoch, not the key: the same secret
+        # still upgrades, now under the target Pool.
+        {moved_conn, 101, _headers} = websocket_upgrade_response!(port, setup, path)
+        Mint.HTTP.close(moved_conn)
+
+        # A pause after the move has nothing left to close under the previous
+        # Pool; the 401 below is the pause's own durable refusal.
+        assert {:ok, _paused} = pause_from_task!(setup)
+        {old_conn, 401, _body} = websocket_upgrade_response!(port, setup, path)
+        Mint.HTTP.close(old_conn)
+
+        assert FakeUpstream.count(upstream) == 0
+        assert request_count(setup) == 0
+        assert attempt_count(setup) == 0
+        assert session_count(setup) == 1
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+
     @tag :replay_race
     test "#{path} drains one admitted turn then drops queued and later frames after pause" do
       route_label = unquote(route_label)
@@ -290,6 +346,52 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
     fn -> Access.pause_api_key(scope, setup.api_key.id) end
     |> Task.async()
     |> Task.await(@detection_timeout_ms)
+  end
+
+  defp move_from_task!(setup, target_pool) do
+    scope = owner_scope!(setup)
+
+    fn -> Access.update_api_key(scope, setup.api_key.id, %{pool_id: target_pool.id}) end
+    |> Task.async()
+    |> Task.await(@detection_timeout_ms)
+  end
+
+  # A committed Pool the key can be moved to. The fixture cleanup is scoped to
+  # `setup.pool`, so the moved key, its owner and the audit events written
+  # under the target Pool are removed here, before that cleanup runs (ExUnit
+  # runs `on_exit` callbacks last-registered first). The slug is chosen up
+  # front so the cleanup is registered before the committed insert. Deleting
+  # the owner graph this early is safe only because fixture Pools record no
+  # creator, so the graph delete cannot cascade into `setup.pool`'s
+  # assignments; and the narrow delete set is enough only because no traffic
+  # is served under the target Pool (ledger and rollup rows would need the
+  # full `cleanup_unboxed_pool!/1` set).
+  defp move_target_pool! do
+    slug = "move-target-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      case Repo.get_by(CodexPooler.Pools.Pool, slug: slug) do
+        nil ->
+          :ok
+
+        pool ->
+          owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool.id])
+
+          Repo.delete_all(
+            from(binding in Access.APIKeyPolicyBinding,
+              where:
+                binding.api_key_id in subquery(
+                  from(key in Access.APIKey, where: key.pool_id == ^pool.id, select: key.id)
+                )
+            )
+          )
+
+          Repo.delete_all(from(key in Access.APIKey, where: key.pool_id == ^pool.id))
+          CodexPooler.PoolerFixtures.delete_committed_pools!([pool.id], owner_ids)
+      end
+    end)
+
+    pool_fixture(%{slug: slug})
   end
 
   defp rotate_from_task!(setup) do

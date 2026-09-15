@@ -319,6 +319,58 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
       end)
     end
 
+    # A move with an unchanged active status is the admin form's and the Pool
+    # wizard's shape; it is not a disabling transition, so it must still reach
+    # both Pools through the reread-required path, on the generic and the
+    # policy update alike (the two notify helpers are separate copies).
+    test "pure pool move publishes an active api_key_updated to both pools on both update paths" do
+      Sandbox.unboxed_run(Repo, fn ->
+        {scope, source_pool} = owner_scope_and_pool()
+        target_pool = create_pool!(scope, "puremove")
+        assert :ok = Events.subscribe_pool(source_pool.id, "pools")
+        assert :ok = Events.subscribe_pool(target_pool.id, "pools")
+
+        scenarios = [
+          {"generic pure move",
+           fn api_key -> Access.update_api_key(scope, api_key, %{pool_id: target_pool.id}) end},
+          {"policy pure move",
+           fn api_key ->
+             Access.update_api_key_with_policy(scope, api_key, %{pool_id: target_pool.id})
+           end}
+        ]
+
+        for {label, mutation} <- scenarios do
+          api_key = create_api_key!(scope, source_pool, label)
+          assert {:ok, result} = publish_from_task(fn -> mutation.(api_key) end)
+          updated_api_key = api_key_from_result(result)
+
+          assert updated_api_key.pool_id == target_pool.id
+          assert updated_api_key.status == "active"
+          assert updated_api_key.runtime_revocation_epoch == 1
+
+          events = receive_events_before_barriers([source_pool.id, target_pool.id])
+          lifecycle_events = Enum.filter(events, &api_key_event?(&1, api_key.id))
+
+          assert Enum.sort(Enum.map(lifecycle_events, & &1.pool_id)) ==
+                   Enum.sort([source_pool.id, target_pool.id]),
+                 label
+
+          for pool <- [source_pool, target_pool] do
+            event = Enum.find(lifecycle_events, &(&1.pool_id == pool.id))
+            assert event.reason == "api_key_updated", label
+
+            assert event.payload == %{
+                     "api_key_id" => api_key.id,
+                     "pool_id" => target_pool.id,
+                     "runtime_revocation_epoch" => 1,
+                     "status" => "active"
+                   },
+                   label
+          end
+        end
+      end)
+    end
+
     test "repeat and resume transitions keep the epoch stable" do
       Sandbox.unboxed_run(Repo, fn ->
         {scope, pool} = owner_scope_and_pool()
