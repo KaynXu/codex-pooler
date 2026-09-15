@@ -5,9 +5,9 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
 
       mise x -- mix run --no-start scripts/verification/release_upgrade_migrations.exs --scenario widths
 
-  Scenarios: widths, fresh, head, invalid, locks, historical_indexes,
-  validation, null_history, migration_lock, scale, index_conflicts,
-  rollback_cancel, rollback_delete. Optional --rows controls the
+  Scenarios: widths, fresh, head, invalid, invalid_owner, client_exit,
+  locks, historical_indexes, validation, null_history, migration_lock,
+  scale, index_conflicts, rollback_cancel, rollback_delete. Optional --rows controls the
   synthetic request count. The database must not exist and is always dropped.
   """
   alias CodexPooler.Repo
@@ -18,9 +18,29 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
   @head 20_260_914_124_456
   @pinned_head "7946bbea078d1b72d889ea9775c5f4bb94a94dea"
   @migrations "priv/repo/migrations"
+  @client_output_limit 4096
 
   @spec run([String.t()]) :: :ok
   def run(["--help"]), do: IO.puts(@moduledoc)
+
+  def run(["--client-exit-builder", application_name, name, columns, predicate]) do
+    _config = safe_config!()
+    validate_client_exit_target!(application_name, name, columns, predicate)
+    {:ok, _} = Application.ensure_all_started(:postgrex)
+
+    options =
+      connection_options()
+      |> Keyword.put(:parameters, application_name: application_name)
+
+    {:ok, builder} = Postgrex.start_link(options)
+
+    Postgrex.query!(
+      builder,
+      "CREATE INDEX CONCURRENTLY #{name} ON attempts (#{columns}) WHERE #{predicate}",
+      [],
+      timeout: :infinity
+    )
+  end
 
   def run(args) do
     {opts, [], []} = OptionParser.parse(args, strict: [scenario: :string, rows: :integer])
@@ -262,66 +282,59 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
     seed(rows)
     qualify_attempts()
     # A writer blocks CREATE INDEX CONCURRENTLY after it has committed its INVALID
-    # catalog entry. Cancelling that real backend leaves the actual retry state.
+    # catalog entry. Server cancellation and hard client exit exercise distinct
+    # real interruption paths before the migration repairs the resulting state.
     {:ok, blocker} = Postgrex.start_link(connection_options())
-    {:ok, builder} = Postgrex.start_link(connection_options())
 
     try do
       Postgrex.query!(blocker, "BEGIN", [])
       Postgrex.query!(blocker, "UPDATE attempts SET status=status", [])
-      [[pid]] = Postgrex.query!(builder, "SELECT pg_backend_pid()", []).rows
+      builder = start_index_builder(scenario, name, columns, predicate)
 
-      task =
-        Task.async(fn ->
-          try do
-            Postgrex.query(
-              builder,
-              "CREATE INDEX CONCURRENTLY #{name} ON attempts (#{columns}) WHERE #{predicate}",
-              [],
-              timeout: 60_000
-            )
-          catch
-            :exit, _ -> :client_exited
-          end
+      try do
+        {pid, task} = begin_index_build(builder, name, columns, predicate)
+
+        await(fn ->
+          query(
+            "SELECT count(*) FROM pg_index WHERE indexrelid=to_regclass('#{name}') AND NOT indisvalid"
+          ).rows == [[1]]
         end)
 
-      await(fn ->
-        query(
-          "SELECT count(*) FROM pg_index WHERE indexrelid=to_regclass('#{name}') AND NOT indisvalid"
-        ).rows == [[1]]
-      end)
+        interrupt_index(scenario, builder, pid, task, name)
+        Postgrex.query!(blocker, "ROLLBACK", [])
 
-      interrupt_index(scenario, builder, pid, task)
-      Postgrex.query!(blocker, "ROLLBACK", [])
+        await(fn ->
+          query("SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND state='active'", [pid]).rows ==
+            [[0]]
+        end)
 
-      await(fn ->
-        query("SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND state='active'", [pid]).rows ==
-          [[0]]
-      end)
+        receipt("interrupted_index", %{
+          name: name,
+          real_cancel: scenario != "client_exit",
+          catalog:
+            query(
+              "SELECT indisvalid,indisready FROM pg_index WHERE indexrelid='#{name}'::regclass"
+            ).rows
+        })
 
-      receipt("interrupted_index", %{
-        name: name,
-        real_cancel: scenario != "client_exit",
-        catalog:
-          query("SELECT indisvalid,indisready FROM pg_index WHERE indexrelid='#{name}'::regclass").rows
-      })
+        migrate(:all)
 
-      migrate(:all)
+        [[true]] =
+          query(
+            "SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid='#{name}'::regclass"
+          ).rows
 
-      [[true]] =
-        query(
-          "SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid='#{name}'::regclass"
-        ).rows
+        query("ANALYZE attempts")
 
-      query("ANALYZE attempts")
+        [[^rows]] =
+          query("SELECT reltuples::bigint FROM pg_class WHERE oid='#{name}'::regclass").rows
 
-      [[^rows]] =
-        query("SELECT reltuples::bigint FROM pg_class WHERE oid='#{name}'::regclass").rows
-
-      receipt("invalid_retry", %{name: name, valid: true, index_rows: rows})
+        receipt("invalid_retry", %{name: name, valid: true, index_rows: rows})
+      after
+        stop_index_builder(builder)
+      end
     after
       GenServer.stop(blocker)
-      if Process.alive?(builder), do: GenServer.stop(builder)
     end
   end
 
@@ -793,40 +806,170 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
     )
   end
 
-  defp interrupt_index("client_exit", builder, pid, task) do
-    await(fn ->
-      query(
-        "SELECT state='active' AND wait_event_type='Lock' AND cardinality(pg_blocking_pids(pid))>0 FROM pg_stat_activity WHERE pid=$1",
-        [pid]
-      ).rows == [[true]]
-    end)
+  defp start_index_builder("client_exit", name, columns, predicate) do
+    application_name = "migration_client_exit_#{System.unique_integer([:positive])}"
+    mix = System.find_executable("mix") || raise "mix executable not found"
 
-    Process.unlink(task.pid)
-    ref = Process.monitor(builder)
-    Process.exit(builder, :kill)
+    port =
+      Port.open({:spawn_executable, mix}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        args: [
+          "run",
+          "--no-start",
+          "--no-compile",
+          __ENV__.file,
+          "--client-exit-builder",
+          application_name,
+          name,
+          columns,
+          predicate
+        ],
+        cd: File.cwd!()
+      ])
 
-    receive do
-      {:DOWN, ^ref, :process, ^builder, :killed} -> :ok
-    after
-      5000 -> raise "client did not exit"
-    end
-
-    [["active", wait_event]] =
-      query("SELECT state,wait_event_type FROM pg_stat_activity WHERE pid=$1", [pid]).rows
-
-    receipt("client_exit", %{
-      client_dead: true,
-      server_backend_still_running: true,
-      observed_wait_event: wait_event,
-      server_cancel_used: false
-    })
-
-    Task.shutdown(task, :brutal_kill)
+    %{kind: :external, connection: port, application_name: application_name}
   end
 
-  defp interrupt_index(_, _, pid, task) do
+  defp start_index_builder(_scenario, _name, _columns, _predicate) do
+    {:ok, connection} = Postgrex.start_link(connection_options())
+    %{kind: :postgrex, connection: connection}
+  end
+
+  defp begin_index_build(%{kind: :external, application_name: application_name}, name, _, _) do
+    pid =
+      await_result("client-exit builder did not reach the blocked index phase", fn ->
+        case external_builder_rows(application_name, name) do
+          [[pid, "active", "Lock", true]] -> {:ok, pid}
+          rows -> {:retry, rows}
+        end
+      end)
+
+    {pid, nil}
+  end
+
+  defp begin_index_build(%{kind: :postgrex, connection: builder}, name, columns, predicate) do
+    [[pid]] = Postgrex.query!(builder, "SELECT pg_backend_pid()", []).rows
+
+    task =
+      Task.async(fn ->
+        Postgrex.query(
+          builder,
+          "CREATE INDEX CONCURRENTLY #{name} ON attempts (#{columns}) WHERE #{predicate}",
+          [],
+          timeout: 60_000
+        )
+      end)
+
+    {pid, task}
+  end
+
+  defp external_builder_rows(application_name, name) do
+    query(
+      """
+      SELECT pid,state,wait_event_type,
+             cardinality(pg_blocking_pids(pid))>0
+      FROM pg_stat_activity
+      WHERE datname=current_database() AND application_name=$1
+        AND query LIKE $2
+      """,
+      [application_name, "CREATE INDEX CONCURRENTLY #{name}%"]
+    ).rows
+  end
+
+  defp interrupt_index("client_exit", %{kind: :external, connection: port}, pid, nil, name) do
+    [[^pid, "active", "Lock", true]] =
+      query(
+        """
+        SELECT pid,state,wait_event_type,
+               cardinality(pg_blocking_pids(pid))>0
+        FROM pg_stat_activity
+        WHERE pid=$1 AND query LIKE $2
+        """,
+        [pid, "CREATE INDEX CONCURRENTLY #{name}%"]
+      ).rows
+
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    {_output, 0} = hard_kill(os_pid)
+    {_output, exit_code} = collect_port_exit(port, "")
+    true = exit_code != 0
+
+    [["active", wait_event, true]] =
+      query(
+        "SELECT state,wait_event_type,cardinality(pg_blocking_pids(pid))>0 FROM pg_stat_activity WHERE pid=$1",
+        [pid]
+      ).rows
+
+    receipt("client_exit", %{
+      client_process_killed: true,
+      server_backend_still_running: true,
+      observed_wait_event: wait_event,
+      fixture_pg_cancel_backend_used: false
+    })
+  end
+
+  defp interrupt_index(_, %{kind: :postgrex}, pid, task, _name) do
     [[true]] = query("SELECT pg_cancel_backend($1)", [pid]).rows
     {:error, %Postgrex.Error{postgres: %{code: :query_canceled}}} = Task.await(task, 60_000)
+  end
+
+  defp stop_index_builder(%{kind: :postgrex, connection: builder}) do
+    if Process.alive?(builder), do: GenServer.stop(builder)
+  end
+
+  defp stop_index_builder(%{kind: :external, connection: port}) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        _ = hard_kill(os_pid)
+        _ = collect_port_exit(port, "")
+        :ok
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp hard_kill(os_pid) do
+    System.cmd("/bin/sh", [
+      "-c",
+      "kill -KILL \"$1\"",
+      "migration-client",
+      Integer.to_string(os_pid)
+    ])
+  end
+
+  defp collect_port_exit(port, output),
+    do: collect_port_exit(port, output, System.monotonic_time(:millisecond) + 15_000)
+
+  defp collect_port_exit(port, output, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^port, {:data, data}} -> collect_port_exit(port, bounded_output(output, data), deadline)
+      {^port, {:exit_status, exit_code}} -> {output, exit_code}
+      {:EXIT, ^port, _reason} -> collect_port_exit(port, output, deadline)
+    after
+      remaining -> raise "client process did not exit"
+    end
+  end
+
+  defp bounded_output(output, data) do
+    combined = output <> data
+    size = byte_size(combined)
+
+    if size <= @client_output_limit,
+      do: combined,
+      else: binary_part(combined, size - @client_output_limit, @client_output_limit)
+  end
+
+  defp validate_client_exit_target!(application_name, name, columns, predicate) do
+    {_version, expected_name, expected_columns, expected_predicate} = index_target("client_exit")
+
+    unless Regex.match?(~r/\Amigration_client_exit_[1-9][0-9]*\z/, application_name) and
+             {name, columns, predicate} ==
+               {expected_name, expected_columns, expected_predicate},
+           do: raise(ArgumentError, "invalid client-exit builder target")
   end
 
   defp seed(rows, attempt_rows \\ nil, ledger_rows \\ nil) do
@@ -1000,6 +1143,25 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
       after
         10 -> await(fun, deadline)
       end
+    end
+  end
+
+  defp await_result(message, fun),
+    do: await_result(message, fun, System.monotonic_time(:millisecond) + 15_000, nil)
+
+  defp await_result(message, fun, deadline, previous) do
+    case fun.() do
+      {:ok, value} ->
+        value
+
+      {:retry, observed} ->
+        if System.monotonic_time(:millisecond) > deadline,
+          do: raise("#{message}: #{inspect(observed || previous)}")
+
+        receive do
+        after
+          10 -> await_result(message, fun, deadline, observed)
+        end
     end
   end
 end
