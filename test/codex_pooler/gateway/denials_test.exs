@@ -63,6 +63,47 @@ defmodule CodexPooler.Gateway.DenialsTest do
            }
   end
 
+  test "a policy denial answers a disabled key with the auth boundary's 401" do
+    fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(fake)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "synthetic"}
+    opts = RequestOptions.build(%{}, @endpoint_path, payload)
+
+    # `GatewayControllerHelpers.authenticate/1` already says 401 for a disabled
+    # key; the gateway policy path used to say 403 for the same condition
+    # (findings#221). Missing stays 401 and a model policy stays 403.
+    for {reason, status, message} <- [
+          {:api_key_disabled, 401, "api key is disabled"},
+          {:api_key_missing, 401, "api key is required"},
+          {:model_not_allowed, 403, "api key is not allowed to use this model"},
+          {:api_key_policy_malformed, 403, "api key policy is invalid"}
+        ] do
+      code = Atom.to_string(reason)
+
+      assert {:error, %{status: ^status, code: ^code, message: ^message}} =
+               Denials.log_policy(%Denials.Context{
+                 auth: auth,
+                 model: setup.model,
+                 reason: reason,
+                 endpoint: @endpoint_path,
+                 payload: payload,
+                 opts: opts
+               })
+
+      assert [%Request{status: "rejected", response_status_code: ^status} = request] =
+               Repo.all(
+                 from r in Request,
+                   where: fragment("?->'policy_denial'->>'code' = ?", r.request_metadata, ^code)
+               )
+
+      assert request.request_metadata["policy_denial"]["message"] == message
+    end
+
+    assert Repo.all(Attempt) == []
+    assert FakeUpstream.count(fake) == 0
+  end
+
   test "gateway denial classifies unknown requested reasoning without persisting raw text" do
     fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(fake)

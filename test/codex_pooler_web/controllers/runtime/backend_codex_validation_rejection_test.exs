@@ -673,6 +673,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  # A Full rejection is rebuilt as a JSON body; a streaming request whose
+  # upstream 400 carried no content-type must not inherit the stream's
+  # `text/event-stream` (findings#219).
+  test "explicit Full override relays a content-type-less streaming rejection as JSON",
+       %{conn: conn} do
+    body =
+      CodexPooler.JSON.encode!(%{
+        "error" => %{
+          "code" => "unsupported_value",
+          "message" => @message_with_list,
+          "param" => "reasoning.effort",
+          "type" => "invalid_request_error"
+        }
+      })
+
+    upstream =
+      start_upstream(
+        # provenance: observed codex-pooler-findings#128 live probe shape; the missing content-type header is invented
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: FakeUpstream.raw_response(body, status: 400, headers: [])
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+    response = post_native(conn, setup)
+
+    assert response.status == 400
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "application/json"
+
+    assert %{"error" => %{"code" => "unsupported_value", "param" => "reasoning.effort"}} =
+             CodexPooler.JSON.decode!(response.resp_body)
+
+    refute response.resp_body =~ @provider_sentinel
+    refute response.resp_body =~ @prompt_sentinel
+    FakeUpstream.verify!(upstream)
+  end
+
   # The backend Chat alias shares the Full caller-facing mapper with the public
   # `/v1/chat/completions` arm (findings#219); only the public arm was pinned.
   test "explicit Full override on the backend Chat alias preserves the Chat parameter name",

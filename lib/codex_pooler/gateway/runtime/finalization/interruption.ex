@@ -367,11 +367,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         |> complete_task_exception_turn!(turn, nil, reason, now)
 
       Accounting.reservation_outstanding?(request) ->
+        # A terminal attempt with its reservation still live is the shape an
+        # armed replay entitlement leaves behind (generation 1 armed, attempt
+        # at generation 0); without an explicit close status the finalizer's
+        # stale-generation arm writes nothing and the reservation leaks
+        # (findings#221). The task raised, so the entitlement is revoked.
         Accounting.finalize_request_with_disposition(request, attempt, %{
           request_status: "failed",
           response_status_code: @task_exception_status_code,
           last_error_code: reason,
           preserve_replay_attempt: true,
+          replay_entitlement_close_status: "revoked",
           usage: %{status: "usage_unknown", source: reason}
         })
         |> complete_task_exception_turn!(turn, attempt, reason, now)

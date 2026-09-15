@@ -638,12 +638,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
         %{
           status: status,
-          headers: headers,
+          headers: json_content_type(headers),
           raw_body: CodexPooler.JSON.encode!(%{"error" => error})
         }
 
       {:canonical_full, _explicit_full?} ->
-        %{status: status, headers: headers, body: canonical_failure_body(request_options)}
+        %{
+          status: status,
+          headers: json_content_type(headers),
+          body: canonical_failure_body(request_options)
+        }
 
       {:mode_scoped, true} ->
         full_failure_result(
@@ -731,9 +735,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        when is_binary(type) do
     rejection = full_rejection(rejection_error, validation_rejection)
 
+    # The relayed body is rebuilt as JSON whatever the request's transport, so
+    # a streaming request whose upstream 400 carried no content-type must not
+    # inherit `text/event-stream` (findings#219).
     %{
       status: status,
-      headers: headers,
+      headers: json_content_type(headers),
       body: full_failure_body(type, rejection),
       public_full_rejection: rejection,
       public_input_file_upstream_404?: marker
@@ -743,7 +750,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp full_failure_result(status, headers, _rejection_error, _validation_rejection, marker) do
     %{
       status: status,
-      headers: headers,
+      headers: json_content_type(headers),
       body: @canonical_full_failure_body,
       public_input_file_upstream_404?: marker
     }

@@ -220,7 +220,11 @@ defmodule CodexPooler.Gateway.Denials do
     end
   end
 
+  # The runtime auth boundary answers a disabled key with 401 (the credential
+  # is not usable); the gateway policy path said 403 for the same reason. One
+  # status for one condition (findings#221).
   defp policy_status(:api_key_missing), do: 401
+  defp policy_status(:api_key_disabled), do: 401
   defp policy_status(_reason), do: 403
 
   defp policy_message(:api_key_missing), do: "api key is required"

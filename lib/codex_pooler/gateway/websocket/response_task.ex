@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
 
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
+  alias CodexPooler.Platform.ExecutionIdentity
 
   @type activity_kind :: :direct | :proxy | :local_owner
   @type run_callback :: (pid() -> term())
@@ -256,14 +257,20 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     send(parent, {:codex_response_done, self(), result})
 
     receive do
-      {:websocket_response_delivery_ack, ^token, outcome}
-      when outcome in [:completed, :aborted] ->
+      {:websocket_response_delivery_ack, ^token, :completed} ->
+        Process.demonitor(parent_monitor, [:flush])
+        complete_delivered_execution()
+
+      {:websocket_response_delivery_ack, ^token, :aborted} ->
         Process.demonitor(parent_monitor, [:flush])
         :ok
 
       {:websocket_response_delivery_ack, ^token} ->
+        # The bare ack is the socket's default delivered outcome; unlike
+        # `await_delivery` this path has no owner-drain cancellation that could
+        # have turned the outcome into `:aborted`, so it completes unconditionally.
         Process.demonitor(parent_monitor, [:flush])
-        :ok
+        complete_delivered_execution()
 
       {:DOWN, ^parent_monitor, :process, ^parent, _reason} ->
         :ok
@@ -272,6 +279,16 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
 
   defp complete_local_owner(parent, result),
     do: send(parent, {:codex_response_done, self(), result})
+
+  # The socket acknowledged that this task's result reached the client, so
+  # the execution the task carried is retired as `completed` in every
+  # activity kind, the way the HTTP controllers retire theirs after sending a
+  # success or an error response; otherwise the registry could only observe
+  # the process exit and record `process_down`, which is what a dead executor
+  # looks like (findings#217). `completed` therefore means delivered, not
+  # succeeded: a task that finalized its request as failed and delivered the
+  # error frame is a completed execution too.
+  defp complete_delivered_execution, do: ExecutionIdentity.complete()
 
   defp run_callback_result(run_callback, coordinator) do
     {:completed, run_callback.(coordinator)}
@@ -419,12 +436,14 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     receive do
       {:websocket_response_delivery_ack, ^token, :completed} ->
         ActivityRegistry.complete(token, :completed, name: registry)
+        complete_delivered_execution()
 
       {:websocket_response_delivery_ack, ^token, :aborted} ->
         ActivityRegistry.complete(token, :aborted, name: registry)
 
       {:websocket_response_delivery_ack, ^token} ->
         ActivityRegistry.unregister(token, outcome, name: registry)
+        if outcome == :completed, do: complete_delivered_execution(), else: :ok
 
       {:websocket_activity_cancel, ^token, :owner_drained} ->
         _cancel_result = cancel_callback.(self(), :owner_drained)

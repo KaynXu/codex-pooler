@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
 
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
   alias CodexPooler.Gateway.Websocket.ResponseTask
+  alias CodexPooler.Platform.{ExecutionIdentity, ExecutionRegistry}
 
   # Failure-detection budget for a response task or watcher that must exit on
   # a socket-death signal; never a scenario timer.
@@ -12,6 +13,38 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     registry = :"websocket-response-task-registry-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: registry})
     {:ok, registry: registry}
+  end
+
+  test "a delivered response completes its execution rather than leaving it to the process exit",
+       %{registry: registry} do
+    parent = self()
+
+    {:ok, pid} =
+      ResponseTask.start(
+        parent,
+        :direct,
+        fn _task_pid ->
+          send(parent, {:execution, ExecutionIdentity.local()})
+          :ok
+        end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry
+      )
+
+    assert_receive {:execution, %{owner_execution_id: execution_id}}
+    monitor = Process.monitor(pid)
+    assert_receive {:websocket_response_activity, ^pid, token}
+    assert_receive {:codex_response_done, ^pid, :ok}
+    send(pid, {:websocket_response_delivery_ack, token, :completed})
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+
+    # The proof is pending publication with the delivery's end kind, not the
+    # exit's (no publisher runs in the test environment, so it stays pending).
+    proof =
+      ExecutionRegistry.pending(10_000)
+      |> Enum.find(&(&1.owner_execution_id == execution_id))
+
+    assert %{end_kind: "completed"} = proof
   end
 
   test "registers and gates before invoking upstream work", %{registry: registry} do
@@ -389,6 +422,43 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
     assert ActivityRegistry.activities(name: registry) == []
     refute_received {:proxy_cancelled, ^pid, :owner_drained}
+  end
+
+  test "a delivered local-owner result completes its execution like the direct kind", %{
+    registry: registry
+  } do
+    # With owner forwarding on, a fresh session's task is `:local_owner`, the
+    # kind production selects; its delivery ack must retire the execution as
+    # `completed` too, not leave it to the process exit (findings#217).
+    parent = self()
+
+    {:ok, pid} =
+      ResponseTask.start(
+        parent,
+        :local_owner,
+        fn _task_pid ->
+          send(parent, {:execution, ExecutionIdentity.local()})
+          {:socket_response_result, :owner_completion_pending, :ok}
+        end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry
+      )
+
+    assert_receive {:execution, %{owner_execution_id: execution_id}}
+    monitor = Process.monitor(pid)
+    assert_receive {:websocket_response_activity, ^pid, token}
+
+    assert_receive {:codex_response_done, ^pid,
+                    {:socket_response_result, :owner_completion_pending, :ok}}
+
+    assert :ok = ResponseTask.acknowledge_delivery(pid, token, :completed)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+
+    proof =
+      ExecutionRegistry.pending(10_000)
+      |> Enum.find(&(&1.owner_execution_id == execution_id))
+
+    assert %{end_kind: "completed"} = proof
   end
 
   test "untracked local-owner submitted work waits for delivery without double-counting", %{
