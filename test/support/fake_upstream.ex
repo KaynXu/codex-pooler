@@ -14,6 +14,35 @@ defmodule CodexPooler.FakeUpstream do
 
   @type t :: %__MODULE__{pid: pid(), server: pid(), supervisor: pid(), url: String.t()}
 
+  @typedoc """
+  How an HTTP barrier-SSE reply treats the client going away mid-tail (the
+  websocket transport of the same scenario writes frames and has no client
+  close to observe).
+
+    * `:fail` (default) keeps the strict complete-delivery contract: a write
+      that finds the client gone raises with the scenario's owner correlator.
+    * `:expected` is for cancellation scenarios that end the client path on
+      purpose before releasing the held tail: the first write that finds the
+      client gone stops the tail, emits no delivery acknowledgement for it, and
+      records one bounded outcome readable through `sse_outcomes/1`.
+
+  Every other write error fails in both modes.
+  """
+  @type barrier_sse_settings :: %{
+          required(:on_client_close) => :fail | :expected,
+          required(:owner) => String.t()
+        }
+
+  @type sse_outcome :: %{
+          required(:scenario) => :barrier_sse,
+          required(:owner) => String.t(),
+          required(:outcome) => :client_closed_expected,
+          required(:chunk_index) => pos_integer(),
+          required(:chunk_count) => non_neg_integer(),
+          required(:reason) =>
+            :closed | :enotconn | :einval | :econnaborted | :econnreset | :epipe
+        }
+
   @type mode ::
           {:json, non_neg_integer(), map()}
           | {:json_headers, non_neg_integer(), map(), [{String.t(), String.t()}]}
@@ -48,7 +77,8 @@ defmodule CodexPooler.FakeUpstream do
           | {:repeat_last, [mode()]}
           | {:expect_request, keyword(), mode()}
           | {:scenario_failure, String.t()}
-          | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
+          | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference(),
+             barrier_sse_settings()}
           | {:malformed_json, non_neg_integer(), String.t()}
           | {:json_error, non_neg_integer(), map()}
           | {:non_json_error, non_neg_integer(), String.t()}
@@ -550,6 +580,23 @@ defmodule CodexPooler.FakeUpstream do
 
   def close_before_headers, do: :close_before_headers
 
+  # What a zero-timeout recv reports once the peer closed.
+  @client_gone_recv_reasons [:closed, :econnreset]
+  # What a write to a peer that went away can report, Bandit's own closure set
+  # plus the broken pipe a half-closed socket yields.
+  @client_gone_write_reasons [:closed, :enotconn, :einval, :econnaborted, :econnreset, :epipe]
+
+  @doc """
+  Holds an SSE reply at chunk `barrier_after` until the owning test releases it.
+
+  Options: `:notify` and `:release_ref` (required), `:barrier_after` (default
+  1), `:done` (default true), `:on_client_close` (`:fail` by default or
+  `:expected`, see `t:barrier_sse_settings/0`), and `:owner`, a bounded
+  correlator (`[A-Za-z0-9_.:-]`, at most 80 bytes) that names the scenario in
+  every write-failure error and recorded outcome so a CI log identifies its
+  caller. It defaults to the calling test file and line (`file_test.exs:line`)
+  when the fixture is built inside a test.
+  """
   def barrier_sse_stream(events, opts) do
     include_done? = Keyword.get(opts, :done, true)
     barrier_after = Keyword.get(opts, :barrier_after, 1)
@@ -559,7 +606,72 @@ defmodule CodexPooler.FakeUpstream do
     chunks = Enum.map(events, &sse_chunk/1)
     chunks = if include_done?, do: chunks ++ ["data: [DONE]\n\n"], else: chunks
 
-    {:barrier_sse, chunks, barrier_after, notify, release_ref}
+    {:barrier_sse, chunks, barrier_after, notify, release_ref,
+     barrier_sse_settings(
+       Keyword.get(opts, :on_client_close, :fail),
+       Keyword.get_lazy(opts, :owner, &default_barrier_sse_owner/0)
+     )}
+  end
+
+  defp barrier_sse_settings(on_client_close, owner)
+       when on_client_close in [:fail, :expected] and is_binary(owner) do
+    unless byte_size(owner) in 1..80 and Regex.match?(~r/^[A-Za-z0-9_.:-]+$/, owner) do
+      raise ArgumentError, "barrier SSE owner must be a bounded [A-Za-z0-9_.:-] correlator"
+    end
+
+    %{on_client_close: on_client_close, owner: owner}
+  end
+
+  defp barrier_sse_settings(on_client_close, _owner) when on_client_close in [:fail, :expected],
+    do: raise(ArgumentError, "barrier SSE owner must be a binary correlator")
+
+  defp barrier_sse_settings(_on_client_close, _owner),
+    do: raise(ArgumentError, "barrier SSE on_client_close must be :fail or :expected")
+
+  # `barrier_sse_stream/2` runs in the owning test process, so the nearest
+  # `*_test.exs` frame names the caller (`file.exs:line`); a scenario may still
+  # pass `:owner` for a more specific label. No test frame yields the generic
+  # label rather than a guess.
+  defp default_barrier_sse_owner do
+    {:current_stacktrace, frames} = Process.info(self(), :current_stacktrace)
+
+    Enum.find_value(frames, "barrier_sse", fn
+      {_module, _function, _arity, location} ->
+        file = to_string(Keyword.get(location, :file, ""))
+        line = Keyword.get(location, :line)
+
+        if String.ends_with?(file, "_test.exs") and is_integer(line) do
+          bounded_owner("#{Path.basename(file)}:#{line}")
+        end
+
+      _frame ->
+        nil
+    end)
+  end
+
+  defp bounded_owner(label) do
+    label = String.replace(label, ~r/[^A-Za-z0-9_.:-]/, "-")
+    if byte_size(label) in 1..80, do: label, else: "barrier_sse"
+  end
+
+  @doc """
+  Bounded outcomes barrier-SSE replies recorded for this fake, oldest first.
+  Today only an expected client close is recorded (`t:sse_outcome/0`).
+  """
+  @spec sse_outcomes(t()) :: [sse_outcome()]
+  def sse_outcomes(%__MODULE__{pid: pid}) do
+    Agent.get(pid, fn state -> Enum.reverse(state.sse_outcomes) end)
+  end
+
+  defmodule SseWriteError do
+    @moduledoc "A barrier-SSE reply could not deliver a chunk; carries only bounded scenario metadata."
+    defexception [:owner, :chunk_index, :chunk_count, :reason, :mode]
+
+    @impl true
+    def message(%__MODULE__{} = error) do
+      "fake upstream barrier SSE owner=#{error.owner} mode=#{error.mode} " <>
+        "chunk #{error.chunk_index}/#{error.chunk_count} write failed: #{error.reason}"
+    end
   end
 
   def websocket_sse_then_close(events, opts \\ []) do
@@ -721,6 +833,7 @@ defmodule CodexPooler.FakeUpstream do
       strict_total: strict_entry_count(mode),
       strict_consumed: 0,
       scenario_failures: [],
+      sse_outcomes: [],
       required_acknowledgements: MapSet.new(),
       acknowledged: MapSet.new(),
       frame_barriers_waiting: %{},
@@ -1364,23 +1477,41 @@ defmodule CodexPooler.FakeUpstream do
     Process.exit(self(), :kill)
   end
 
-  defp respond(_pid, conn, {:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do
+  defp respond(
+         pid,
+         conn,
+         {:barrier_sse, chunks, barrier_after, notify, release_ref, settings},
+         _request
+       ) do
     conn =
       conn
       |> Plug.Conn.put_resp_header("cache-control", "no-cache")
       |> Plug.Conn.put_resp_content_type("text/event-stream")
       |> Plug.Conn.send_chunked(200)
 
-    maybe_wait_for_sse_barrier(0, barrier_after, notify, release_ref)
+    maybe_wait_for_sse_barrier(conn, 0, barrier_after, notify, release_ref)
+    chunk_count = length(chunks)
 
     chunks
     |> Enum.with_index(1)
-    |> Enum.reduce(conn, fn {chunk, index}, conn ->
-      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
-      notify_chunk_sent(notify, index)
-      maybe_wait_for_sse_barrier(index, barrier_after, notify, release_ref)
+    |> Enum.reduce_while(conn, fn {chunk, index}, conn ->
+      # A write result is never assumed: the chunk-delivered acknowledgement
+      # follows only a successful write, so a failed tail write can never be
+      # reported as delivered.
+      case Plug.Conn.chunk(conn, chunk) do
+        {:ok, conn} ->
+          notify_chunk_sent(notify, index)
+          maybe_wait_for_sse_barrier(conn, index, barrier_after, notify, release_ref)
+          {:cont, conn}
 
-      conn
+        {:error, reason} ->
+          {:halt,
+           barrier_sse_write_failed(pid, conn, settings, notify, release_ref, %{
+             chunk_index: index,
+             chunk_count: chunk_count,
+             reason: reason
+           })}
+      end
     end)
   end
 
@@ -1587,6 +1718,66 @@ defmodule CodexPooler.FakeUpstream do
   defp notify_chunk_sent(nil, _index), do: :ok
   defp notify_chunk_sent(pid, index), do: send(pid, {:fake_upstream_chunk_sent, index})
 
+  # The client going away (`:closed`, or the reset the kernel reports for the
+  # same event) is the one write failure a cancellation scenario may expect:
+  # it ends the tail with one bounded outcome and a notification, never an
+  # acknowledgement. In strict mode, and for every other write error, the
+  # handler fails with the owner correlator in its message.
+
+  defp barrier_sse_write_failed(
+         pid,
+         conn,
+         %{on_client_close: :expected, owner: owner},
+         notify,
+         release_ref,
+         %{reason: reason} = failure
+       )
+       when reason in @client_gone_write_reasons do
+    outcome = %{
+      scenario: :barrier_sse,
+      owner: owner,
+      outcome: :client_closed_expected,
+      chunk_index: failure.chunk_index,
+      chunk_count: failure.chunk_count,
+      reason: reason
+    }
+
+    Agent.update(pid, fn state -> %{state | sse_outcomes: [outcome | state.sse_outcomes]} end)
+
+    if is_pid(notify) do
+      send(notify, {:fake_upstream_client_closed, failure.chunk_index, self(), release_ref})
+    end
+
+    conn
+  end
+
+  defp barrier_sse_write_failed(_pid, _conn, settings, _notify, _release_ref, failure) do
+    raise SseWriteError,
+      owner: settings.owner,
+      chunk_index: failure.chunk_index,
+      chunk_count: failure.chunk_count,
+      reason: safe_write_reason(failure.reason),
+      mode: settings.on_client_close
+  end
+
+  defp safe_write_reason(reason) when is_atom(reason), do: reason
+
+  # Bandit returns `Exception.message/1` text for non-transport errors; keep
+  # it when it is a bounded identifier, otherwise fingerprint it.
+  defp safe_write_reason(reason) when is_binary(reason) do
+    if byte_size(reason) <= 80 and Regex.match?(~r/^[A-Za-z0-9_.:-]+$/, reason),
+      do: reason,
+      else: "sha256:" <> short_hash(reason)
+  end
+
+  defp safe_write_reason(reason), do: "sha256:" <> short_hash(reason)
+
+  defp short_hash(term),
+    do:
+      :crypto.hash(:sha256, :erlang.term_to_binary(term))
+      |> Base.encode16(case: :lower)
+      |> String.slice(0, 12)
+
   defp wait_for_delay(interval_ms) do
     receive do
     after
@@ -1594,17 +1785,66 @@ defmodule CodexPooler.FakeUpstream do
     end
   end
 
-  defp maybe_wait_for_sse_barrier(index, index, notify, release_ref) when is_pid(notify) do
-    send(notify, {:fake_upstream_chunk_barrier, index, self(), release_ref})
+  @barrier_release_timeout_ms 30_000
+  @barrier_poll_ms 20
 
+  defp maybe_wait_for_sse_barrier(conn, index, index, notify, release_ref) when is_pid(notify) do
+    send(notify, {:fake_upstream_chunk_barrier, index, self(), release_ref})
+    deadline = System.monotonic_time(:millisecond) + @barrier_release_timeout_ms
+    await_sse_barrier_release(conn, index, notify, release_ref, deadline, false)
+  end
+
+  defp maybe_wait_for_sse_barrier(_conn, _index, _barrier_after, _notify, _release_ref), do: :ok
+
+  # While parked, the handler watches its own socket the way Bandit does
+  # (`recv(socket, 0, 0)`): a peer that closed is reported to the owning test
+  # exactly once as `{:fake_upstream_client_gone, index, handler, release_ref}`,
+  # so a scenario that closes its client can wait for the server-side
+  # observation before releasing the tail instead of racing the FIN.
+  defp await_sse_barrier_release(conn, index, notify, release_ref, deadline, gone_reported?) do
     receive do
       {:fake_upstream_release_chunk, ^release_ref} -> :ok
     after
-      30_000 -> raise "timed out waiting for fake upstream SSE barrier release"
+      @barrier_poll_ms ->
+        if System.monotonic_time(:millisecond) > deadline do
+          raise "timed out waiting for fake upstream SSE barrier release"
+        end
+
+        gone_reported? =
+          if not gone_reported? and client_gone?(conn) do
+            send(notify, {:fake_upstream_client_gone, index, self(), release_ref})
+            true
+          else
+            gone_reported?
+          end
+
+        await_sse_barrier_release(conn, index, notify, release_ref, deadline, gone_reported?)
     end
   end
 
-  defp maybe_wait_for_sse_barrier(_index, _barrier_after, _notify, _release_ref), do: :ok
+  # Bandit keeps the socket passive while the plug runs, so a zero-timeout
+  # recv distinguishes "still open, no data" from a peer close. Observing the
+  # close also closes the port, so the next write fails deterministically.
+  # Any other shape (active socket, unknown adapter) answers false and leaves
+  # detection to the write result.
+  defp client_gone?(%Plug.Conn{
+         adapter: {Bandit.Adapter, %{transport: %{socket: %ThousandIsland.Socket{} = socket}}}
+       }) do
+    case ThousandIsland.Socket.recv(socket, 0, 0) do
+      {:error, reason} when reason in @client_gone_recv_reasons ->
+        true
+
+      {:error, _still_open_or_active} ->
+        false
+
+      {:ok, _bytes} ->
+        # No barrier scenario has its client speak mid-response; bytes here
+        # would otherwise be swallowed before Bandit's keep-alive read.
+        raise "fake upstream barrier SSE received client bytes while parked"
+    end
+  end
+
+  defp client_gone?(_conn), do: false
 
   defp wait_for_timeout_release(stage, notify, release_ref) do
     if is_pid(notify) do
@@ -2022,7 +2262,10 @@ defmodule CodexPooler.FakeUpstream do
       {:barrier_close, code, reason, notify, release_ref}
     end
 
-    defp websocket_messages({:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do
+    defp websocket_messages(
+           {:barrier_sse, chunks, barrier_after, notify, release_ref, _settings},
+           _request
+         ) do
       maybe_wait_for_sse_barrier(0, barrier_after, notify, release_ref)
 
       chunks

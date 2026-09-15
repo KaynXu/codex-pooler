@@ -14,35 +14,37 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport.VirtualDeadline
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Endpoint
   alias Ecto.Adapters.SQL.Sandbox
+  alias Plug.Adapters.Test.Conn, as: TestConn
 
   @public_path "/v1/responses"
   @response_id "resp_v1_rollout_drain"
 
   defmodule RaisingChunkAdapter do
     @moduledoc false
-    defdelegate send_chunked(state, status, headers), to: Plug.Adapters.Test.Conn
-    defdelegate send_resp(state, status, headers, body), to: Plug.Adapters.Test.Conn
-    defdelegate read_req_body(state, opts), to: Plug.Adapters.Test.Conn
-    defdelegate get_peer_data(state), to: Plug.Adapters.Test.Conn
-    defdelegate get_http_protocol(state), to: Plug.Adapters.Test.Conn
+    defdelegate send_chunked(state, status, headers), to: TestConn
+    defdelegate send_resp(state, status, headers, body), to: TestConn
+    defdelegate read_req_body(state, opts), to: TestConn
+    defdelegate get_peer_data(state), to: TestConn
+    defdelegate get_http_protocol(state), to: TestConn
     def chunk(_state, _body), do: raise(ArgumentError, "synthetic downstream writer failure")
   end
 
   defmodule PausingHeadersAdapter do
     @moduledoc false
-    defdelegate send_resp(state, status, headers, body), to: Plug.Adapters.Test.Conn
-    defdelegate read_req_body(state, opts), to: Plug.Adapters.Test.Conn
-    defdelegate get_peer_data(state), to: Plug.Adapters.Test.Conn
-    defdelegate get_http_protocol(state), to: Plug.Adapters.Test.Conn
-    defdelegate chunk(state, body), to: Plug.Adapters.Test.Conn
+    defdelegate send_resp(state, status, headers, body), to: TestConn
+    defdelegate read_req_body(state, opts), to: TestConn
+    defdelegate get_peer_data(state), to: TestConn
+    defdelegate get_http_protocol(state), to: TestConn
+    defdelegate chunk(state, body), to: TestConn
 
     def send_chunked(state, status, headers) do
       send(state.test_parent, {:headers_held, self(), state.test_ref})
 
       receive do
         {:release_headers, ref} when ref == state.test_ref ->
-          Plug.Adapters.Test.Conn.send_chunked(state, status, headers)
+          TestConn.send_chunked(state, status, headers)
       end
     end
   end
@@ -450,7 +452,11 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
         FakeUpstream.barrier_sse_stream([created_event(), completed_event()],
           barrier_after: 0,
           notify: self(),
-          release_ref: release_ref
+          release_ref: release_ref,
+          # The gateway tears the upstream request down while the relay is
+          # raising, so the released tail may meet a closed client.
+          on_client_close: :expected,
+          owner: "responses_sse_rollout_drain_test:fault_#{fault}"
         )
       )
 
@@ -462,7 +468,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
       Task.async(fn ->
         Sandbox.allow(Repo, parent, self())
         conn = build_conn() |> auth(setup)
-        conn = Plug.Adapters.Test.Conn.conn(conn, :post, @public_path, stream_payload(setup))
+        conn = TestConn.conn(conn, :post, @public_path, stream_payload(setup))
 
         conn =
           if fault == :relay_raise do
@@ -473,7 +479,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
           end
 
         try do
-          CodexPoolerWeb.Endpoint.call(conn, CodexPoolerWeb.Endpoint.init([]))
+          Endpoint.call(conn, Endpoint.init([]))
           :unexpected_success
         rescue
           exception -> {:raised, root_exception(exception).__struct__}
@@ -544,10 +550,10 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
       Task.async(fn ->
         Sandbox.allow(Repo, parent, self())
         conn = build_conn() |> auth(setup)
-        conn = Plug.Adapters.Test.Conn.conn(conn, :post, @public_path, stream_payload(setup))
+        conn = TestConn.conn(conn, :post, @public_path, stream_payload(setup))
         {_adapter, state} = conn.adapter
         state = Map.merge(state, %{test_parent: parent, test_ref: release_ref})
-        CodexPoolerWeb.Endpoint.call(%{conn | adapter: {PausingHeadersAdapter, state}}, [])
+        Endpoint.call(%{conn | adapter: {PausingHeadersAdapter, state}}, [])
       end)
 
     assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref},
@@ -697,12 +703,16 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
   defp assert_admitted_cutoff(context, cutoff_before_reservation?) do
     release_ref = make_ref()
 
+    # The drain ends the client path before the held tail is released, so the
+    # fake's later tail write meets a closed client by design (findings#226).
     upstream =
       start_upstream(
         FakeUpstream.barrier_sse_stream([created_event(), completed_event()],
           barrier_after: 1,
           notify: self(),
-          release_ref: release_ref
+          release_ref: release_ref,
+          on_client_close: :expected,
+          owner: "responses_sse_rollout_drain:admitted_cutoff"
         )
       )
 
