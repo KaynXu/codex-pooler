@@ -83,8 +83,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
         "content_type" => header(response, "content-type"),
         "status_code" => response.status,
         "rate_limit_reached_type" => RateLimitReachedType.parse_header(response.headers),
-        "upstream_request_id" =>
-          header(response, "x-request-id") || header(response, "openai-request-id")
+        "upstream_request_id" => upstream_request_id(response)
       }
       |> compact_metadata()
 
@@ -340,8 +339,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       %{
         "content_type" => "application/json",
         "status_code" => 200,
-        "upstream_request_id" =>
-          header(headers, "x-request-id") || header(headers, "openai-request-id"),
+        "upstream_request_id" => upstream_request_id(headers),
         "rate_limit_reached_type" => RateLimitReachedType.parse_header(headers),
         "upstream_transport" => "websocket"
       }
@@ -630,6 +628,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp maybe_put_native_response_control_headers(headers, _response, _request_options),
     do: headers
+
+  # The Codex backend names its server-assigned request id `x-oai-request-id`
+  # (observed directly against the provider on 2026-09-15); the released Codex
+  # client reads that name too. `x-request-id` and `openai-request-id` are the
+  # names other OpenAI surfaces use. Reading only the latter two left every
+  # attempt without a provider id for seventy days (findings#218).
+  @upstream_request_id_headers ~w(x-oai-request-id x-request-id openai-request-id)
+
+  defp upstream_request_id(response_or_headers) do
+    Enum.find_value(@upstream_request_id_headers, &header(response_or_headers, &1))
+  end
 
   defp header(%Req.Response{headers: headers}, key) do
     headers
