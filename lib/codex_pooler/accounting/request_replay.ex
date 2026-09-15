@@ -1764,7 +1764,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
     valid? =
       consume_entitlement_matches?(input, request, turn, entitlement, now) and
         consume_owner_matches?(input, session, turn, owner_lease, now) and
-        consume_key_matches?(input, api_key, pool, entitlement) and
+        consume_key_matches?(input, api_key, pool, entitlement, now) and
         consume_lifecycle_open?(request, turn, attempt, entitlement) and
         no_terminal_ledger?(request.id)
 
@@ -1812,12 +1812,25 @@ defmodule CodexPooler.Accounting.RequestReplay do
       live_lease_matches?(session, owner_lease, input.owner_lease_token, now)
   end
 
-  defp consume_key_matches?(input, api_key, pool, entitlement) do
+  # A replay is a new upstream send, so consume passes the same lifecycle fence
+  # as a claim: the Pool must be active, the key must still be the armed key
+  # with its exact runtime epoch, and its expiry must still be ahead of the
+  # database clock read under the locks. Expiry is a clock crossing rather
+  # than an edit, so status and epoch alone cannot reveal it, and an armed
+  # replay whose key expired between arm and consume must fail closed before
+  # any replay attempt exists (findings#204).
+  defp consume_key_matches?(input, api_key, pool, entitlement, now) do
     pool.status == "active" and api_key.id == input.auth.api_key.id and
       api_key.pool_id == input.auth.pool.id and
       current_replay_authorization?(api_key, entitlement) and
+      key_unexpired?(api_key, now) and
       model_policy_allows?(api_key, entitlement.model_identifier)
   end
+
+  defp key_unexpired?(%APIKey{expires_at: nil}, _now), do: true
+
+  defp key_unexpired?(%APIKey{expires_at: %DateTime{} = expires_at}, now),
+    do: future?(expires_at, now)
 
   defp consume_turn_open?(turn),
     do:

@@ -2,8 +2,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
   @moduledoc """
   Real-path coverage for an already-open Responses websocket whose API key stops
   being usable from another application node without a pause or revoke: the key
-  is deleted, it expires, it moves to another Pool, or its Pool is disabled or
-  archived and deleted.
+  is deleted, it expires, it is rotated, it moves to another Pool, or its Pool
+  is disabled or archived and deleted.
 
   The change runs on a peer node that shares only PostgreSQL with this node, so
   the prompt event reaches the socket through the PostgreSQL relay, and
@@ -43,7 +43,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
     {:backend_responses, "/backend-api/codex/responses"},
     {:backend_v1_responses, "/backend-api/codex/v1/responses"}
   ]
-  @lifecycle_changes [:delete_key, :expire_key, :disable_pool, :delete_pool, :move_key]
+  # `:rotate_key` keeps the key active and only advances its runtime epoch, so
+  # the socket learns nothing from the event's status and must reread the
+  # durable authorization to close (findings#204).
+  @lifecycle_changes [
+    :delete_key,
+    :expire_key,
+    :rotate_key,
+    :disable_pool,
+    :delete_pool,
+    :move_key
+  ]
   @fence_changes @lifecycle_changes
 
   # One peer node serves the whole module: starting a node costs far more than
@@ -297,6 +307,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
     past = DateTime.add(DateTime.utc_now(), -1, :second)
     peer_call!(peer, :expire_key, [owner_scope!(setup), setup.api_key.id, past])
   end
+
+  # Rotation returns the new one-time secret with the key; the socket under
+  # test still holds the old one, so only the `{:ok, _}` shape matters here.
+  defp apply_change_on_peer!(peer, :rotate_key, setup),
+    do: peer_call!(peer, :rotate_key, [owner_scope!(setup), setup.api_key.id])
 
   defp apply_change_on_peer!(peer, :disable_pool, setup),
     do: peer_call!(peer, :disable_pool, [owner_scope!(setup), setup.pool.id])
@@ -716,6 +731,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
 
       def expire_key(scope, api_key_id, expires_at),
         do: CodexPooler.Access.update_api_key(scope, api_key_id, %{expires_at: expires_at})
+
+      def rotate_key(scope, api_key_id), do: CodexPooler.Access.rotate_api_key(scope, api_key_id)
 
       # The operator form submits the key's status with every edit.
       def move_key(scope, api_key_id, pool_id),

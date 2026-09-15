@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
   import ExUnit.Callbacks
   import Phoenix.ConnTest
   import Plug.Conn
+  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 2]
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -94,6 +95,78 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
         assert session_count(setup) == 1
       after
         Mint.HTTP.close(conn)
+      end
+    end
+
+    # Rotation keeps the key active and only advances its runtime epoch, so the
+    # `api_key_rotated` event carries no disabling status the socket could
+    # latch on. The idle old-secret socket must still close from that event
+    # alone, without a client frame, while a sibling key on the same Pool and a
+    # fresh upgrade with the rotated secret keep working (findings#204).
+    test "#{path} closes an idle websocket on rotation, keeps a sibling key open, and admits the rotated secret" do
+      route_label = unquote(route_label)
+      path = unquote(path)
+      upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+      setup = gateway_setup(upstream)
+      register_committed_setup_cleanup!(setup)
+      sibling = sibling_key_setup(setup)
+      port = start_public_endpoint!()
+
+      {conn, websocket, ref} =
+        public_websocket_connect!(port, setup, "idle-rotate-#{route_label}", path)
+
+      {sibling_conn, sibling_websocket, sibling_ref} =
+        public_websocket_connect!(port, sibling, "idle-rotate-sibling-#{route_label}", path)
+
+      try do
+        {conn, websocket} = websocket_transport_barrier!(conn, websocket, ref)
+
+        {sibling_conn, sibling_websocket} =
+          websocket_transport_barrier!(sibling_conn, sibling_websocket, sibling_ref)
+
+        epoch_before = setup.api_key.runtime_revocation_epoch
+
+        assert {:ok, %{api_key: rotated_key, raw_key: rotated_secret}} =
+                 rotate_from_task!(setup)
+
+        assert rotated_key.status == "active"
+        assert rotated_key.runtime_revocation_epoch == epoch_before + 1
+
+        assert Repo.get!(CodexPooler.Access.APIKey, setup.api_key.id).runtime_revocation_epoch ==
+                 epoch_before + 1
+
+        # No client frame is sent on the old-secret socket: the rotation event
+        # alone must prompt the reread that closes it.
+        {_conn, _websocket, frames} =
+          receive_websocket_frames_until_close!(conn, websocket, ref)
+
+        assert frames == [@api_key_close_frame]
+
+        # The sibling socket received the same Pool event before this ping and
+        # answers it with a pong and nothing else, so it was not revoked.
+        {_sibling_conn, _sibling_websocket} =
+          websocket_transport_barrier!(sibling_conn, sibling_websocket, sibling_ref)
+
+        {old_conn, 401, _body} = websocket_upgrade_response!(port, setup, path)
+        Mint.HTTP.close(old_conn)
+
+        rotated_setup = %{setup | authorization: "Bearer #{rotated_secret}"}
+
+        {fresh_conn, fresh_websocket, fresh_ref} =
+          public_websocket_connect!(port, rotated_setup, "fresh-rotated-#{route_label}", path)
+
+        {fresh_conn, _fresh_websocket} =
+          websocket_transport_barrier!(fresh_conn, fresh_websocket, fresh_ref)
+
+        Mint.HTTP.close(fresh_conn)
+
+        assert FakeUpstream.count(upstream) == 0
+        assert request_count(setup) == 0
+        assert attempt_count(setup) == 0
+        assert session_count(setup) == 3
+      after
+        Mint.HTTP.close(conn)
+        Mint.HTTP.close(sibling_conn)
       end
     end
 
@@ -217,6 +290,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
     fn -> Access.pause_api_key(scope, setup.api_key.id) end
     |> Task.async()
     |> Task.await(@detection_timeout_ms)
+  end
+
+  defp rotate_from_task!(setup) do
+    scope = owner_scope!(setup)
+
+    fn -> Access.rotate_api_key(scope, setup.api_key.id) end
+    |> Task.async()
+    |> Task.await(@detection_timeout_ms)
+  end
+
+  # A second active key on the same Pool and owner, so the Pool cleanup removes
+  # it with the fixture; only the credential fields differ from `setup`.
+  defp sibling_key_setup(setup) do
+    Map.merge(
+      setup,
+      active_api_key_fixture(setup.pool, %{created_by_user_id: setup.api_key.created_by_user_id})
+    )
   end
 
   defp owner_scope!(setup) do

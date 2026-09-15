@@ -12,6 +12,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -463,6 +464,188 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
       do: send(holder_pid, :release_epoch_session)
 
     cleanup_fixture(fixture)
+  end
+
+  # Decision (findings#204): replay consume passes the same lifecycle fence as
+  # a claim. Active-Pool ownership and the exact runtime epoch were already
+  # fenced and stay as controls here; the natural expiry crossing is the new
+  # edge, because it changes neither status nor epoch. Time moves through the
+  # replay clock function `request_replay_db_now()`, which consume reads under
+  # its locks, so nothing sleeps and no key attribute is edited after arming.
+  test "consume fails closed when the armed key expires between arm and consume at locked database time" do
+    on_exit(fn -> Sandbox.unboxed_run(Repo, &restore_replay_db_now!/0) end)
+
+    scenarios = [
+      :expires_between_arm_and_consume,
+      :valid_unexpired,
+      :nil_expiry,
+      :stale_epoch,
+      :inactive_pool
+    ]
+
+    for scenario <- scenarios do
+      fixture = committed_replay_fixture!()
+      fixture = Sandbox.unboxed_run(Repo, fn -> put_key_expiry!(fixture, scenario) end)
+      {:ok, armed} = Sandbox.unboxed_run(Repo, fn -> RequestReplay.arm(arm_input(fixture)) end)
+      assert_key_valid_when_armed!(fixture, armed)
+
+      input = consume_input(fixture, armed, :crypto.strong_rand_bytes(32))
+      allow_committed_owner(fixture)
+      ledger_before = Sandbox.unboxed_run(Repo, fn -> ledger_snapshot(fixture) end)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        cross_between_arm_and_consume!(fixture, armed, scenario)
+      end)
+
+      consume_result = Sandbox.unboxed_run(Repo, fn -> RequestReplay.consume(input) end)
+      Sandbox.unboxed_run(Repo, &restore_replay_db_now!/0)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        entitlement = Repo.get!(RequestReplayEntitlement, armed.entitlement_id)
+        api_key = Repo.get!(APIKey, fixture.api_key.id)
+
+        if scenario in [:valid_unexpired, :nil_expiry] do
+          assert {:ok, consumed} = consume_result, "#{scenario}: #{inspect(consume_result)}"
+          assert consumed.attempt.replay_generation == 1
+          assert entitlement.status == "consumed"
+          assert request_attempt_count(fixture.request.id) == 2
+        else
+          assert {:error, :ineligible} = consume_result, "#{scenario}: #{inspect(consume_result)}"
+          assert entitlement.status == "armed"
+          assert request_attempt_count(fixture.request.id) == 1
+          assert upstream_send_count(fixture) == 0
+          assert ledger_snapshot(fixture) == ledger_before
+        end
+
+        # One reservation for every scenario: a refused consume consumes nothing
+        # more, and an admitted replay reuses the reservation it inherited.
+        assert ledger_snapshot(fixture).reservations == 1
+
+        if scenario == :expires_between_arm_and_consume do
+          # The refusal came from the clock alone: status and epoch are exactly
+          # what the entitlement captured when it was armed.
+          assert api_key.status == "active"
+          assert api_key.runtime_revocation_epoch == entitlement.api_key_runtime_epoch
+        end
+      end)
+
+      cleanup_fixture(fixture)
+    end
+  end
+
+  # Ten seconds keeps the key valid across `arm` under CI scheduling pressure
+  # while staying well inside the entitlement's own 30-second window, so the
+  # overridden clock below expires the key and nothing else.
+  @key_expiry_window_seconds 10
+
+  defp put_key_expiry!(fixture, :expires_between_arm_and_consume),
+    do: put_key_expiry!(fixture, DateTime.add(db_clock!(), @key_expiry_window_seconds, :second))
+
+  defp put_key_expiry!(fixture, :valid_unexpired),
+    do: put_key_expiry!(fixture, DateTime.add(db_clock!(), 3_600, :second))
+
+  defp put_key_expiry!(fixture, :nil_expiry) do
+    assert is_nil(fixture.api_key.expires_at)
+    fixture
+  end
+
+  defp put_key_expiry!(fixture, scenario) when scenario in [:stale_epoch, :inactive_pool],
+    do: fixture
+
+  defp put_key_expiry!(fixture, %DateTime{} = expires_at) do
+    api_key =
+      APIKey
+      |> Repo.get!(fixture.api_key.id)
+      |> Ecto.Changeset.change(expires_at: expires_at)
+      |> Repo.update!()
+
+    %{fixture | api_key: api_key}
+  end
+
+  defp assert_key_valid_when_armed!(%{api_key: %APIKey{expires_at: nil}}, _armed), do: :ok
+
+  defp assert_key_valid_when_armed!(%{api_key: %APIKey{expires_at: expires_at}}, armed) do
+    assert DateTime.compare(armed.armed_at, expires_at) == :lt,
+           "the key expired before replay was armed; widen @key_expiry_window_seconds"
+  end
+
+  defp cross_between_arm_and_consume!(fixture, armed, :expires_between_arm_and_consume) do
+    crossed_at = DateTime.add(fixture.api_key.expires_at, 1, :microsecond)
+    # The entitlement itself is still live at the crossed instant, so only the
+    # key's own expiry can refuse the consume.
+    assert DateTime.compare(crossed_at, armed.expires_at) == :lt
+    set_replay_db_now!(crossed_at)
+  end
+
+  defp cross_between_arm_and_consume!(fixture, _armed, :stale_epoch) do
+    api_key = Repo.get!(APIKey, fixture.api_key.id)
+
+    api_key
+    |> Ecto.Changeset.change(runtime_revocation_epoch: api_key.runtime_revocation_epoch + 1)
+    |> Repo.update!()
+  end
+
+  defp cross_between_arm_and_consume!(fixture, _armed, :inactive_pool) do
+    Pool
+    |> Repo.get!(fixture.pool.id)
+    |> Ecto.Changeset.change(status: "disabled")
+    |> Repo.update!()
+  end
+
+  defp cross_between_arm_and_consume!(_fixture, _armed, _control), do: :ok
+
+  # Exact original definition from the entitlements migration, re-verified
+  # here against the same contract the schema contract test pins: volatile,
+  # parallel safe, `search_path=pg_catalog`, and a clock that moves again.
+  defp restore_replay_db_now! do
+    Repo.query!("""
+    CREATE OR REPLACE FUNCTION public.request_replay_db_now()
+    RETURNS timestamp with time zone
+    LANGUAGE sql VOLATILE PARALLEL SAFE
+    SET search_path = pg_catalog
+    AS $$ SELECT clock_timestamp() $$
+    """)
+
+    assert %{rows: [["v", "s", ["search_path=pg_catalog"]]]} =
+             Repo.query!("""
+             SELECT provolatile::text, proparallel::text, proconfig
+             FROM pg_proc
+             WHERE pronamespace = 'public'::regnamespace
+               AND proname = 'request_replay_db_now'
+             """)
+
+    assert %{rows: [[true]]} =
+             Repo.query!("SELECT request_replay_db_now() <= clock_timestamp()")
+
+    :ok
+  end
+
+  defp db_clock! do
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
+
+    case now do
+      %DateTime{} -> now
+      %NaiveDateTime{} -> DateTime.from_naive!(now, "Etc/UTC")
+    end
+  end
+
+  defp ledger_snapshot(fixture) do
+    entries =
+      Repo.all(
+        from entry in LedgerEntry,
+          where: entry.request_id == ^fixture.request.id,
+          select: entry.entry_kind
+      )
+
+    %{
+      total: length(entries),
+      reservations: Enum.count(entries, &(&1 == "reservation"))
+    }
+  end
+
+  defp upstream_send_count(fixture) do
+    {:ok, owner} = WebsocketOwnerSession.lookup(fixture.session.id)
+    Agent.get(:sys.get_state(owner).upstream_pid, & &1)
   end
 
   defp await_replay_blocked!(waiter, holder, expires_at, deadline) do

@@ -265,7 +265,7 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
       end)
     end
 
-    test "pool move plus disable publishes exactly once to the canonical new pool" do
+    test "pool move plus disable publishes once to the source pool and once to the canonical new pool" do
       Sandbox.unboxed_run(Repo, fn ->
         {scope, source_pool} = owner_scope_and_pool()
         target_pool = create_pool!(scope, "target")
@@ -303,14 +303,18 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
           assert Enum.sort(Enum.map(lifecycle_events, & &1.pool_id)) ==
                    Enum.sort([source_pool.id, target_pool.id])
 
-          event = Enum.find(lifecycle_events, &(&1.pool_id == target_pool.id))
+          # Both Pools receive the same paused/epoch payload: an idle socket on the
+          # source Pool latches on exactly these fields.
+          for pool <- [source_pool, target_pool] do
+            event = Enum.find(lifecycle_events, &(&1.pool_id == pool.id))
 
-          assert event.payload == %{
-                   "api_key_id" => api_key.id,
-                   "pool_id" => target_pool.id,
-                   "runtime_revocation_epoch" => 1,
-                   "status" => "paused"
-                 }
+            assert event.payload == %{
+                     "api_key_id" => api_key.id,
+                     "pool_id" => target_pool.id,
+                     "runtime_revocation_epoch" => 1,
+                     "status" => "paused"
+                   }
+          end
         end
       end)
     end

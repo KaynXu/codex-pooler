@@ -777,12 +777,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # Pause and revoke broadcast the newer runtime epoch they disable at, so that
   # event alone latches. Every other change that can make the key unusable
   # carries nothing the socket could decide from -- a delete keeps the key's
-  # old status and epoch, an edited expiry changes neither, and a Pool change
-  # names no key -- so those events only prompt a reread of the durable
-  # authorization, which stays the authority. Pool events that cannot disable
-  # the Pool (a rename, a routing change) do not reread, so an ordinary Pool
-  # edit does not make every open socket of that Pool query its key row.
-  @api_key_reread_event_reasons ["api_key_deleted", "api_key_updated"]
+  # old status and epoch, an edited expiry changes neither, a rotation keeps
+  # the key active while advancing the epoch this socket captured, and a Pool
+  # change names no key -- so those events only prompt a reread of the durable
+  # authorization, which stays the authority. Rotation is listed explicitly
+  # because its status stays `active`: without the reread an idle socket
+  # opened with the rotated, possibly leaked, secret would stay authorized
+  # until its next frame (findings#204). Pool events that cannot disable the
+  # Pool (a rename, a routing change) do not reread, so an ordinary Pool edit
+  # does not make every open socket of that Pool query its key row.
+  @api_key_reread_event_reasons ["api_key_deleted", "api_key_rotated", "api_key_updated"]
   @pool_reread_event_reasons ["pool_status_updated", "pool_deleted"]
   @active_pool_status "active"
 
