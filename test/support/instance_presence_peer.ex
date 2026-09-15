@@ -4,6 +4,82 @@ defmodule CodexPooler.InstancePresencePeer do
   import ExUnit.Assertions
   alias CodexPooler.Platform.InstancePresence.Identity
 
+  @type os_process_source :: :proc | :ps
+  @type os_process_identity :: %{
+          pid: String.t(),
+          source: os_process_source(),
+          start_signature: String.t()
+        }
+  @type os_process_snapshot :: %{
+          source: os_process_source(),
+          start_signature: String.t(),
+          state: String.t(),
+          parent_pid: non_neg_integer()
+        }
+
+  @spec capture_os_process_identity!(String.t(), keyword()) :: os_process_identity()
+  def capture_os_process_identity!(os_pid, opts \\ []) do
+    probe = Keyword.get(opts, :probe, &os_process_snapshot/1)
+
+    case probe.(os_pid) do
+      {:present, %{source: source, start_signature: start_signature}}
+      when source in [:proc, :ps] and is_binary(start_signature) ->
+        %{pid: os_pid, source: source, start_signature: start_signature}
+
+      result ->
+        flunk("owned peer OS process identity unavailable: #{inspect(result)}")
+    end
+  end
+
+  @spec assert_os_process_stopped!(os_process_identity(), keyword()) :: :ok
+  def assert_os_process_stopped!(identity, opts \\ []) do
+    budget = Keyword.get(opts, :budget_ms, 15_000)
+    probe = Keyword.get(opts, :probe, &os_process_snapshot/1)
+    deadline = System.monotonic_time(:millisecond) + budget
+    await_os_process_stopped(identity, probe, deadline)
+  end
+
+  defp await_os_process_stopped(identity, probe, deadline) do
+    case classify_owned_process(identity, probe.(identity.pid)) do
+      :stopped ->
+        :ok
+
+      status when status in [:live, :unknown] ->
+        assert System.monotonic_time(:millisecond) < deadline,
+               "owned peer OS process remained #{status} through shutdown detection budget"
+
+        receive do
+        after
+          25 -> :ok
+        end
+
+        await_os_process_stopped(identity, probe, deadline)
+    end
+  end
+
+  @spec classify_owned_process(
+          os_process_identity(),
+          :absent | {:present, os_process_snapshot()} | {:error, term()}
+        ) :: :stopped | :live | :unknown
+  def classify_owned_process(_identity, :absent), do: :stopped
+
+  def classify_owned_process(
+        %{source: source, start_signature: expected},
+        {:present, %{source: source, start_signature: actual}}
+      )
+      when actual != expected,
+      do: :stopped
+
+  def classify_owned_process(
+        %{source: source, start_signature: signature},
+        {:present, %{source: source, start_signature: signature, state: state}}
+      )
+      when is_binary(state) do
+    if String.starts_with?(state, "Z"), do: :stopped, else: :live
+  end
+
+  def classify_owned_process(_identity, _result), do: :unknown
+
   @spec assert_os_process_absent!(String.t(), keyword()) :: :ok
   def assert_os_process_absent!(os_pid, opts \\ []) do
     budget = Keyword.get(opts, :budget_ms, 15_000)
@@ -40,6 +116,89 @@ defmodule CodexPooler.InstancePresencePeer do
 
   defp os_process_probe(os_pid) do
     System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true, env: [{"LC_ALL", "C"}])
+  end
+
+  defp os_process_snapshot(os_pid) do
+    case :os.type() do
+      {:unix, :linux} -> linux_process_snapshot("/proc/#{os_pid}/stat")
+      _other -> portable_process_snapshot(os_pid)
+    end
+  end
+
+  defp linux_process_snapshot(proc_path) do
+    case File.read(proc_path) do
+      {:ok, stat} ->
+        parse_linux_process_stat(stat)
+
+      {:error, :enoent} ->
+        :absent
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp portable_process_snapshot(os_pid) do
+    case System.cmd("ps", ["-o", "state=", "-o", "lstart=", "-o", "ppid=", "-p", os_pid],
+           stderr_to_stdout: true,
+           env: [{"LC_ALL", "C"}]
+         ) do
+      {output, 0} ->
+        parse_portable_process_output(output)
+
+      {_output, 1} ->
+        classify_portable_absence(os_pid)
+
+      {output, exit_code} ->
+        {:error, {:ps_failed, exit_code, String.trim(output)}}
+    end
+  end
+
+  @doc false
+  @spec parse_linux_process_stat(String.t()) ::
+          {:present, os_process_snapshot()} | {:error, atom()}
+  def parse_linux_process_stat(stat) do
+    with [_, fields] <- Regex.run(~r/\A\d+ \(.+\) (.+)\z/s, stat),
+         values when length(values) > 19 <- String.split(fields),
+         {parent_pid, ""} <- values |> Enum.at(1) |> Integer.parse() do
+      {:present,
+       %{
+         source: :proc,
+         state: Enum.at(values, 0),
+         parent_pid: parent_pid,
+         start_signature: Enum.at(values, 19)
+       }}
+    else
+      _invalid -> {:error, :invalid_proc_stat}
+    end
+  end
+
+  @doc false
+  @spec parse_portable_process_output(String.t()) ::
+          {:present, os_process_snapshot()} | {:error, atom()}
+  def parse_portable_process_output(output) do
+    case Regex.run(~r/\A\s*(\S+)\s+(.+?)\s+(\d+)\s*\z/, output) do
+      [_, state, started_at, parent_pid] ->
+        {:present,
+         %{
+           source: :ps,
+           state: state,
+           parent_pid: String.to_integer(parent_pid),
+           start_signature: String.replace(started_at, ~r/\s+/, " ")
+         }}
+
+      _invalid ->
+        {:error, :invalid_ps_output}
+    end
+  end
+
+  defp classify_portable_absence(os_pid) do
+    case os_process_probe(os_pid) do
+      {diagnostic, exit_code} ->
+        if classify_os_process_probe({diagnostic, exit_code}) == :absent,
+          do: :absent,
+          else: {:error, :ps_process_unknown}
+    end
   end
 
   @spec start_presence_peer!(atom()) :: map()
