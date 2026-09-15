@@ -537,9 +537,10 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &stream_outcome_tag_values/1,
         description:
           "Gateway stream outcomes by bounded outcome and transport metadata. " <>
-            "Expired-owner recovery settles abandoned turns from the runtime cleanup job, and " <>
-            "no reporter runs for OBAN_MODE=worker or scheduler, so the interrupted outcome is " <>
-            "under-counted; read the request and attempt rows for the rest."
+            "Expired-owner recovery settles abandoned turns from the runtime cleanup job on " <>
+            "OBAN_MODE=worker or scheduler, which run no reporter; that share reaches this metric " <>
+            "through the PostgreSQL relay under the job_relay via label (best effort, at most once), " <>
+            "while the in_process via label is the request path; the request and attempt rows are complete."
       ),
       counter("codex_pooler.gateway.websocket_bridge.fallback.count",
         event_name: [:codex_pooler, :gateway, :websocket_bridge, :fallback],
@@ -561,8 +562,9 @@ defmodule CodexPoolerWeb.Telemetry do
         description:
           "Quota cycle decisions by bounded scope, decision, and source class. " <>
             "Account reconciliation, saved-reset redemption, and alert evaluation also decide " <>
-            "cycles, and no reporter runs for OBAN_MODE=worker or scheduler, so this counter " <>
-            "carries the request-path share only; read the quota window rows for the rest."
+            "cycles on OBAN_MODE=worker or scheduler, which run no reporter; that share reaches " <>
+            "this counter through the PostgreSQL relay under the job_relay via label (best effort, at " <>
+            "most once), while the in_process via label is the request path; the quota window rows are complete."
       ),
       sum("codex_pooler.saved_reset.convergence.count",
         event_name: [:codex_pooler, :saved_reset, :convergence],
@@ -571,8 +573,10 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &convergence_tag_values/1,
         description:
           "Committed saved-reset convergence transitions observed on scraped web nodes. " <>
-            "No reporter runs for OBAN_MODE=worker or scheduler, so transitions committed by " <>
-            "the redemption and reconciliation jobs are absent; read the upstream identity saved_reset_redemption lifecycle metadata."
+            "OBAN_MODE=worker or scheduler run no reporter; transitions committed by the " <>
+            "redemption and reconciliation jobs reach this counter through the PostgreSQL relay " <>
+            "under the job_relay via label (best effort, at most once); the upstream identity " <>
+            "saved_reset_redemption lifecycle metadata is complete."
       ),
       distribution("codex_pooler.saved_reset.convergence.applied_to_canonical.seconds",
         event_name: [:codex_pooler, :saved_reset, :convergence],
@@ -582,8 +586,9 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &convergence_tag_values/1,
         description:
           "Applied-to-canonical saved-reset latency observed on scraped web nodes. " <>
-            "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
-            "are absent; read the upstream identity saved_reset_redemption lifecycle metadata.",
+            "OBAN_MODE=worker or scheduler run no reporter; job-committed samples reach this " <>
+            "histogram through the PostgreSQL relay under the job_relay via label (best effort, at " <>
+            "most once); the upstream identity saved_reset_redemption lifecycle metadata is complete.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       distribution("codex_pooler.saved_reset.convergence.canonical_to_lifecycle.seconds",
@@ -594,8 +599,9 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &convergence_tag_values/1,
         description:
           "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
-            "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
-            "are absent; read the upstream identity saved_reset_redemption lifecycle metadata.",
+            "OBAN_MODE=worker or scheduler run no reporter; job-committed samples reach this " <>
+            "histogram through the PostgreSQL relay under the job_relay via label (best effort, at " <>
+            "most once); the upstream identity saved_reset_redemption lifecycle metadata is complete.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       distribution("codex_pooler.saved_reset.convergence.applied_to_lifecycle.seconds",
@@ -606,8 +612,9 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &convergence_tag_values/1,
         description:
           "Applied-to-lifecycle saved-reset latency observed on scraped web nodes. " <>
-            "No reporter runs for OBAN_MODE=worker or scheduler, so job-committed transitions " <>
-            "are absent; read the upstream identity saved_reset_redemption lifecycle metadata.",
+            "OBAN_MODE=worker or scheduler run no reporter; job-committed samples reach this " <>
+            "histogram through the PostgreSQL relay under the job_relay via label (best effort, at " <>
+            "most once); the upstream identity saved_reset_redemption lifecycle metadata is complete.",
         reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       counter("codex_pooler.gateway.routing.circuit.transition.count",
@@ -624,9 +631,10 @@ defmodule CodexPoolerWeb.Telemetry do
         tag_values: &pre_attempt_release_tag_values/1,
         description:
           "Reservations released with no attempt row, by bounded pre-attempt phase and transport. " <>
-            "The stale_sweep phase is only scraped where the runtime cleanup job (every 15 minutes, " <>
-            "releasing reservations older than six hours) shares a node with the Prometheus " <>
-            "reporter (OBAN_MODE=all); elsewhere read it from the release ledger."
+            "The stale_sweep phase is emitted by the runtime cleanup job (every 15 minutes, " <>
+            "releasing reservations older than six hours) on OBAN_MODE=worker or scheduler, which " <>
+            "run no reporter; it reaches this counter through the PostgreSQL relay under " <>
+            "the job_relay via label (best effort, at most once), and the release ledger is complete."
       ),
       counter("codex_pooler.gateway.routing.affinity.stale_write.count",
         event_name: [:codex_pooler, :gateway, :routing, :affinity, :stale_write],
