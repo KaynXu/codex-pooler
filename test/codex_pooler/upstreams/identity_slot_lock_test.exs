@@ -292,23 +292,8 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     )
   end
 
-  defp evidence_attrs(used_percent) do
-    reset_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.add(604_800, :second)
-
-    %{
-      quota_key: "account",
-      quota_scope: "account",
-      quota_family: "account",
-      window_kind: "secondary",
-      window_minutes: 10_080,
-      used_percent: Decimal.new(used_percent),
-      reset_at: reset_at,
-      source: "codex_rate_limit_event",
-      source_precision: "observed",
-      freshness_state: "fresh",
-      metadata: %{}
-    }
-  end
+  defp evidence_attrs(used_percent),
+    do: CodexPooler.QuotaEvidenceSupport.account_secondary_evidence(used_percent)
 
   defp wait_event!(backend_pid) do
     unboxed(fn ->

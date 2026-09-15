@@ -193,6 +193,36 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
       assert redemption(identity)["phase"] == RedemptionLifecycle.consumed_pending_probe()
     end
 
+    # The unchanged leaf above never reaches `apply_transition!/6`; with fresh
+    # usable account evidence after `consumed_at` the same leaf writes the
+    # confirmed phase, so the writing path's lock order is proven too
+    # (findings#215).
+    test "post-consume convergence that applies a transition still locks only the identity row",
+         %{identity: identity} do
+      assert {:ok, _window} = unboxed(fn -> record_evidence(identity) end)
+      pending = redemption(identity)
+
+      # Both oracle phases must reach `apply_transition!/6`: the first one
+      # confirms the redemption, so the pending redemption is restored before
+      # the second (advisory-held) phase, otherwise that phase would only
+      # exercise the read-only `:unchanged` branch the previous test covers.
+      results =
+        assert_row_only_leaf(
+          identity,
+          fn ->
+            Convergence.converge(identity, DateTime.utc_now(), "runtime_websocket_frame_headers")
+          end,
+          before_each: fn -> restore_redemption!(identity, pending) end
+        )
+
+      assert results == %{
+               row: {:ok, :confirmed_by_quota},
+               advisory: {:ok, :confirmed_by_quota}
+             }
+
+      assert redemption(identity)["phase"] == RedemptionLifecycle.confirmed_by_quota()
+    end
+
     test "usage probe allocation locks only the identity row", %{identity: identity} do
       results =
         assert_row_only_leaf(identity, fn ->
@@ -408,10 +438,27 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
   #   * `:advisory` phase: another backend holds the identity advisory mutex.
   #     The leaf must complete while that mutex is still held: it takes no
   #     advisory mutex after the row either.
-  defp assert_row_only_leaf(identity, leaf) do
+  defp assert_row_only_leaf(identity, leaf, opts \\ []) do
+    before_each = Keyword.get(opts, :before_each, fn -> :ok end)
+    before_each.()
     row_result = leaf_waits_on_row_without_advisory(identity, leaf)
+    before_each.()
     advisory_result = leaf_completes_under_held_advisory(identity, leaf)
     %{row: row_result, advisory: advisory_result}
+  end
+
+  defp restore_redemption!(identity, redemption) do
+    unboxed(fn ->
+      current = Repo.reload!(identity)
+
+      current
+      |> Ecto.Changeset.change(
+        metadata: Map.put(current.metadata || %{}, "saved_reset_redemption", redemption)
+      )
+      |> Repo.update!()
+    end)
+
+    :ok
   end
 
   defp leaf_waits_on_row_without_advisory(identity, leaf) do
@@ -544,19 +591,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
 
     EvidenceStore.record_evidence(
       identity,
-      %{
-        quota_key: "account",
-        quota_scope: "account",
-        quota_family: "account",
-        window_kind: "secondary",
-        window_minutes: 10_080,
-        used_percent: Decimal.new("22"),
-        reset_at: DateTime.add(now, 604_800, :second),
-        source: "codex_rate_limit_event",
-        source_precision: "observed",
-        freshness_state: "fresh",
-        metadata: %{}
-      },
+      CodexPooler.QuotaEvidenceSupport.account_secondary_evidence("22", now),
       now
     )
   end

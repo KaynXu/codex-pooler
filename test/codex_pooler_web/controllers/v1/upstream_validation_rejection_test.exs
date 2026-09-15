@@ -110,6 +110,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
   test "POST /v1/chat/completions under Full preserves the Chat parameter name", %{conn: conn} do
     upstream =
       start_upstream(
+        # provenance: observed codex-pooler-findings#128 live probe (status 400, invalid_request_error, unsupported_value, reasoning.effort); message text synthetic; the Full override and the two-request sequence are invented
         FakeUpstream.strict_sequence([
           FakeUpstream.expect_request(
             method: "POST",
@@ -161,6 +162,20 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
 
     FakeUpstream.verify!(upstream)
     assert_failed_validation_accounting!(setup, 2)
+
+    # The rendered body is the same under Lite, so the durable routing metadata
+    # is the witness that the Full projection was in effect.
+    for attempt <-
+          Repo.all(
+            from(a in Attempt,
+              join: r in Request,
+              on: r.id == a.request_id,
+              where: r.pool_id == ^setup.pool.id
+            )
+          ) do
+      assert attempt.response_metadata["routing"]["model_serving_mode"] == "full"
+      assert attempt.response_metadata["routing"]["model_serving_mode_source"] == "override"
+    end
   end
 
   test "POST /v1/responses keeps non-allowlisted and non-400 rejections redacted", %{conn: conn} do

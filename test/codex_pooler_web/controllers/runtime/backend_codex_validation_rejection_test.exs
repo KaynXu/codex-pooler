@@ -252,6 +252,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     assert request.last_error_code == "upstream_status"
     assert request.retry_count == 0
     assert attempt.network_error_code == "upstream_status"
+    assert_full_override_witness!(attempt)
     assert attempt.response_metadata["rejection_error_code"] == "unsupported_value"
     assert attempt.response_metadata["rejection_error_param"] == "reasoning.effort"
     assert attempt.response_metadata["rejection_supported_values"] == ~w(low medium high)
@@ -300,6 +301,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert_full_override_witness!(attempt)
     refute Map.has_key?(attempt.response_metadata, "rejection_error_param")
     assert attempt.response_metadata["rejection_supported_values"] == ~w(low medium high)
     assert attempt.response_metadata["rejection_supported_values_state"] == "present"
@@ -669,6 +671,94 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     # an attempt and never enters the serving-mode failure projection.
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  # The backend Chat alias shares the Full caller-facing mapper with the public
+  # `/v1/chat/completions` arm (findings#219); only the public arm was pinned.
+  test "explicit Full override on the backend Chat alias preserves the Chat parameter name",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        # provenance: observed codex-pooler-findings#128 live probe (status 400, invalid_request_error, unsupported_value, reasoning.effort); message text synthetic; the Chat alias, the Full override and the two-request sequence are invented
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: validation_rejection(400, "unsupported_value", "reasoning.effort")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            json: [valid: true, required: ["input"]],
+            respond: validation_rejection(400, "unsupported_value", "reasoning.effort")
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    put_full_override!(setup)
+
+    for stream? <- [true, false] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/backend-api/codex/v1/chat/completions", %{
+          "model" => setup.model.exposed_model_id,
+          "messages" => [%{"role" => "user", "content" => @prompt_sentinel}],
+          "reasoning_effort" => "high",
+          "stream" => stream?
+        })
+
+      assert response.status == 400, "stream #{stream?}"
+
+      assert CodexPooler.JSON.decode(response.resp_body) ==
+               {:ok,
+                %{
+                  "error" => %{
+                    "type" => "invalid_request_error",
+                    "code" => "unsupported_value",
+                    "param" => "reasoning_effort",
+                    "message" =>
+                      "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high"
+                  }
+                }},
+             "stream #{stream?}"
+
+      refute response.resp_body =~ "reasoning.effort", "stream #{stream?}"
+      refute response.resp_body =~ @provider_sentinel, "stream #{stream?}"
+      refute response.resp_body =~ @prompt_sentinel, "stream #{stream?}"
+    end
+
+    FakeUpstream.verify!(upstream)
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert length(requests) == 2
+
+    for request <- requests do
+      assert request.last_error_code == "upstream_status"
+      assert request.response_status_code == 400
+      assert request.retry_count == 0
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      # The rendered body is the same under Lite, so the durable routing
+      # metadata is the witness that the Full projection was in effect.
+      assert_full_override_witness!(attempt)
+      # The durable field keeps the provider's parameter path; only the
+      # caller-facing rendering is remapped.
+      assert attempt.response_metadata["rejection_error_param"] == "reasoning.effort"
+      refute inspect({request, attempt}) =~ @prompt_sentinel
+      refute inspect({request, attempt}) =~ @provider_sentinel
+    end
+
+    assert Repo.aggregate(BridgeDemotion, :count) == 0
+    assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
+  # A Full body can be byte-identical to the Lite body, so the durable routing
+  # metadata is what proves the explicit override was in effect.
+  defp assert_full_override_witness!(attempt) do
+    assert attempt.response_metadata["routing"]["model_serving_mode"] == "full"
+    assert attempt.response_metadata["routing"]["model_serving_mode_source"] == "override"
   end
 
   defp put_full_override!(setup) do
