@@ -244,10 +244,45 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   # fencing and reconciliation guards (production 40P01, 2026-07-22). Taking
   # the canonical reference locks first removes the cycle; lock or ownership
   # failures degrade to a logged skip because routing bookkeeping must never
-  # fail an already-finalized turn. A residual deadlock first drains the
-  # assignment holder without retaining the identity lock, then retries once.
+  # fail an already-finalized turn. Standalone, a residual deadlock first
+  # drains the assignment holder without retaining the identity lock, then
+  # retries once. Inside a caller-owned transaction (a `before_finalize`
+  # callback runs inside the finalization transaction) the side effect runs
+  # under its own savepoint, so a missing pair or a deadlock still degrades to
+  # a skip instead of rolling back the caller's work; the retry needs a fresh
+  # transaction and is not attempted there (findings#221).
   defp locked_side_effect(side_effect, assignment, identity, fun) do
-    run_locked_side_effect(side_effect, assignment, identity, fun, _retry_left = 1)
+    if Repo.in_transaction?() do
+      run_locked_side_effect_in_savepoint(side_effect, assignment, identity, fun)
+    else
+      run_locked_side_effect(side_effect, assignment, identity, fun, _retry_left = 1)
+    end
+  end
+
+  @side_effect_savepoint "routing_side_effect"
+
+  defp run_locked_side_effect_in_savepoint(side_effect, assignment, identity, fun) do
+    Repo.query!("SAVEPOINT #{@side_effect_savepoint}")
+
+    case ReferenceLocks.lock_and_validate(identity.id, assignment.id) do
+      {:ok, _locked} ->
+        fun.()
+        Repo.query!("RELEASE SAVEPOINT #{@side_effect_savepoint}")
+        :ok
+
+      {:error, reason} ->
+        Repo.query!("ROLLBACK TO SAVEPOINT #{@side_effect_savepoint}")
+        log_skipped_side_effect(side_effect, assignment, identity, skip_code(reason))
+    end
+  rescue
+    error in Postgrex.Error ->
+      Repo.query!("ROLLBACK TO SAVEPOINT #{@side_effect_savepoint}")
+
+      if deadlock?(error) do
+        log_skipped_side_effect(side_effect, assignment, identity, "routing_side_effect_deadlock")
+      else
+        reraise error, __STACKTRACE__
+      end
   end
 
   defp run_locked_side_effect(side_effect, assignment, identity, fun, retry_left) do

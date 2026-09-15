@@ -190,6 +190,27 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
       assert Repo.aggregate(BridgeAffinity, :count) == 0
     end
 
+    # findings#221: a `before_finalize` callback runs inside the finalization
+    # transaction; a skipped side effect there must not roll back the caller.
+    test "record_success skips under its own savepoint inside a caller-owned transaction" do
+      {plan, assignment, identity} = missing_reference_pair()
+
+      {result, log} =
+        with_log(fn ->
+          Repo.transaction(fn ->
+            assert BridgeRing.record_success(plan, assignment, identity) == :ok
+            # The enclosing work continues on a healthy transaction.
+            %{rows: [[1]]} = Repo.query!("SELECT 1")
+            :finalized
+          end)
+        end)
+
+      assert result == {:ok, :finalized}
+      assert log =~ "routing side effect skipped"
+      assert log =~ "upstream_identity_not_found"
+      assert Repo.aggregate(BridgeAffinity, :count) == 0
+    end
+
     test "record_failure still returns the reason code, skips, and logs" do
       {plan, assignment, identity} = missing_reference_pair()
 
