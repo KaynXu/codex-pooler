@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
     field :status, :string
     field :owner_instance_id, :string
     field :owner_instance_boot_id, :string
-    field :owner_lease_token, :binary_id
+    field :owner_lease_token, :binary_id, redact: true
     field :owner_lease_expires_at, :utc_datetime_usec
     field :last_heartbeat_at, :utc_datetime_usec
     field :disconnected_at, :utc_datetime_usec

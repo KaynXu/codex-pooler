@@ -113,7 +113,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :bearer_token_hmac_digest, :string
       field :bearer_token_fingerprint, :string
       field :bearer_token_key_version, :string
-      field :bearer_token, :string, virtual: true
+      field :bearer_token, :string, virtual: true, redact: true
       field :bearer_token_action, :string, virtual: true
 
       field :bearer_token_status, Ecto.Enum,
@@ -130,11 +130,11 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :ssl, :boolean
       field :tls, :string
       field :retries, :integer
-      field :password_ciphertext, :string
-      field :password_nonce, :string
+      field :password_ciphertext, :string, redact: true
+      field :password_nonce, :string, redact: true
       field :password_aad, :map
       field :password_key_version, :string
-      field :password, :string, virtual: true
+      field :password, :string, virtual: true, redact: true
       field :password_action, :string, virtual: true
 
       field :password_status, Ecto.Enum,
