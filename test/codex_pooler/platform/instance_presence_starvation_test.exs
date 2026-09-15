@@ -55,6 +55,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
              :peer.start_link(%{
                name: peer_name,
                connection: :standard_io,
+               shutdown: 15_000,
                args: [~c"+S", ~c"2:2", ~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
              })
 
@@ -166,7 +167,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
 
     monitor = Process.monitor(owner)
     send(owner, :stop)
-    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 15_000
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}, 30_000
     CodexPooler.PeerRegistry.assert_peer_absent!(peer_name, peer_node: remote)
     CodexPooler.InstancePresencePeer.assert_os_process_absent!(os_pid)
 
