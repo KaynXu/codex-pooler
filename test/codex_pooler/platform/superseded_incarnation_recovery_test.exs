@@ -15,20 +15,27 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
   alias CodexPooler.UnboxedFixture
 
   @peer_timeout_ms 15_000
+  # Cleanup tasks must outlive the detection budget they wait on, otherwise the
+  # unboxed task times out first and the row cleanup registered before it is
+  # skipped as collateral.
+  @cleanup_timeout_ms @peer_timeout_ms + 10_000
 
   test "a hard-killed named owner is recovered once its in-place successor publishes presence" do
     %{user: owner} = CodexPooler.AccountsFixtures.committed_bootstrap_owner_fixture!()
     slug = "superseded-incarnation-#{Ecto.UUID.generate()}"
 
-    UnboxedFixture.register_unboxed_cleanup!(fn ->
-      ids = Repo.all(from p in CodexPooler.Pools.Pool, where: p.slug == ^slug, select: p.id)
-      CodexPooler.PoolerFixtures.delete_committed_pools!(ids)
+    UnboxedFixture.register_unboxed_cleanup!(
+      fn ->
+        ids = Repo.all(from p in CodexPooler.Pools.Pool, where: p.slug == ^slug, select: p.id)
+        CodexPooler.PoolerFixtures.delete_committed_pools!(ids)
 
-      Repo.delete_all(
-        from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
-          where: identity.account_label == ^slug
-      )
-    end)
+        Repo.delete_all(
+          from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
+            where: identity.account_label == ^slug
+        )
+      end,
+      @cleanup_timeout_ms
+    )
 
     setup =
       UnboxedFixture.run_unboxed(fn ->
@@ -52,7 +59,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     {_, 0} = System.cmd("epmd", ["-daemon"])
     CodexPooler.PeerRegistry.assert_epmd_ready!()
 
-    {first_peer, first_os_pid, first_identity} = start_named_peer!(name, setup)
+    {first_peer, first_os_identity, first_identity} = start_named_peer!(name, setup)
     refute first_identity.node_name == "nonode@nohost"
     assert [] == :peer.call(first_peer, Node, :list, [])
 
@@ -79,7 +86,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     # simply stops. Age the row and the attempt past the liveness window the
     # way ten silent minutes would; its stale row alone must not settle the
     # execution.
-    kill_peer!(first_peer, first_os_pid, name)
+    kill_peer!(first_peer, first_os_identity, name)
     assert ExecutionIdentity.status(attempt) == :unknown
     refute InstancePresence.superseded?(first_identity)
     now = DateTime.utc_now()
@@ -102,7 +109,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     assert UnboxedFixture.run_unboxed(fn -> Repo.reload!(attempt).status end) == "in_progress"
 
     # The container restarts in place under the same name with a new boot id.
-    {second_peer, second_os_pid, second_identity} = start_named_peer!(name, setup)
+    {second_peer, second_os_identity, second_identity} = start_named_peer!(name, setup)
     assert second_identity.node_name == first_identity.node_name
     refute second_identity.boot_id == first_identity.boot_id
     assert [] == :peer.call(second_peer, Node, :list, [])
@@ -148,7 +155,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
              "queued"
            ]
 
-    kill_peer!(second_peer, second_os_pid, name)
+    kill_peer!(second_peer, second_os_identity, name)
   end
 
   defp start_named_peer!(name, _setup) do
@@ -184,23 +191,35 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
         Repo.config()
       ])
 
+    # The peer is identified by PID plus kernel start signature so a reused
+    # PID never reads as the peer, and so a hard-killed peer that lingers as a
+    # zombie until its port is reaped counts as stopped rather than surviving.
+    os_identity = InstancePresencePeer.capture_os_process_identity!(os_pid)
+
     identity = :peer.call(peer, CodexPooler.Platform.InstancePresence.Identity, :local, [])
     {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [])
 
-    UnboxedFixture.register_unboxed_cleanup!(fn ->
-      InstancePresencePeer.assert_os_process_absent!(os_pid, budget_ms: @peer_timeout_ms)
-      assert_peer_connections_absent!(identity.boot_id)
-    end)
+    UnboxedFixture.register_unboxed_cleanup!(
+      fn ->
+        # A backend the dead peer left mid-statement still holds its row
+        # locks; end it first so the row cleanup registered earlier (which
+        # runs after this one) can never block on the peer's leftovers.
+        terminate_peer_connections!(identity.boot_id)
+        InstancePresencePeer.assert_os_process_stopped!(os_identity, budget_ms: @peer_timeout_ms)
+        assert_peer_connections_absent!(identity.boot_id)
+      end,
+      @cleanup_timeout_ms
+    )
 
-    {peer, os_pid, identity}
+    {peer, os_identity, identity}
   end
 
   # SIGKILL the peer VM: nothing inside it runs, so no proof and no drain. The
   # controlling process notices the lost stdio connection and stops on its
   # own, and the name must have left epmd before a successor can reuse it.
-  defp kill_peer!(peer, os_pid, name) do
-    {_, 0} = System.cmd("kill", ["-9", os_pid])
-    InstancePresencePeer.assert_os_process_absent!(os_pid, budget_ms: @peer_timeout_ms)
+  defp kill_peer!(peer, os_identity, name) do
+    {_, 0} = System.cmd("kill", ["-9", os_identity.pid])
+    InstancePresencePeer.assert_os_process_stopped!(os_identity, budget_ms: @peer_timeout_ms)
     await_controller_down!(peer, System.monotonic_time(:millisecond) + @peer_timeout_ms)
     CodexPooler.PeerRegistry.assert_peer_absent!(name, budget_ms: @peer_timeout_ms)
     :ok
@@ -237,6 +256,15 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
     end
 
     {:ok, _} = UnboxedFixture.run_unboxed(fn -> InstancePresence.record_heartbeat(local) end)
+    :ok
+  end
+
+  defp terminate_peer_connections!(boot_id) do
+    Repo.query!(
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1 AND pid <> pg_backend_pid()",
+      ["execution_peer_" <> boot_id]
+    )
+
     :ok
   end
 
