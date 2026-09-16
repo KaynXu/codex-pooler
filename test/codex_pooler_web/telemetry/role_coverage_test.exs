@@ -456,11 +456,76 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       refute RoleCoverage.markers_correct?(nil, :relayed)
     end
 
+    test "every promoted family carries evidence for each of its four gates" do
+      # The gate this replaces failed on any :relayed declaration at all. It
+      # said nothing about which family had which evidence, and it was one line
+      # for a promoting author to delete. This one asks each promoted family for
+      # its own four by name: the three test gates each name the test that
+      # proves them for that family, and the live comparison names the record of
+      # a measurement no test can take.
+      unmet =
+        for {event, declaration} <- RoleCoverage.unscraped_emissions(),
+            gate <- RoleCoverage.unmet_promotion_gates(declaration),
+            do: "#{inspect(event)}: #{gate}"
+
+      assert unmet == [],
+             "these promoted families have not named evidence for a promotion gate: " <>
+               Enum.join(unmet, ", ")
+    end
+
+    test "the promotion gate reads each family's own evidence" do
+      # Run the checker against synthetic declarations, because no shipped
+      # family is promoted: a gate that only ever sees :partial declarations
+      # proves nothing about what it does to a promoted one.
+      assert RoleCoverage.promotion_gates() == [
+               :real_worker_emission,
+               :double_emission,
+               :relay_round_trip,
+               :live_comparison
+             ]
+
+      complete = %{
+        coverage: :relayed,
+        entrypoints: [],
+        fallback: "rows",
+        note: "note",
+        promotion_evidence: %{
+          real_worker_emission: {"test/some_test.exs", "the real worker emits"},
+          double_emission: {"test/some_test.exs", "one sample per emission"},
+          relay_round_trip: {"test/some_test.exs", "the row is drained and scraped"},
+          live_comparison: "runbook manual telemetry-relay, 2026-09-15 comparison"
+        }
+      }
+
+      assert RoleCoverage.unmet_promotion_gates(complete) == []
+
+      for gate <- RoleCoverage.promotion_gates() do
+        without = update_in(complete.promotion_evidence, &Map.delete(&1, gate))
+        assert RoleCoverage.unmet_promotion_gates(without) == [gate]
+
+        blanked =
+          put_in(
+            complete.promotion_evidence[gate],
+            if(gate == :live_comparison, do: "  ", else: {"", ""})
+          )
+
+        assert RoleCoverage.unmet_promotion_gates(blanked) == [gate]
+      end
+
+      assert RoleCoverage.unmet_promotion_gates(%{complete | promotion_evidence: %{}}) ==
+               RoleCoverage.promotion_gates()
+
+      assert RoleCoverage.unmet_promotion_gates(Map.delete(complete, :promotion_evidence)) ==
+               RoleCoverage.promotion_gates()
+
+      # An unpromoted family owes none of them.
+      assert RoleCoverage.unmet_promotion_gates(%{complete | coverage: :partial}) == []
+    end
+
     test "no shipped family is promoted while its live comparison is outstanding" do
       # Phase 1 is shadowed on purpose: the relay carries the job share, the
-      # panels still select via="in_process", and the caveats stay true. A
-      # family promoted here without the per-family evidence would silently
-      # change what every panel means.
+      # panels still select via="in_process", and the caveats stay true. This
+      # states today's position; the gate above is what a promotion has to pass.
       promoted =
         for {event, %{coverage: :relayed}} <- RoleCoverage.unscraped_emissions(), do: event
 

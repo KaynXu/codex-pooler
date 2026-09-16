@@ -45,9 +45,18 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
 
   Promotion is not a rename. A family moves to `:relayed` only once its
   real-worker emission test, its double-emission pins, its relay round trip and
-  a live comparison have each passed for that family; the four shipped families
+  a live comparison have each passed *for that family*; the four shipped families
   stay `:partial` until then, and the phase-1 panels keep selecting
   `via="in_process"` so today's caveats stay true.
+
+  Those four are `promotion_gates/0`, and a `:relayed` declaration has to name
+  the evidence for each of them in a `promotion_evidence` map:
+  `unmet_promotion_gates/1` returns the ones it does not. The three test gates
+  name the test that proves them for that family, by file and `test` name; the
+  live comparison names the record instead, because no test can stand in for a
+  measurement taken on a running deployment. A single tripwire that fails on any
+  `:relayed` declaration said nothing about which family had which evidence, and
+  was one line for a promoting author to delete.
 
   ## What the derivation cannot see
 
@@ -73,12 +82,26 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   @typedoc "How much of an event's traffic reaches Prometheus."
   @type coverage :: :partial | :unscraped_only | :relayed
 
+  @typedoc """
+  Evidence that a family has passed each promotion gate.
+
+  The three test gates name a test as `{relative path, test name}`; the live
+  comparison names the record of a measurement taken on a running deployment.
+  """
+  @type promotion_evidence :: %{
+          real_worker_emission: {Path.t(), String.t()},
+          double_emission: {Path.t(), String.t()},
+          relay_round_trip: {Path.t(), String.t()},
+          live_comparison: String.t()
+        }
+
   @typedoc "One declared event whose emissions cross the unscraped-role boundary."
   @type declaration :: %{
-          entrypoints: [module()],
-          coverage: coverage(),
-          fallback: String.t(),
-          note: String.t()
+          :entrypoints => [module()],
+          :coverage => coverage(),
+          :fallback => String.t(),
+          :note => String.t(),
+          optional(:promotion_evidence) => promotion_evidence()
         }
 
   # Mirrors the modes `CodexPoolerWeb.Telemetry.prometheus_reporter_enabled?/0`
@@ -121,6 +144,15 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   # graph that has started carrying that share. Naming what a promoted
   # description may *not* say is what makes the replacement mandatory.
   @forbidden_markers %{relayed: @caveat_marker}
+
+  # What a family owes before it may be declared `:relayed`, each proven for that
+  # family rather than for the phase. The first three are tests; the fourth is a
+  # measurement on a running deployment, which no test can take.
+  @promotion_gates [:real_worker_emission, :double_emission, :relay_round_trip, :live_comparison]
+
+  # Gates whose evidence is a test, named as `{path relative to the repository
+  # root, the test's own name}` so the guard can resolve it.
+  @test_gates [:real_worker_emission, :double_emission, :relay_round_trip]
 
   @unscraped_emissions %{
     [:codex_pooler, :instance_presence, :heartbeat] => %{
@@ -177,6 +209,39 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
           "under-counted while the outcomes settled on the request path are complete."
     }
   }
+
+  @doc "The gates a family passes individually before it may be declared `:relayed`."
+  @spec promotion_gates() :: [atom()]
+  def promotion_gates, do: @promotion_gates
+
+  @doc "The gates whose evidence is a `{path, test name}` pair the guard can resolve."
+  @spec test_promotion_gates() :: [atom()]
+  def test_promotion_gates, do: @test_gates
+
+  @doc """
+  The promotion gates `declaration` does not carry evidence for.
+
+  A declaration that is not `:relayed` owes nothing, so the list is empty. A
+  `:relayed` one owes all of `promotion_gates/0`: a test gate is met by a
+  `{path, test name}` pair of non-empty strings, the live comparison by a
+  non-empty string naming the record. Whether a named test exists is the guard's
+  question, not this function's, because only the guard can read the repository.
+  """
+  @spec unmet_promotion_gates(declaration()) :: [atom()]
+  def unmet_promotion_gates(%{coverage: :relayed} = declaration) do
+    evidence = Map.get(declaration, :promotion_evidence) || %{}
+    Enum.reject(@promotion_gates, &gate_met?(&1, Map.get(evidence, &1)))
+  end
+
+  def unmet_promotion_gates(%{coverage: coverage}) when is_map_key(@markers, coverage), do: []
+
+  defp gate_met?(gate, {path, name}) when gate in @test_gates,
+    do: present?(path) and present?(name)
+
+  defp gate_met?(:live_comparison, record), do: present?(record)
+  defp gate_met?(_gate, _evidence), do: false
+
+  defp present?(value), do: is_binary(value) and String.trim(value) != ""
 
   @doc "OBAN_MODE values whose processes run no Prometheus reporter."
   @spec unscraped_oban_modes() :: [String.t()]
