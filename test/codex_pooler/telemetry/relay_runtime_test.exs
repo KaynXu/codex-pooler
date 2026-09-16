@@ -667,54 +667,179 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
       assert rejected_samples() - before == 2
     end
 
-    test "is counted lost rather than re-queued when only the insert can see it", %{
-      sandbox_owner: owner
+    test "is counted lost when only the database can see it, through the real insert", %{
+      runtime: runtime,
+      table: table
     } do
-      # The capture guard and the changeset are one predicate, so nothing the
-      # capture path admits can be refused by the changeset today. This is the
-      # backstop for the day that stops being true: a permanent rejection at
-      # the insert must leave the buffer and be counted, while a transient
-      # failure must still be retried.
-      rejected =
-        Ecto.Changeset.add_error(
-          RelayEvent.changeset(%RelayEvent{}, %{}),
-          :measurements,
-          "synthetic permanent rejection"
-        )
+      # The capture guard and the changeset are one predicate, so no sample the
+      # capture path admits is refused by the *changeset*. The storage layer is
+      # a different question, and it is the one that matters: the changeset
+      # declares no bound on NUL bytes, invalid UTF-8, a constraint added by a
+      # later migration, or anything else PostgreSQL alone decides, and a
+      # refusal that arrives as an exception used to land in the catch-all and
+      # re-queue forever.
+      #
+      # So this drives a refusal only the database can make — a real CHECK
+      # constraint, added inside this test's transaction, that no changeset
+      # knows about — through the real `Relay.insert`. A fabricated `insert_fun`
+      # would exercise the arm without exercising the path.
+      Repo.query!(
+        "ALTER TABLE telemetry_relay_events ADD CONSTRAINT probe_refusal " <>
+          "CHECK (labels->>'phase' IS DISTINCT FROM 'probe_refused')"
+      )
 
-      runtime =
-        start_supervised!(
-          {RelayRuntime,
-           enabled: true,
-           role: "worker",
-           start_paused: true,
-           name: {:global, {__MODULE__, make_ref()}},
-           flush_ms: 60_000,
-           drain_ms: 60_000,
-           insert_fun: fn _event, _labels, _count, _values, _writer -> {:error, rejected} end},
-          id: make_ref()
-        )
-
-      Sandbox.allow(Repo, owner, runtime)
-      :ok = GenServer.call(runtime, :activate)
-      state = :sys.get_state(runtime)
       before = rejected_samples()
 
-      :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 1}, %{
-        scope: :account
-      })
+      :telemetry.execute(
+        [:codex_pooler, :accounting, :reservation, :pre_attempt_release],
+        %{count: 1},
+        %{phase: "probe_refused"}
+      )
 
       :sys.get_state(runtime)
-      assert :ets.tab2list(state.table) != []
+      assert :ets.tab2list(table) != [], "the capture path refused it; nothing reached the insert"
 
       for _ <- 1..5 do
         send(runtime, :flush)
         :sys.get_state(runtime)
       end
 
-      assert :ets.tab2list(state.table) == []
+      assert :ets.tab2list(table) == []
+      assert Repo.aggregate(RelayEvent, :count) == 0
       assert rejected_samples() - before == 1
     end
+
+    for {code, label, permanent?} <- [
+          {"22P05", "a refusal no changeset declares", true},
+          {"40001", "a serialization failure", false}
+        ] do
+      @tag code: code, permanent?: permanent?
+      test "#{label} is #{if permanent?, do: "counted", else: "re-queued"}, by its SQLSTATE", %{
+        runtime: runtime,
+        table: table,
+        code: code,
+        permanent?: permanent?
+      } do
+        # The arm above is reached through `Ecto.ConstraintError`, which is only
+        # the subclass PostgreSQL reports as a constraint. A NUL byte is 22P05,
+        # a bad encoding is 22021, and a future rule is whatever it is: those
+        # arrive as a bare `Postgrex.Error`, and the first version of this fix
+        # matched `Ecto.Changeset` alone and let every one of them re-queue
+        # forever. So the rule is not an enumeration of what is permanent — that
+        # set is open — but of the few server errors that are about the server.
+        #
+        # These two cases differ in one character of one SQLSTATE and in nothing
+        # else: same trigger, same row, same five flush cycles. If the
+        # classification stopped working, they would stop disagreeing.
+        install_refusal_trigger!(code)
+        before = rejected_samples()
+
+        :telemetry.execute(
+          [:codex_pooler, :accounting, :reservation, :pre_attempt_release],
+          %{count: 1},
+          %{phase: "probe_refused"}
+        )
+
+        :sys.get_state(runtime)
+        assert :ets.tab2list(table) != []
+
+        for _ <- 1..5 do
+          send(runtime, :flush)
+          :sys.get_state(runtime)
+        end
+
+        assert Repo.aggregate(RelayEvent, :count) == 0
+
+        if permanent? do
+          assert :ets.tab2list(table) == []
+          assert rejected_samples() - before == 1
+        else
+          assert [{_key, 1}] = :ets.tab2list(table)
+          assert rejected_samples() - before == 0
+        end
+      end
+    end
+
+    test "is not a sample the database never saw: an outage still re-queues", %{
+      runtime: runtime,
+      table: table,
+      writer: writer
+    } do
+      # The other half of the same decision. A failure the server never
+      # answered — here the producer's own heartbeat, the outage the module
+      # already models — must keep its sample, or a database blip becomes data
+      # loss. `stale writer requeues until its own heartbeat is refreshed`
+      # pins the recovery; this pins that the new permanent arm did not eat it.
+      before = rejected_samples()
+
+      Repo.query!(
+        "UPDATE telemetry_relay_heartbeats SET heartbeat_at = NOW() - INTERVAL '2 minutes' WHERE owner = $1",
+        [writer]
+      )
+
+      :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 1}, %{
+        scope: :account
+      })
+
+      :sys.get_state(runtime)
+
+      for _ <- 1..5 do
+        send(runtime, :flush)
+        :sys.get_state(runtime)
+      end
+
+      assert [{_key, 1}] = :ets.tab2list(table)
+      assert rejected_samples() - before == 0
+    end
+
+    test "a label value PostgreSQL cannot store is bounded before it is captured", %{
+      runtime: runtime,
+      table: table
+    } do
+      # `bounded/1` bounded length and type and let a NUL byte through, so an
+      # 11-byte label value carrying one passed every predicate and then made
+      # `Relay.insert` raise 22P05. It is not a short label; it is a value the
+      # storage layer refuses. It is bounded to `unknown` the same way an
+      # oversized or non-binary value already is, so the sample still counts.
+      before = rejected_samples()
+
+      :telemetry.execute(
+        [:codex_pooler, :accounting, :reservation, :pre_attempt_release],
+        %{count: 1},
+        %{phase: "in_process" <> <<0>>, outcome: <<0xFF, 0xFE>>}
+      )
+
+      :sys.get_state(runtime)
+      assert [{{"pre_attempt_release", labels, _values}, 1}] = :ets.tab2list(table)
+      assert labels.phase == "unknown"
+      assert labels.outcome == "unknown"
+
+      send(runtime, :flush)
+      :sys.get_state(runtime)
+
+      assert [%RelayEvent{labels: %{"phase" => "unknown"}}] = Repo.all(RelayEvent)
+      assert rejected_samples() - before == 0
+    end
+  end
+
+  # A real server refusal of a real row, at a SQLSTATE the caller chooses. A
+  # `CHECK` can only ever be `23514`, and the class this has to cover is the one
+  # PostgreSQL does not report as a constraint at all. Sandbox rollback removes
+  # both objects with the test's transaction.
+  defp install_refusal_trigger!(sqlstate) do
+    Repo.query!("""
+    CREATE FUNCTION relay_probe_refuse() RETURNS trigger LANGUAGE plpgsql AS $fn$
+    BEGIN
+      RAISE EXCEPTION 'relay probe refusal' USING ERRCODE = '#{sqlstate}';
+    END
+    $fn$
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER relay_probe_refusal BEFORE INSERT ON telemetry_relay_events
+      FOR EACH ROW WHEN (NEW.labels->>'phase' = 'probe_refused')
+      EXECUTE FUNCTION relay_probe_refuse()
+    """)
   end
 
   defp rejected_samples do

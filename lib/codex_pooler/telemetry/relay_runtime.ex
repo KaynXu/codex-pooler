@@ -480,15 +480,19 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
       if dropped > 0, do: safe_loss(state, "buffer_overflow", dropped)
 
+      # Read once, and act only on a change: the checkpoint is cumulative and
+      # already holds what was reported, so writing it again every flush buys a
+      # `SELECT … FOR UPDATE` every `flush_ms` for the life of the node. One
+      # read also means the number logged is the number recorded.
       rejected = :atomics.get(capacity, @rejected_slot)
 
-      if rejected > state.rejected_reported,
-        do:
-          Logger.warning(
-            "telemetry relay refused unstorable samples=#{rejected - state.rejected_reported}"
-          )
+      if rejected > state.rejected_reported do
+        Logger.warning(
+          "telemetry relay refused unstorable samples=#{rejected - state.rejected_reported}"
+        )
 
-      if rejected > 0, do: safe_loss(state, "rejected_sample", rejected)
+        safe_loss(state, "rejected_sample", rejected)
+      end
     rescue
       _ -> :ok
     end
@@ -621,22 +625,65 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     {_table, capacity, _max} = state.capture
 
     case result do
-      {:ok, _} ->
-        :atomics.sub(capacity, 1, 1)
-
-      # A refusal no retry can fix. Re-accumulating it would keep the series
-      # slot and re-attempt the same insert every flush for as long as the node
-      # lives, so the sample leaves the buffer and is counted as lost instead.
-      {:error, reason} when is_struct(reason, Ecto.Changeset) ->
-        :atomics.sub(capacity, 1, 1)
-        :atomics.add(capacity, @rejected_slot, count)
-
-      _ ->
-        accumulate(state.capture, key, count, true)
+      {:ok, _} -> :atomics.sub(capacity, 1, 1)
+      {:error, reason} -> settle_failed_flush(state, key, count, reason)
+      _ -> accumulate(state.capture, key, count, true)
     end
   rescue
-    _ -> accumulate(state.capture, key, count, true)
+    error -> settle_failed_flush(state, key, count, error)
   end
+
+  # A refusal no retry can fix leaves the buffer and is counted; anything else
+  # is re-accumulated, because the next flush may be the one that works.
+  # Re-accumulating a refusal keeps the series slot and re-attempts the same
+  # insert every flush for as long as the node lives, with no loss reason.
+  defp settle_failed_flush(state, key, count, reason) do
+    {_table, capacity, _max} = state.capture
+
+    if permanent_refusal?(reason) do
+      :atomics.sub(capacity, 1, 1)
+      :atomics.add(capacity, @rejected_slot, count)
+    else
+      accumulate(state.capture, key, count, true)
+    end
+  end
+
+  # A server that answered and refused the statement has refused this sample:
+  # the next flush writes the same bytes and gets the same answer. So a server
+  # error is permanent unless it is one of the few that are about the server
+  # rather than the row, while a failure with no server answer at all — a
+  # closed connection, a refused checkout, a stale heartbeat, the shutdown
+  # deadline — is an outage whose sample must be kept.
+  #
+  # Enumerating the transient codes rather than the permanent ones is the whole
+  # point. The permanent set is open: the previous version of this matched
+  # `Ecto.Changeset` alone, and a label value carrying a NUL byte arrived as a
+  # raw 22P05 one value class over and re-queued forever.
+  @transient_postgres_codes [
+    :admin_shutdown,
+    :cannot_connect_now,
+    :configuration_limit_exceeded,
+    :crash_shutdown,
+    :deadlock_detected,
+    :disk_full,
+    :idle_in_transaction_session_timeout,
+    :lock_not_available,
+    :object_in_use,
+    :out_of_memory,
+    :query_canceled,
+    :read_only_sql_transaction,
+    :serialization_failure,
+    :too_many_connections
+  ]
+
+  defp permanent_refusal?(%Ecto.Changeset{}), do: true
+  defp permanent_refusal?(%Ecto.ConstraintError{}), do: true
+  defp permanent_refusal?(%Ecto.InvalidChangesetError{}), do: true
+
+  defp permanent_refusal?(%Postgrex.Error{postgres: %{code: code}}),
+    do: code not in @transient_postgres_codes
+
+  defp permanent_refusal?(_other), do: false
 
   defp emit(row) do
     case Map.get(@source_events, row.event) do
@@ -717,7 +764,16 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   # function and the changeset both refuse, which is a captured sample the
   # storage layer can never accept.
   defp bounded(v) when is_atom(v), do: bounded(Atom.to_string(v))
-  defp bounded(v) when is_binary(v) and byte_size(v) <= 80, do: v
+
+  # PostgreSQL stores no NUL byte in `text` or `jsonb` (22P05) and no invalid
+  # UTF-8 (22021), so a value carrying either is not a short label — it is a
+  # value the storage layer refuses, and it used to pass every predicate here
+  # and then raise at the insert. Bounded the same way an oversized or
+  # non-binary value already is, so the sample it belongs to still counts.
+  defp bounded(v) when is_binary(v) and byte_size(v) <= 80 do
+    if String.valid?(v) and not String.contains?(v, <<0>>), do: v, else: "unknown"
+  end
+
   defp bounded(_), do: "unknown"
 
   defp normalize_map(map) when is_map(map) do

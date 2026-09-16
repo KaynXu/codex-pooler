@@ -42,6 +42,17 @@ defmodule CodexPooler.Telemetry.RelayEvent do
         do: [],
         else: [measurements: "must be bounded non-negative integer measurements"]
     end)
+    # Every CHECK the table carries is named here so a violation comes back as
+    # `{:error, changeset}` rather than an `Ecto.ConstraintError` the caller has
+    # to rescue. `RelayRuntime.flush_snapshot/3` treats either as a permanent
+    # refusal, but a violation the changeset can name is one it can also
+    # report.
+    |> check_constraint(:event, name: :event_allowed)
+    |> check_constraint(:count, name: :count_non_negative)
+    |> check_constraint(:labels, name: :labels_bounded)
+    |> check_constraint(:labels, name: :labels_values_bounded)
+    |> check_constraint(:measurements, name: :measurements_bounded)
+    |> check_constraint(:measurements, name: :measurements_non_negative_integers)
   end
 
   @doc """
