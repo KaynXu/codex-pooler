@@ -210,6 +210,68 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     assert :ets.lookup(dist_table, metric.name) == []
   end
 
+  test "an unscraped node still drains its raw samples and keeps an exact histogram count" do
+    # `TelemetryMetricsPrometheus.Core` stores every distribution observation as
+    # its own ETS row and folds those rows into the cumulative aggregate only
+    # when something scrapes. Two shipped configurations never scrape: the
+    # Compose default has no Prometheus, and a chart install has the
+    # ServiceMonitor off by default. Without the periodic fold those rows grow
+    # for the life of the node.
+    #
+    # Nothing here reads the reporter's rendering, because reading it is the
+    # very thing the unscraped node never does: the drain and the count are
+    # read straight out of Core's own tables.
+    registry = unique_name()
+    event = [:codex_pooler_test, :unscraped, unique_event_atom()]
+
+    metric =
+      Telemetry.Metrics.distribution(event,
+        event_name: event,
+        measurement: :value,
+        tags: [:kind],
+        reporter_options: [buckets: [10, 20, 50]]
+      )
+
+    start_supervised!(
+      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
+    )
+
+    %{dist_table_id: dist_table, aggregates_table_id: aggregates} =
+      TelemetryMetricsPrometheus.Core.Registry.config(registry)
+
+    observations = [5, 15, 40, 5, 15, 40, 60]
+
+    start_supervised!(
+      {PrometheusReporter,
+       name: unique_name(), prometheus_name: registry, interval_ms: 10, fold_notify: self()}
+    )
+
+    for value <- observations,
+        do: :telemetry.execute(event, %{value: value}, %{kind: "unscraped"})
+
+    # Proof the rows really accumulate before anything folds them: without this
+    # the assertion below could pass on a metric nothing ever recorded.
+    assert :ets.lookup(dist_table, metric.name) != []
+
+    assert_receive {:prometheus_folded, _pid}, 1_000
+
+    # A fold may land between two of the executes above, so wait for one that
+    # started after the last of them before reading the drained table.
+    assert_receive {:prometheus_folded, _pid}, 1_000
+
+    assert :ets.lookup(dist_table, metric.name) == [],
+           "an unscraped node kept raw distribution samples, so they grow without bound"
+
+    assert [{{_name, %{kind: "unscraped"}}, {buckets, count, sum}}] =
+             :ets.lookup(aggregates, {metric.name, %{kind: "unscraped"}})
+
+    assert count == length(observations),
+           "the folded histogram count does not equal the events emitted"
+
+    assert sum == Enum.sum(observations)
+    assert buckets == [{"10", 2}, {"20", 4}, {"50", 6}, {"+Inf", 7}]
+  end
+
   defp unique_name, do: Module.concat(__MODULE__, "Reporter#{System.unique_integer([:positive])}")
 
   defp unique_event_atom, do: String.to_atom("event_#{System.unique_integer([:positive])}")
