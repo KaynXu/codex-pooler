@@ -31,6 +31,12 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   # TelemetryMetricsPrometheus.Core exports a distribution as three series.
   @distribution_suffixes ["_bucket", "_sum", "_count"]
 
+  # The selector a shadowed family's panels pin, and the matcher that recognises
+  # it as a label matcher rather than as a substring. `relay_via="in_process"`
+  # contains the literal and selects nothing of the kind.
+  @shadow_filter ~s(via="in_process")
+  @shadow_matcher ~r/(?<![A-Za-z0-9_])via\s*=\s*"in_process"/
+
   defmodule CallGraph do
     @moduledoc false
     # An intra-process call graph read out of compiled BEAM debug info, plus the
@@ -526,7 +532,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # share — and both directions are checked from the coverage state.
       relayed = MapSet.new(RelayRuntime.relayed_events())
       by_series = declared_series_by_event()
-      shadow_filter = ~s(via="in_process")
+      shadow_filter = @shadow_filter
 
       charted =
         for panel <- dashboard_panels(),
@@ -545,7 +551,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
       unshadowed =
         for {title, series, expr, :partial} <- charted,
-            not String.contains?(expr, shadow_filter),
+            not series_pinned?(expr, series),
             do: "#{title} (#{series})"
 
       assert unshadowed == [],
@@ -555,13 +561,59 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
       still_pinned =
         for {title, series, expr, :relayed} <- charted,
-            String.contains?(expr, shadow_filter),
+            series_pins_anywhere?(expr, series),
             do: "#{title} (#{series})"
 
       assert still_pinned == [],
              "these panels chart a promoted family but still pin #{shadow_filter}, so the " <>
                "relayed share it was promoted for stays invisible: " <>
                Enum.join(still_pinned, ", ")
+    end
+
+    test "the shadow-selector check reads the charted family's own selector" do
+      # Three ways a panel used to satisfy the pin without pinning the family it
+      # charts. Each expression contains the literal `via="in_process"`, which is
+      # all a substring test over the whole expression ever asked for.
+      series = "codex_pooler_quota_cycle_decision_count"
+      other = "codex_pooler_gateway_stream_outcome_count"
+
+      # A second series in the same expression carries the pin.
+      mixed = ~s|sum(rate(#{series}[5m])) + sum(rate(#{other}{via="in_process"}[5m]))|
+      assert String.contains?(mixed, @shadow_filter)
+      refute series_pinned?(mixed, series)
+      assert series_pinned?(mixed, other)
+
+      # A different label whose name merely ends in `via` selects nothing of the kind.
+      renamed = ~s|sum(rate(#{series}{relay_via="in_process"}[5m]))|
+      assert String.contains?(renamed, @shadow_filter)
+      refute series_pinned?(renamed, series)
+
+      # One occurrence pinned and another bare is not a pinned family either.
+      half = ~s|sum(rate(#{series}{via="in_process"}[5m])) + sum(rate(#{series}[5m]))|
+      assert String.contains?(half, @shadow_filter)
+      refute series_pinned?(half, series)
+
+      refute series_pinned?(~s|sum(rate(#{series}[5m]))|, series)
+      assert series_pinned?(~s|sum(rate(#{series}{via="in_process"}[5m]))|, series)
+
+      # The promoted direction fires on a pin anywhere on the charted family.
+      assert series_pins_anywhere?(half, series)
+      refute series_pins_anywhere?(~s|sum(rate(#{series}[5m]))|, series)
+      refute series_pins_anywhere?(mixed, series)
+    end
+
+    test "a panel nested two rows deep is still a panel this guard reads" do
+      # Grafana rows nest. Flattening one level left a panel two levels down
+      # charting whatever it liked, seen by no check here.
+      buried = %{"title" => "buried", "targets" => [%{"expr" => "codex_pooler_x"}]}
+      inner = %{"title" => "inner row", "panels" => [buried]}
+      outer = %{"title" => "outer row", "panels" => [inner]}
+
+      assert Enum.map(flatten_panel(outer), &Map.get(&1, "title")) == [
+               "outer row",
+               "inner row",
+               "buried"
+             ]
     end
 
     test "the panel check would catch a promoted family whose panels still say OBAN_MODE" do
@@ -682,19 +734,53 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     end
   end
 
+  # Rows nest, and a row inside a row was invisible to a single flatten: a panel
+  # two levels down charted whatever it liked and no guard here saw it.
   defp dashboard_panels do
     @dashboard
     |> File.read!()
     |> Jason.decode!()
     |> Map.fetch!("panels")
-    |> Enum.flat_map(fn panel -> [panel | Map.get(panel, "panels") || []] end)
+    |> Enum.flat_map(&flatten_panel/1)
   end
+
+  defp flatten_panel(panel),
+    do: [panel | Enum.flat_map(Map.get(panel, "panels") || [], &flatten_panel/1)]
 
   defp panel_series(panel) do
     panel
     |> Map.get("targets", [])
     |> Enum.flat_map(&Regex.scan(~r/\bcodex_pooler_[a-z0-9_]+\b/, Map.get(&1, "expr", "")))
     |> Enum.map(&hd/1)
+  end
+
+  # Whether `series` carries `@shadow_filter` in its OWN label selector, at every
+  # place the expression names it. A substring test over the whole expression is
+  # satisfied by any other series in the same expression that happens to pin it,
+  # and by a different label whose name merely ends in `via`, so neither says
+  # anything about the family actually being charted.
+  defp series_pinned?(expr, series) do
+    case series_selectors(expr, series) do
+      [] -> false
+      selectors -> Enum.all?(selectors, &Regex.match?(@shadow_matcher, &1))
+    end
+  end
+
+  # The promoted direction: the family is charted with the shadow pin still on
+  # it anywhere, so the share the promotion was for stays invisible.
+  defp series_pins_anywhere?(expr, series),
+    do: Enum.any?(series_selectors(expr, series), &Regex.match?(@shadow_matcher, &1))
+
+  # The selector braces attached to each occurrence of `series`, or "" where it
+  # is written bare. Quoted label values are consumed whole, because a Grafana
+  # variable such as `pod=~"${pod:regex}"` puts a `}` inside one.
+  defp series_selectors(expr, series) do
+    ~r/(?<![A-Za-z0-9_:])#{Regex.escape(series)}(?![A-Za-z0-9_:])\s*(\{(?:"(?:[^"\\]|\\.)*"|[^{}"])*\})?/
+    |> Regex.scan(expr)
+    |> Enum.map(fn
+      [_match, selector] -> selector
+      [_match] -> ""
+    end)
   end
 
   defp compile_synthetic_worker do
