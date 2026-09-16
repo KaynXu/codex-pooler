@@ -39,6 +39,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   @shadow_value "in_process"
   @shadow_filter ~s(#{@shadow_label}="#{@shadow_value}")
 
+  @repo_root Path.expand("../../..", __DIR__)
+
+  # This file, and a test in it, used as real promotion evidence below. Renaming
+  # that test reds the resolver, which is the property being demonstrated.
+  @guard_file "test/codex_pooler_web/telemetry/role_coverage_test.exs"
+  @resolvable_test "every promoted family carries evidence for each of its four gates"
+
   defmodule CallGraph do
     @moduledoc false
     # An intra-process call graph read out of compiled BEAM debug info, plus the
@@ -671,6 +678,121 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert unmet == [],
              "these promoted families have not named evidence for a promotion gate: " <>
                Enum.join(unmet, ", ")
+
+      unresolved =
+        for {event, declaration} <- RoleCoverage.unscraped_emissions(),
+            {gate, reason} <- unresolved_promotion_gates(declaration),
+            do: "#{inspect(event)}: #{gate} #{inspect(reason)}"
+
+      assert unresolved == [],
+             "these promoted families name evidence that does not resolve against this " <>
+               "repository: " <> Enum.join(unresolved, ", ")
+
+      # Both loops above are empty today, because no shipped family is promoted:
+      # they would stay green whatever the promoted branch did. So run the same
+      # machinery over a shipped declaration moved into that state, and execute
+      # the branch a promotion will actually take against this repository.
+      {event, shipped} = RoleCoverage.unscraped_emissions() |> Enum.sort() |> hd()
+      promoting = Map.put(shipped, :coverage, :relayed)
+
+      assert RoleCoverage.unmet_promotion_gates(promoting) == RoleCoverage.promotion_gates(),
+             "promoting #{inspect(event)} unchanged owes every gate"
+
+      evidenced = Map.put(promoting, :promotion_evidence, evidence_naming(@resolvable_test))
+
+      assert RoleCoverage.unmet_promotion_gates(evidenced) == []
+      assert unresolved_promotion_gates(evidenced) == []
+
+      fabricated = Map.put(promoting, :promotion_evidence, evidence_naming("a test nobody wrote"))
+
+      assert RoleCoverage.unmet_promotion_gates(fabricated) == [],
+             "the shape half cannot tell a fabricated test name from a real one; that is what " <>
+               "the resolver is for"
+
+      assert Enum.map(unresolved_promotion_gates(fabricated), &elem(&1, 0)) ==
+               RoleCoverage.test_promotion_gates()
+    end
+
+    test "a promotion gate naming a test nobody wrote does not resolve" do
+      # The shape check passes any pair of non-empty strings, so a declaration
+      # could name a test that does not exist, in a file that does not exist, and
+      # ship green. Resolving the name binds it to the repository: the file is
+      # loaded and the names come from the ExUnit.Test structs the compiled module
+      # registers. That is runtime introspection of a compiled artifact, the same
+      # class of evidence CallGraph above reads out of .beam chunks, and not a
+      # scan of source text — renaming the test reds this, reformatting the file
+      # does not. What it binds is existence: no check here can say the named test
+      # proves its gate, and review still has to.
+      promoted = fn evidence ->
+        %{
+          coverage: :relayed,
+          entrypoints: [],
+          fallback: "rows",
+          note: "note",
+          promotion_evidence: evidence
+        }
+      end
+
+      real = promoted.(evidence_naming(@resolvable_test))
+      assert RoleCoverage.unmet_promotion_gates(real) == []
+      assert unresolved_promotion_gates(real) == []
+
+      # ExUnit registers a test under its describe block, so either spelling of
+      # the name resolves.
+      qualified =
+        promoted.(evidence_naming("the caveat an operator has to see #{@resolvable_test}"))
+
+      assert unresolved_promotion_gates(qualified) == []
+
+      for {label, evidence, expected} <- [
+            {"a test nobody wrote in a real file", evidence_naming("a test nobody wrote"),
+             {:no_such_test, @guard_file, "a test nobody wrote"}},
+            {"a file nobody wrote",
+             Map.new(
+               RoleCoverage.test_promotion_gates(),
+               &{&1, {"test/does_not_exist_xyz.exs", "a test nobody wrote"}}
+             ), {:no_such_file, "test/does_not_exist_xyz.exs"}},
+            {"a path that is not a file",
+             Map.new(RoleCoverage.test_promotion_gates(), &{&1, {".", "."}}),
+             {:no_such_file, "."}}
+          ] do
+        declaration = promoted.(Map.put(evidence, :live_comparison, "TODO"))
+
+        assert RoleCoverage.unmet_promotion_gates(declaration) == [],
+               "#{label} passes the shape check, which is why the resolver exists"
+
+        assert unresolved_promotion_gates(declaration) ==
+                 Enum.map(RoleCoverage.test_promotion_gates(), &{&1, expected}),
+               "#{label} should not resolve"
+      end
+
+      # An unpromoted declaration is not resolved at all, so an unpromoted family
+      # is never asked for evidence it does not owe.
+      assert unresolved_promotion_gates(%{
+               promoted.(evidence_naming("nobody"))
+               | coverage: :partial
+             }) ==
+               []
+
+      # A gate naming a file this run has not loaded takes the other branch: the
+      # file is compiled here and read back. Its one test raises when run, so if
+      # loading it ever enqueued it with ExUnit this run would carry an extra
+      # failure rather than quietly running someone else's test.
+      {path, name} = write_probe_test_file()
+
+      resolving =
+        promoted.(
+          RoleCoverage.test_promotion_gates()
+          |> Map.new(&{&1, {path, name}})
+          |> Map.put(:live_comparison, "probe")
+        )
+
+      assert unresolved_promotion_gates(resolving) == []
+
+      missing = put_in(resolving.promotion_evidence[:double_emission], {path, "not in that file"})
+
+      assert unresolved_promotion_gates(missing) ==
+               [{:double_emission, {:no_such_test, path, "not in that file"}}]
     end
 
     test "the promotion gate reads each family's own evidence" do
@@ -1107,6 +1229,90 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     do: Enum.any?(PromQL.occurrences(expr, series), &shadow_pin?/1)
 
   defp shadow_pin?(matchers), do: PromQL.selects?(matchers, @shadow_label, @shadow_value)
+
+  # Promotion evidence naming a test in this file for each of the three test
+  # gates, plus a live comparison record the resolver does not touch.
+  defp evidence_naming(test_name) do
+    RoleCoverage.test_promotion_gates()
+    |> Map.new(&{&1, {@guard_file, test_name}})
+    |> Map.put(:live_comparison, "runbook manual telemetry-relay, 2026-09-15 comparison")
+  end
+
+  # The test gates whose declared `{file, test name}` names nothing this
+  # repository has, with the reason. `RoleCoverage.unmet_promotion_gates/1` can
+  # only check the shape of a declaration; binding the name to reality needs the
+  # repository, which is the guard's to read.
+  defp unresolved_promotion_gates(%{coverage: coverage} = declaration) do
+    if RoleCoverage.promoted?(coverage) do
+      evidence = Map.get(declaration, :promotion_evidence) || %{}
+
+      RoleCoverage.test_promotion_gates()
+      |> Enum.map(&{&1, unresolved_reason(Map.get(evidence, &1))})
+      |> Enum.reject(&match?({_gate, nil}, &1))
+    else
+      []
+    end
+  end
+
+  defp unresolved_reason({path, name}) when is_binary(path) and is_binary(name) do
+    file = Path.expand(path, @repo_root)
+
+    cond do
+      not File.regular?(file) -> {:no_such_file, path}
+      test_named?(file, name) -> nil
+      true -> {:no_such_test, path, name}
+    end
+  end
+
+  defp unresolved_reason(evidence), do: {:not_a_test_reference, evidence}
+
+  # Loading the file compiles it; the compiled module exports `__ex_unit__/0`,
+  # whose `%ExUnit.Test{}` structs carry the registered name and the file it was
+  # defined in. No test is run, and no source text is read. A file this run has
+  # already loaded is not required again, so its modules come from the code
+  # server instead.
+  defp test_named?(file, name) do
+    modules =
+      case Code.require_file(file) do
+        nil -> for {module, _beam} <- :code.all_loaded(), do: module
+        compiled -> Enum.map(compiled, &elem(&1, 0))
+      end
+
+    Enum.any?(modules, fn module ->
+      function_exported?(module, :__ex_unit__, 0) and
+        Enum.any?(module.__ex_unit__().tests, &names_test?(&1, file, name))
+    end)
+  end
+
+  # ExUnit registers a test as `:"test <describe> <name>"`, so a gate may name it
+  # either as it is written or with its describe block prefixed.
+  defp names_test?(%ExUnit.Test{} = test, file, name) do
+    test.tags.file == file and
+      Atom.to_string(test.name) in ["test #{name}", "test #{test.tags[:describe]} #{name}"]
+  end
+
+  # An ExUnit file this run has not loaded, so resolving a gate against it takes
+  # the compile branch. It lives outside test_paths, so nothing else collects it.
+  defp write_probe_test_file do
+    suffix = System.unique_integer([:positive])
+    name = "the probe gate resolves #{suffix}"
+    path = "tmp/role_coverage_gate_probe_#{suffix}_test.exs"
+    full = Path.expand(path, @repo_root)
+    File.mkdir_p!(Path.dirname(full))
+    on_exit(fn -> File.rm_rf!(full) end)
+
+    File.write!(full, """
+    defmodule RoleCoverageGateProbe#{suffix}Test do
+      use ExUnit.Case, async: false
+
+      test "#{name}" do
+        raise "loading a named evidence file must not run its tests"
+      end
+    end
+    """)
+
+    {path, name}
+  end
 
   defp compile_synthetic_worker do
     dir =
