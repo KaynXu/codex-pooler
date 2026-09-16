@@ -18,8 +18,9 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
   # Every unboxed cleanup gets a task timeout above the detection budgets it
   # may wait on (an OS-process wait plus a connection wait, each bounded by
   # @peer_timeout_ms), so a slow peer is reported by its own assertion instead
-  # of `Task.await` timing out first.
-  @cleanup_timeout_ms @peer_timeout_ms * 2 + 5_000
+  # of `Task.await` timing out first. The relation lives in the helper, which
+  # owns it for every caller.
+  @cleanup_timeout_ms InstancePresencePeer.cleanup_timeout_ms(@peer_timeout_ms)
 
   test "a hard-killed named owner is recovered once its in-place successor publishes presence" do
     %{user: owner} = CodexPooler.AccountsFixtures.committed_bootstrap_owner_fixture!()
@@ -66,20 +67,24 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
 
     UnboxedFixture.register_unboxed_cleanup!(
       fn ->
-        # This cleanup runs before the first peer's own (registered later, so
-        # earlier in LIFO order): the hard-killed peer's proof publisher may
-        # still hold a backend mid-statement on these very rows, so its
-        # backends are ended here first.
-        terminate_peer_connections!(first_identity.boot_id)
+        # `purge_peer_state!/3` owns the order: the hard-killed peer's proof
+        # publisher may still hold a backend mid-statement on these very rows,
+        # so its backends are ended before the deletion rather than by whatever
+        # LIFO position this callback happens to hold.
+        InstancePresencePeer.purge_peer_state!(
+          first_identity.boot_id,
+          fn ->
+            Repo.delete_all(
+              from instance in InstancePresence.Instance,
+                where: instance.node_name == ^first_identity.node_name
+            )
 
-        Repo.delete_all(
-          from instance in InstancePresence.Instance,
-            where: instance.node_name == ^first_identity.node_name
-        )
-
-        Repo.delete_all(
-          from proof in CodexPooler.Platform.ExecutionTerminalProof,
-            where: proof.owner_instance_id == ^first_identity.node_name
+            Repo.delete_all(
+              from proof in CodexPooler.Platform.ExecutionTerminalProof,
+                where: proof.owner_instance_id == ^first_identity.node_name
+            )
+          end,
+          budget_ms: @peer_timeout_ms
         )
       end,
       @cleanup_timeout_ms
@@ -214,9 +219,15 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
         # A backend the dead peer left mid-statement still holds its row
         # locks; end it first so the row cleanup registered earlier (which
         # runs after this one) can never block on the peer's leftovers.
-        terminate_peer_connections!(identity.boot_id)
-        InstancePresencePeer.assert_os_process_stopped!(os_identity, budget_ms: @peer_timeout_ms)
-        assert_peer_connections_absent!(identity.boot_id)
+        InstancePresencePeer.purge_peer_state!(
+          identity.boot_id,
+          fn ->
+            InstancePresencePeer.assert_os_process_stopped!(os_identity,
+              budget_ms: @peer_timeout_ms
+            )
+          end,
+          budget_ms: @peer_timeout_ms
+        )
       end,
       @cleanup_timeout_ms
     )
@@ -270,36 +281,5 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
 
     {:ok, _} = UnboxedFixture.run_unboxed(fn -> InstancePresence.record_heartbeat(local) end)
     :ok
-  end
-
-  defp terminate_peer_connections!(boot_id) do
-    Repo.query!(
-      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1 AND pid <> pg_backend_pid()",
-      ["execution_peer_" <> boot_id]
-    )
-
-    :ok
-  end
-
-  defp assert_peer_connections_absent!(boot_id),
-    do:
-      assert_peer_connections_absent!(
-        boot_id,
-        System.monotonic_time(:millisecond) + @peer_timeout_ms
-      )
-
-  defp assert_peer_connections_absent!(boot_id, deadline) do
-    %{rows: [[count]]} =
-      Repo.query!("SELECT count(*) FROM pg_stat_activity WHERE application_name = $1", [
-        "execution_peer_" <> boot_id
-      ])
-
-    if count > 0 do
-      assert System.monotonic_time(:millisecond) < deadline, "peer database connections survived"
-      Process.sleep(10)
-      assert_peer_connections_absent!(boot_id, deadline)
-    else
-      :ok
-    end
   end
 end

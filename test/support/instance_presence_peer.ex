@@ -17,6 +17,84 @@ defmodule CodexPooler.InstancePresencePeer do
           parent_pid: non_neg_integer()
         }
 
+  @doc """
+  Task timeout for one unboxed cleanup that waits on a peer, from that peer's
+  detection budget.
+
+  A cleanup may wait on two budgets in sequence -- an OS-process wait and a
+  database-connection wait -- so its `Task.await` must outlast both, plus room
+  for the cleanup's own work. A timeout at or below the budget reports
+  `Task.await` timing out instead of the peer assertion that actually failed,
+  which is exactly the wrong end of the failure (findings#207 rows 207-41,
+  207-47). Deriving it here is what keeps the relation from drifting: callers
+  never write the arithmetic.
+  """
+  @spec cleanup_timeout_ms(pos_integer()) :: pos_integer()
+  def cleanup_timeout_ms(peer_timeout_ms)
+      when is_integer(peer_timeout_ms) and peer_timeout_ms > 0,
+      do: peer_timeout_ms * 2 + 5_000
+
+  @doc """
+  Removes one peer's committed state in the only order that is safe.
+
+  The peer's own backends are ended first: a hard-killed VM's proof publisher
+  can still hold a backend mid-statement on the very rows the cleanup deletes,
+  and a cleanup that deleted first would block on that lock until its task
+  timeout (findings#207 row 207-40). The row deletion runs second, and the
+  absence of the peer's connections is asserted last. Callers pass only the
+  deletion; the order is this function's, not theirs.
+
+  `:terminate`, `:delete` and `:await` are injectable so the order itself can be
+  observed without a real VM.
+  """
+  @spec purge_peer_state!(String.t(), (-> term()), keyword()) :: :ok
+  def purge_peer_state!(boot_id, delete_rows, opts \\ [])
+      when is_binary(boot_id) and is_function(delete_rows, 0) do
+    budget = Keyword.get(opts, :budget_ms, 15_000)
+    terminate = Keyword.get(opts, :terminate, &terminate_peer_connections!/1)
+    await = Keyword.get(opts, :await, &assert_peer_connections_absent!/2)
+
+    :ok = terminate.(boot_id)
+    _deleted = delete_rows.()
+    :ok = await.(boot_id, budget)
+    :ok
+  end
+
+  @spec peer_application_name(String.t()) :: String.t()
+  def peer_application_name(boot_id) when is_binary(boot_id), do: "execution_peer_" <> boot_id
+
+  @spec terminate_peer_connections!(String.t()) :: :ok
+  def terminate_peer_connections!(boot_id) when is_binary(boot_id) do
+    CodexPooler.Repo.query!(
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity " <>
+        "WHERE application_name = $1 AND pid <> pg_backend_pid()",
+      [peer_application_name(boot_id)]
+    )
+
+    :ok
+  end
+
+  @spec assert_peer_connections_absent!(String.t(), pos_integer()) :: :ok
+  def assert_peer_connections_absent!(boot_id, budget_ms) when is_binary(boot_id) do
+    await_peer_connections_absent(boot_id, System.monotonic_time(:millisecond) + budget_ms)
+  end
+
+  defp await_peer_connections_absent(boot_id, deadline) do
+    %{rows: [[count]]} =
+      CodexPooler.Repo.query!(
+        "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+        [peer_application_name(boot_id)]
+      )
+
+    if count > 0 do
+      assert System.monotonic_time(:millisecond) < deadline, "peer database connections survived"
+      Process.sleep(10)
+      await_peer_connections_absent(boot_id, deadline)
+    else
+      :ok
+    end
+  end
+
   @spec capture_os_process_identity!(String.t(), keyword()) :: os_process_identity()
   def capture_os_process_identity!(os_pid, opts \\ []) do
     probe = Keyword.get(opts, :probe, &os_process_snapshot/1)

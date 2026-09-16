@@ -3,6 +3,68 @@ defmodule CodexPooler.InstancePresencePeerCleanupTest do
 
   alias CodexPooler.InstancePresencePeer
 
+  # findings#207 row 207-47: the wave introduced two rules that R1 and R3 of the
+  # same review showed are easy to get wrong -- the cleanup timeout must outlast
+  # the detection budget, and a peer's backends must be ended before its rows are
+  # deleted. Both now live in one helper each, and these pin the helpers' own
+  # behaviour rather than restating the convention.
+  test "a cleanup timeout always outlasts both detection budgets it may wait on" do
+    for budget <- [1, 10, 1_000, 15_000, 120_000] do
+      timeout = InstancePresencePeer.cleanup_timeout_ms(budget)
+
+      assert timeout > budget * 2,
+             "a cleanup that may wait on two #{budget}ms budgets needs more than #{budget * 2}ms"
+    end
+
+    for invalid <- [0, -1, nil, 15_000.0, "15000"] do
+      assert_raise FunctionClauseError, fn ->
+        InstancePresencePeer.cleanup_timeout_ms(invalid)
+      end
+    end
+  end
+
+  test "peer state purge ends the peer's backends before deleting its rows" do
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+    on_exit(fn -> if Process.alive?(calls), do: Agent.stop(calls) end)
+    record = fn step -> Agent.update(calls, &(&1 ++ [step])) end
+
+    assert :ok =
+             InstancePresencePeer.purge_peer_state!(
+               "boot-id",
+               fn -> record.(:delete) end,
+               budget_ms: 1,
+               terminate: fn "boot-id" ->
+                 record.(:terminate)
+                 :ok
+               end,
+               await: fn "boot-id", 1 ->
+                 record.(:await)
+                 :ok
+               end
+             )
+
+    assert Agent.get(calls, & &1) == [:terminate, :delete, :await]
+  end
+
+  test "peer state purge never deletes rows when the backends cannot be ended" do
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+    on_exit(fn -> if Process.alive?(calls), do: Agent.stop(calls) end)
+
+    assert_raise MatchError, fn ->
+      InstancePresencePeer.purge_peer_state!(
+        "boot-id",
+        fn -> Agent.update(calls, &(&1 ++ [:delete])) end,
+        terminate: fn _boot_id -> :error end
+      )
+    end
+
+    assert Agent.get(calls, & &1) == []
+  end
+
+  test "the peer application name is the one the termination predicate matches" do
+    assert InstancePresencePeer.peer_application_name("boot-id") == "execution_peer_boot-id"
+  end
+
   test "OS absence waits past peer termination until the kernel PID disappears" do
     {:ok, samples} =
       Agent.start_link(fn -> [{"", 0}, {"", 0}, {"kill: 123: No such process\n", 1}] end)
