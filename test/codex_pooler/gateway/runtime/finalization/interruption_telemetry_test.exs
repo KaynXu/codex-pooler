@@ -85,6 +85,73 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     end)
   end
 
+  test "recovery inside a caller transaction hands its outcomes back instead of dropping them" do
+    # The emitter above is silent for the right reason — nothing has committed
+    # yet — but silence is also what losing the markers looks like. A caller
+    # that owns the transaction is the only thing that knows when the write
+    # becomes durable, so the outcomes are its to emit and it is told so.
+    #
+    # `RuntimeStateCleanup.run/1` runs every step bare, so this arm is
+    # unreachable in production today. That invariant is what the after-commit
+    # property rests on, which is exactly why breaking it must be audible.
+    fixture = committed_interruption_fixture!(:active_attempt)
+    expire_owner!(fixture)
+
+    log =
+      capture_outcomes(fn ->
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert run_unboxed(fn ->
+                   Repo.transaction(fn ->
+                     assert perform_job(RuntimeStateCleanupWorker, %{}) == :ok
+                     Repo.rollback(:caller_rollback)
+                   end)
+                 end) == {:error, :caller_rollback}
+        end)
+      end)
+
+    refute_received {:stream_outcome, _}
+    assert log =~ "expired-owner recovery outcomes dropped inside a caller transaction"
+    assert log =~ "outcomes=1"
+    assert committed_interruption_state(fixture).turn_status == "in_progress"
+  end
+
+  test "a multi-turn expired-owner recovery counts a release its own rollback erases" do
+    # Recorded, not desired. `interrupt_session_transaction/4` maps
+    # `interrupt_turn!/5` over EVERY in-progress turn of a session inside one
+    # transaction. The first turn's `release_unattempted_request!/6` counts a
+    # `turn_interrupted` pre-attempt release; the second turn then fails into
+    # `rollback_interrupted_accounting/4` and aborts the whole transaction.
+    #
+    # `tap_pre_attempt_release_count/3` runs on the value of `Repo.transaction/1`,
+    # which is a savepoint release rather than a commit whenever a caller already
+    # holds a transaction, and unlike every emitter beside it that function never
+    # asks `Repo.in_transaction?/0`. So the counter keeps a sample for a release
+    # row that no longer exists, biased upward on the `turn_interrupted` and
+    # `task_exception` slices. Ledger, settlement, routing and durable metadata
+    # all roll back correctly; only the counter lies.
+    #
+    # This is the production path findings#195 row 195-94 names, driven from the
+    # real worker. Fixing the defect means deferring the marker to the outermost
+    # commit the way interrupted outcomes already are, and it must change this
+    # test — which is also the moment row 195-12's second clause becomes
+    # satisfiable.
+    fixture = multi_turn_interruption_fixture!()
+    expire_owner!(fixture)
+    samples = capture_pre_attempt_releases()
+
+    assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime], _summary}} =
+             run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
+
+    # The transaction rolled back: no release row exists for either request and
+    # both turns are still running.
+    assert run_unboxed(fn -> release_entry_count(fixture) end) == 0
+    assert run_unboxed(fn -> turn_statuses(fixture) end) == ["in_progress", "in_progress"]
+
+    # And yet the first turn's release was counted, from inside the caller's
+    # still-open transaction.
+    assert [%{phase: "turn_interrupted", in_transaction?: true}] = drain_samples(samples)
+  end
+
   test "cleanup worker accounting rollback emits nothing and retains the active turn" do
     fixture = committed_interruption_fixture!(:accounting_failure)
     expire_owner!(fixture)
@@ -472,6 +539,125 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
       attempt: attempt,
       started: System.monotonic_time(:millisecond)
     }
+  end
+
+  # One session carrying two in-progress turns, neither with an attempt, whose
+  # SECOND turn has no reservation ledger entry: finalizing it raises and
+  # `rollback_interrupted_accounting/4` aborts the transaction both turns share.
+  defp multi_turn_interruption_fixture! do
+    fixture = committed_interruption_fixture!(:without_attempt)
+
+    run_unboxed(fn ->
+      second = add_failing_turn!(fixture)
+
+      # `in_progress_turns_for_session/1` orders by started_at, so the failing
+      # turn is made unambiguously second.
+      Repo.update_all(from(t in CodexTurn, where: t.id == ^fixture.turn.id),
+        set: [started_at: DateTime.add(DateTime.utc_now(), -30, :second)]
+      )
+
+      Repo.update_all(from(t in CodexTurn, where: t.id == ^second.turn.id),
+        set: [started_at: DateTime.utc_now()]
+      )
+
+      Map.merge(fixture, %{
+        requests: [fixture.request, second.request],
+        turns: [fixture.turn, second.turn]
+      })
+    end)
+  end
+
+  defp add_failing_turn!(fixture) do
+    unique = System.unique_integer([:positive, :monotonic])
+    correlation_id = "interruption-telemetry-second-#{unique}"
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               fixture.auth,
+               fixture.model,
+               %{"model" => fixture.model.exposed_model_id},
+               %{
+                 endpoint: "/backend-api/codex/responses",
+                 transport: "websocket",
+                 correlation_id: correlation_id,
+                 request_metadata: %{"codex_session_id" => fixture.session.id}
+               }
+             )
+
+    opts =
+      RequestOptions.for_websocket(%{
+        request_id: correlation_id,
+        interrupt_reason: "client_disconnected",
+        reconnect_window_seconds: 300
+      })
+
+    assert {:ok, turn} =
+             SessionContinuity.start_codex_turn(fixture.session, reserved.request, opts)
+
+    # The reservation still reads as outstanding, so this turn takes the same
+    # release branch as the first one, but `finalize_reserved_request_failure/2`
+    # cannot find the entry by its source event id and raises — which is what
+    # `rollback_interrupted_accounting/4` turns into a rollback of the
+    # transaction both turns share. Deleting the entry instead would make the
+    # branch quietly succeed, and giving this turn an attempt would fail the
+    # dead-execution recovery that runs before any turn is interrupted.
+    Repo.update_all(
+      from(entry in LedgerEntry,
+        where: entry.source_event_id == ^"request:#{reserved.request.id}:reservation"
+      ),
+      set: [source_event_id: "request:#{reserved.request.id}:reservation-detached"]
+    )
+
+    %{request: reserved.request, turn: turn}
+  end
+
+  defp release_entry_count(%{requests: requests}) do
+    ids = Enum.map(requests, & &1.id)
+
+    Repo.aggregate(
+      from(entry in LedgerEntry,
+        where: entry.request_id in ^ids and entry.entry_kind == "release"
+      ),
+      :count
+    )
+  end
+
+  defp turn_statuses(%{turns: turns}) do
+    ids = Enum.map(turns, & &1.id)
+
+    Repo.all(from turn in CodexTurn, where: turn.id in ^ids, select: turn.status, order_by: :id)
+  end
+
+  defp capture_pre_attempt_releases do
+    handler_id = "pre-attempt-release-#{System.unique_integer([:positive, :monotonic])}"
+    parent = self()
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :accounting, :reservation, :pre_attempt_release],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:pre_attempt_release, metadata, Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+    handler_id
+  end
+
+  defp drain_samples(handler_id) when is_binary(handler_id) do
+    :telemetry.detach(handler_id)
+    collect_samples([])
+  end
+
+  defp collect_samples(acc) do
+    receive do
+      {:pre_attempt_release, metadata, in_transaction?} ->
+        collect_samples([Map.put(metadata, :in_transaction?, in_transaction?) | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp interrupt_turn(fixture) do
