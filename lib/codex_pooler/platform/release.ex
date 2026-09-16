@@ -10,6 +10,7 @@ defmodule CodexPooler.Release do
 
   alias CodexPooler.Catalog
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Platform.Readiness
   alias CodexPooler.Telemetry.RelayRuntime
 
   @app :codex_pooler
@@ -58,6 +59,28 @@ defmodule CodexPooler.Release do
       )
 
     drain.(remaining)
+  end
+
+  @doc """
+  Readiness for release roles that serve no HTTP, over `bin/codex_pooler rpc`.
+
+  Worker and scheduler pods run with `PHX_SERVER` unset, so `/readyz` does not
+  exist there and a container with no probe is Ready the moment it starts, even
+  against a database with no tables. This is the same fact `/readyz` reports,
+  reached the only way those roles can be asked: it evaluates inside the
+  running node, so it shares that node's grace state.
+
+  Returns `:ok` when the node can serve and raises with a sanitized reason
+  class otherwise, so any probe wrapper sees a non-zero exit. It is a read; it
+  starts nothing and changes nothing.
+  """
+  @spec readiness_check() :: :ok
+  def readiness_check do
+    case Readiness.check() do
+      :ready -> :ok
+      {:ready, :degraded, _class} -> :ok
+      {:not_ready, class} -> raise "readiness check failed reason_class=#{class}"
+    end
   end
 
   # A release task runs with the runtime config of whatever `OBAN_MODE` its

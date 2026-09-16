@@ -2,6 +2,7 @@ defmodule CodexPooler.Platform.ReadinessTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Platform.Readiness
+  alias CodexPooler.Release
   alias CodexPooler.Repo
 
   setup do
@@ -85,5 +86,37 @@ defmodule CodexPooler.Platform.ReadinessTest do
 
     assert Readiness.check(now_ms: now, sql_probe: MissingSchemaProbe) ==
              {:not_ready, "undefined_table"}
+  end
+
+  describe "release readiness check for roles without an HTTP listener" do
+    test "returns :ok against a migrated database" do
+      assert Release.readiness_check() == :ok
+    end
+
+    test "tolerates a connectivity blip the same way the HTTP probe does" do
+      assert Readiness.check() == :ready
+
+      Application.put_env(:codex_pooler, Readiness, sql_probe: UnreachableProbe)
+
+      assert Release.readiness_check() == :ok
+    end
+
+    test "raises a sanitized class when the schema is not applied" do
+      Repo.query!("DELETE FROM schema_migrations")
+
+      assert_raise RuntimeError, "readiness check failed reason_class=migrations_missing", fn ->
+        Release.readiness_check()
+      end
+    end
+
+    test "never carries a database message into the raised reason" do
+      Application.put_env(:codex_pooler, Readiness, sql_probe: MissingSchemaProbe)
+
+      error =
+        assert_raise RuntimeError, fn -> Release.readiness_check() end
+
+      assert error.message == "readiness check failed reason_class=undefined_table"
+      refute error.message =~ "does not exist"
+    end
   end
 end
