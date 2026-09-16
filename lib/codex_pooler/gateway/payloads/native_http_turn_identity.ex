@@ -15,7 +15,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # header. Either source yields the same `turn_id`, and the derivation is
   # `WebsocketTurnIdentity`'s own, so both transports name one turn the same way.
   #
-  # ## Why the bare turn claim, and when not
+  # ## Three arms, because the turn id is not the request id
   #
   # The claim must survive a *rebuilt* retry body. The released client records
   # each completed output item into history as it arrives and rebuilds the
@@ -27,12 +27,31 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # by construction have delivered items.
   #
   # So this mirrors the websocket `cond` (`websocket_codec.ex:938-965`) rather
-  # than inventing a second rule: a turn's opening request takes the BARE,
-  # payload-independent `codex-turn:` claim, which survives any rebuild, and an
-  # ordinary tool-result continuation takes the payload-scoped `codex-request:`
-  # claim, which is what keeps the several requests of one turn from colliding
-  # with each other. The discriminator is the shared `NativeTurnContinuation`
-  # predicate, so the two transports cannot drift.
+  # than inventing a second rule, and it mirrors ALL THREE of its arms. One
+  # `turn_id` covers every request made about a turn, not just the turn itself:
+  # the released client builds a compaction request's metadata from the same
+  # `turn_metadata_state` as the turn it compacts (`session.rs:686-701`,
+  # `turn_metadata.rs:169`), and the bare claim encodes no endpoint, so a
+  # compaction that took the bare claim would collide with its own turn and
+  # refuse a request that has no duplicate at all.
+  #
+  #   * a compaction request      -> the payload-scoped `codex-request:`
+  #                                  compaction claim, whose own HMAC domain
+  #                                  keeps it clear of the turn
+  #   * a tool-result continuation -> the payload-scoped request claim, which is
+  #                                  what keeps the several requests of one turn
+  #                                  from colliding with each other
+  #   * the turn itself            -> the BARE, payload-independent `codex-turn:`
+  #                                  claim, which survives any rebuilt body
+  #
+  # The continuation discriminator is the shared `NativeTurnContinuation`
+  # predicate, so the two transports cannot drift on it.
+  #
+  # Only an explicit `request_kind` of `turn` may reach the bare claim. A
+  # `prewarm` or `memory` request, an unknown kind, and a document that omits
+  # the field are all left unfenced rather than guessed at: they are requests
+  # *about* a turn that can carry its `turn_id`, and the cost of being wrong
+  # about one is a refusal of a request that never had a duplicate.
   #
   # ## Failing open
   #
@@ -51,10 +70,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # The routes that carry the canonical turn metadata
   # (`UpstreamDispatch.@regular_runtime_metadata_endpoints`). Keep the two lists
   # together: a route that does not carry the document cannot be fenced by it.
-  @native_endpoints [
-    "/backend-api/codex/responses",
-    "/backend-api/codex/responses/compact"
-  ]
+  @compact_endpoint "/backend-api/codex/responses/compact"
+  @native_endpoints ["/backend-api/codex/responses", @compact_endpoint]
 
   @doc """
   True when this request is a native Codex HTTP turn, i.e. on a route this
@@ -77,8 +94,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
          metadata when not is_nil(metadata) <- turn_metadata(request_options, payload),
          %CodexSession{id: session_id} when is_binary(session_id) <-
            Map.get(request_options.continuity, :codex_session),
-         {:ok, identity} <- WebsocketTurnIdentity.resolve(canonical_payload(metadata), session_id) do
-      {:ok, claim_for(identity, request_options, payload)}
+         {:ok, identity} <-
+           WebsocketTurnIdentity.resolve(canonical_payload(metadata), session_id),
+         {:ok, claim} <- claim_for(identity, request_options, payload, metadata) do
+      {:ok, claim}
     else
       _fail_open -> :none
     end
@@ -86,15 +105,35 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
   def request_claim_key(_request_options, _payload), do: :none
 
-  # The websocket rule, on the same predicate: the request that opens a turn is
-  # named by the turn alone so a rebuilt retry body still meets it; a
-  # tool-result continuation is named by its payload so the requests within one
-  # turn stay distinct.
-  defp claim_for(identity, request_options, payload) do
-    if NativeTurnContinuation.ordinary_tool_continuation?(payload, request_options) do
-      WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)
-    else
-      identity.turn_claim_key
+  defp claim_for(identity, request_options, payload, metadata) do
+    cond do
+      compaction_request?(request_options, metadata) ->
+        {:ok, WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload)}
+
+      NativeTurnContinuation.ordinary_tool_continuation?(payload, request_options) ->
+        {:ok, WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)}
+
+      turn_request?(metadata) ->
+        {:ok, identity.turn_claim_key}
+
+      true ->
+        :none
+    end
+  end
+
+  # Either signal is enough, and neither is trusted alone: the canonical kind is
+  # what the client declares, and the compact endpoint is what the request
+  # actually is. A compaction that reached the turn arm would refuse its own
+  # turn.
+  defp compaction_request?(%RequestOptions{transport: %{upstream_endpoint: endpoint}}, metadata),
+    do: endpoint == @compact_endpoint or request_kind(metadata) == "compaction"
+
+  defp turn_request?(metadata), do: request_kind(metadata) == "turn"
+
+  defp request_kind(metadata) do
+    case NativeTurnContinuation.canonical_metadata_map(metadata) do
+      %{"request_kind" => kind} when is_binary(kind) -> kind
+      _absent -> nil
     end
   end
 

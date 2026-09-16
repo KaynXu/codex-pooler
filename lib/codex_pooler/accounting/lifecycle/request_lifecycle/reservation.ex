@@ -23,6 +23,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Repo
 
+  # Mirrors `FailedPredecessorResend`'s own chain bound.
+  @native_turn_chain_depth 16
+
   @usage_pending "usage_pending"
   @usage_not_applicable "not_applicable"
 
@@ -183,44 +186,71 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # reaches the resend policy. A turn nobody has recorded keeps its claim and
   # inserts exactly as before, so an unfenceable first request is never taxed
   # with the policy's anchored/entitlement refusals.
-  defp native_turn_resend_claim!(%CodexSession{} = session, context) do
-    %{correlation_id: correlation_id, pool: pool, api_key: api_key, model: model, opts: opts} =
-      context
+  defp native_turn_resend_claim!(%CodexSession{} = session, context),
+    do: walk_native_turn_chain(session, context, context.correlation_id, 0)
 
-    case native_turn_predecessor(correlation_id) do
+  # Falling open must not abandon the turn's identity. A zero-output predecessor
+  # is stepped over by deriving the next claim from it -- the same deterministic
+  # derivation the websocket resend chain uses -- so the successor is still
+  # named by this turn. Reserving a fresh UUID instead would park the turn's
+  # claim on a row that can never be met again and switch the fence off for that
+  # turn permanently, letting a later attempt that DOES deliver output be
+  # resent and dispatched a second time.
+  defp walk_native_turn_chain(_session, _context, _claim, depth)
+       when depth > @native_turn_chain_depth,
+       do: Repo.rollback(duplicate_request_error(:chain_exhausted))
+
+  defp walk_native_turn_chain(session, context, claim, depth) do
+    case native_turn_predecessor(claim) do
       nil ->
-        {correlation_id, nil}
+        {claim, nil}
 
       %Request{} = predecessor ->
         if delivered_provider_output?(predecessor) do
-          _locked = SessionContinuity.lock_codex_session_for_turn(session)
-
-          scope = %{
-            pool_id: pool.id,
-            api_key_id: api_key.id,
-            model_id: model.id,
-            endpoint: context.endpoint,
-            transports: context.transports,
-            codex_session_id: session.id,
-            native_client_retry_witness: attr(opts, :native_client_retry_witness),
-            anchor_present?: attr(opts, :anchor_present?) == true
-          }
-
-          case FailedPredecessorResend.resolve(correlation_id, scope) do
-            {:ok, %{claim: claim, predecessor: resolved, predecessor_shape: shape}} ->
-              {claim,
-               %{
-                 predecessor_request_id: resolved.id,
-                 reason: :failed_predecessor,
-                 predecessor_shape: shape
-               }}
-
-            {:error, disposition} ->
-              Repo.rollback(duplicate_request_error(disposition))
-          end
+          resolve_native_turn_resend!(session, context, claim)
         else
-          {Ecto.UUID.generate(), nil}
+          step_over_native_turn_predecessor(session, context, claim, predecessor, depth)
         end
+    end
+  end
+
+  defp step_over_native_turn_predecessor(session, context, claim, predecessor, depth) do
+    case ClientRetry.deterministic_failed_predecessor_claim(claim, predecessor.id) do
+      {:ok, derived} ->
+        walk_native_turn_chain(session, context, derived, depth + 1)
+
+      # Without the app secret no claim can be derived; keep today's behaviour
+      # rather than refusing a request that has no duplicate.
+      {:error, _reason} ->
+        {Ecto.UUID.generate(), nil}
+    end
+  end
+
+  defp resolve_native_turn_resend!(session, context, claim) do
+    %{pool: pool, api_key: api_key, model: model, opts: opts} = context
+    _locked = SessionContinuity.lock_codex_session_for_turn(session)
+
+    scope = %{
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      model_id: model.id,
+      endpoint: context.endpoint,
+      codex_session_id: session.id,
+      native_client_retry_witness: attr(opts, :native_client_retry_witness),
+      anchor_present?: attr(opts, :anchor_present?) == true
+    }
+
+    case FailedPredecessorResend.resolve(claim, scope) do
+      {:ok, %{claim: resolved_claim, predecessor: resolved, predecessor_shape: shape}} ->
+        {resolved_claim,
+         %{
+           predecessor_request_id: resolved.id,
+           reason: :failed_predecessor,
+           predecessor_shape: shape
+         }}
+
+      {:error, disposition} ->
+        Repo.rollback(duplicate_request_error(disposition))
     end
   end
 
@@ -612,13 +642,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp native_turn_claim?(_correlation_id), do: false
 
-  # A resend may chain off a predecessor on either leg of a transport switch,
-  # so the failover retry is judged by the resend policy rather than refused by
-  # a scope accident. The websocket claim path passes no `:transports` and keeps
-  # its single-transport scope exactly as it was.
-  defp native_turn_resend_transports(transport),
-    do: Enum.uniq([transport, "http_sse", "http_json", "websocket"])
-
   # Existing reservation inputs stay explicit at the private handoff.
   # credo:disable-for-next-line Credo.Check.Refactor.FunctionArity
   defp do_reserve_for_model(
@@ -651,7 +674,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           api_key: api_key,
           model: model,
           endpoint: endpoint,
-          transports: native_turn_resend_transports(transport),
           opts: opts
         })
 

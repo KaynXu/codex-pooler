@@ -99,7 +99,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     assert FakeUpstream.count(upstream) > dispatched
     assert [^predecessor, successor] = pool_requests(setup)
-    assert {:ok, _uuid} = Ecto.UUID.cast(successor.correlation_id)
+
+    # Falling open steps OVER the zero-output predecessor rather than abandoning
+    # the turn: the successor is still named by this turn, through the same
+    # deterministic derivation the websocket resend chain uses. A fresh UUID
+    # here would switch the fence off for this turn permanently.
+    assert String.starts_with?(successor.correlation_id, "codex-request-retry:")
+  end
+
+  # The chain is what makes falling open safe. A turn whose first attempt bought
+  # nothing is served; if a LATER attempt of that same turn delivers output and
+  # is then resent, the fence must still be there to refuse it. With a fresh
+  # UUID on fall-open it would not be.
+  test "a turn served past a zero-output failure is still fenced once it delivers output", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          first_event_terminal_sse("response.failed", "server_error"),
+          stream_success_sse()
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    # Attempt 1 buys nothing and is served.
+    assert response(post_turn(conn, setup, session, @turn_id, stream: true), 200)
+    # Attempt 2 is served past it, and this one really does deliver output.
+    assert response(post_turn(conn, setup, session, @turn_id, stream: true), 200)
+
+    assert [zero_output, delivered] = pool_requests(setup)
+    assert zero_output.last_error_code == "server_error"
+    assert delivered.status == "succeeded"
+    dispatched = FakeUpstream.count(upstream)
+
+    # Attempt 3 would be the second dispatch of work already delivered.
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(post_turn(conn, setup, session, @turn_id, stream: true), 409)
+
+    assert FakeUpstream.count(upstream) == dispatched
+    assert length(pool_requests(setup)) == 2
   end
 
   # A predecessor left live by a killed node keeps `completed_at` null until the
@@ -169,6 +210,85 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert FakeUpstream.count(upstream) == 1
     assert [request] = pool_requests(setup)
     assert String.starts_with?(request.correlation_id, "codex-turn:")
+  end
+
+  # A compaction request is built from the SAME `turn_metadata_state` as the turn
+  # it compacts (`session.rs:686-701`, `turn_metadata.rs:169`), so both carry one
+  # `turn_id`, and the bare claim encodes no endpoint. A compaction that reached
+  # the turn arm would be refused as a duplicate of the turn it is compacting --
+  # breaking every native HTTP turn that triggers a remote compaction, which is
+  # strictly worse than the double spend the fence exists to stop.
+  test "a turn and its own compaction are different requests, in both orders", %{conn: conn} do
+    for {first, second} <- [{:turn, :compaction}, {:compaction, :turn}] do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.json_response(%{"id" => "resp_pair_one"}),
+            FakeUpstream.json_response(%{"id" => "resp_pair_two"})
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+      session = session_id()
+
+      assert json_response(post_kind(conn, setup, session, first), 200)
+      assert json_response(post_kind(conn, setup, session, second), 200)
+
+      assert FakeUpstream.count(upstream) == 2
+      requests = pool_requests(setup)
+      assert length(requests) == 2
+      assert requests |> Enum.map(& &1.correlation_id) |> Enum.uniq() |> length() == 2
+    end
+  end
+
+  # The compaction arm is a different claim, not an absent one: a compaction
+  # resent identically is still fenced, under its own HMAC domain.
+  test "an identical compaction resend is refused", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_compaction"}))
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    assert json_response(post_kind(conn, setup, session, :compaction), 200)
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(post_kind(conn, setup, session, :compaction), 409)
+
+    assert FakeUpstream.count(upstream) == 1
+    assert [request] = pool_requests(setup)
+    assert String.starts_with?(request.correlation_id, "codex-request:")
+  end
+
+  # Only an explicit `turn` kind reaches the bare claim. A request kind that is
+  # about a turn rather than being one -- and a document that omits the field --
+  # is left unfenced rather than guessed at.
+  test "a prewarm sharing the turn id is not fenced against the turn", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_prewarm"}),
+          FakeUpstream.json_response(%{"id" => "resp_turn_after_prewarm"})
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    prewarm =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header(@session_header, session)
+      |> put_req_header(
+        @metadata_header,
+        CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "prewarm"})
+      )
+      |> post("/backend-api/codex/responses", turn_payload(setup))
+
+    assert json_response(prewarm, 200)
+    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+
+    assert FakeUpstream.count(upstream) == 2
+    assert length(pool_requests(setup)) == 2
   end
 
   # KNOWN MISS, documented deliberately. A tool-result continuation inside a
@@ -426,6 +546,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     }
 
     if Keyword.get(opts, :stream, false), do: Map.put(payload, "stream", true), else: payload
+  end
+
+  defp post_kind(conn, setup, session, :turn),
+    do: post_turn(conn, setup, session, @turn_id)
+
+  defp post_kind(conn, setup, session, :compaction) do
+    conn
+    |> recycle()
+    |> auth(setup)
+    |> put_req_header(@session_header, session)
+    |> put_req_header(
+      @metadata_header,
+      CodexPooler.JSON.encode!(%{
+        "turn_id" => @turn_id,
+        "request_kind" => "compaction",
+        "window_id" => "compaction-window",
+        "context_window_id" => Ecto.UUID.generate()
+      })
+    )
+    |> post("/backend-api/codex/responses/compact", turn_payload(setup))
   end
 
   defp turn_metadata(turn_id),
