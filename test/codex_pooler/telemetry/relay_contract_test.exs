@@ -133,6 +133,59 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       assert {:ok, _} = raw_insert(%{measurements: %{"count" => 1, "applied_to_ms" => 0}})
     end
 
+    test "the measurement bound holds for the whole column, not only an object's scalars" do
+      # The first bound was a `$.*` path expression, and SQL/JSON path lax mode
+      # descends into what it is given: an array value was tested element by
+      # element, and a non-object column value matched nothing at all, so the
+      # constraint was skipped whole rather than violated. Every value here was
+      # accepted before. They are written as raw JSON literals because a column
+      # value of `null` is the JSON one, not SQL NULL, which the column already
+      # refuses for a different reason.
+      literals = [
+        "[-1]",
+        "-1",
+        "null",
+        ~s("x"),
+        "true",
+        "[]",
+        "[1,2]",
+        ~s({"count":[1,2]}),
+        ~s({"count":[]}),
+        ~s({"count":{"a":1}}),
+        ~s({"count":1e500}),
+        ~s({"count":1.0}),
+        ~s({"count":1000000000001})
+      ]
+
+      for literal <- literals do
+        assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} =
+                 raw_insert_literal("measurements", literal),
+               "measurements = #{literal} was accepted by the database"
+
+        assert name == "measurements_non_negative_integers"
+      end
+
+      # The bound's own edges still store, so the refusals above are the rule
+      # and not a constraint that refuses everything.
+      assert {:ok, _} = raw_insert_literal("measurements", ~s({"count":1000000000000}))
+      assert {:ok, _} = raw_insert_literal("measurements", ~s({"count":0}))
+      assert {:ok, _} = raw_insert_literal("measurements", "{}")
+    end
+
+    test "a non-object labels value is refused by the constraint rather than raising past it" do
+      # `jsonb_each` raises `22023` on a non-object, which is not a
+      # `check_violation`: `check_constraint/3` cannot map it to a field error,
+      # and a storage bound that raises a different class of error for the
+      # shape furthest outside it is not a bound.
+      for literal <- ["[]", ~s(["a"]), ~s("x"), "1", "null", "true"] do
+        assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} =
+                 raw_insert_literal("labels", literal),
+               "labels = #{literal} did not violate a check constraint"
+
+        assert name == "labels_values_bounded"
+      end
+    end
+
     test "the changeset refuses the same values the database refuses" do
       # The database is the backstop; the changeset is the path every producer
       # actually takes, and it admitted negatives, floats and unbounded strings.
@@ -158,6 +211,27 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
                Relay.insert("pre_attempt_release", %{"phase" => String.duplicate("x", 80)}, 1, %{
                  count: 1
                })
+    end
+
+    test "and refuses nothing the database would have stored" do
+      # The two bounds have to agree in both directions, not just overlap. A
+      # value the changeset refuses and the database accepts is only untidy; a
+      # value the database refuses and the capture path accepts is a sample
+      # that can never be stored and is re-queued forever, which is the failure
+      # mode findings#195 row 195-101 records. These four disagreed.
+      for value <- [1.0, 1_000_000_000_001, [1, 2], []] do
+        assert {:error, changeset} =
+                 Relay.insert("pre_attempt_release", %{}, 1, %{count: value})
+
+        assert %{measurements: _} = errors_on(changeset),
+               "the changeset accepted measurement #{inspect(value)}"
+
+        assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} =
+                 raw_insert(%{measurements: %{"count" => value}}),
+               "the database accepted measurement #{inspect(value)} the changeset refuses"
+
+        assert name == "measurements_non_negative_integers"
+      end
     end
 
     test "the database refuses an unknown event name and a negative count" do
@@ -589,6 +663,18 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
         attrs.measurements,
         DateTime.utc_now()
       ]
+    )
+  end
+
+  # A JSON literal rather than a parameter: the shapes this file has to refuse
+  # include the JSON value `null` and bare scalars, which no Elixir term a
+  # parameter could carry encodes to. The literal is a test-local constant, not
+  # anything a caller supplies.
+  defp raw_insert_literal(column, literal) when column in ["labels", "measurements"] do
+    Repo.query(
+      "INSERT INTO telemetry_relay_events (event, labels, count, measurements, inserted_at) " <>
+        "VALUES ('pre_attempt_release', #{if column == "labels", do: "'#{literal}'::jsonb", else: "'{}'::jsonb"}, 1, " <>
+        "#{if column == "measurements", do: "'#{literal}'::jsonb", else: "'{}'::jsonb"}, now())"
     )
   end
 

@@ -48,7 +48,9 @@ defmodule CodexPooler.Telemetry.RelayEvent do
   end
 
   defp bounded_measurement?({key, value}),
-    do: is_atom(key) and is_integer(value) and value >= 0 and value <= 1_000_000_000_000
+    do:
+      is_atom(key) and byte_size(Atom.to_string(key)) <= @label_key_bytes and
+        is_integer(value) and value >= 0 and value <= 1_000_000_000_000
 
   defp bounded_label?({key, value}) do
     key_bytes =

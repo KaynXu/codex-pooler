@@ -662,7 +662,11 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       |> Map.put_new(:via, "in_process")
       |> Map.new(fn {k, v} -> {k, bounded(v)} end)
 
-  defp bounded(v) when is_atom(v), do: Atom.to_string(v)
+  # An atom label is bounded by the same 80 bytes as a binary one rather than
+  # passed through: an atom longer than that produced a label value the SQL
+  # function and the changeset both refuse, which is a captured sample the
+  # storage layer can never accept.
+  defp bounded(v) when is_atom(v), do: bounded(Atom.to_string(v))
   defp bounded(v) when is_binary(v) and byte_size(v) <= 80, do: v
   defp bounded(_), do: "unknown"
 
