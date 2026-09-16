@@ -485,16 +485,21 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   #
   # This runs on the return of `Repo.transaction/1`, which is a savepoint
   # release rather than a commit whenever a caller already holds a
-  # transaction. `Interruption` calls `finalize_reservation_failure/2` from
-  # inside its own transaction, which can still roll back through
-  # `rollback_interrupted_accounting/4`, so on that path the counter can
-  # record a `turn_interrupted` release that was never committed. Unlike the
-  # convergence and stream-outcome emitters beside it, this one takes no
-  # `Repo.in_transaction?/0` guard and has no post-commit marker to defer to.
-  # The behaviour is pinned as observed, not desired, in
-  # `test/codex_pooler/telemetry/relay_job_emission_test.exs`; fixing it means
-  # deferring the marker to the outermost commit the way interrupted outcomes
-  # already are, and it is tracked on findings#195.
+  # transaction. `Interruption.interrupt_session_transaction/4` calls
+  # `finalize_reservation_failure/2` once per in-progress turn inside ONE
+  # transaction, so the first turn's release is counted here and then any later
+  # failure in that transaction erases it — whether the failure returns an
+  # error into `rollback_interrupted_accounting/4` or raises straight past it,
+  # as an `Ecto.NoResultsError` on a detached reservation does. Either way the
+  # counter keeps a `turn_interrupted` sample for a release that was never
+  # committed. Unlike the convergence and stream-outcome emitters beside it,
+  # this one takes no `Repo.in_transaction?/0` guard and has no post-commit
+  # marker to defer to. The behaviour is pinned as observed, not desired, in
+  # `test/codex_pooler/telemetry/relay_job_emission_test.exs` and
+  # `test/codex_pooler/gateway/runtime/finalization/interruption_telemetry_test.exs`;
+  # fixing it means deferring the marker to the outermost commit the way
+  # interrupted outcomes already are, and it is tracked on findings#195 as rows
+  # 195-94 and 195-12.
   defp tap_pre_attempt_release_count(result, nil, _last_error_code), do: result
 
   defp tap_pre_attempt_release_count(
