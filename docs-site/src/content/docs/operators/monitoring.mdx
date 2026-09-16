@@ -16,6 +16,17 @@ The endpoint has exactly three states:
 Restore the previous metrics bearer state in `/admin/system` to roll back a
 metrics exposure change.
 
+### Reachability
+
+`/metrics` is served by the app role on the same listener as every other route, so any ingress that routes `/` to the app service also reaches it, and the runtime firewall allowlist does not apply to it. Since background events now reach the app reporter through the relay, that payload describes the whole cluster's declared families rather than one pod's own traffic.
+
+For an internet-facing install, do one of the following before exposing the app service:
+
+- configure a metrics bearer in `/admin/system` and give Prometheus the matching Kubernetes Secret reference, or
+- block `/metrics` at the ingress and scrape the app pods in-cluster instead.
+
+An in-cluster-only install with no external ingress can stay open. Metric payloads carry bounded label vocabularies and counters only, never request content, but they do describe traffic volume, model and transport mix, and failure rates.
+
 Use monitoring for runtime evidence only. Dashboards, alerts, logs, tickets, and copied queries must not include prompts, response bodies, uploaded files, websocket frames, cookies, bearer tokens, upstream secrets, or raw Pool API keys.
 
 ## Collector path
