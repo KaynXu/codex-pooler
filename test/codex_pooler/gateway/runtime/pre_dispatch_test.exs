@@ -2618,6 +2618,113 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     end
   end
 
+  test "an explicit reasoning effort routes to the assignment whose own catalog advertises it" do
+    # Translated Responses traffic starts from every valid canonical assignment,
+    # so both catalogs are candidates and the Pool-wide union is the only thing
+    # that admitted `max`. Sending the turn to the sibling whose own catalog
+    # stops at `xhigh` is a backend 400 for a level this Pool advertises
+    # (findings#221). Backend catalog-driven turns are narrower only by
+    # accident: `supported_reasoning_levels` sits in the canonical partition
+    # digest, so divergent catalogs are already in different partitions there.
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    sibling =
+      gateway_upstream(
+        setup.pool,
+        start_upstream(FakeUpstream.json_response(%{"data" => []})),
+        "upstream-token-reasoning-sibling",
+        compact?: false
+      )
+
+    prime_routing_quota!(sibling.identity)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!([setup.assignment, sibling.assignment])
+      |> put_assignment_reasoning_levels!(setup.assignment.id, ~w(low medium high xhigh max))
+      |> put_assignment_reasoning_levels!(sibling.assignment.id, ~w(low medium high xhigh))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("route max where max exists"),
+      "reasoning" => %{"effort" => "max"}
+    }
+
+    options =
+      request_options(auth, payload,
+        requested_model: model.exposed_model_id,
+        effective_model: model.exposed_model_id,
+        openai_source_endpoint: "/v1/responses",
+        openai_translated_endpoint: @endpoint_path
+      )
+
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+    assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+  end
+
+  test "an effort no assignment advertises leaves the refusal to the upstream" do
+    # Preference, not admission. Narrowing to nothing here would turn the
+    # upstream's own 400 into a 503 no_compatible_backend for a level the Pool
+    # never advertised.
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    sibling =
+      gateway_upstream(
+        setup.pool,
+        start_upstream(FakeUpstream.json_response(%{"data" => []})),
+        "upstream-token-reasoning-sibling-none",
+        compact?: false
+      )
+
+    prime_routing_quota!(sibling.identity)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!([setup.assignment, sibling.assignment])
+      |> put_assignment_reasoning_levels!(setup.assignment.id, ~w(low medium high xhigh))
+      |> put_assignment_reasoning_levels!(sibling.assignment.id, ~w(low medium high xhigh))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("nobody advertises max"),
+      "reasoning" => %{"effort" => "max"}
+    }
+
+    options =
+      request_options(auth, payload,
+        requested_model: model.exposed_model_id,
+        effective_model: model.exposed_model_id,
+        openai_source_endpoint: "/v1/responses",
+        openai_translated_endpoint: @endpoint_path
+      )
+
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+    assert Enum.sort(candidate_ids(prepared.candidates)) ==
+             Enum.sort([setup.assignment.id, sibling.assignment.id])
+  end
+
+  defp put_assignment_reasoning_levels!(model, assignment_id, levels) do
+    source_models = Map.fetch!(model.metadata, "source_assignment_models")
+    source = Map.fetch!(source_models, assignment_id)
+    levels = Enum.map(levels, &%{"effort" => &1, "description" => &1})
+
+    model
+    |> Ecto.Changeset.change(%{
+      metadata:
+        put_in(
+          model.metadata,
+          ["source_assignment_models", assignment_id],
+          Map.put(source, "supported_reasoning_levels", levels)
+        )
+    })
+    |> Repo.update!()
+  end
+
   defp native_text_input(text) do
     [
       %{

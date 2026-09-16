@@ -287,6 +287,19 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     end
   end
 
+  @doc """
+  Reasoning levels one metadata map advertises, canonicalized and de-duplicated.
+
+  Reads a raw metadata map rather than a `Model`, so a per-assignment source
+  from `source_assignment_models` can be asked what *it* advertises rather than
+  what the Pool-wide union does.
+  """
+  @spec metadata_reasoning_levels(term()) :: [String.t()]
+  def metadata_reasoning_levels(metadata) when is_map(metadata),
+    do: reasoning_level_values(metadata)
+
+  def metadata_reasoning_levels(_metadata), do: []
+
   @spec reasoning_levels_and_default(Model.t()) :: {[String.t()], String.t() | nil}
   def reasoning_levels_and_default(%Model{} = model) do
     metadata = metadata(model)

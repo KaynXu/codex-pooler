@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       upstream_assignment_fixture: 2
     ]
 
+  alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
@@ -563,6 +564,197 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                )
 
       assert candidate_ids(filtered) == ["assignment-supported", "assignment-plain"]
+    end
+  end
+
+  describe "prefer_reasoning_effort_candidates/3" do
+    test "an explicit effort routes to the assignments whose own catalog advertises it" do
+      # The Pool-wide union advertises `max` because one assignment contributes
+      # it. Dispatching the turn to the assignment whose own catalog stops at
+      # `high` is a backend 400 for a level the Pool promised (findings#221).
+      model = model_with_reasoning_levels()
+      request_options = request_options_with_effort("max")
+
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-max"]
+    end
+
+    test "an effort every assignment advertises narrows nothing" do
+      model = model_with_reasoning_levels()
+      request_options = request_options_with_effort("high")
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-high", "assignment-max"]
+    end
+
+    test "an effort no assignment advertises keeps every candidate" do
+      # Preference, not admission: the Pool never advertised this level, so the
+      # upstream refusal is the honest answer. Narrowing to nothing here would
+      # turn that 400 into a 503 no_compatible_backend.
+      model = model_with_reasoning_levels()
+      request_options = request_options_with_effort("none")
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-high", "assignment-max"]
+    end
+
+    test "an assignment with no reasoning evidence loses to one that advertises the effort" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-silent" => %{"capabilities" => %{"responses" => true}},
+            "assignment-max" => %{"supported_reasoning_levels" => ~w(low medium high max)}
+          }
+        }
+      }
+
+      request_options = request_options_with_effort("max")
+      candidates = [candidate("assignment-silent"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-max"]
+    end
+
+    test "no assignment carrying reasoning evidence keeps every candidate" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-a" => %{"capabilities" => %{"responses" => true}},
+            "assignment-b" => %{"capabilities" => %{"responses" => true}}
+          }
+        }
+      }
+
+      request_options = request_options_with_effort("max")
+      candidates = [candidate("assignment-a"), candidate("assignment-b")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-a", "assignment-b"]
+    end
+
+    test "ultra keeps every candidate because it is rewritten per assignment" do
+      # `ReasoningEffort.rewrite_backend_upstream/2` lands `ultra` on a level the
+      # selected assignment advertises, so every candidate can serve it.
+      model = model_with_reasoning_levels()
+      request_options = request_options_with_effort("ultra")
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-high", "assignment-max"]
+    end
+
+    test "minimal is judged as the low it is rewritten to" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-low" => %{"supported_reasoning_levels" => ~w(low medium high)},
+            "assignment-no-low" => %{"supported_reasoning_levels" => ~w(medium high)}
+          }
+        }
+      }
+
+      request_options = request_options_with_effort("minimal")
+      candidates = [candidate("assignment-low"), candidate("assignment-no-low")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-low"]
+    end
+
+    test "the applied effort an API key enforced decides, not the level the client asked for" do
+      model = model_with_reasoning_levels()
+
+      request_options =
+        request_options_with_effort("max", requested_effort: "high", mode: :always_use)
+
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-max"]
+    end
+
+    test "a request with no reasoning effort narrows nothing" do
+      model = model_with_reasoning_levels()
+
+      request_options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", %{"model" => "gpt-4.1"})
+
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-high", "assignment-max"]
+    end
+
+    test "an unknown effort string is left to the upstream to refuse" do
+      model = model_with_reasoning_levels()
+      request_options = request_options_with_effort("turbo")
+      candidates = [candidate("assignment-high"), candidate("assignment-max")]
+
+      assert {:ok, filtered} =
+               CandidateEligibility.prefer_reasoning_effort_candidates(
+                 model,
+                 request_options,
+                 candidates
+               )
+
+      assert candidate_ids(filtered) == ["assignment-high", "assignment-max"]
     end
   end
 
@@ -1191,6 +1383,35 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
         "source_assignment_models" => %{}
       }
     }
+  end
+
+  # The Pool-wide union advertises `max`; only one of the two assignments does.
+  defp model_with_reasoning_levels do
+    %Model{
+      metadata: %{
+        "upstream_model" => %{"supported_reasoning_levels" => ~w(low medium high max)},
+        "source_assignment_models" => %{
+          "assignment-high" => %{"supported_reasoning_levels" => ~w(low medium high)},
+          "assignment-max" => %{"supported_reasoning_levels" => ~w(low medium high max)}
+        }
+      }
+    }
+  end
+
+  defp request_options_with_effort(applied_effort, opts \\ []) do
+    requested_effort = Keyword.get(opts, :requested_effort, applied_effort)
+    payload = %{"model" => "gpt-4.1", "reasoning" => %{"effort" => requested_effort}}
+
+    %{}
+    |> RequestOptions.build("/backend-api/codex/responses", payload)
+    |> RequestOptions.put_routing(
+      reasoning_effort_decision: %Decision{
+        mode: Keyword.get(opts, :mode, :unrestricted),
+        configured_effort: Keyword.get(opts, :configured_effort),
+        requested_effort: requested_effort,
+        applied_effort: applied_effort
+      }
+    )
   end
 
   defp model_with_image_support(assignment_id, image_input?) do

@@ -3,8 +3,10 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
 
   import Ecto.Query
 
+  alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility.Quota
   alias CodexPooler.Gateway.Routing.{CircuitState, ModelMetadata}
@@ -326,6 +328,73 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   end
 
   def maybe_filter_compact(_endpoint, candidates), do: {:ok, candidates}
+
+  @doc """
+  Narrow the candidates to the assignments whose own catalog advertises the
+  reasoning effort this turn will send upstream.
+
+  The Pool-wide union (`ModelMetadata.catalog_reasoning_levels/1`) is the right
+  authority for admission and for `/backend-api/codex/models`: it answers
+  "can some assignment in this Pool serve this effort". It is the wrong
+  authority for routing. Dispatching an explicit `max` to an assignment whose
+  own catalog stops at `xhigh` is a backend 400 for a level this Pool
+  advertises, while a sibling assignment would have served it (findings#221).
+
+  Preference, not admission, in the shape of `maybe_filter_compact/2`: when no
+  assignment advertises the effort the Pool never promised it, so the upstream
+  refusal is the honest answer and every candidate is kept. Narrowing to an
+  empty set there would turn that 400 into a 503 `no_compatible_backend`.
+  """
+  @spec prefer_reasoning_effort_candidates(Model.t(), RequestOptions.t(), [candidate()]) ::
+          {:ok, [candidate()]}
+  def prefer_reasoning_effort_candidates(
+        %Model{} = model,
+        %RequestOptions{} = request_options,
+        candidates
+      )
+      when is_list(candidates) do
+    case upstream_reasoning_effort(request_options) do
+      nil -> {:ok, candidates}
+      effort -> {:ok, prefer_effort_candidates(model, effort, candidates)}
+    end
+  end
+
+  # The level the upstream actually receives: the policy-applied effort after
+  # the two rewrites `PayloadNormalizer` performs. `ultra` is answered with nil
+  # because `ReasoningEffort.rewrite_backend_upstream/2` lands it on a level the
+  # *selected* assignment advertises, so every candidate can serve it.
+  defp upstream_reasoning_effort(%RequestOptions{
+         routing: %{reasoning_effort_decision: %Decision{applied_effort: effort}}
+       }) do
+    case ReasoningEffort.normalize_known(effort) do
+      "ultra" -> nil
+      "minimal" -> ReasoningEffort.rewrite_client_upstream("minimal")
+      known -> known
+    end
+  end
+
+  defp upstream_reasoning_effort(%RequestOptions{}), do: nil
+
+  defp prefer_effort_candidates(model, effort, candidates) do
+    advertising =
+      Enum.filter(candidates, fn {assignment, _identity} ->
+        model
+        |> source_assignment_model_metadata(assignment)
+        |> assignment_advertises_effort?(effort)
+      end)
+
+    case advertising do
+      [] -> candidates
+      [_ | _] -> advertising
+    end
+  end
+
+  # An assignment that advertises no reasoning levels at all makes no claim
+  # either way, so it never outranks one that names the level.
+  defp assignment_advertises_effort?(%{} = metadata, effort),
+    do: effort in ModelMetadata.metadata_reasoning_levels(metadata)
+
+  defp assignment_advertises_effort?(_metadata, _effort), do: false
 
   @spec filter_quota_eligible_candidates(FilterInput.t()) :: quota_filter_result()
   defdelegate filter_quota_eligible_candidates(input), to: Quota

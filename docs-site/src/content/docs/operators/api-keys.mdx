@@ -193,7 +193,7 @@ Enforced request fields let the key override selected client request values:
 The reasoning policy offers three modes:
 
 1. **Unrestricted** leaves omission absent and preserves any effort the route already accepts. This is the default for keys with neither reasoning value configured.
-2. **Allow up to** permits only known efforts through the selected ceiling: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. The Pool model's known levels (the union across the Pool's assignments) can narrow the result further; the assignment that finally serves may list fewer, in which case an explicit effort it does not list is the upstream's to refuse. An omitted request uses the permitted model default, or the highest permitted known level.
+2. **Allow up to** permits only known efforts through the selected ceiling: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. The Pool model's known levels (the union across the Pool's assignments) can narrow the result further; the assignment that finally serves may list fewer, so routing prefers an assignment whose own catalog lists the effort, and when no candidate lists it the effort is the upstream's to refuse. An omitted request uses the permitted model default, or the highest permitted known level.
 3. **Always use** applies one exact effort to every request. Existing keys that already have an enforced reasoning effort stay in this mode.
 
 Allow up to rejects rather than changes a disallowed request. An effort above the ceiling, an unknown or custom effort, or an omission with no permitted level returns `400 reasoning_effort_not_allowed` before upstream work. Backend Responses and public Responses identify `reasoning.effort`; Chat Completions identifies `reasoning_effort`.

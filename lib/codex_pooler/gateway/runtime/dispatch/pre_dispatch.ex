@@ -445,6 +445,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       with {:ok, candidates} <-
              SessionContinuity.filter_file_affinity(candidates, request_options),
            {:ok, candidates} <- CandidateEligibility.maybe_filter_compact(endpoint, candidates),
+           {:ok, candidates} <-
+             CandidateEligibility.prefer_reasoning_effort_candidates(
+               model,
+               request_options,
+               candidates
+             ),
            request_compatible_capacity = candidates,
            {:ok, candidates} <-
              SessionContinuity.apply_codex_session_assignment(candidates, request_options, model),

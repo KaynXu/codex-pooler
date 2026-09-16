@@ -455,7 +455,11 @@ levels without `max`, `ultra` becomes the highest level that assignment
 lists (the Pool-wide union only when the assignment has no levels of its
 own), and it never becomes `none` or `minimal`. `none` and every other explicit effort are forwarded
 unchanged, even when the model catalog does not list them, so the upstream
-decides whether that model accepts the value. Safe reasoning summaries retain
+decides whether that model accepts the value. Routing prefers a candidate whose
+own source model lists the effort the turn will send, so an effort the Pool-wide
+union advertises is served by an assignment that advertises it whenever one is
+eligible; when no candidate lists it, every candidate stays and the upstream
+refusal stands. Safe reasoning summaries retain
 requested, applied, and effective values and name the rewrite as
 `minimal_to_low` or `ultra_to_<level>`.
 
