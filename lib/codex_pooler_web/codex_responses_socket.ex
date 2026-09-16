@@ -958,10 +958,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # row the reread returns. The next frame alone would already be refused, but
   # waiting for it would keep an expired credential's connection, its owner
   # lease and its upstream websocket open for as long as the client stays quiet.
+  #
+  # A key with no expiry has no clock crossing to schedule against, and it used
+  # to get no timer at all -- which made it the one key an idle socket could
+  # hold past a change it never heard about. Events are the fast path, not the
+  # authority: `LISTEN` delivers nothing while its connection is down, and
+  # `Postgrex.Notifications` re-subscribes without replaying what was missed, so
+  # a pause, rotation, delete or Pool change published inside that window is
+  # simply gone. With no expiry and no frames, the socket then kept its owner
+  # lease, its Codex session and its upstream websocket until the client spoke
+  # again, which may be never (findings#204). The recheck therefore runs on
+  # every socket, on the same cap, which bounds that exposure at one interval
+  # instead of leaving it open. The next frame was always refused, so this is
+  # not an authorization hole; it is a connection, a lease and an upstream
+  # session held for a Pool the key has left.
   @api_key_expiry_recheck_floor_ms 1_000
   @api_key_expiry_check_max_delay_ms 3_600_000
 
-  defp schedule_api_key_expiry_check(state, %DateTime{} = expires_at) do
+  defp schedule_api_key_expiry_check(state, expires_at)
+       when is_nil(expires_at) or is_struct(expires_at, DateTime) do
     case Map.get(state, :api_key_expiry_check) do
       %{expires_at: ^expires_at} ->
         state
@@ -974,7 +989,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           Process.send_after(
             self(),
             {:api_key_expiry_check, token},
-            api_key_expiry_check_delay(expires_at)
+            api_key_authorization_recheck_delay(expires_at)
           )
 
         Map.put(state, :api_key_expiry_check, %{
@@ -982,17 +997,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           timer: timer,
           expires_at: expires_at
         })
-    end
-  end
-
-  defp schedule_api_key_expiry_check(state, nil) do
-    case Map.get(state, :api_key_expiry_check) do
-      nil ->
-        state
-
-      check ->
-        cancel_api_key_timer(check)
-        Map.put(state, :api_key_expiry_check, nil)
     end
   end
 
@@ -1004,12 +1008,23 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp cancel_api_key_timer(_check), do: :ok
 
   # A capped delay rereads when it fires and re-arms from the durable row, so
-  # an expiry further ahead than one timer should wait still gets its check.
-  defp api_key_expiry_check_delay(expires_at) do
+  # an expiry further ahead than one timer should wait still gets its check, and
+  # a key with no expiry gets the cap alone.
+  defp api_key_authorization_recheck_delay(%DateTime{} = expires_at) do
     case DateTime.diff(expires_at, DateTime.utc_now(), :millisecond) + 1 do
-      remaining_ms when remaining_ms > 0 -> min(remaining_ms, @api_key_expiry_check_max_delay_ms)
+      remaining_ms when remaining_ms > 0 -> min(remaining_ms, jittered_recheck_delay())
       _already_passed -> @api_key_expiry_recheck_floor_ms
     end
+  end
+
+  defp api_key_authorization_recheck_delay(nil), do: jittered_recheck_delay()
+
+  # Jitter subtracts, never adds, so the cap stays the worst case: a rollout
+  # that reconnects a Pool's sockets together must not make them all reread in
+  # the same instant an hour later.
+  defp jittered_recheck_delay do
+    @api_key_expiry_check_max_delay_ms -
+      :rand.uniform(div(@api_key_expiry_check_max_delay_ms, 4) + 1) + 1
   end
 
   defp revoke_api_key(%{api_key_revoked?: true} = state, _disabling_epoch), do: state

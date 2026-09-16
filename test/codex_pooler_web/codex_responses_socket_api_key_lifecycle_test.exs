@@ -474,6 +474,64 @@ defmodule CodexPoolerWeb.CodexResponsesSocketAPIKeyLifecycleTest do
     send(refused_task, :stop)
   end
 
+  # findings#204 row 204-20: events are the fast path, not the authority. A
+  # dropped `LISTEN` connection loses whatever was published while it was down,
+  # and a key with no expiry used to get no timer at all, so an idle socket kept
+  # its lease and its upstream session under a Pool the key had left until the
+  # client's next frame -- which may never come.
+  test "a key with no expiry still arms an authorization recheck" do
+    setup = active_api_key_fixture()
+    refute setup.api_key.expires_at
+
+    state = api_key_socket_state(setup.api_key.id, setup.pool.id, 0)
+    refute Map.get(state, :api_key_expiry_check)
+
+    assert {:ok, armed} =
+             CodexResponsesSocket.handle_info(
+               {Events, api_key_event(setup.pool, setup.api_key)},
+               state
+             )
+
+    assert %{token: token, timer: timer, expires_at: nil} = armed.api_key_expiry_check
+    assert is_reference(token)
+    assert is_reference(timer)
+    refute armed.api_key_revoked?
+
+    # An idle recheck is not a reset button: a later event keeps the armed
+    # timer rather than pushing it another interval out.
+    assert {:ok, still_armed} =
+             CodexResponsesSocket.handle_info(
+               {Events, api_key_event(setup.pool, setup.api_key)},
+               armed
+             )
+
+    assert still_armed.api_key_expiry_check.token == token
+  end
+
+  test "the recheck closes an idle socket whose revocation event never arrived" do
+    setup = active_api_key_fixture()
+    state = api_key_socket_state(setup.api_key.id, setup.pool.id, 0)
+
+    assert {:ok, armed} =
+             CodexResponsesSocket.handle_info(
+               {Events, api_key_event(setup.pool, setup.api_key)},
+               state
+             )
+
+    assert %{token: token} = armed.api_key_expiry_check
+
+    # The Pool leaves the key behind with no event the socket can hear: this is
+    # the change that was published while the bridge's connection was down.
+    assert {:ok, %{status: "disabled"}} =
+             Pools.change_pool_status(owner_scope(setup.api_key), setup.pool, "disabled")
+
+    assert {:stop, :normal, @api_key_close, closed} =
+             CodexResponsesSocket.handle_info({:api_key_expiry_check, token}, armed)
+
+    assert closed.api_key_revoked?
+    assert closed.api_key_close_sent?
+  end
+
   # The check fires at the node's reading of the expiry, while the durable
   # authorization compares it with the database clock; a database clock a
   # little behind the node authorizes that first check and re-arms it, so the
