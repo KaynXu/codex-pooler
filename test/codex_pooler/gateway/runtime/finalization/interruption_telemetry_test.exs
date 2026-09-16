@@ -115,20 +115,77 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     assert committed_interruption_state(fixture).turn_status == "in_progress"
   end
 
+  test "the after-commit rule belongs to the gate, not to each caller that reaches it" do
+    # findings#195 row 195-05 asks that every caller that can drop these markers
+    # be audited. An enumeration of call sites answers that only until the next
+    # site is written, so the rule now lives in the one function every one of
+    # them reaches — `Interruption.emit_outcomes_after_commit/1`, the single
+    # path to `Streaming.emit_stream_outcome/3` for an interrupted outcome —
+    # and it reads the transaction it is standing in rather than a flag the
+    # caller computed and passed down. What that buys is that a fourth caller
+    # gets the same answer as these three without anyone having to find it.
+    #
+    # So this drives the gate itself, on the same markers, with nothing
+    # different between the two halves except whether a transaction is open.
+    markers = [
+      %{
+        outcome: "interrupted",
+        downstream_transport: "websocket",
+        upstream_transport: "unknown"
+      }
+    ]
+
+    capture_outcomes(fn ->
+      assert run_unboxed(fn ->
+               Repo.transaction(fn ->
+                 Interruption.emit_committed_recovery_outcomes(%{interrupted_outcomes: markers})
+               end)
+             end) == {:ok, {:deferred, markers}}
+
+      refute_received {:stream_outcome, _}
+
+      assert run_unboxed(fn ->
+               Interruption.emit_committed_recovery_outcomes(%{interrupted_outcomes: markers})
+             end) == :ok
+
+      assert_receive {:stream_outcome, %{outcome: "interrupted"}}
+      assert_receive {:stream_outcome_transaction, false}
+    end)
+  end
+
   test "a multi-turn expired-owner recovery counts a release its own rollback erases" do
     # Recorded, not desired. `interrupt_session_transaction/4` maps
     # `interrupt_turn!/5` over EVERY in-progress turn of a session inside one
     # transaction. The first turn's `release_unattempted_request!/6` counts a
-    # `turn_interrupted` pre-attempt release; the second turn then fails into
-    # `rollback_interrupted_accounting/4` and aborts the whole transaction.
+    # `turn_interrupted` pre-attempt release; the second turn then raises, and
+    # the whole transaction it shares with the first is aborted.
     #
-    # `tap_pre_attempt_release_count/3` runs on the value of `Repo.transaction/1`,
-    # which is a savepoint release rather than a commit whenever a caller already
-    # holds a transaction, and unlike every emitter beside it that function never
-    # asks `Repo.in_transaction?/0`. So the counter keeps a sample for a release
-    # row that no longer exists, biased upward on the `turn_interrupted` and
-    # `task_exception` slices. Ledger, settlement, routing and durable metadata
-    # all roll back correctly; only the counter lies.
+    # The raise is precisely where `multi_turn_interruption_fixture!/0` puts it,
+    # and saying so is the point of the assertion below. The second turn's
+    # reservation has its `source_event_id` detached, so
+    # `release_unattempted_request!/6`'s `Repo.get_by!(LedgerEntry, ...)` raises
+    # `Ecto.NoResultsError` — past `rollback_interrupted_accounting/4`, which
+    # never runs, and past both of that function's clauses, neither of which
+    # rescues. Nothing between here and `RuntimeStateCleanup.run_step/2`'s
+    # rescue catches it, which is why the failure reads `{:raised,
+    # :gateway_runtime, _}` and not `{:interrupt_accounting_failed, _}`. Two
+    # reviews read this comment as the accounting-rollback path because the
+    # error assertion was loose enough not to tell them apart.
+    #
+    # The injected fault stands for the class, not for itself: any exception
+    # raised after the first turn's release — a lock timeout, a serialization
+    # failure, a raced terminal row — aborts the same shared transaction and
+    # leaves the same counted sample behind.
+    #
+    # `tap_pre_attempt_release_count/3`
+    # (`lib/codex_pooler/accounting/lifecycle/request_lifecycle.ex`) runs on the
+    # value of `Repo.transaction/1`, which is a savepoint release rather than a
+    # commit whenever a caller already holds a transaction, and unlike every
+    # emitter beside it that function never asks `Repo.in_transaction?/0`. So
+    # the counter keeps a sample for a release row that no longer exists, biased
+    # upward on the `turn_interrupted` and `task_exception` slices. Ledger,
+    # settlement, routing and durable metadata all roll back correctly; only the
+    # counter lies.
     #
     # This is the production path findings#195 row 195-94 names, driven from the
     # real worker. Fixing the defect means deferring the marker to the outermost
@@ -139,8 +196,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     expire_owner!(fixture)
     samples = capture_pre_attempt_releases()
 
-    assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime], _summary}} =
-             run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime], _summary}} =
+                 run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
+      end)
+
+    # Which failure, not just that one happened. `run_step/2`'s rescue is the
+    # only producer of `{:raised, name, _}`; a step that returned an error
+    # instead — `rollback_interrupted_accounting/4` reaching its own
+    # `{:interrupt_accounting_failed, _}` — reports a different shape here.
+    assert log =~ "runtime state cleanup step gateway_runtime failed"
+    assert log =~ "{:raised, :gateway_runtime,"
+    assert log =~ "expected at least one result but got none"
+    refute log =~ "interrupt_accounting_failed"
 
     # The transaction rolled back: no release row exists for either request and
     # both turns are still running.

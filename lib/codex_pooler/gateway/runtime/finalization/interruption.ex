@@ -650,7 +650,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         _missing_or_stale -> Repo.rollback(:stale_owner_cleanup)
       end
     end)
-    |> finalize_transaction(caller_owned_transaction?)
+    |> finalize_transaction()
   end
 
   defp close_owner_replay!(request_id) do
@@ -814,7 +814,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         Map.merge(interruption_context, %{turn: turn, turn_authority: authority})
       )
     end)
-    |> finalize_transaction(caller_owned_transaction?)
+    |> finalize_transaction()
   end
 
   # The exact selector is never widened: `turn_for_selector/2` still matches one
@@ -1358,10 +1358,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   Emits the interrupted outcomes of a committed expired-owner recovery.
 
   A caller that already holds a transaction has not committed anything yet, so
-  the markers are handed back instead of emitted: `{:deferred, markers}` says the
-  outcomes are this caller's to emit after its own commit. Dropping them here and
-  returning `:ok` would lose them with nothing to say so, and the caller is the
-  only thing that knows when the write is durable.
+  the markers are handed back instead of emitted. `{:deferred, markers}` is not
+  a promise that anyone emits them: the sole caller,
+  `CodexPooler.Gateway.Persistence.RuntimeCleanup`, logs how many there were
+  and returns `:ok`. What the return buys is that the drop is audible instead
+  of silent, and that the caller — the only thing that knows when its own write
+  becomes durable — is the one that decides.
 
   `CodexPooler.Jobs.RuntimeStateCleanup` runs every step bare, so the deferred
   arm is unreachable in production today. It is returned rather than assumed
@@ -1370,7 +1372,24 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   """
   @spec emit_committed_recovery_outcomes(%{interrupted_outcomes: [map()]}) ::
           :ok | {:deferred, [map()]}
-  def emit_committed_recovery_outcomes(%{interrupted_outcomes: markers}) do
+  def emit_committed_recovery_outcomes(%{interrupted_outcomes: markers}),
+    do: emit_outcomes_after_commit(markers)
+
+  # The only place an interrupted outcome is emitted, and the only place the
+  # after-commit rule is decided.
+  #
+  # findings#195 row 195-05 asks that every caller that can drop these markers
+  # be audited. An enumeration of call sites answers that only until the next
+  # one is written, so the property is placed in the gate instead: a caller
+  # cannot emit an outcome without coming through here, and coming through here
+  # cannot emit inside a transaction. A fourth site added tomorrow inherits the
+  # rule rather than needing to be found.
+  #
+  # The check is `Repo.in_transaction?/0` rather than a flag threaded down from
+  # the caller because the flag is a claim about the transaction and this is the
+  # transaction itself.
+  @spec emit_outcomes_after_commit([map()]) :: :ok | {:deferred, [map()]}
+  defp emit_outcomes_after_commit(markers) do
     if Repo.in_transaction?() do
       {:deferred, markers}
     else
@@ -1379,23 +1398,28 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     end
   end
 
-  defp finalize_transaction(
-         {:ok, %{public_result: public_result, interrupted_outcomes: markers}},
-         caller_owned_transaction?
-       ) do
-    unless caller_owned_transaction?, do: Enum.each(markers, &emit_interrupted_outcome/1)
+  # These two paths return a public result to a caller that may own the
+  # transaction, and have no channel to hand markers back through, so a
+  # deferral is a drop. It is the same drop as before the gate existed; what
+  # changed is that the decision not to emit is no longer theirs to get wrong.
+  defp emit_or_drop_deferred(markers) do
+    case emit_outcomes_after_commit(markers) do
+      :ok -> :ok
+      {:deferred, _markers} -> :ok
+    end
+  end
+
+  defp finalize_transaction({:ok, %{public_result: public_result, interrupted_outcomes: markers}}) do
+    emit_or_drop_deferred(markers)
     {:ok, public_result}
   end
 
-  defp finalize_transaction(
-         {:error, [public_error: public_error, interrupted_outcomes: markers]},
-         caller_owned_transaction?
-       ) do
-    unless caller_owned_transaction?, do: Enum.each(markers, &emit_interrupted_outcome/1)
+  defp finalize_transaction({:error, [public_error: public_error, interrupted_outcomes: markers]}) do
+    emit_or_drop_deferred(markers)
     {:error, public_error}
   end
 
-  defp finalize_transaction({:error, reason}, _caller_owned_transaction?), do: {:error, reason}
+  defp finalize_transaction({:error, reason}), do: {:error, reason}
 
   defp emit_interrupted_outcome(marker) do
     Streaming.emit_stream_outcome(
