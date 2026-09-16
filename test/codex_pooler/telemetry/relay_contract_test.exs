@@ -191,6 +191,71 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
         assert owners == ["node-a", "node-b"]
       end)
     end
+
+    test "a row another backend holds is skipped rather than waited on" do
+      # Disjointness alone does not distinguish SKIP LOCKED from a plain
+      # FOR UPDATE: a second claimer that blocks and then re-reads still ends up
+      # disjoint, because the rows it waited for are no longer unclaimed. What
+      # SKIP LOCKED buys is that a drain on one app pod is never held up by a
+      # row another pod is sitting on, so this asserts the claim completes while
+      # the lock is still held, and skips exactly the held row.
+      ids = for _ <- 1..4, do: Ecto.UUID.generate()
+      [held | rest] = ids
+
+      register_unboxed_cleanup!(fn ->
+        Repo.delete_all(from e in RelayEvent, where: e.id in ^ids)
+      end)
+
+      run_unboxed(fn ->
+        for id <- ids do
+          Repo.insert!(%RelayEvent{
+            id: id,
+            event: "stream_outcome",
+            labels: %{},
+            count: 1,
+            inserted_at: DateTime.utc_now()
+          })
+        end
+      end)
+
+      parent = self()
+      release = make_ref()
+
+      holder =
+        Task.async(fn ->
+          run_unboxed(fn ->
+            Repo.transaction(fn ->
+              Repo.one!(from e in RelayEvent, where: e.id == ^held, lock: "FOR UPDATE")
+              send(parent, {:held, self()})
+
+              receive do
+                {:release, ^release} -> :ok
+              after
+                @task_budget -> :timeout
+              end
+            end)
+          end)
+        end)
+
+      assert_receive {:held, holder_pid}, @task_budget
+      on_exit(fn -> send(holder_pid, {:release, release}) end)
+
+      claimed =
+        Task.async(fn ->
+          run_unboxed(fn -> Relay.claim(10, "skipping-node") end)
+        end)
+        |> Task.await(@task_budget)
+
+      assert {:ok, rows} = claimed
+      assert Enum.sort(Enum.map(rows, & &1.id)) == Enum.sort(rest)
+
+      send(holder_pid, {:release, release})
+      assert {:ok, _} = Task.await(holder, @task_budget)
+
+      run_unboxed(fn ->
+        assert {:ok, [%RelayEvent{id: ^held}]} = Relay.claim(10, "later-node")
+      end)
+    end
   end
 
   describe "statement bounds" do
