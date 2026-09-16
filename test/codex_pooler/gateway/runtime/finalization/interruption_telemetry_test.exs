@@ -221,13 +221,44 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     assert [%{phase: "turn_interrupted", in_transaction?: true}] = drain_samples(samples)
   end
 
-  test "cleanup worker accounting rollback emits nothing and retains the active turn" do
+  test "cleanup worker recovery raises past the accounting rollback and emits nothing" do
+    # Same injection as `outermost accounting rollback emits one settlement
+    # failure and preserves exact tuple` below — the reservation ledger entry is
+    # deleted — and a different failure at a different stage, which is exactly
+    # why the failure has to be named.
+    #
+    # `interrupt_codex_turn/2` reaches the missing reservation through
+    # `finalize_interrupted_request!/5`, whose `rescue` turns the
+    # `Ecto.NoResultsError` into `{:interrupt_accounting_failed, _}` and emits a
+    # `settlement_failed` outcome. Expired-owner recovery never gets that far:
+    # `recover_expired_owner_locked/2` runs dead-execution recovery over the
+    # session's in-progress turns FIRST, so `recover_dead_request_execution/2`
+    # raises out of `RequestLifecycle.lock_finalization_rows/2` before any turn
+    # is interrupted. `recover_dead_request_execution/2` handles `{:error, _}`
+    # and not a raise, and nothing below `RuntimeStateCleanup.run_step/2`
+    # rescues, so the exception travels the whole way. Nothing is emitted
+    # because nothing reached the code that builds a marker.
+    #
+    # So this test never exercised the interruption's accounting handling at
+    # all — not `release_unattempted_request!/6`, not
+    # `rollback_interrupted_accounting/4` — while its name said "accounting
+    # rollback" and its error tuple was loose enough to agree with anything.
+    # findings#195 row 195-127, the same class as 195-103 one test over.
     fixture = committed_interruption_fixture!(:accounting_failure)
     expire_owner!(fixture)
 
     capture_outcomes(fn ->
-      assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime], _summary}} =
-               run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:runtime_state_cleanup_steps_failed, [:gateway_runtime], _summary}} =
+                   run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end)
+        end)
+
+      assert log =~ "runtime state cleanup step gateway_runtime failed"
+      assert log =~ "{:raised, :gateway_runtime,"
+      assert log =~ "expected at least one result but got none"
+      assert log =~ "CodexPooler.Accounting.LedgerEntry"
+      refute log =~ "interrupt_accounting_failed"
 
       refute_received {:stream_outcome, _}
       assert committed_interruption_state(fixture).turn_status == "in_progress"
