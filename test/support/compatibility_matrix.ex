@@ -411,6 +411,68 @@ defmodule CodexPooler.CompatibilityMatrix do
         "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; strict native turn-identity precedence validates client_metadata.turn_id, canonical client metadata, turn_id, then request_id without falling through a present invalid source, retaining only an opaque session-scoped SHA-256 semantic key and full claim key; a same active non-cancelled replay is suppressed without new work, while a cancelled predecessor with a different valid native identity can enter one bounded cancellation handoff with a one-second soft boundary and five-second absolute boundary, then starts only after matching fenced readiness; cancelled equal, noncancelled different, missing, public, non-native, and response.processed reconnect candidates fail bounded busy, while generate:false prewarm stays local, row-free, and neutral; predecessor, replacement, and later turn each settle exactly once, replacement uses a new connection generation, and the later turn reuses it; mixed-release behavior is identity-aware only when both current proxy and owner support the control path, a current proxy fails before accounting against a previous owner, and older callers retain their legacy behavior; no hidden automatic replay occurs; native anchor, compact, and final frames share one semantic client turn but create three distinct accounting lifecycles on one physical websocket generation; a first full-history compact uses the ordinary durable turn claim, while mid-turn compact and final transitions require a one-shot owner capability plus sealed runtime proof and can never be authorized by payload shape or client metadata alone; rejected capability frames create no rows, upstream calls, saved-reset probe or redeem activity, retry, replay, or fallback; public /v1 never inherits the native owner capability or proof and retains its existing replay, bridge, byte, and terminal-shape semantics; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; an owner-forwarded native turn instead delivers the owner's single relayed status-502 server_error frame and the socket authors no second error frame for that turn, so a native turn reaches the client with at most one error frame while a success terminal followed by a settlement failure still receives its error frame; every frame authored through the shared websocket error envelope classifies its error type from the same enumerated code vocabulary the HTTP relay uses instead of a catch-all default, so owner-lifecycle and overload codes carry error type server_error while a replaced or stale downstream carries invalid_request_error, and a code outside that vocabulary follows its status class alone, carrying rate_limit_error at 429 and server_error at any 5xx whatever the reason declares about its own retryability, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed with error type server_error when its reason has no code and message; public /v1 terminal masking and shape remain unchanged; a native backend websocket response.create turn uses the upstream websocket whether its stream flag is true or omitted and never falls back to the HTTP Responses endpoint, an explicit stream false is rejected before admission, accounting, or upstream work with status 400 wire code invalid_request and param stream because the provider websocket rejects it, and a websocket turn without a websocket upstream path fails closed before reservation with one type:error frame carrying status 500 and wire code websocket_transport_required; model streaming-capability checks in pre-dispatch and candidate eligibility treat every websocket turn as streaming, so a stream-less websocket turn on a non-streaming model receives the same local 400 unsupported_model_capability param stream rejection as stream true"
     },
     %{
+      slug: :duplicate_turn_fence,
+      status: :supported,
+      current: :shared_turn_claim_on_both_transports,
+      categories: [:route, :auth, :error, :ownership],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/backend-api/codex/responses/compact"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :get, path: "/backend-api/codex/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :duplicate_turn_fence,
+      duplicate_turn: %{
+        public_error: %{
+          status: 409,
+          code: "duplicate_turn",
+          transports: ["http_json", "http_sse", "websocket"]
+        },
+        claim_by_request_kind: %{
+          turn: "bare_payload_independent_codex_turn_claim",
+          tool_result_continuation: "payload_scoped_request_claim",
+          compaction: "payload_scoped_codex_request_claim"
+        },
+        continuation_discriminator: "shared_native_turn_continuation_predicate",
+        metadata_sources: ["body_client_metadata", "request_header"],
+        bare_claim_request_kinds: ["turn"],
+        unfenced: [
+          "translated_v1_request",
+          "non_native_route",
+          "missing_codex_session",
+          "absent_turn_metadata",
+          "malformed_turn_metadata",
+          "absent_request_kind",
+          "unknown_request_kind",
+          "prewarm_request_kind",
+          "memory_request_kind"
+        ],
+        refusal_dispositions: [
+          "unsupported_claim",
+          "missing_predecessor",
+          "authorization_changed",
+          "active_predecessor",
+          "terminal_predecessor",
+          "entitlement_present",
+          "retry_expired",
+          "chain_exhausted",
+          "invalid_predecessor",
+          "anchor_unavailable"
+        ],
+        diagnostics: %{
+          http_stage: "native_http_turn_claim",
+          websocket_stage: "websocket_turn_claim",
+          http_label: "native http replay rejection",
+          websocket_label_unchanged: true,
+          claim_key_payload_or_frame: false
+        },
+        known_gaps: %{tool_result_continuation_grown_body_retry_fenced: false}
+      },
+      contract:
+        "409 duplicate_turn is a public runtime response on both transports: a native Codex HTTP turn on /backend-api/codex/responses and its compact route takes the same turn claim a websocket response.create frame takes, so a resend of one turn meets the resend policy instead of buying a second upstream dispatch. A turn request takes the bare payload-independent codex-turn claim so a rebuilt longer retry body still names the same turn, a tool-result continuation and a compaction each take their own payload-scoped claim, and the continuation discriminator is the predicate both transports share. The canonical x-codex-turn-metadata document is preferred from the request body and falls back to the header; a translated /v1 request, a non-native route, a missing Codex session, an absent or malformed document, an absent or unknown request kind, and the prewarm and memory kinds are not claimed at all and keep the generated correlation id. Every refusal fails closed through one disposition vocabulary, and only a predecessor that already bought provider output refuses a resend: a completed turn or a post-relay cut that had delivered output. A zero-output provider failure and an unfinished predecessor are served, and so are a prewarm sharing the turn id, a turn and its own compaction in either order, and the same turn id under a different session. Native HTTP refusals log their own stage and label with the transport field set, the websocket line is unchanged, and no line carries a claim key, payload, or frame. Tool-result continuations remain unfenced against grown-body retries on both transports because their claim is payload-scoped by construction"
+    },
+    %{
       slug: :reasoning_minimal,
       status: :supported,
       current: :normalized_to_low,
@@ -2162,6 +2224,30 @@ defmodule CodexPooler.CompatibilityMatrix do
         }
       },
       json: %{"model" => "gpt-fixture-text", "input" => "synthetic websocket turn"}
+    },
+    duplicate_turn_fence: %{
+      json: %{"model" => "gpt-fixture-text", "input" => "synthetic duplicate turn"},
+      turn_metadata: %{"request_kind" => "turn", "turn_id" => "synthetic-turn-id"},
+      claim_prefixes: %{
+        turn: "codex-turn:",
+        request: "codex-request:",
+        derived_retry: "codex-request-retry:"
+      },
+      refused: [
+        "identical_native_http_resend",
+        "identical_compaction_resend",
+        "every_further_resend_of_one_turn",
+        "resend_of_a_turn_that_delivered_output_after_a_served_zero_output_failure"
+      ],
+      served: [
+        "resend_after_a_zero_output_provider_failure",
+        "retry_while_the_predecessor_is_unfinished",
+        "prewarm_sharing_the_turn_id",
+        "turn_and_its_own_compaction_in_either_order",
+        "two_genuinely_different_native_http_turns",
+        "same_turn_id_under_a_different_codex_session",
+        "tool_result_continuation_resent_with_a_grown_body"
+      ]
     },
     reasoning_minimal: %{
       json: %{

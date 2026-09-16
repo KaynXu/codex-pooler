@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Repo
@@ -51,6 +52,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     # A turn's opening request is named by the turn alone, exactly as the
     # websocket path names it, so the claim survives a rebuilt retry body.
     assert String.starts_with?(request.correlation_id, "codex-turn:")
+  end
+
+  # `409 duplicate_turn` is a public response on a runtime route, so the
+  # machine-readable route/feature contract has to carry it for both transports
+  # and has to be answerable from the route itself rather than from prose
+  # (findings#212). The grown-body gap the entry records is proven behaviourally
+  # by "a tool continuation resent with a grown body is NOT fenced" below.
+  test "the compatibility matrix duplicate-turn entry is the refusal this route produces", %{
+    conn: conn
+  } do
+    feature = CompatibilityMatrix.by_slug!(:duplicate_turn_fence)
+    fixture = CompatibilityMatrix.fixture!(:duplicate_turn_fence)
+
+    assert %{method: :post, path: "/backend-api/codex/responses"} in feature.routes
+
+    assert %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"} in feature.routes
+
+    assert "websocket" in feature.duplicate_turn.public_error.transports
+    assert "http_sse" in feature.duplicate_turn.public_error.transports
+
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_matrix_turn"}))
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+
+    %{status: status, code: code} = feature.duplicate_turn.public_error
+
+    assert %{"error" => %{"code" => ^code}} =
+             json_response(post_turn(conn, setup, session, @turn_id), status)
+
+    assert [request] = pool_requests(setup)
+    assert String.starts_with?(request.correlation_id, fixture.claim_prefixes.turn)
+    assert FakeUpstream.count(upstream) == 1
   end
 
   # The cohort in the row is streaming: a native Codex turn resolves to

@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     backend_v1_alias_surface
     usage_alias_meter_identity
     websocket_continuity
+    duplicate_turn_fence
     reasoning_minimal
     reasoning_none
     reasoning_ultra
