@@ -78,7 +78,10 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
           for _ <- 1..iterations do
             :telemetry.execute(
               [:codex_pooler, :saved_reset, :convergence],
-              %{count: 2, applied_to_canonical_ms: 0.5, applied_to_lifecycle_ms: 3},
+              # Whole milliseconds because that is what the storage layer accepts
+              # and what `DateTime.diff/3` produces; a fractional one is refused
+              # and counted, which the refusal tests below pin.
+              %{count: 2, applied_to_canonical_ms: 5, applied_to_lifecycle_ms: 3},
               %{source: "runtime_headers", outcome: "confirmed_by_quota"}
             )
           end
@@ -95,7 +98,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
     assert [{{"saved_reset_convergence", _labels, measurements}, count}] = :ets.tab2list(table)
     assert count == writers * iterations
-    assert measurements.applied_to_canonical_ms == 0.5
+    assert measurements.applied_to_canonical_ms == 5
     assert measurements.applied_to_lifecycle_ms == 3
   end
 
@@ -610,5 +613,117 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     send(runtime, :cleanup)
     assert_receive {:cleanup_attempt, 1}
     assert_receive {:cleanup_attempt, 2}, 1_000
+  end
+
+  describe "a sample the storage layer will never accept" do
+    test "is refused where it is captured, and counted", %{runtime: runtime, table: table} do
+      # `flush_snapshot/3` re-accumulates anything that did not insert, which is
+      # right for an outage and wrong for a value no retry can fix: a rejected
+      # sample was re-queued forever, holding a `max_series` slot, with no
+      # retry cap and no loss reason — claimed and vanished, the shape the
+      # storage allowlist exists to eliminate. The capture path now asks the
+      # same question the changeset asks, so the corrupt sample never becomes a
+      # permanent resident.
+      before = rejected_samples()
+
+      :telemetry.execute(
+        [:codex_pooler, :saved_reset, :convergence],
+        %{count: 1, applied_to_canonical_ms: 1.5},
+        %{source: "reconciliation"}
+      )
+
+      :telemetry.execute(
+        [:codex_pooler, :quota, :cycle, :decision],
+        %{count: 1.5},
+        %{scope: :account}
+      )
+
+      :sys.get_state(runtime)
+      assert :ets.tab2list(table) == []
+
+      # Five cycles, because the defect was unbounded re-queuing rather than a
+      # single lost flush: this is the state that used to never change.
+      for _ <- 1..5 do
+        send(runtime, :flush)
+        :sys.get_state(runtime)
+      end
+
+      assert :ets.tab2list(table) == []
+      assert Repo.aggregate(RelayEvent, :count) == 0
+      assert rejected_samples() - before == 2
+
+      # An integer measurement beside it is unaffected: the guard refuses the
+      # corrupt sample, not the family.
+      :telemetry.execute(
+        [:codex_pooler, :saved_reset, :convergence],
+        %{count: 1, applied_to_canonical_ms: 2},
+        %{source: "reconciliation"}
+      )
+
+      :sys.get_state(runtime)
+      send(runtime, :flush)
+      :sys.get_state(runtime)
+      assert [%RelayEvent{measurements: %{"applied_to_canonical_ms" => 2}}] = Repo.all(RelayEvent)
+      assert rejected_samples() - before == 2
+    end
+
+    test "is counted lost rather than re-queued when only the insert can see it", %{
+      sandbox_owner: owner
+    } do
+      # The capture guard and the changeset are one predicate, so nothing the
+      # capture path admits can be refused by the changeset today. This is the
+      # backstop for the day that stops being true: a permanent rejection at
+      # the insert must leave the buffer and be counted, while a transient
+      # failure must still be retried.
+      rejected =
+        Ecto.Changeset.add_error(
+          RelayEvent.changeset(%RelayEvent{}, %{}),
+          :measurements,
+          "synthetic permanent rejection"
+        )
+
+      runtime =
+        start_supervised!(
+          {RelayRuntime,
+           enabled: true,
+           role: "worker",
+           start_paused: true,
+           name: {:global, {__MODULE__, make_ref()}},
+           flush_ms: 60_000,
+           drain_ms: 60_000,
+           insert_fun: fn _event, _labels, _count, _values, _writer -> {:error, rejected} end},
+          id: make_ref()
+        )
+
+      Sandbox.allow(Repo, owner, runtime)
+      :ok = GenServer.call(runtime, :activate)
+      state = :sys.get_state(runtime)
+      before = rejected_samples()
+
+      :telemetry.execute([:codex_pooler, :quota, :cycle, :decision], %{count: 1}, %{
+        scope: :account
+      })
+
+      :sys.get_state(runtime)
+      assert :ets.tab2list(state.table) != []
+
+      for _ <- 1..5 do
+        send(runtime, :flush)
+        :sys.get_state(runtime)
+      end
+
+      assert :ets.tab2list(state.table) == []
+      assert rejected_samples() - before == 1
+    end
+  end
+
+  defp rejected_samples do
+    %{rows: rows} =
+      Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason = 'rejected_sample'")
+
+    case rows do
+      [[samples]] -> samples
+      [] -> 0
+    end
   end
 end

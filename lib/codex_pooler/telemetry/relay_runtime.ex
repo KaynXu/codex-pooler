@@ -5,7 +5,11 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   require Logger
 
   alias CodexPooler.Gateway.OperationalStatus
-  alias CodexPooler.Telemetry.Relay
+  alias CodexPooler.Telemetry.{Relay, RelayEvent}
+
+  # `capacity` slot 1 counts live series, slot 2 samples dropped because the
+  # buffer was full, and slot 3 samples the storage layer will never accept.
+  @rejected_slot 3
 
   @events %{
     [:codex_pooler, :quota, :cycle, :decision] => "quota_cycle_decision",
@@ -70,7 +74,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     role = Keyword.get(opts, :role, System.get_env("OBAN_MODE", "all"))
     producer? = role in ["worker", "scheduler"]
     quiesced? = not producer? and OperationalStatus.marker_draining?()
-    capacity = :atomics.new(2, signed: false)
+    capacity = :atomics.new(3, signed: false)
     capture = {table, capacity, Keyword.get(opts, :max_series, 10_000)}
     callbacks = :ets.new(:relay_callbacks, [:public, :set])
     max_pending = Keyword.get(opts, :max_pending_callbacks, 10_000)
@@ -117,6 +121,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       producer?: producer?,
       quiesced?: quiesced?,
       overflow_reported: 0,
+      rejected_reported: 0,
       pending: [],
       drain_again?: false,
       claim_more?: false,
@@ -148,15 +153,26 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
         sample_values(relay_event, measurements)
         |> Map.put(:count_weight, Map.get(measurements, :count, 1))
 
-      key = {relay_event, labels(metadata), values}
-      token = make_ref()
-      shard = :erlang.phash2(token, config.shards)
+      labels = labels(metadata)
 
-      shard_cap =
-        div(config.max_pending, config.shards) +
-          if(shard < rem(config.max_pending, config.shards), do: 1, else: 0)
+      # A sample the changeset will refuse can never be inserted and can never
+      # be retried into existence, so capturing it would hold a `max_series`
+      # slot forever with nothing to say the sample was lost. It is refused
+      # here instead, and counted where it is refused.
+      if RelayEvent.storable_measurements?(values) and RelayEvent.storable_labels?(labels) do
+        key = {relay_event, labels, values}
+        token = make_ref()
+        shard = :erlang.phash2(token, config.shards)
 
-      capture_callback(config, shard, token, key, shard_cap)
+        shard_cap =
+          div(config.max_pending, config.shards) +
+            if(shard < rem(config.max_pending, config.shards), do: 1, else: 0)
+
+        capture_callback(config, shard, token, key, shard_cap)
+      else
+        {_table, capacity, _max} = config.capture
+        :atomics.add(capacity, @rejected_slot, 1)
+      end
     end
 
     :ok
@@ -289,11 +305,17 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     end
   end
 
-  defp sample_values("saved_reset_convergence", measurements) do
-    measurements
-    |> Map.take([:applied_to_canonical_ms, :canonical_to_lifecycle_ms, :applied_to_lifecycle_ms])
-    |> Map.filter(fn {_key, value} -> is_number(value) end)
-  end
+  # Taken, not filtered. A value the storage layer refuses used to be dropped
+  # here while the rest of the sample was captured, which relays a convergence
+  # with its duration silently missing. `handle_event/4` refuses the whole
+  # sample instead, and says so.
+  defp sample_values("saved_reset_convergence", measurements),
+    do:
+      Map.take(measurements, [
+        :applied_to_canonical_ms,
+        :canonical_to_lifecycle_ms,
+        :applied_to_lifecycle_ms
+      ])
 
   defp sample_values(_event, _measurements), do: %{}
 
@@ -452,12 +474,27 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
           )
 
       if dropped > 0, do: safe_loss(state, "buffer_overflow", dropped)
+
+      rejected = :atomics.get(capacity, @rejected_slot)
+
+      if rejected > state.rejected_reported,
+        do:
+          Logger.warning(
+            "telemetry relay refused unstorable samples=#{rejected - state.rejected_reported}"
+          )
+
+      if rejected > 0, do: safe_loss(state, "rejected_sample", rejected)
     rescue
       _ -> :ok
     end
 
     {_table, capacity, _max} = state.capture
-    %{state | overflow_reported: :atomics.get(capacity, 2)}
+
+    %{
+      state
+      | overflow_reported: :atomics.get(capacity, 2),
+        rejected_reported: :atomics.get(capacity, @rejected_slot)
+    }
   end
 
   defp drain(state) do
@@ -576,10 +613,18 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
         do: {:error, :shutdown_deadline},
         else: state.insert_fun.(event, labels, count, values, state.owner)
 
+    {_table, capacity, _max} = state.capture
+
     case result do
       {:ok, _} ->
-        {_table, capacity, _max} = state.capture
         :atomics.sub(capacity, 1, 1)
+
+      # A refusal no retry can fix. Re-accumulating it would keep the series
+      # slot and re-attempt the same insert every flush for as long as the node
+      # lives, so the sample leaves the buffer and is counted as lost instead.
+      {:error, reason} when is_struct(reason, Ecto.Changeset) ->
+        :atomics.sub(capacity, 1, 1)
+        :atomics.add(capacity, @rejected_slot, count)
 
       _ ->
         accumulate(state.capture, key, count, true)

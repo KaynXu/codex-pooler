@@ -33,19 +33,40 @@ defmodule CodexPooler.Telemetry.RelayEvent do
     |> validate_inclusion(:event, @events)
     |> validate_number(:count, greater_than_or_equal_to: 0)
     |> validate_change(:labels, fn :labels, v ->
-      if is_map(v) and map_size(v) <= 16 and Enum.all?(v, &bounded_label?/1),
+      if storable_labels?(v),
         do: [],
         else: [labels: "must be a bounded map of bounded strings"]
     end)
-    # A relayed sample is a count or a millisecond duration. A negative or
-    # fractional value is a corrupt sample that would be replayed into a
-    # Prometheus series as if an emitter had produced it.
     |> validate_change(:measurements, fn :measurements, v ->
-      if is_map(v) and map_size(v) <= 8 and Enum.all?(v, &bounded_measurement?/1),
+      if storable_measurements?(v),
         do: [],
         else: [measurements: "must be bounded non-negative integer measurements"]
     end)
   end
+
+  @doc """
+  Whether the storage layer will accept this measurement map.
+
+  A relayed sample is a count or a millisecond duration: a negative, fractional
+  or oversized value is a corrupt sample that would be replayed into a
+  Prometheus series as if an emitter had produced it.
+
+  `CodexPooler.Telemetry.RelayRuntime` asks this before it captures a sample,
+  and the changeset asks it again before the row is written. It is one
+  predicate on purpose: a sample the capture path admits and the changeset
+  refuses cannot be inserted and cannot be retried into existence, so it would
+  sit in the buffer forever.
+  """
+  @spec storable_measurements?(term()) :: boolean()
+  def storable_measurements?(v),
+    do: is_map(v) and map_size(v) <= 8 and Enum.all?(v, &bounded_measurement?/1)
+
+  @doc """
+  Whether the storage layer will accept this label map, for the same reason.
+  """
+  @spec storable_labels?(term()) :: boolean()
+  def storable_labels?(v),
+    do: is_map(v) and map_size(v) <= 16 and Enum.all?(v, &bounded_label?/1)
 
   defp bounded_measurement?({key, value}),
     do:

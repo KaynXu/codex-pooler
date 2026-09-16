@@ -6,9 +6,19 @@ defmodule CodexPooler.Telemetry.Relay do
   @heartbeat_stale_seconds 60
   @cleanup_batch_size 100
 
+  # `rejected_sample` is a sample the storage layer will never accept, counted
+  # where it is refused rather than re-queued into a buffer slot it can never
+  # leave. The other three are rows or samples lost to time, space and
+  # shutdown.
+  @loss_reasons ["expired_unclaimed", "buffer_overflow", "shutdown_unflushed", "rejected_sample"]
+  @checkpointed_loss_reasons ["buffer_overflow", "shutdown_unflushed", "rejected_sample"]
+
+  @doc false
+  @spec loss_reasons() :: [String.t()]
+  def loss_reasons, do: @loss_reasons
+
   @spec record_loss(String.t(), non_neg_integer(), non_neg_integer()) :: :ok
-  def record_loss(reason, rows, samples)
-      when reason in ["expired_unclaimed", "buffer_overflow", "shutdown_unflushed"] do
+  def record_loss(reason, rows, samples) when reason in @loss_reasons do
     Repo.query!(
       """
       INSERT INTO telemetry_relay_losses(reason, rows, samples) VALUES ($1,$2,$3)
@@ -24,7 +34,7 @@ defmodule CodexPooler.Telemetry.Relay do
   @spec checkpoint_loss(String.t(), String.t(), non_neg_integer()) ::
           {:ok, :ok} | {:error, term()}
   def checkpoint_loss(owner, reason, total)
-      when is_binary(owner) and reason in ["buffer_overflow", "shutdown_unflushed"] and
+      when is_binary(owner) and reason in @checkpointed_loss_reasons and
              is_integer(total) and total >= 0 do
     Repo.transaction(
       fn ->
