@@ -399,7 +399,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     defp anchored?(pattern, series) do
       case Regex.compile("\\A(?:" <> pattern <> ")\\z") do
         {:ok, regex} -> Regex.match?(regex, series)
-        :error -> true
+        {:error, _reason} -> true
       end
     end
 
@@ -1350,6 +1350,11 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # Prometheus anchors the pattern, so a fragment that would match unanchored
       # does not name the series.
       assert PromQL.charted_series(~s|sum(rate({__name__=~"quota_cycle"}[5m]))|, candidates) == []
+
+      # A pattern that will not compile is invalid PromQL; the panel stays inside
+      # the rule rather than escaping it.
+      assert PromQL.charted_series(~s|sum(rate({__name__=~"["}[5m]))|, candidates) == candidates
+      refute series_pinned?(~s|sum(rate({__name__=~"["}[5m]))|, series)
     end
 
     test "a panel nested two rows deep is still a panel this guard reads" do
