@@ -44,7 +44,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   # This file, and a test in it, used as real promotion evidence below. Renaming
   # that test reds the resolver, which is the property being demonstrated.
   @guard_file "test/codex_pooler_web/telemetry/role_coverage_test.exs"
-  @resolvable_test "every promoted family carries evidence for each of its four gates"
+  @probe_dir "tmp/role_coverage_guard"
 
   defmodule CallGraph do
     @moduledoc false
@@ -246,78 +246,162 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
   defmodule PromQL do
     @moduledoc false
-    # Label matchers read out of a PromQL expression.
+    # Label matchers, and series selection, read out of a PromQL expression.
     #
-    # Four rounds of review defeated a regex over selector *text*, each time by a
-    # literal that is not a label matcher: a pin supplied by a second series, a
-    # label whose name merely ends in `via`, a `#` comment left where a pin used
-    # to be, and a single-quoted or backtick label value quoting the pin. PromQL
-    # has three string forms and permits comments, so no amount of patching a
-    # scanner answers the question; a matcher that has to be patched once per
-    # review round is the defect. This tokenizes instead — strings and comments
-    # are consumed as tokens, and a label matcher is a name, an operator and a
-    # string value in that order — so those literals are not matchers by
-    # construction and cannot be made into one by rewriting them.
+    # Six rounds of review defeated a scan over the expression's *text*, each time
+    # with a literal that is not what the scan took it for: a pin supplied by a
+    # second series, a label whose name merely ends in `via`, a `#` comment left
+    # where a pin used to be, a single-quoted or backtick label value quoting the
+    # pin, and — one step out from all of those — a panel that selects the family
+    # through `{__name__=~"…"}` and so never writes its name at all, which made
+    # the guard skip the panel entirely rather than judge it. PromQL has three
+    # string forms, permits comments, and lets a series be named indirectly, so no
+    # amount of patching a scanner answers the question; a matcher that has to be
+    # patched once per review round is the defect.
+    #
+    # This tokenizes, and answers both halves from the same tokens: which declared
+    # series an expression selects (`charted_series/2`) and what each occurrence's
+    # label matchers are (`occurrences/2`). A literal that is not a matcher cannot
+    # become one, and a selection that does not spell the name is still found.
     #
     # It is not a PromQL parser: it knows strings, comments, braces, matcher
-    # operators and identifiers, and treats everything else as opaque. That is
-    # enough to answer "does this occurrence of this series carry this label
-    # matcher", and unterminated strings or unbalanced braces lose the
-    # occurrence rather than inventing one, so the guard fails closed.
+    # operators and identifiers, and treats everything else as opaque. An
+    # expression Prometheus would reject — an unterminated string, an unbalanced
+    # brace, an escape that is not an escape — is `:invalid`, and every caller
+    # resolves that against itself: an invalid expression charts every candidate,
+    # is not pinned, and does pin somewhere, so a broken panel reds both
+    # directions instead of slipping through one. An earlier version instead let
+    # an unbalanced brace run to the next `}`, which let a family's selector
+    # inherit a pin from an unrelated series — the first defeat, reachable again.
 
     @type matcher :: {String.t(), String.t(), String.t()}
 
     @doc """
-    The label matchers on each occurrence of `series` in `expr`, one list per occurrence.
+    The label matchers on each occurrence of `series` in `expr`, or `:invalid`.
 
-    An occurrence is the series named bare (`foo`, `foo{...}`) or selected by
-    `__name__` (`{__name__="foo", ...}`), which is the form a Grafana panel takes
-    when the name itself is templated. A bare occurrence with no braces has no
-    matchers, which is what makes an unpinned one visible.
+    An occurrence is the series named bare (`foo`, `foo{…}`), or a selector that
+    reaches it through `__name__` — by equality, by an anchored regex, or by not
+    bounding the name at all, which is what `{job="x"}` does. A bare occurrence
+    with no braces has no matchers, which is what makes an unpinned one visible.
     """
-    @spec occurrences(String.t(), String.t()) :: [[matcher()]]
-    def occurrences(expr, series) when is_binary(expr) and is_binary(series),
-      do: expr |> tokens() |> scan(series, [])
+    @spec occurrences(String.t(), String.t()) :: [[matcher()]] | :invalid
+    def occurrences(expr, series) when is_binary(expr) and is_binary(series) do
+      case tokens(expr) do
+        :invalid -> :invalid
+        tokens -> scan(tokens, series, [])
+      end
+    end
 
-    @doc "Whether `matchers` selects exactly `label` = `value`."
+    @doc """
+    Which of `candidates` `expr` selects.
+
+    This is the step the sixth defeat attacked. Deciding it by scanning the text
+    for `codex_pooler_[a-z0-9_]+` means a panel that selects a declared family
+    without spelling its name is associated with no family at all, so every rule
+    that would have judged it silently does not run. An invalid expression charts
+    everything, so it is judged rather than skipped.
+    """
+    @spec charted_series(String.t(), [String.t()]) :: [String.t()]
+    def charted_series(expr, candidates) when is_binary(expr) and is_list(candidates) do
+      case tokens(expr) do
+        :invalid ->
+          candidates
+
+        tokens ->
+          Enum.filter(candidates, &selected?(scan(tokens, &1, [])))
+      end
+    end
+
+    defp selected?(:invalid), do: true
+    defp selected?(occurrences), do: occurrences != []
+
+    @doc """
+    Whether `matchers` selects exactly `label` = `value`, with nothing contradicting it.
+
+    `=~` on a literal is the same selection: PromQL anchors a matcher regex, so
+    `via=~"in_process"` picks the same series `via="in_process"` does. It is
+    compared literally, so an equivalent spelling such as `via=~"^in_process$"`
+    reads as not selecting it — the safe direction, since the consequence is a
+    guard failure rather than a family silently escaping one. A second matcher on
+    the same label that contradicts the first (`{via="in_process", via="job_relay"}`,
+    or a negation of the same value) selects nothing, so it is not a pin either.
+    """
     @spec selects?([matcher()], String.t(), String.t()) :: boolean()
     def selects?(matchers, label, value) do
-      # `=~` on a literal is the same selection: PromQL anchors a matcher regex,
-      # so `via=~"in_process"` picks the same series `via="in_process"` does.
-      # `!=` and `!~` are the opposite and are not pins.
-      Enum.any?(matchers, fn {name, operator, matched} ->
-        name == label and operator in ~w(= =~) and matched == value
-      end)
+      on_label = for {name, operator, matched} <- matchers, name == label, do: {operator, matched}
+      positive = for {operator, matched} <- on_label, operator in ~w(= =~), do: matched
+      negative = for {operator, matched} <- on_label, operator in ~w(!= !~), do: matched
+
+      positive != [] and Enum.all?(positive, &(&1 == value)) and value not in negative
     end
 
     defp scan([], _series, acc), do: Enum.reverse(acc)
 
-    defp scan([{:ident, series}, :lbrace | rest], series, acc) do
-      {matchers, rest} = matchers(rest, [])
-      scan(rest, series, [matchers | acc])
+    # A brace group written after a name belongs to that name, whatever is inside
+    # it: `up{__name__="x"}` is not an occurrence of `x`.
+    defp scan([{:ident, name}, :lbrace | rest], series, acc) do
+      case matchers(rest, []) do
+        :invalid -> :invalid
+        {found, rest} -> scan(rest, series, if(name == series, do: [found | acc], else: acc))
+      end
     end
 
     defp scan([{:ident, series} | rest], series, acc), do: scan(rest, series, [[] | acc])
 
     defp scan([:lbrace | rest], series, acc) do
-      {matchers, rest} = matchers(rest, [])
+      case matchers(rest, []) do
+        :invalid ->
+          :invalid
 
-      scan(
-        rest,
-        series,
-        if(selects?(matchers, "__name__", series), do: [matchers | acc], else: acc)
-      )
+        {found, rest} ->
+          scan(rest, series, if(names?(found, series), do: [found | acc], else: acc))
+      end
     end
+
+    # Every `}` in a valid expression closes a `{` this walk already consumed.
+    defp scan([:rbrace | _rest], _series, _acc), do: :invalid
 
     defp scan([_token | rest], series, acc), do: scan(rest, series, acc)
 
-    defp matchers([], acc), do: {Enum.reverse(acc), []}
+    defp matchers([], _acc), do: :invalid
+    defp matchers([:lbrace | _rest], _acc), do: :invalid
     defp matchers([:rbrace | rest], acc), do: {Enum.reverse(acc), rest}
 
     defp matchers([{:ident, name}, {:op, operator}, {:string, value} | rest], acc),
       do: matchers(rest, [{name, operator, value} | acc])
 
     defp matchers([_token | rest], acc), do: matchers(rest, acc)
+
+    # Whether a selector reaches `series` through `__name__`. With no positive
+    # `__name__` matcher the selection is not bounded by name at all — `{job="x"}`
+    # selects every metric that job exports, this family included — so it counts
+    # unless a negative matcher excludes exactly this one.
+    defp names?(matchers, series) do
+      on_name = for {"__name__", operator, value} <- matchers, do: {operator, value}
+      positive = for {operator, value} <- on_name, operator in ~w(= =~), do: {operator, value}
+
+      case positive do
+        [] -> not Enum.any?(on_name, &excludes?(&1, series))
+        _ -> Enum.any?(positive, &matches?(&1, series))
+      end
+    end
+
+    defp matches?({"=", value}, series), do: value == series
+    defp matches?({"=~", pattern}, series), do: anchored?(pattern, series)
+
+    defp excludes?({"!=", value}, series), do: value == series
+    defp excludes?({"!~", pattern}, series), do: anchored?(pattern, series)
+    defp excludes?(_matcher, _series), do: false
+
+    # Prometheus anchors a label-matcher regex at both ends. A pattern that will
+    # not compile is invalid PromQL, and assuming it reaches the family keeps a
+    # broken panel inside the rule rather than outside it.
+    defp anchored?(pattern, series) do
+      case Regex.compile("\\A(?:" <> pattern <> ")\\z") do
+        {:ok, regex} -> Regex.match?(regex, series)
+        :error -> true
+      end
+    end
 
     defp tokens(expr), do: tokens(expr, [])
 
@@ -326,13 +410,18 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     defp tokens(<<c, rest::binary>>, acc) when c in ~c" \t\n\r", do: tokens(rest, acc)
 
     defp tokens(<<q, rest::binary>>, acc) when q in ~c"\"'" do
-      {value, rest} = quoted(rest, q, [])
-      tokens(rest, [{:string, value} | acc])
+      case quoted(rest, q, []) do
+        :invalid -> :invalid
+        {value, rest} -> tokens(rest, [{:string, value} | acc])
+      end
     end
 
     defp tokens(<<"`", rest::binary>>, acc) do
-      {value, rest} = backquoted(rest, [])
-      tokens(rest, [{:string, value} | acc])
+      # A backquoted string is raw: Prometheus does not read escapes inside one.
+      case backquoted(rest, []) do
+        :invalid -> :invalid
+        {value, rest} -> tokens(rest, [{:string, value} | acc])
+      end
     end
 
     defp tokens(<<"{", rest::binary>>, acc), do: tokens(rest, [:lbrace | acc])
@@ -356,18 +445,59 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
     defp ident(rest, acc), do: {acc |> Enum.reverse() |> List.to_string(), rest}
 
-    # An unterminated string runs to the end of the expression: the occurrence it
-    # would have closed is lost, so the guard reports the family unpinned.
-    defp quoted(<<>>, _q, acc), do: {collect(acc), <<>>}
-    defp quoted(<<"\\", c, rest::binary>>, q, acc), do: quoted(rest, q, [c | acc])
+    # Codepoints, not bytes: accumulating bytes and finishing with
+    # `List.to_string/1` re-encodes a UTF-8 label value.
+    defp quoted(<<>>, _q, _acc), do: :invalid
+
+    defp quoted(<<"\\", rest::binary>>, q, acc) do
+      case escape(rest) do
+        :invalid -> :invalid
+        {decoded, rest} -> quoted(rest, q, [decoded | acc])
+      end
+    end
+
     defp quoted(<<q, rest::binary>>, q, acc), do: {collect(acc), rest}
-    defp quoted(<<c, rest::binary>>, q, acc), do: quoted(rest, q, [c | acc])
+    defp quoted(<<c::utf8, rest::binary>>, q, acc), do: quoted(rest, q, [<<c::utf8>> | acc])
+    defp quoted(<<c, rest::binary>>, q, acc), do: quoted(rest, q, [<<c>> | acc])
 
-    defp backquoted(<<>>, acc), do: {collect(acc), <<>>}
+    defp backquoted(<<>>, _acc), do: :invalid
     defp backquoted(<<"`", rest::binary>>, acc), do: {collect(acc), rest}
-    defp backquoted(<<c, rest::binary>>, acc), do: backquoted(rest, [c | acc])
+    defp backquoted(<<c::utf8, rest::binary>>, acc), do: backquoted(rest, [<<c::utf8>> | acc])
+    defp backquoted(<<c, rest::binary>>, acc), do: backquoted(rest, [<<c>> | acc])
 
-    defp collect(acc), do: acc |> Enum.reverse() |> List.to_string()
+    # Prometheus decodes these; stripping the backslash and keeping the next
+    # character instead answers a question about a string Prometheus never reads
+    # (`via="i\n_process"` selects `i<LF>_process` and charts nothing, while
+    # `via="in\x5fprocess"` selects `in_process` and is a pin). An escape
+    # Prometheus does not accept makes the whole expression invalid.
+    defp escape(<<"\\", rest::binary>>), do: {"\\", rest}
+    defp escape(<<"\"", rest::binary>>), do: {"\"", rest}
+    defp escape(<<"'", rest::binary>>), do: {"'", rest}
+    defp escape(<<"`", rest::binary>>), do: {"`", rest}
+    defp escape(<<"a", rest::binary>>), do: {<<7>>, rest}
+    defp escape(<<"b", rest::binary>>), do: {<<8>>, rest}
+    defp escape(<<"f", rest::binary>>), do: {<<12>>, rest}
+    defp escape(<<"n", rest::binary>>), do: {<<10>>, rest}
+    defp escape(<<"r", rest::binary>>), do: {<<13>>, rest}
+    defp escape(<<"t", rest::binary>>), do: {<<9>>, rest}
+    defp escape(<<"v", rest::binary>>), do: {<<11>>, rest}
+    defp escape(<<"x", rest::binary>>), do: codepoint(rest, 2, 16)
+    defp escape(<<"u", rest::binary>>), do: codepoint(rest, 4, 16)
+    defp escape(<<"U", rest::binary>>), do: codepoint(rest, 8, 16)
+    defp escape(<<c, _::binary>> = rest) when c in ?0..?7, do: codepoint(rest, 3, 8)
+    defp escape(_rest), do: :invalid
+
+    defp codepoint(binary, length, base) do
+      with <<digits::binary-size(^length), rest::binary>> <- binary,
+           {value, ""} <- Integer.parse(digits, base),
+           true <- value in 0..0x10FFFF and value not in 0xD800..0xDFFF do
+        {<<value::utf8>>, rest}
+      else
+        _unparsable -> :invalid
+      end
+    end
+
+    defp collect(acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
 
     defp comment(<<>>), do: <<>>
     defp comment(<<"\n", rest::binary>>), do: rest
@@ -549,6 +679,22 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert RoleCoverage.marker_present?(reworded, :relayed)
       refute RoleCoverage.markers_correct?(reworded, :relayed)
 
+      # The same sentence in the plural is the more natural English of the two,
+      # and a snake_case spelling is what a code comment reaches for. Both used
+      # to pass: a bare word boundary rejects a following `s`, and treating `_`
+      # as a word character rejects a preceding one.
+      for escape <- [
+            "the job share arrives as via=\"job_relay\". When the pooler runs as workers or " <>
+              "schedulers, no reporter runs, so this graph is empty.",
+            "job_relay carries it; the oban_worker and oban_scheduler roles run no reporter",
+            "job_relay; SCHEDULERS export nothing"
+          ] do
+        assert RoleCoverage.marker_present?(escape, :relayed)
+
+        refute RoleCoverage.markers_correct?(escape, :relayed),
+               "a promoted description may not name the unscraped roles: #{escape}"
+      end
+
       # Case and word boundaries: the token itself is caught however it is cased,
       # and a longer word that merely contains a role name is not a caveat.
       refute RoleCoverage.markers_correct?(
@@ -557,6 +703,14 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
              )
 
       assert RoleCoverage.markers_correct?("job_relay from coworkers and reschedulers", :relayed)
+
+      # The residual no word list closes: a caveat that never names a role. It is
+      # left to review, and pinned here so the limit is not mistaken for a gap.
+      assert RoleCoverage.markers_correct?(
+               "job_relay; on a split-role deployment the job pods run no reporter, so this " <>
+                 "graph is empty",
+               :relayed
+             )
 
       declared =
         for metric <- Telemetry.prometheus_metrics(),
@@ -626,6 +780,11 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       states = RoleCoverage.coverage_states()
 
       assert Enum.sort(states) == Enum.sort([:partial, :unscraped_only, :relayed])
+
+      # `coverage_states/0` derives from the classification map, while the marker
+      # functions guard on a second one. Pinning them equal keeps "one place a
+      # guard asks" true in both directions rather than only downwards.
+      assert Enum.sort(RoleCoverage.marked_coverage_states()) == Enum.sort(states)
 
       for state <- states do
         assert RoleCoverage.coverage_class(state) in [:shadowed, :promoted],
@@ -698,12 +857,14 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert RoleCoverage.unmet_promotion_gates(promoting) == RoleCoverage.promotion_gates(),
              "promoting #{inspect(event)} unchanged owes every gate"
 
-      evidenced = Map.put(promoting, :promotion_evidence, evidence_naming(@resolvable_test))
+      {path, names, _suffix} = write_probe_test_file()
+      evidenced = Map.put(promoting, :promotion_evidence, evidence_from(path, names))
 
       assert RoleCoverage.unmet_promotion_gates(evidenced) == []
       assert unresolved_promotion_gates(evidenced) == []
 
-      fabricated = Map.put(promoting, :promotion_evidence, evidence_naming("a test nobody wrote"))
+      fabricated =
+        Map.put(promoting, :promotion_evidence, evidence_from(path, "a test nobody wrote"))
 
       assert RoleCoverage.unmet_promotion_gates(fabricated) == [],
              "the shape half cannot tell a fabricated test name from a real one; that is what " <>
@@ -721,8 +882,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # registers. That is runtime introspection of a compiled artifact, the same
       # class of evidence CallGraph above reads out of .beam chunks, and not a
       # scan of source text — renaming the test reds this, reformatting the file
-      # does not. What it binds is existence: no check here can say the named test
-      # proves its gate, and review still has to.
+      # does not. What it binds is that the named test exists and can run: no
+      # check here can say it proves its gate, and review still has to.
       promoted = fn evidence ->
         %{
           coverage: :relayed,
@@ -733,66 +894,79 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
         }
       end
 
-      real = promoted.(evidence_naming(@resolvable_test))
-      assert RoleCoverage.unmet_promotion_gates(real) == []
-      assert unresolved_promotion_gates(real) == []
+      {path, names, suffix} = write_probe_test_file()
+      gates = RoleCoverage.test_promotion_gates()
+
+      # The probe file is not part of this run, so the first resolution compiles
+      # it. Every later one reads the same registrations back off the code
+      # server, which is the branch a promotion naming an already-loaded file
+      # takes.
+      refute Path.expand(path, @repo_root) in Code.required_files()
+      assert unresolved_promotion_gates(promoted.(evidence_from(path, names))) == []
+      assert Path.expand(path, @repo_root) in Code.required_files()
+      assert unresolved_promotion_gates(promoted.(evidence_from(path, names))) == []
 
       # ExUnit registers a test under its describe block, so either spelling of
       # the name resolves.
-      qualified =
-        promoted.(evidence_naming("the caveat an operator has to see #{@resolvable_test}"))
-
-      assert unresolved_promotion_gates(qualified) == []
+      qualified = Map.new(names, fn {gate, name} -> {gate, "the probe #{name}"} end)
+      assert unresolved_promotion_gates(promoted.(evidence_from(path, qualified))) == []
 
       for {label, evidence, expected} <- [
-            {"a test nobody wrote in a real file", evidence_naming("a test nobody wrote"),
-             {:no_such_test, @guard_file, "a test nobody wrote"}},
-            {"a file nobody wrote",
-             Map.new(
-               RoleCoverage.test_promotion_gates(),
-               &{&1, {"test/does_not_exist_xyz.exs", "a test nobody wrote"}}
-             ), {:no_such_file, "test/does_not_exist_xyz.exs"}},
-            {"a path that is not a file",
-             Map.new(RoleCoverage.test_promotion_gates(), &{&1, {".", "."}}),
-             {:no_such_file, "."}}
+            {"a test nobody wrote in a real test file", evidence_from(path, "nobody wrote this"),
+             {:no_such_test, path, "nobody wrote this"}},
+            {"a test file nobody wrote",
+             evidence_from("test/does_not_exist_xyz_test.exs", "a test nobody wrote"),
+             {:no_such_file, "test/does_not_exist_xyz_test.exs"}},
+            {"a path that is not a test file", evidence_from(".", "."), {:not_a_test_file, "."}},
+            {"the repository's own mix file", evidence_from("mix.exs", "anything"),
+             {:not_a_test_file, "mix.exs"}},
+            {"a path that escapes the repository",
+             evidence_from("test/../../elsewhere_test.exs", "anything"),
+             {:not_a_test_file, "test/../../elsewhere_test.exs"}},
+            {"an absolute path", evidence_from(Path.expand(path, @repo_root), "anything"),
+             {:not_a_test_file, Path.expand(path, @repo_root)}},
+            {"this guard's own test", evidence_from(@guard_file, "anything"),
+             {:names_the_guard_itself, @guard_file}},
+            {"a test ExUnit will never run",
+             evidence_from(path, "the probe skipped test #{suffix}"),
+             {:skipped_test, path, "the probe skipped test #{suffix}"}},
+            {"a test this suite excludes",
+             evidence_from(path, "the probe excluded test #{suffix}"),
+             {:excluded_test, path, "the probe excluded test #{suffix}"}}
           ] do
         declaration = promoted.(Map.put(evidence, :live_comparison, "TODO"))
 
         assert RoleCoverage.unmet_promotion_gates(declaration) == [],
                "#{label} passes the shape check, which is why the resolver exists"
 
-        assert unresolved_promotion_gates(declaration) ==
-                 Enum.map(RoleCoverage.test_promotion_gates(), &{&1, expected}),
+        assert unresolved_promotion_gates(declaration) == Enum.map(gates, &{&1, expected}),
                "#{label} should not resolve"
       end
+
+      # Three gates asking three different questions cannot be answered by one
+      # test. The cheapest declaration that satisfied the resolver named one test
+      # three times, and nothing said so.
+      one_test = evidence_from(path, names[:double_emission])
+
+      assert unresolved_promotion_gates(promoted.(one_test)) ==
+               Enum.map(
+                 gates,
+                 &{&1, {:evidence_shared_with_another_gate, {path, names[:double_emission]}}}
+               )
+
+      two_of_three =
+        Map.put(evidence_from(path, names), :relay_round_trip, {path, names[:double_emission]})
+
+      assert Enum.map(unresolved_promotion_gates(promoted.(two_of_three)), &elem(&1, 0)) ==
+               [:double_emission, :relay_round_trip]
 
       # An unpromoted declaration is not resolved at all, so an unpromoted family
       # is never asked for evidence it does not owe.
       assert unresolved_promotion_gates(%{
-               promoted.(evidence_naming("nobody"))
+               promoted.(evidence_from(path, "nobody"))
                | coverage: :partial
              }) ==
                []
-
-      # A gate naming a file this run has not loaded takes the other branch: the
-      # file is compiled here and read back. Its one test raises when run, so if
-      # loading it ever enqueued it with ExUnit this run would carry an extra
-      # failure rather than quietly running someone else's test.
-      {path, name} = write_probe_test_file()
-
-      resolving =
-        promoted.(
-          RoleCoverage.test_promotion_gates()
-          |> Map.new(&{&1, {path, name}})
-          |> Map.put(:live_comparison, "probe")
-        )
-
-      assert unresolved_promotion_gates(resolving) == []
-
-      missing = put_in(resolving.promotion_evidence[:double_emission], {path, "not in that file"})
-
-      assert unresolved_promotion_gates(missing) ==
-               [{:double_emission, {:no_such_test, path, "not in that file"}}]
     end
 
     test "the promotion gate reads each family's own evidence" do
@@ -884,11 +1058,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       by_series = declared_series_by_event()
       panels = dashboard_panels()
 
+      candidates = Map.keys(by_series)
+
       charting =
         for panel <- panels,
             events =
               panel
-              |> panel_series()
+              |> panel_series(candidates)
               |> Enum.flat_map(&Map.get(by_series, &1, []))
               |> Enum.uniq(),
             events != [],
@@ -923,11 +1099,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       by_series = declared_series_by_event()
       shadow_filter = @shadow_filter
 
+      candidates = Map.keys(by_series)
+
       charted =
         for panel <- dashboard_panels(),
-            target <- Map.get(panel, "targets", []),
-            expr = Map.get(target, "expr", ""),
-            series <- panel_series(%{"targets" => [target]}),
+            target <- targets(panel),
+            expr = target_expr(target),
+            series <- panel_series(%{"targets" => [target]}, candidates),
             event <- Map.get(by_series, series, []),
             MapSet.member?(relayed, event),
             do:
@@ -1001,8 +1179,9 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # sit inside the charted series' own braces while the series carries no
       # `via` matcher at all. All three used to read as pinned.
       commented =
-        "sum(rate(#{series}{namespace=\"$ns\", job=\"app\"\n" <>
-          "  # was via=\"in_process\" before promotion review\n}[5m]))"
+        ~s|sum(rate(#{series}{namespace="$ns", job="app"\n| <>
+          ~S|  # was via="in_process" before promotion review| <>
+          ~s|\n}[5m]))|
 
       single_quoted = ~s|sum(rate(#{series}{note='via="in_process"'}[5m]))|
       backticked = ~s|sum(rate(#{series}{note=`via="in_process"`}[5m]))|
@@ -1051,10 +1230,126 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
                series
              )
 
+      # An expression Prometheus would reject does not get to answer either
+      # question. Letting an unbalanced brace run to the next `}` let the charted
+      # family inherit a pin from an unrelated series — the first defeat again.
+      swallowed = ~s|sum(rate(#{series}{namespace="x"[5m])) + sum(rate(up{via="in_process"}[5m]))|
+
+      assert PromQL.occurrences(swallowed, series) == :invalid
+      refute series_pinned?(swallowed, series)
+      assert series_pins_anywhere?(swallowed, series)
+      assert PromQL.charted_series(swallowed, [series]) == [series]
+
+      for broken <- [
+            ~s|sum(rate(#{series}{via="in_process"[5m]))|,
+            ~s|sum(rate(#{series}{a="1"{, via="in_process"}[5m]))|,
+            ~s|sum(rate(#{series}{job="app}[5m]))|
+          ] do
+        assert PromQL.occurrences(broken, series) == :invalid
+        refute series_pinned?(broken, series)
+      end
+
+      # Escapes are decoded, not stripped: `\n` is a newline Prometheus selects on
+      # and `\x5f` is the underscore it selects on, so one of these charts nothing
+      # and the other is a real pin. An escape Prometheus rejects is invalid, and a
+      # backquoted string is raw, so the same text there is not an escape at all.
+      escaped = fn value -> ~s|sum(rate(#{series}{via=#{value}}[5m]))| end
+
+      refute series_pinned?(escaped.(~S|"i\n_process"|), series)
+      assert series_pinned?(escaped.(~S|"in\x5fprocess"|), series)
+      assert series_pinned?(escaped.(~S|"in\u005fprocess"|), series)
+      assert series_pinned?(escaped.(~S|"in\137process"|), series)
+      assert PromQL.occurrences(escaped.(~S|"in\_process"|), series) == :invalid
+      refute series_pinned?(escaped.(~S|`in\x5fprocess`|), series)
+      assert series_pinned?(escaped.(~S|`in_process`|), series)
+
+      # Label values survive as they were written, not re-encoded byte by byte.
+      assert [[{"note", "=", "café"}, {"via", "=", "in_process"}]] =
+               PromQL.occurrences(~s|#{series}{note="café", via="in_process"}|, series)
+
       # The promoted direction fires on a pin anywhere on the charted family.
       assert series_pins_anywhere?(half, series)
       refute series_pins_anywhere?(~s|sum(rate(#{series}[5m]))|, series)
       refute series_pins_anywhere?(mixed, series)
+
+      # Two matchers on one label that contradict each other select nothing, so
+      # the family is not pinned by either.
+      refute series_pinned?(
+               ~s|sum(rate(#{series}{via="in_process", via="job_relay"}[5m]))|,
+               series
+             )
+
+      refute series_pinned?(
+               ~s|sum(rate(#{series}{via="job_relay", via="in_process"}[5m]))|,
+               series
+             )
+
+      refute series_pinned?(
+               ~s|sum(rate(#{series}{via="in_process", via!="in_process"}[5m]))|,
+               series
+             )
+
+      assert series_pinned?(
+               ~s|sum(rate(#{series}{via="in_process", via!="job_relay"}[5m]))|,
+               series
+             )
+    end
+
+    test "the charted-family check reads what an expression selects, not what it spells" do
+      series = "codex_pooler_quota_cycle_decision_count"
+      other = "codex_pooler_gateway_stream_outcome_count"
+      candidates = [series, other]
+
+      # The sixth defeat. Prometheus resolves this to exactly `series`, relayed
+      # samples included, and the expression contains no `codex_pooler_` token at
+      # all, so a text scan associated the panel with no family and every rule
+      # below it silently did not run.
+      regex_named =
+        ~s|sum by (scope) (rate({__name__=~".+_quota_cycle_decision_count", job="app"}[5m]))|
+
+      refute Regex.match?(~r/\bcodex_pooler_[a-z0-9_]+\b/, regex_named),
+             "this expression must not spell the series, or it proves nothing"
+
+      assert PromQL.charted_series(regex_named, candidates) == [series]
+      refute series_pinned?(regex_named, series)
+
+      assert series_pinned?(
+               String.replace(regex_named, ~s|job="app"|, ~s|via="in_process"|),
+               series
+             )
+
+      # The ordinary spellings still resolve, and only to their own family.
+      assert PromQL.charted_series(~s|sum(rate(#{series}[5m]))|, candidates) == [series]
+
+      assert PromQL.charted_series(~s|sum(rate({__name__="#{other}"}[5m]))|, candidates) == [
+               other
+             ]
+
+      assert PromQL.charted_series(~s|sum(rate(#{series}[5m])) + #{other}|, candidates) ==
+               candidates
+
+      assert PromQL.charted_series(~s|sum(rate(up[5m]))|, candidates) == []
+      assert PromQL.charted_series(~s|sum(rate(up{__name__="#{series}"}[5m]))|, candidates) == []
+
+      # A selector that does not bound the name at all selects every metric the
+      # job exports, this family included.
+      assert PromQL.charted_series(~s|sum(rate({job="codex-pooler-app"}[5m]))|, candidates) ==
+               candidates
+
+      assert PromQL.charted_series(~s|sum(rate({__name__!="#{series}"}[5m]))|, candidates) == [
+               other
+             ]
+
+      # A regex that reaches neither is neither, and one that reaches both is both.
+      assert PromQL.charted_series(~s|sum(rate({__name__=~"unrelated_.*"}[5m]))|, candidates) ==
+               []
+
+      assert PromQL.charted_series(~s|sum(rate({__name__=~"codex_pooler_.*"}[5m]))|, candidates) ==
+               candidates
+
+      # Prometheus anchors the pattern, so a fragment that would match unanchored
+      # does not name the series.
+      assert PromQL.charted_series(~s|sum(rate({__name__=~"quota_cycle"}[5m]))|, candidates) == []
     end
 
     test "a panel nested two rows deep is still a panel this guard reads" do
@@ -1080,7 +1375,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
       charting =
         for panel <- dashboard_panels(),
-            panel |> panel_series() |> Enum.any?(&Map.has_key?(by_series, &1)),
+            panel_series(panel, Map.keys(by_series)) != [],
             do: panel
 
       assert charting != []
@@ -1202,12 +1497,23 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   defp flatten_panel(panel),
     do: [panel | Enum.flat_map(Map.get(panel, "panels") || [], &flatten_panel/1)]
 
-  defp panel_series(panel) do
+  # Which declared series a panel charts. Scanning the expression's text for
+  # `codex_pooler_…` answered a different question — which names it spells — and a
+  # panel that selects a declared family through `{__name__=~"…"}` spells none, so
+  # it was associated with no family and every rule below silently skipped it. The
+  # selection is read from the same tokens the pin is.
+  defp panel_series(panel, candidates) do
     panel
-    |> Map.get("targets", [])
-    |> Enum.flat_map(&Regex.scan(~r/\bcodex_pooler_[a-z0-9_]+\b/, Map.get(&1, "expr", "")))
-    |> Enum.map(&hd/1)
+    |> targets()
+    |> Enum.flat_map(&PromQL.charted_series(target_expr(&1), candidates))
+    |> Enum.uniq()
   end
+
+  # Grafana serialises a panel with no queries as `"targets": null`, which
+  # `Map.get/3` hands back as `nil` rather than as its default.
+  defp targets(panel), do: Map.get(panel, "targets") || []
+
+  defp target_expr(target), do: Map.get(target, "expr") || ""
 
   # Whether `series` carries the shadow pin as a label matcher of its OWN, at
   # every place the expression selects it. A test over the expression's text is
@@ -1218,6 +1524,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   # and none of them is a label matcher, so PromQL.occurrences/2 never sees one.
   defp series_pinned?(expr, series) do
     case PromQL.occurrences(expr, series) do
+      :invalid -> false
       [] -> false
       occurrences -> Enum.all?(occurrences, &shadow_pin?/1)
     end
@@ -1225,62 +1532,128 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
   # The promoted direction: the family is charted with the shadow pin still on
   # it anywhere, so the share the promotion was for stays invisible.
-  defp series_pins_anywhere?(expr, series),
-    do: Enum.any?(PromQL.occurrences(expr, series), &shadow_pin?/1)
+  # An expression Prometheus would reject is treated as pinning, so a promoted
+  # family's broken panel reds here too rather than passing the one direction
+  # `series_pinned?/2`'s `false` does not cover.
+  defp series_pins_anywhere?(expr, series) do
+    case PromQL.occurrences(expr, series) do
+      :invalid -> true
+      occurrences -> Enum.any?(occurrences, &shadow_pin?/1)
+    end
+  end
 
   defp shadow_pin?(matchers), do: PromQL.selects?(matchers, @shadow_label, @shadow_value)
 
-  # Promotion evidence naming a test in this file for each of the three test
-  # gates, plus a live comparison record the resolver does not touch.
-  defp evidence_naming(test_name) do
-    RoleCoverage.test_promotion_gates()
-    |> Map.new(&{&1, {@guard_file, test_name}})
+  # Promotion evidence built from a probe file: `{path, name}` per test gate,
+  # plus a live comparison record the resolver does not touch. A single name is
+  # expanded to all three gates, which is what a fabricated declaration looks
+  # like and is exactly what the distinctness rule refuses.
+  defp evidence_from(path, name) when is_binary(name),
+    do: evidence_from(path, Map.new(RoleCoverage.test_promotion_gates(), &{&1, name}))
+
+  defp evidence_from(path, names) when is_map(names) do
+    names
+    |> Map.new(fn {gate, name} -> {gate, {path, name}} end)
     |> Map.put(:live_comparison, "runbook manual telemetry-relay, 2026-09-15 comparison")
   end
 
   # The test gates whose declared `{file, test name}` names nothing this
-  # repository has, with the reason. `RoleCoverage.unmet_promotion_gates/1` can
-  # only check the shape of a declaration; binding the name to reality needs the
-  # repository, which is the guard's to read.
+  # repository has, or names it in a way that is not evidence, with the reason.
+  # `RoleCoverage.unmet_promotion_gates/1` can only check the shape of a
+  # declaration; binding the name to reality needs the repository, which is the
+  # guard's to read.
   defp unresolved_promotion_gates(%{coverage: coverage} = declaration) do
-    if RoleCoverage.promoted?(coverage) do
-      evidence = Map.get(declaration, :promotion_evidence) || %{}
-
-      RoleCoverage.test_promotion_gates()
-      |> Enum.map(&{&1, unresolved_reason(Map.get(evidence, &1))})
-      |> Enum.reject(&match?({_gate, nil}, &1))
-    else
-      []
-    end
+    if RoleCoverage.promoted?(coverage),
+      do: gate_reasons(Map.get(declaration, :promotion_evidence) || %{}),
+      else: []
   end
 
-  defp unresolved_reason({path, name}) when is_binary(path) and is_binary(name) do
-    file = Path.expand(path, @repo_root)
+  defp gate_reasons(evidence) do
+    gates = RoleCoverage.test_promotion_gates()
+    shared = repeated_evidence(evidence, gates)
 
+    gates
+    |> Enum.map(&{&1, gate_reason(Map.get(evidence, &1), &1 in shared)})
+    |> Enum.reject(&match?({_gate, nil}, &1))
+  end
+
+  defp gate_reason(reference, shared?) do
+    unresolved_reason(reference) ||
+      if shared?, do: {:evidence_shared_with_another_gate, reference}
+  end
+
+  # Three gates asking three different questions cannot be answered by one test.
+  # Nothing said so, and the cheapest declaration that satisfied the resolver was
+  # to name one test three times.
+  defp repeated_evidence(evidence, gates) do
+    evidence
+    |> Map.take(gates)
+    |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+    |> Enum.flat_map(fn {_reference, sharing} ->
+      if length(sharing) > 1, do: sharing, else: []
+    end)
+  end
+
+  # A gate may name only a test file, by a repository-relative path. Without that
+  # the resolver hands whatever the declaration points at to `Code.require_file/1`
+  # and runs it: measured, `mix.exs` redefines the Mix project and raises,
+  # `README.md` raises a `SyntaxError`, and an ordinary `.exs` executes its
+  # top-level code inside the test run. The declaration is in-repo and reviewed,
+  # so that is a sharp edge rather than an injection channel, and it has no
+  # upside. Naming this guard is refused separately: a guard cannot be its own
+  # evidence.
+  defp unresolved_reason({path, name}) when is_binary(path) and is_binary(name) do
     cond do
-      not File.regular?(file) -> {:no_such_file, path}
-      test_named?(file, name) -> nil
-      true -> {:no_such_test, path, name}
+      not test_file_path?(path) -> {:not_a_test_file, path}
+      path == @guard_file -> {:names_the_guard_itself, path}
+      not File.regular?(Path.expand(path, @repo_root)) -> {:no_such_file, path}
+      true -> registration_reason(path, name)
     end
   end
 
   defp unresolved_reason(evidence), do: {:not_a_test_reference, evidence}
 
+  defp test_file_path?(path) do
+    Path.type(path) == :relative and String.ends_with?(path, "_test.exs") and
+      ".." not in Path.split(path)
+  end
+
+  defp registration_reason(path, name) do
+    case find_registered_test(Path.expand(path, @repo_root), name) do
+      nil -> {:no_such_test, path, name}
+      test -> runnable_reason(test, path, name)
+    end
+  end
+
+  # A registered test is not necessarily a test that runs. `@tag :skip` and a tag
+  # the suite excludes each leave the registration in place while ExUnit refuses
+  # to execute it, so evidence naming one names nothing that ever asserts
+  # anything. The decision is ExUnit's own, not a second implementation of it.
+  defp runnable_reason(test, path, name) do
+    config = ExUnit.configuration()
+
+    case ExUnit.Filters.eval(config[:include] || [], config[:exclude] || [], test.tags, []) do
+      :ok -> if test.tags[:skip], do: {:skipped_test, path, name}
+      {:excluded, _why} -> {:excluded_test, path, name}
+      {:skipped, _why} -> {:skipped_test, path, name}
+    end
+  end
+
   # Loading the file compiles it; the compiled module exports `__ex_unit__/0`,
-  # whose `%ExUnit.Test{}` structs carry the registered name and the file it was
-  # defined in. No test is run, and no source text is read. A file this run has
-  # already loaded is not required again, so its modules come from the code
-  # server instead.
-  defp test_named?(file, name) do
+  # whose `%ExUnit.Test{}` structs carry the registered name, its tags and the
+  # file it was defined in. No test is run, and no source text is read. A file
+  # this run has already loaded is not required again, so its modules come from
+  # the code server instead.
+  defp find_registered_test(file, name) do
     modules =
       case Code.require_file(file) do
         nil -> for {module, _beam} <- :code.all_loaded(), do: module
         compiled -> Enum.map(compiled, &elem(&1, 0))
       end
 
-    Enum.any?(modules, fn module ->
+    Enum.find_value(modules, fn module ->
       function_exported?(module, :__ex_unit__, 0) and
-        Enum.any?(module.__ex_unit__().tests, &names_test?(&1, file, name))
+        Enum.find(module.__ex_unit__().tests, &names_test?(&1, file, name))
     end)
   end
 
@@ -1291,27 +1664,65 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       Atom.to_string(test.name) in ["test #{name}", "test #{test.tags[:describe]} #{name}"]
   end
 
-  # An ExUnit file this run has not loaded, so resolving a gate against it takes
-  # the compile branch. It lives outside test_paths, so nothing else collects it.
+  # An ExUnit file this run has not loaded, with one test per test gate plus a
+  # skipped and an excluded one, so a declaration built from it resolves, is
+  # distinct per gate, and can demonstrate what does not resolve. It is written
+  # into the repository because a gate may only name a repository-relative path;
+  # `tmp/` is gitignored and outside `test_paths`, so `mix test` never collects
+  # it, and `compile_synthetic_worker/0` can use `System.tmp_dir!()` only because
+  # nothing there has to be namable by a declaration. Every test in it raises, so
+  # if loading one ever enqueued it with ExUnit this run would carry an extra
+  # failure rather than quietly running someone else's test.
   defp write_probe_test_file do
     suffix = System.unique_integer([:positive])
-    name = "the probe gate resolves #{suffix}"
-    path = "tmp/role_coverage_gate_probe_#{suffix}_test.exs"
+    gates = RoleCoverage.test_promotion_gates()
+    names = Map.new(gates, &{&1, "the probe #{&1} gate resolves #{suffix}"})
+    path = Path.join(@probe_dir, "role_coverage_gate_probe_#{suffix}_test.exs")
     full = Path.expand(path, @repo_root)
     File.mkdir_p!(Path.dirname(full))
-    on_exit(fn -> File.rm_rf!(full) end)
+    sweep_stale_probes(Path.dirname(full))
+
+    on_exit(fn ->
+      File.rm_rf!(full)
+      File.rmdir(Path.dirname(full))
+    end)
+
+    body =
+      Enum.map_join(names, "\n", fn {_gate, name} -> probe_test(name, "") end) <>
+        probe_test("the probe skipped test #{suffix}", "@tag :skip\n    ") <>
+        probe_test("the probe excluded test #{suffix}", "@tag :unix_integration\n    ")
 
     File.write!(full, """
     defmodule RoleCoverageGateProbe#{suffix}Test do
       use ExUnit.Case, async: false
 
-      test "#{name}" do
-        raise "loading a named evidence file must not run its tests"
-      end
+      describe "the probe" do
+    #{body}  end
     end
     """)
 
-    {path, name}
+    {path, names, suffix}
+  end
+
+  defp probe_test(name, tag) do
+    """
+        #{tag}test "#{name}" do
+          raise "loading a named evidence file must not run its tests"
+        end
+    """
+  end
+
+  # An abnormal exit leaves one behind in a directory six agents share; a run an
+  # hour later is not the one that wrote it.
+  defp sweep_stale_probes(dir) do
+    cutoff = System.os_time(:second) - 3600
+
+    for stale <- Path.wildcard(Path.join(dir, "role_coverage_gate_probe_*_test.exs")),
+        match?(
+          {:ok, %File.Stat{mtime: mtime}} when mtime < cutoff,
+          File.stat(stale, time: :posix)
+        ),
+        do: File.rm(stale)
   end
 
   defp compile_synthetic_worker do

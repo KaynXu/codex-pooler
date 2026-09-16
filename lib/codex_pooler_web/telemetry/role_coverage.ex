@@ -164,6 +164,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   }
 
   @coverage_states @coverage_classes |> Map.keys() |> Enum.sort()
+  @marked_coverage_states @markers |> Map.keys() |> Enum.sort()
 
   # What a coverage state's descriptions may not say. Requiring the new marker
   # cannot by itself force a rewrite on promotion: a `:partial` family's
@@ -183,6 +184,15 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   # the relay now carries exactly that share. The role names come from
   # `@unscraped_oban_modes` rather than from a second hand-written list, so a
   # changed role set moves both halves together.
+  #
+  # Matching has to be looser than an exact token and tighter than a substring.
+  # A bare word boundary is too tight: `workers or schedulers` is the more
+  # natural English of the two and escaped it, and so did `oban_worker`, because
+  # `_` was treated as a word character. A plural `s` is allowed after the word
+  # and `_` is not part of it. What no word list can close is a caveat that
+  # avoids the role nouns entirely ("the job pods run no reporter"); that
+  # residual is recorded rather than papered over, because the answer to it is
+  # review, not a longer list.
   @forbidden_markers %{relayed: [@caveat_marker | @unscraped_oban_modes]}
 
   # What a family owes before it may be declared `:relayed`, each proven for that
@@ -267,6 +277,17 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   @doc "Every promotion state a declaration may carry."
   @spec coverage_states() :: [coverage()]
   def coverage_states, do: @coverage_states
+
+  @doc """
+  Every state the marker functions accept.
+
+  The classification and the markers are separate maps, and the guard asserts
+  they hold the same states: a state present in one and absent from the other is
+  half-covered, which is how `:unscraped_only` read as supported while matching
+  no guard clause.
+  """
+  @spec marked_coverage_states() :: [coverage()]
+  def marked_coverage_states, do: @marked_coverage_states
 
   @doc """
   Whether `coverage` keeps the job share out of operator totals or puts it in them.
@@ -361,24 +382,6 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   def required_marker(coverage) when is_map_key(@markers, coverage),
     do: Map.fetch!(@markers, coverage)
 
-  @doc "The substring `event`'s metric and panel descriptions owe, or `nil` when undeclared."
-  @spec required_marker_for([atom()]) :: String.t() | nil
-  def required_marker_for(event) when is_list(event) do
-    case coverage_for(event) do
-      nil -> nil
-      coverage -> required_marker(coverage)
-    end
-  end
-
-  @doc """
-  Whether `description` carries the caveat a declared event's metric and panels owe an operator.
-  """
-  @spec caveat_present?(term()) :: boolean()
-  def caveat_present?(description) when is_binary(description),
-    do: String.contains?(description, @caveat_marker)
-
-  def caveat_present?(_description), do: false
-
   @doc """
   Whether `description` carries the marker a declaration in `coverage` owes an operator.
 
@@ -420,7 +423,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   end
 
   defp word_present?(description, word) when is_binary(description) do
-    Regex.match?(~r/(?<![A-Za-z0-9_])#{Regex.escape(word)}(?![A-Za-z0-9_])/i, description)
+    Regex.match?(~r/(?<![A-Za-z0-9])#{Regex.escape(word)}s?(?![A-Za-z0-9])/i, description)
   end
 
   defp word_present?(_description, _word), do: false
