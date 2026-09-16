@@ -31,11 +31,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   # TelemetryMetricsPrometheus.Core exports a distribution as three series.
   @distribution_suffixes ["_bucket", "_sum", "_count"]
 
-  # The selector a shadowed family's panels pin, and the matcher that recognises
-  # it as a label matcher rather than as a substring. `relay_via="in_process"`
-  # contains the literal and selects nothing of the kind.
-  @shadow_filter ~s(via="in_process")
-  @shadow_matcher ~r/(?<![A-Za-z0-9_])via\s*=\s*"in_process"/
+  # The selector a shadowed family's panels pin, as a label and a value rather
+  # than as text: what the guard has to decide is whether the charted series
+  # carries this label matcher, which is a question about PromQL structure and
+  # not about which characters appear near each other.
+  @shadow_label "via"
+  @shadow_value "in_process"
+  @shadow_filter ~s(#{@shadow_label}="#{@shadow_value}")
 
   defmodule CallGraph do
     @moduledoc false
@@ -233,6 +235,136 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
       parents
     end
+  end
+
+  defmodule PromQL do
+    @moduledoc false
+    # Label matchers read out of a PromQL expression.
+    #
+    # Four rounds of review defeated a regex over selector *text*, each time by a
+    # literal that is not a label matcher: a pin supplied by a second series, a
+    # label whose name merely ends in `via`, a `#` comment left where a pin used
+    # to be, and a single-quoted or backtick label value quoting the pin. PromQL
+    # has three string forms and permits comments, so no amount of patching a
+    # scanner answers the question; a matcher that has to be patched once per
+    # review round is the defect. This tokenizes instead — strings and comments
+    # are consumed as tokens, and a label matcher is a name, an operator and a
+    # string value in that order — so those literals are not matchers by
+    # construction and cannot be made into one by rewriting them.
+    #
+    # It is not a PromQL parser: it knows strings, comments, braces, matcher
+    # operators and identifiers, and treats everything else as opaque. That is
+    # enough to answer "does this occurrence of this series carry this label
+    # matcher", and unterminated strings or unbalanced braces lose the
+    # occurrence rather than inventing one, so the guard fails closed.
+
+    @type matcher :: {String.t(), String.t(), String.t()}
+
+    @doc """
+    The label matchers on each occurrence of `series` in `expr`, one list per occurrence.
+
+    An occurrence is the series named bare (`foo`, `foo{...}`) or selected by
+    `__name__` (`{__name__="foo", ...}`), which is the form a Grafana panel takes
+    when the name itself is templated. A bare occurrence with no braces has no
+    matchers, which is what makes an unpinned one visible.
+    """
+    @spec occurrences(String.t(), String.t()) :: [[matcher()]]
+    def occurrences(expr, series) when is_binary(expr) and is_binary(series),
+      do: expr |> tokens() |> scan(series, [])
+
+    @doc "Whether `matchers` selects exactly `label` = `value`."
+    @spec selects?([matcher()], String.t(), String.t()) :: boolean()
+    def selects?(matchers, label, value) do
+      # `=~` on a literal is the same selection: PromQL anchors a matcher regex,
+      # so `via=~"in_process"` picks the same series `via="in_process"` does.
+      # `!=` and `!~` are the opposite and are not pins.
+      Enum.any?(matchers, fn {name, operator, matched} ->
+        name == label and operator in ~w(= =~) and matched == value
+      end)
+    end
+
+    defp scan([], _series, acc), do: Enum.reverse(acc)
+
+    defp scan([{:ident, series}, :lbrace | rest], series, acc) do
+      {matchers, rest} = matchers(rest, [])
+      scan(rest, series, [matchers | acc])
+    end
+
+    defp scan([{:ident, series} | rest], series, acc), do: scan(rest, series, [[] | acc])
+
+    defp scan([:lbrace | rest], series, acc) do
+      {matchers, rest} = matchers(rest, [])
+
+      scan(
+        rest,
+        series,
+        if(selects?(matchers, "__name__", series), do: [matchers | acc], else: acc)
+      )
+    end
+
+    defp scan([_token | rest], series, acc), do: scan(rest, series, acc)
+
+    defp matchers([], acc), do: {Enum.reverse(acc), []}
+    defp matchers([:rbrace | rest], acc), do: {Enum.reverse(acc), rest}
+
+    defp matchers([{:ident, name}, {:op, operator}, {:string, value} | rest], acc),
+      do: matchers(rest, [{name, operator, value} | acc])
+
+    defp matchers([_token | rest], acc), do: matchers(rest, acc)
+
+    defp tokens(expr), do: tokens(expr, [])
+
+    defp tokens(<<>>, acc), do: Enum.reverse(acc)
+    defp tokens(<<"#", rest::binary>>, acc), do: tokens(comment(rest), acc)
+    defp tokens(<<c, rest::binary>>, acc) when c in ~c" \t\n\r", do: tokens(rest, acc)
+
+    defp tokens(<<q, rest::binary>>, acc) when q in ~c"\"'" do
+      {value, rest} = quoted(rest, q, [])
+      tokens(rest, [{:string, value} | acc])
+    end
+
+    defp tokens(<<"`", rest::binary>>, acc) do
+      {value, rest} = backquoted(rest, [])
+      tokens(rest, [{:string, value} | acc])
+    end
+
+    defp tokens(<<"{", rest::binary>>, acc), do: tokens(rest, [:lbrace | acc])
+    defp tokens(<<"}", rest::binary>>, acc), do: tokens(rest, [:rbrace | acc])
+    defp tokens(<<"=~", rest::binary>>, acc), do: tokens(rest, [{:op, "=~"} | acc])
+    defp tokens(<<"!~", rest::binary>>, acc), do: tokens(rest, [{:op, "!~"} | acc])
+    defp tokens(<<"!=", rest::binary>>, acc), do: tokens(rest, [{:op, "!="} | acc])
+    defp tokens(<<"==", rest::binary>>, acc), do: tokens(rest, [:other | acc])
+    defp tokens(<<"=", rest::binary>>, acc), do: tokens(rest, [{:op, "="} | acc])
+
+    defp tokens(<<c, _::binary>> = expr, acc) when c in ?a..?z or c in ?A..?Z or c in ~c"_:" do
+      {name, rest} = ident(expr, [])
+      tokens(rest, [{:ident, name} | acc])
+    end
+
+    defp tokens(<<_c, rest::binary>>, acc), do: tokens(rest, [:other | acc])
+
+    defp ident(<<c, rest::binary>>, acc)
+         when c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c in ~c"_:",
+         do: ident(rest, [c | acc])
+
+    defp ident(rest, acc), do: {acc |> Enum.reverse() |> List.to_string(), rest}
+
+    # An unterminated string runs to the end of the expression: the occurrence it
+    # would have closed is lost, so the guard reports the family unpinned.
+    defp quoted(<<>>, _q, acc), do: {collect(acc), <<>>}
+    defp quoted(<<"\\", c, rest::binary>>, q, acc), do: quoted(rest, q, [c | acc])
+    defp quoted(<<q, rest::binary>>, q, acc), do: {collect(acc), rest}
+    defp quoted(<<c, rest::binary>>, q, acc), do: quoted(rest, q, [c | acc])
+
+    defp backquoted(<<>>, acc), do: {collect(acc), <<>>}
+    defp backquoted(<<"`", rest::binary>>, acc), do: {collect(acc), rest}
+    defp backquoted(<<c, rest::binary>>, acc), do: backquoted(rest, [c | acc])
+
+    defp collect(acc), do: acc |> Enum.reverse() |> List.to_string()
+
+    defp comment(<<>>), do: <<>>
+    defp comment(<<"\n", rest::binary>>), do: rest
+    defp comment(<<_c, rest::binary>>), do: comment(rest)
   end
 
   setup_all do
@@ -736,6 +868,67 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       refute series_pinned?(~s|sum(rate(#{series}[5m]))|, series)
       assert series_pinned?(~s|sum(rate(#{series}{via="in_process"}[5m]))|, series)
 
+      # A Grafana variable puts a `}` inside a quoted label value, so a selector
+      # cannot be taken to end at the first closing brace.
+      assert series_pinned?(
+               ~s|sum(rate(#{series}{pod=~"${pod:regex}", via="in_process"}[5m]))|,
+               series
+             )
+
+      # PromQL has three string forms and permits comments, so the literal can
+      # sit inside the charted series' own braces while the series carries no
+      # `via` matcher at all. All three used to read as pinned.
+      commented =
+        "sum(rate(#{series}{namespace=\"$ns\", job=\"app\"\n" <>
+          "  # was via=\"in_process\" before promotion review\n}[5m]))"
+
+      single_quoted = ~s|sum(rate(#{series}{note='via="in_process"'}[5m]))|
+      backticked = ~s|sum(rate(#{series}{note=`via="in_process"`}[5m]))|
+
+      for {form, expr} <- [
+            {"a # comment where the pin was", commented},
+            {"a single-quoted label value", single_quoted},
+            {"a backtick label value", backticked}
+          ] do
+        assert String.contains?(expr, @shadow_filter), "#{form} should contain the literal"
+        refute series_pinned?(expr, series), "#{form} is not a label matcher"
+        refute series_pins_anywhere?(expr, series), "#{form} is not a label matcher"
+      end
+
+      # And the pin is still read when it is a matcher next to any of them.
+      assert series_pinned?(
+               ~s|sum(rate(#{series}{note='x', via="in_process"} # pinned\n[5m]))|,
+               series
+             )
+
+      # A series selected by __name__ rather than written bare is the same
+      # occurrence. Hardening the matcher had made this correctly-pinned form
+      # read as unpinned.
+      assert series_pinned?(~s|sum(rate({__name__="#{series}", via="in_process"}[5m]))|, series)
+      refute series_pinned?(~s|sum(rate({__name__="#{series}", job="app"}[5m]))|, series)
+
+      assert series_pins_anywhere?(
+               ~s|sum(rate({__name__="#{series}", via="in_process"}))|,
+               series
+             )
+
+      refute series_pinned?(~s|sum(rate({__name__="#{other}", via="in_process"}[5m]))|, series)
+
+      # `via=~"in_process"` selects exactly what `via="in_process"` does, and the
+      # negated operators select its complement.
+      assert series_pinned?(~s|sum(rate(#{series}{via=~"in_process"}[5m]))|, series)
+      refute series_pinned?(~s|sum(rate(#{series}{via!="in_process"}[5m]))|, series)
+      refute series_pinned?(~s|sum(rate(#{series}{via="job_relay"}[5m]))|, series)
+
+      # A `via` written as a grouping label or as a string argument is not a
+      # matcher on the series either.
+      refute series_pinned?(~s|sum by (via) (rate(#{series}[5m]))|, series)
+
+      refute series_pinned?(
+               ~s|label_replace(sum(rate(#{series}[5m])), "via", "in_process", "", "")|,
+               series
+             )
+
       # The promoted direction fires on a pin anywhere on the charted family.
       assert series_pins_anywhere?(half, series)
       refute series_pins_anywhere?(~s|sum(rate(#{series}[5m]))|, series)
@@ -894,34 +1087,26 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     |> Enum.map(&hd/1)
   end
 
-  # Whether `series` carries `@shadow_filter` in its OWN label selector, at every
-  # place the expression names it. A substring test over the whole expression is
+  # Whether `series` carries the shadow pin as a label matcher of its OWN, at
+  # every place the expression selects it. A test over the expression's text is
   # satisfied by any other series in the same expression that happens to pin it,
-  # and by a different label whose name merely ends in `via`, so neither says
-  # anything about the family actually being charted.
+  # by a label whose name merely ends in `via`, by a `#` comment where a pin used
+  # to be, and by the pin quoted inside some other label's single-quoted or
+  # backtick value. None of those says anything about the family being charted,
+  # and none of them is a label matcher, so PromQL.occurrences/2 never sees one.
   defp series_pinned?(expr, series) do
-    case series_selectors(expr, series) do
+    case PromQL.occurrences(expr, series) do
       [] -> false
-      selectors -> Enum.all?(selectors, &Regex.match?(@shadow_matcher, &1))
+      occurrences -> Enum.all?(occurrences, &shadow_pin?/1)
     end
   end
 
   # The promoted direction: the family is charted with the shadow pin still on
   # it anywhere, so the share the promotion was for stays invisible.
   defp series_pins_anywhere?(expr, series),
-    do: Enum.any?(series_selectors(expr, series), &Regex.match?(@shadow_matcher, &1))
+    do: Enum.any?(PromQL.occurrences(expr, series), &shadow_pin?/1)
 
-  # The selector braces attached to each occurrence of `series`, or "" where it
-  # is written bare. Quoted label values are consumed whole, because a Grafana
-  # variable such as `pod=~"${pod:regex}"` puts a `}` inside one.
-  defp series_selectors(expr, series) do
-    ~r/(?<![A-Za-z0-9_:])#{Regex.escape(series)}(?![A-Za-z0-9_:])\s*(\{(?:"(?:[^"\\]|\\.)*"|[^{}"])*\})?/
-    |> Regex.scan(expr)
-    |> Enum.map(fn
-      [_match, selector] -> selector
-      [_match] -> ""
-    end)
-  end
+  defp shadow_pin?(matchers), do: PromQL.selects?(matchers, @shadow_label, @shadow_value)
 
   defp compile_synthetic_worker do
     dir =
