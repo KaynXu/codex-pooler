@@ -164,7 +164,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       correlation_id:
         authorized_correlation_id ||
           durable_request_correlation_id(request_options, payload),
-      idempotency_key: request_metadata.idempotency_key,
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
       runtime_revocation_epoch: request_options.runtime.api_key_runtime_epoch,

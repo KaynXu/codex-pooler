@@ -155,7 +155,6 @@ defmodule CodexPooler.Gateway.Denials do
       endpoint: endpoint,
       transport: request_options.transport.transport,
       correlation_id: RequestOptions.websocket_denial_correlation_id(request_options, turn_claim),
-      idempotency_key: request_options.request_metadata.idempotency_key,
       client_ip: request_options.request_metadata.client_ip,
       user_agent: request_options.request_metadata.user_agent,
       requested_model: requested_model(model, payload, endpoint),

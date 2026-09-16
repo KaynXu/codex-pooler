@@ -1598,6 +1598,27 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
            ) == []
   end
 
+  test "reservation attrs never carry the raw idempotency key" do
+    # Every `Request` insert nils the `idempotency_key` column, so carrying the
+    # raw header value this far only waits for a future caller to persist it
+    # (findings#212). The header still reaches the routing affinity key, which
+    # hashes it.
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = websocket_payload(setup.model.exposed_model_id, "idempotency key carry")
+    raw_key = "idem-raw-key-#{System.unique_integer([:positive])}"
+
+    request_options =
+      RequestOptions.build(%{idempotency_key: raw_key}, @endpoint, payload)
+
+    assert request_options.request_metadata.idempotency_key == raw_key
+
+    attrs = AccountingReservation.attrs(auth, payload, @endpoint, request_options)
+
+    refute inspect(attrs, limit: :infinity, printable_limit: :infinity) =~ raw_key
+  end
+
   defp request_options(auth, payload, model, request_id \\ "pre-attempt-rollback") do
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
 
