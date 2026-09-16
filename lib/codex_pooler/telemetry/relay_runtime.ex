@@ -159,25 +159,30 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       # be retried into existence, so capturing it would hold a `max_series`
       # slot forever with nothing to say the sample was lost. It is refused
       # here instead, and counted where it is refused.
-      if RelayEvent.storable_measurements?(values) and RelayEvent.storable_labels?(labels) do
-        key = {relay_event, labels, values}
-        token = make_ref()
-        shard = :erlang.phash2(token, config.shards)
-
-        shard_cap =
-          div(config.max_pending, config.shards) +
-            if(shard < rem(config.max_pending, config.shards), do: 1, else: 0)
-
-        capture_callback(config, shard, token, key, shard_cap)
-      else
-        {_table, capacity, _max} = config.capture
-        :atomics.add(capacity, @rejected_slot, 1)
-      end
+      if RelayEvent.storable_measurements?(values) and RelayEvent.storable_labels?(labels),
+        do: admit_sample(config, {relay_event, labels, values}),
+        else: count_rejected_sample(config)
     end
 
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp admit_sample(config, key) do
+    token = make_ref()
+    shard = :erlang.phash2(token, config.shards)
+
+    shard_cap =
+      div(config.max_pending, config.shards) +
+        if(shard < rem(config.max_pending, config.shards), do: 1, else: 0)
+
+    capture_callback(config, shard, token, key, shard_cap)
+  end
+
+  defp count_rejected_sample(config) do
+    {_table, capacity, _max} = config.capture
+    :atomics.add(capacity, @rejected_slot, 1)
   end
 
   defp capture_callback(config, shard, token, key, shard_cap) do
