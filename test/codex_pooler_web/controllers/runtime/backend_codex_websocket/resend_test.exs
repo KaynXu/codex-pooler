@@ -491,13 +491,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert first.network_error_code == expected_first_error
   end
 
-  # A port nothing listens on: bound once to learn its number and closed
-  # again, so every connect to it is refused until a listener takes it.
-  defp reserve_closed_port! do
+  # A port nothing listens on: bound once to learn its number, closed again,
+  # then probed to prove the kernel refuses it before the test relies on that.
+  # Binding and closing alone has a TOCTOU window in which a concurrent
+  # partition can take the freed port, which would turn a refused-connect test
+  # into a hang or an unrelated failure (findings#208). The probe does not
+  # close the window, it bounds it: a port that no longer refuses is discarded
+  # and a fresh one is drawn, and exhausting the attempts fails loudly with the
+  # real cause instead of leaving a mystery timeout.
+  @closed_port_attempts 10
+  @closed_port_probe_timeout_ms 200
+
+  defp reserve_closed_port!(attempts \\ @closed_port_attempts) do
     {:ok, listener} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, reuseaddr: true])
     {:ok, port} = :inet.port(listener)
     :ok = :gen_tcp.close(listener)
-    port
+
+    case :gen_tcp.connect(
+           {127, 0, 0, 1},
+           port,
+           [:binary, active: false],
+           @closed_port_probe_timeout_ms
+         ) do
+      {:error, :econnrefused} ->
+        port
+
+      {:ok, socket} ->
+        :ok = :gen_tcp.close(socket)
+        retry_closed_port!(attempts, port, :accepted)
+
+      {:error, reason} ->
+        retry_closed_port!(attempts, port, reason)
+    end
+  end
+
+  defp retry_closed_port!(attempts, _port, _reason) when attempts > 1,
+    do: reserve_closed_port!(attempts - 1)
+
+  defp retry_closed_port!(_attempts, port, reason) do
+    flunk(
+      "no refusing loopback port after #{@closed_port_attempts} attempts; " <>
+        "last port #{port} answered #{inspect(reason)}"
+    )
   end
 
   # A listener that accepts `count` connections and closes each immediately
