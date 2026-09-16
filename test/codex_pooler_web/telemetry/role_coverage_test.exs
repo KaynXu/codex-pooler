@@ -395,8 +395,29 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # "OBAN_MODE=worker or scheduler ... run no reporter" sentence would
       # survive on a graph that had started carrying that share. What catches
       # it is the marker a promoted description may NOT carry.
-      assert RoleCoverage.forbidden_marker(:relayed) == RoleCoverage.caveat_marker()
-      assert RoleCoverage.forbidden_marker(:partial) == nil
+      assert RoleCoverage.caveat_marker() in RoleCoverage.forbidden_markers(:relayed)
+      assert RoleCoverage.forbidden_markers(:partial) == []
+
+      # One literal token is not the claim. A caveat reworded to drop OBAN_MODE
+      # says the same false thing to an operator, so the roles it has to name are
+      # forbidden too — and the promoted description has nothing true left to say
+      # about them, because the relay now carries exactly the share they withhold.
+      reworded =
+        "The job share arrives as via=\"job_relay\". When the pooler runs as worker or " <>
+          "scheduler, no reporter runs, so this graph is empty."
+
+      refute String.contains?(reworded, RoleCoverage.caveat_marker())
+      assert RoleCoverage.marker_present?(reworded, :relayed)
+      refute RoleCoverage.markers_correct?(reworded, :relayed)
+
+      # Case and word boundaries: the token itself is caught however it is cased,
+      # and a longer word that merely contains a role name is not a caveat.
+      refute RoleCoverage.markers_correct?(
+               "job_relay, exported only under oban_mode=all",
+               :relayed
+             )
+
+      assert RoleCoverage.markers_correct?("job_relay from coworkers and reschedulers", :relayed)
 
       declared =
         for metric <- Telemetry.prometheus_metrics(),
@@ -454,6 +475,53 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       refute RoleCoverage.markers_correct?(both, :relayed)
       assert RoleCoverage.markers_correct?(relayed_only, :relayed)
       refute RoleCoverage.markers_correct?(nil, :relayed)
+    end
+
+    test "every coverage state is classified, marked and checked, and an unknown one raises" do
+      # `:unscraped_only` was declared in the type, in the marker map and in a
+      # passing marker test, so it read as a supported state — and matched no
+      # guard clause anywhere. A family moved to it could have its panels
+      # unpinned, which is the substantive act of promotion, while owing no
+      # evidence and keeping a now-false OBAN_MODE caveat. Nothing here may
+      # depend on the guards happening to know today's three atoms.
+      states = RoleCoverage.coverage_states()
+
+      assert Enum.sort(states) == Enum.sort([:partial, :unscraped_only, :relayed])
+
+      for state <- states do
+        assert RoleCoverage.coverage_class(state) in [:shadowed, :promoted],
+               "#{state} is not classified, so no panel rule applies to it"
+
+        assert RoleCoverage.shadowed?(state) != RoleCoverage.promoted?(state),
+               "#{state} is both shadowed and promoted, or neither"
+
+        assert is_binary(RoleCoverage.required_marker(state)),
+               "#{state} owes no marker, so its descriptions are unchecked"
+
+        expected = if RoleCoverage.promoted?(state), do: RoleCoverage.promotion_gates(), else: []
+
+        assert RoleCoverage.unmet_promotion_gates(%{coverage: state}) == expected,
+               "#{state} does not demand the promotion evidence its class owes"
+      end
+
+      # Every shipped declaration is one of them, so no family sits outside the
+      # classification the guards below run on.
+      undeclared_states =
+        for {event, %{coverage: coverage}} <- RoleCoverage.unscraped_emissions(),
+            coverage not in states,
+            do: {event, coverage}
+
+      assert undeclared_states == [],
+             "these families declare a coverage state nothing classifies: " <>
+               inspect(undeclared_states)
+
+      # A state invented tomorrow is refused rather than skipped.
+      assert_raise FunctionClauseError, fn -> RoleCoverage.coverage_class(:invented_state) end
+      assert_raise FunctionClauseError, fn -> RoleCoverage.shadowed?(:invented_state) end
+
+      assert_raise FunctionClauseError, fn ->
+        RoleCoverage.unmet_promotion_gates(%{coverage: :invented_state})
+      end
     end
 
     test "every promoted family carries evidence for each of its four gates" do
@@ -527,7 +595,9 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # panels still select via="in_process", and the caveats stay true. This
       # states today's position; the gate above is what a promotion has to pass.
       promoted =
-        for {event, %{coverage: :relayed}} <- RoleCoverage.unscraped_emissions(), do: event
+        for {event, %{coverage: coverage}} <- RoleCoverage.unscraped_emissions(),
+            RoleCoverage.promoted?(coverage),
+            do: event
 
       assert promoted == [],
              "#{inspect(promoted)} is declared :relayed. Promotion needs that family's " <>
@@ -614,8 +684,12 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
              "no operator dashboard panel charts a relayed family any more; this check would " <>
                "pass vacuously"
 
+      # Classified through RoleCoverage rather than matched against the atoms
+      # this file happens to know: a family in a state neither arm named used to
+      # match neither and be skipped by both.
       unshadowed =
-        for {title, series, expr, :partial} <- charted,
+        for {title, series, expr, coverage} <- charted,
+            RoleCoverage.shadowed?(coverage),
             not series_pinned?(expr, series),
             do: "#{title} (#{series})"
 
@@ -625,7 +699,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
                Enum.join(unshadowed, ", ")
 
       still_pinned =
-        for {title, series, expr, :relayed} <- charted,
+        for {title, series, expr, coverage} <- charted,
+            RoleCoverage.promoted?(coverage),
             series_pins_anywhere?(expr, series),
             do: "#{title} (#{series})"
 
