@@ -23,7 +23,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Repo
 
-  # Mirrors `FailedPredecessorResend`'s own chain bound.
+  # The same NUMBER as `FailedPredecessorResend`'s own chain bound, and
+  # deliberately not the same behaviour at it: that one returns
+  # `{:error, :chain_exhausted}` and refuses, this one stops deriving and falls
+  # open to a generated id. See `walk_native_turn_chain/4` for why (findings#212,
+  # row 212-50).
   @native_turn_chain_depth 16
 
   @usage_pending "usage_pending"
