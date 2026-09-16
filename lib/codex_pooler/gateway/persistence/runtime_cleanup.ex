@@ -5,6 +5,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
@@ -214,11 +216,31 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
         {:cont, {:ok, recovered_count}}
 
       {:ok, {:recovered, result}} ->
-        Interruption.emit_committed_recovery_outcomes(result)
+        emit_recovery_outcomes(result)
         {:cont, {:ok, recovered_count + 1}}
 
       {:error, reason} ->
         {:halt, {:error, reason}}
+    end
+  end
+
+  # The after-commit property of these outcomes rests on this step running bare,
+  # which `RuntimeStateCleanup.run/1` guarantees today. If a future caller wraps
+  # it, the markers are not this function's to emit and it has nowhere to put
+  # them; saying so beats losing a recovery's outcomes silently. Only the count
+  # crosses into the log.
+  defp emit_recovery_outcomes(result) do
+    case Interruption.emit_committed_recovery_outcomes(result) do
+      :ok ->
+        :ok
+
+      {:deferred, markers} ->
+        Logger.warning(
+          "expired-owner recovery outcomes dropped inside a caller transaction " <>
+            "outcomes=#{length(markers)}"
+        )
+
+        :ok
     end
   end
 

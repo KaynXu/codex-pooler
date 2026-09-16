@@ -1354,11 +1354,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp bounded_transport(transport) when transport in ["http_sse", "websocket"], do: transport
   defp bounded_transport(_transport), do: "unknown"
 
-  @doc false
-  @spec emit_committed_recovery_outcomes(%{interrupted_outcomes: [map()]}) :: :ok
+  @doc """
+  Emits the interrupted outcomes of a committed expired-owner recovery.
+
+  A caller that already holds a transaction has not committed anything yet, so
+  the markers are handed back instead of emitted: `{:deferred, markers}` says the
+  outcomes are this caller's to emit after its own commit. Dropping them here and
+  returning `:ok` would lose them with nothing to say so, and the caller is the
+  only thing that knows when the write is durable.
+
+  `CodexPooler.Jobs.RuntimeStateCleanup` runs every step bare, so the deferred
+  arm is unreachable in production today. It is returned rather than assumed
+  because that is the invariant the after-commit property rests on, and an
+  invariant that has to hold is worth being told about when it stops holding.
+  """
+  @spec emit_committed_recovery_outcomes(%{interrupted_outcomes: [map()]}) ::
+          :ok | {:deferred, [map()]}
   def emit_committed_recovery_outcomes(%{interrupted_outcomes: markers}) do
-    unless Repo.in_transaction?(), do: Enum.each(markers, &emit_interrupted_outcome/1)
-    :ok
+    if Repo.in_transaction?() do
+      {:deferred, markers}
+    else
+      Enum.each(markers, &emit_interrupted_outcome/1)
+      :ok
+    end
   end
 
   defp finalize_transaction(
