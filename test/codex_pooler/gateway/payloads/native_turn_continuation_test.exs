@@ -33,6 +33,24 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
              ) == body
     end
 
+    # A native Codex client sends the header once. Two different values mean an
+    # intermediary put them there and nothing says which turn is meant, so the
+    # document is absent rather than "whichever arrived first" (212-34).
+    test "a repeated header is used only when every copy agrees" do
+      one = document(%{"request_kind" => "turn", "turn_id" => "t-one"})
+      two = document(%{"request_kind" => "turn", "turn_id" => "t-two"})
+
+      assert NativeTurnContinuation.canonical_document(
+               %{},
+               options(headers: [{@metadata_key, one}, {@metadata_key, one}])
+             ) == one
+
+      assert NativeTurnContinuation.canonical_document(
+               %{},
+               options(headers: [{@metadata_key, one}, {@metadata_key, two}])
+             ) == nil
+    end
+
     test "is absent for a payload and options that carry neither" do
       assert NativeTurnContinuation.canonical_document(%{"input" => []}, options()) == nil
       assert NativeTurnContinuation.canonical_document(%{}, options(headers: [])) == nil

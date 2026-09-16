@@ -206,14 +206,24 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
 
   defp body_document(_payload), do: nil
 
-  # A repeated header takes the first value, exactly as the forwarded header
-  # list was built; a native Codex client sends it once.
+  # A native Codex client sends this header once. Two DIFFERENT values for it
+  # mean an intermediary put them there, and nothing in the request says which
+  # turn it belongs to -- so the document is treated as absent and the request
+  # keeps its generated id, the same outcome as a malformed one. Silently taking
+  # the first would let an injected header choose a turn's identity, and the
+  # header is the only carrier a header-only client has (findings#212, 212-34).
   defp header_document(%RequestOptions{transport: %{forwarded_metadata_headers: headers}})
        when is_list(headers) do
-    Enum.find_value(headers, fn
-      {@canonical_metadata_key, value} when is_binary(value) and value != "" -> value
-      _other -> nil
+    headers
+    |> Enum.flat_map(fn
+      {@canonical_metadata_key, value} when is_binary(value) and value != "" -> [value]
+      _other -> []
     end)
+    |> Enum.uniq()
+    |> case do
+      [value] -> value
+      _absent_or_ambiguous -> nil
+    end
   end
 
   defp header_document(%RequestOptions{}), do: nil

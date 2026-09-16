@@ -333,6 +333,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert String.starts_with?(request.correlation_id, "codex-request:")
   end
 
+  # KNOWN MISS, documented deliberately: the compaction arm's own copy of the
+  # boundary "a tool continuation resent with a grown body is NOT fenced" pins
+  # below (findings#212, 212-54). A compaction is by construction a full-history
+  # request, so its body is the thing most likely to differ between two
+  # attempts -- and its claim has to be payload-scoped, because the only
+  # alternative is the bare claim its own turn already holds. So a compaction
+  # resent with a changed body is NOT fenced.
+  test "a compaction resent with a changed body is NOT fenced (known miss)", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_compaction_one"}),
+          FakeUpstream.json_response(%{"id" => "resp_compaction_two"})
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    compaction = fn text ->
+      post_turn(conn, setup, session, @turn_id,
+        where: :body,
+        document: kind_metadata("compaction"),
+        input: native_text_input(text) ++ [%{"type" => "compaction_trigger"}]
+      )
+    end
+
+    assert json_response(compaction.("history as it stood"), 200)
+    assert json_response(compaction.("history as it stood, plus one more item"), 200)
+
+    assert FakeUpstream.count(upstream) == 2
+    assert [one, two] = pool_requests(setup)
+    assert String.starts_with?(one.correlation_id, "codex-request:")
+    assert one.correlation_id != two.correlation_id
+  end
+
   # THE ROW'S OWN FAILURE (findings#212, 212-48). A remote compaction is not a
   # URL: the released client has no `/compact` route anywhere in `codex-rs`, it
   # sends an ordinary Responses request carrying `request_kind: "compaction"`
