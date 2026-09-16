@@ -1134,6 +1134,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       rollback_interrupted_accounting(exception, opts, attempt, caller_owned_transaction?)
   end
 
+  # The one place `caller_owned_transaction?` still decides anything. It is not
+  # an emission decision — `emit_outcomes_after_commit/1` owns those — but a
+  # production decision: inside a caller's transaction no `settlement_failed`
+  # marker is built at all, and the caller gets the bare error tuple its own
+  # tests pin. Behaviourally the same as producing one, because the gate would
+  # defer it and this path has nowhere to hand a deferral back to; recorded
+  # because the module otherwise reads as though the flag were gone.
   defp rollback_interrupted_accounting(error, _opts, _attempt, true) do
     Repo.rollback({:interrupt_accounting_failed, error})
   end

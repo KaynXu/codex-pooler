@@ -210,14 +210,20 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     defp maybe_wait_after_expired_owner_candidates(_candidates), do: :ok
   end
 
+  # Every committed outcome of this transaction goes through the same emission,
+  # which is what makes the producer side of the after-commit property hold the
+  # way the emitter side does. `Interruption.emit_outcomes_after_commit/1`
+  # guarantees that nothing emits a marker inside a transaction; it cannot
+  # guarantee that a marker a recovery produced ever reaches it, and the
+  # `:stale_owner` arm used to skip the call rather than carry an empty list. A
+  # second arm written the same way would drop a recovery's outcomes with no
+  # gate, no log and no test — the shape findings#195 row 195-05's third site
+  # had. There is now one `{:ok, _}` shape and it always carries the markers.
   defp recover_expired_owner_session(candidate, {:ok, recovered_count}) do
     case Repo.transaction(fn -> recover_expired_owner_session_locked(candidate) end) do
-      {:ok, :stale_owner} ->
-        {:cont, {:ok, recovered_count}}
-
-      {:ok, {:recovered, result}} ->
+      {:ok, {recovered, result}} ->
         emit_recovery_outcomes(result)
-        {:cont, {:ok, recovered_count + 1}}
+        {:cont, {:ok, recovered_count + recovered}}
 
       {:error, reason} ->
         {:halt, {:error, reason}}
@@ -251,8 +257,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
       |> RequestOptions.put_transport(websocket_owner_lease_token: candidate.owner_lease_token)
 
     case Interruption.recover_expired_owner_lifecycle(candidate, opts) do
-      {:ok, :stale_owner} -> :stale_owner
-      {:ok, result} -> {:recovered, result}
+      {:ok, :stale_owner} -> {0, %{interrupted_outcomes: []}}
+      {:ok, result} -> {1, result}
       {:error, reason} -> Repo.rollback(reason)
     end
   end

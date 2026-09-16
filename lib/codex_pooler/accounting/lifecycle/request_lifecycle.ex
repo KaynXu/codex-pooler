@@ -485,10 +485,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   #
   # This runs on the return of `Repo.transaction/1`, which is a savepoint
   # release rather than a commit whenever a caller already holds a
-  # transaction. `Interruption.interrupt_session_transaction/4` calls
-  # `finalize_reservation_failure/2` once per in-progress turn inside ONE
-  # transaction, so the first turn's release is counted here and then any later
-  # failure in that transaction erases it — whether the failure returns an
+  # transaction. `Interruption.interrupt_session_transaction/4` maps
+  # `interrupt_turn!/5` over every in-progress turn of a session inside ONE
+  # transaction, and a turn with no active attempt reaches
+  # `finalize_reserved_request_failure/2` through
+  # `release_unattempted_request!/6` (one with an attempt goes to
+  # `finalize_interrupted_request!/5` instead). So the first such turn's release
+  # is counted here and then any later failure in that transaction erases it — whether the failure returns an
   # error into `rollback_interrupted_accounting/4` or raises straight past it,
   # as an `Ecto.NoResultsError` on a detached reservation does. Either way the
   # counter keeps a `turn_interrupted` sample for a release that was never
