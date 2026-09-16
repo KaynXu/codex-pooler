@@ -184,14 +184,39 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       # worse than refusing it: the row is claimed, then dropped by `emit/1`
       # with no loss reason to count it. The allowlist held two such names —
       # `stale_sweep` is a `pre_attempt_release` phase and `interrupted` a
-      # `stream_outcome` outcome, neither an event. Pinned in both directions,
-      # so promoting a family means adding it to both or failing here.
-      assert Enum.sort(RelayEvent.events()) == Enum.sort(RelayRuntime.relay_event_names())
+      # `stream_outcome` outcome, neither an event.
+      #
+      # The storable set is read off the live `event_allowed` constraint rather
+      # than off a second Elixir constant. Comparing `RelayEvent.events/0` to
+      # `RelayRuntime.relay_event_names/0` only pins two module attributes to
+      # each other: a name added to the database allowlist alone — a migration
+      # without the matching schema and runtime change — is storable,
+      # unreplayable and uncounted, and neither constant can see it. This is
+      # the direction the row is about, so it is the database that is asked.
+      storable = database_event_allowlist()
 
-      for retired <- ~w(stale_sweep interrupted) do
+      refute storable == [],
+             "no values were read off event_allowed; the extraction, not the schema, is broken"
+
+      assert storable == Enum.sort(RelayEvent.events())
+      assert storable == Enum.sort(RelayRuntime.relay_event_names())
+
+      # And the extraction describes the database it was read from, rather than
+      # some text that merely parses: every name it found stores, and a name it
+      # did not find is refused by the constraint it was read from.
+      for event <- storable do
+        assert {:ok, _} = raw_insert(%{event: event}),
+               "#{event} was read off event_allowed but the database refuses it"
+      end
+
+      absent = ~w(stale_sweep interrupted) ++ ["ghost_#{System.unique_integer([:positive])}"]
+
+      for refused <- absent do
+        refute refused in storable
+
         assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} =
-                 raw_insert(%{event: retired}),
-               "#{retired} is storable but nothing can replay it"
+                 raw_insert(%{event: refused}),
+               "#{refused} is storable but nothing can replay it"
 
         assert name == "event_allowed"
       end
@@ -529,6 +554,23 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
                Relay.insert("pre_attempt_release", %{}, 1, %{}, state.owner)
              end) == {:error, :stale_heartbeat}
     end
+  end
+
+  # The names the database will actually accept, read off the constraint itself.
+  # `pg_get_constraintdef/1` renders the allowlist as quoted literals and casts
+  # to unquoted type names, so every quoted run in the definition is a value.
+  # The single-row match is part of the assertion: a renamed or dropped
+  # constraint fails here rather than quietly reporting an empty allowlist.
+  defp database_event_allowlist do
+    %{rows: [[definition]]} =
+      Repo.query!(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'telemetry_relay_events'::regclass AND conname = 'event_allowed'"
+      )
+
+    ~r/'((?:[^']|'')*)'/
+    |> Regex.scan(definition)
+    |> Enum.map(fn [_match, value] -> String.replace(value, "''", "'") end)
+    |> Enum.sort()
   end
 
   defp raw_insert(overrides) do
