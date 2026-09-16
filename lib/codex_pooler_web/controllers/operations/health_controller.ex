@@ -4,9 +4,12 @@ defmodule CodexPoolerWeb.Operations.HealthController do
   require Logger
 
   alias CodexPooler.Gateway.OperationalStatus
-  alias CodexPooler.Repo
-  alias Ecto.Adapters.SQL
+  alias CodexPooler.Platform.Readiness
 
+  # Liveness stays a process-level fact. Restarting this container cannot
+  # reconnect a database or apply a migration, so nothing about the database
+  # belongs on this path: putting it here would turn an outage into a crash
+  # loop that outlives the outage.
   @spec health(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def health(conn, _params) do
     json(conn, %{status: "ok"})
@@ -17,14 +20,22 @@ defmodule CodexPoolerWeb.Operations.HealthController do
     if draining?() do
       unavailable(conn)
     else
-      case readiness_probe().query(Repo, "select 1", [], timeout: 1_000) do
-        {:ok, _result} ->
+      case Readiness.check() do
+        :ready ->
           json(conn, %{status: "ready"})
 
-        {:error, reason} ->
+        {:ready, :degraded, class} ->
+          Logger.warning([
+            "readiness probe degraded path=/readyz reason_class=",
+            class
+          ])
+
+          json(conn, %{status: "ready"})
+
+        {:not_ready, class} ->
           Logger.warning([
             "readiness probe failed path=/readyz reason_class=",
-            reason_class(reason)
+            class
           ])
 
           unavailable(conn)
@@ -35,20 +46,9 @@ defmodule CodexPoolerWeb.Operations.HealthController do
   @spec draining?() :: boolean()
   defp draining?, do: OperationalStatus.draining?()
 
-  defp readiness_probe do
-    :codex_pooler
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(:readiness_probe, SQL)
-  end
-
   defp unavailable(conn) do
     conn
     |> put_status(:service_unavailable)
     |> json(%{status: "unavailable"})
   end
-
-  defp reason_class(%module{}) when is_atom(module), do: inspect(module)
-  defp reason_class(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_class({reason, _details}) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_class(_reason), do: "unknown"
 end
