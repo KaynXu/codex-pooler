@@ -11,6 +11,14 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   # both transports read one definition rather than drifting apart
   # (findings#212, rows 212-48/212-49/212-51).
   #
+  # What lives here is every DISCRIMINATOR, not the claim selection itself: the
+  # websocket codec applies its own arms in its own order because its native
+  # compaction bridge deliberately puts a compaction on the turn's bare claim
+  # and its forwarded-final path deduplicates on that collision. Anything that
+  # changes what a compaction, a tool continuation, an opening request or a
+  # `request_kind` IS belongs here and reaches both transports; anything that
+  # changes which claim the websocket bridge picks belongs to that bridge.
+  #
   # ## The canonical document has two carriers, and both are authoritative
   #
   # The body's `client_metadata` is what a websocket frame carries and what the

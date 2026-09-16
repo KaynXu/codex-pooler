@@ -45,11 +45,19 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   #                                   `codex-turn:` claim, which survives any
   #                                   rebuilt body
   #
-  # Every discriminator above is `NativeTurnContinuation`'s, which the websocket
-  # codec reads too, so the two transports cannot drift on any of them. What is
-  # deliberately NOT shared is this module's fail-open gate: a websocket frame
-  # always takes some claim because the claim also feeds replay, while an HTTP
-  # request with nothing to go on keeps its generated correlation id.
+  # Every discriminator above is `NativeTurnContinuation`'s. So is the websocket
+  # codec's continuation arm, and both transports resolve the canonical document
+  # and `request_kind` through the same reader, so they cannot drift on ANY of
+  # those. What the two transports do NOT share is the order they apply them in,
+  # and that is deliberate rather than an oversight: the websocket codec gives
+  # its native compaction bridge the bare turn claim on purpose, and its
+  # forwarded-final path depends on that collision to deduplicate -- running
+  # this module's order there was measured to buy a THIRD upstream dispatch
+  # where the path expects two. Reconciling the two orders is a change to the
+  # websocket compaction bridge, not to this fence, and it is tracked separately
+  # (findings#212, row 212-51). This module's fail-open gate is also its own: a
+  # websocket frame always takes some claim because the claim feeds replay,
+  # while an HTTP request with nothing to go on keeps its generated id.
   #
   # KNOWN MISS, inherited by every payload-scoped claim: a request whose retry
   # body has grown is a different claim and is not fenced. That is the price of
