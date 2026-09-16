@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @request_claim_prefix "codex-request:"
   @request_claim_domain "native_websocket_response_claim_v1"
   @compaction_claim_domain "native_websocket_compaction_claim_v1"
+  @kind_claim_domain_prefix "native_turn_kind_claim_v1:"
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
@@ -83,6 +84,24 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   def compaction_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
     scoped_request_claim_key(semantic_turn_key, payload, @compaction_claim_domain)
+  end
+
+  @doc """
+  A payload-scoped claim for a request that is *about* a turn rather than one of
+  its model requests, domain separated by the declared `request_kind`.
+
+  A `prewarm` is built from the turn's own `TurnMetadataState` and so carries
+  the turn's `turn_id` (`session_startup_prewarm.rs:303-310`); a `memory`
+  request mints its own (`turn_metadata.rs:133-139`). Neither may take the
+  turn's bare claim -- that refuses a request which has no duplicate -- but both
+  are single-shot per turn, so an identical resend of one is a duplicate and
+  stays fenced (findings#212, row 212-46).
+  """
+  @spec kind_claim_key(<<_::256>>, map(), String.t()) :: String.t()
+  def kind_claim_key(semantic_turn_key, payload, kind)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_map(payload) and is_binary(kind) do
+    scoped_request_claim_key(semantic_turn_key, payload, @kind_claim_domain_prefix <> kind)
   end
 
   defp scoped_request_claim_key(semantic_turn_key, payload, domain) do

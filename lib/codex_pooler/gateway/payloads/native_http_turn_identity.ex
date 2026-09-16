@@ -15,7 +15,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # header. Either source yields the same `turn_id`, and the derivation is
   # `WebsocketTurnIdentity`'s own, so both transports name one turn the same way.
   #
-  # ## Three arms, because the turn id is not the request id
+  # ## One turn id, several requests
   #
   # The claim must survive a *rebuilt* retry body. The released client records
   # each completed output item into history as it arrives and rebuilds the
@@ -26,39 +26,47 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # cohort the row measures -- turns still relaying ~85 s after preStop, which
   # by construction have delivered items.
   #
-  # So this mirrors the websocket `cond` (`websocket_codec.ex:938-965`) rather
-  # than inventing a second rule, and it mirrors ALL THREE of its arms. One
-  # `turn_id` covers every request made about a turn, not just the turn itself:
-  # the released client builds a compaction request's metadata from the same
-  # `turn_metadata_state` as the turn it compacts (`session.rs:686-701`,
-  # `turn_metadata.rs:169`), and the bare claim encodes no endpoint, so a
-  # compaction that took the bare claim would collide with its own turn and
-  # refuse a request that has no duplicate at all.
+  # But one `turn_id` covers every request made about a turn, not just the turn
+  # itself: a compaction, a prewarm, every tool-result continuation and the
+  # request that resumes the turn after a compaction all carry it, because they
+  # are built from one `TurnMetadataState` (`session.rs:686-701`,
+  # `turn_metadata.rs:169`). So the bare claim is reserved for the one request
+  # that can be shown to have opened the turn, and everything else that shares
+  # the `turn_id` is named by its own payload inside its own domain:
   #
-  #   * a compaction request      -> the payload-scoped `codex-request:`
-  #                                  compaction claim, whose own HMAC domain
-  #                                  keeps it clear of the turn
-  #   * a tool-result continuation -> the payload-scoped request claim, which is
-  #                                  what keeps the several requests of one turn
-  #                                  from colliding with each other
-  #   * the turn itself            -> the BARE, payload-independent `codex-turn:`
-  #                                  claim, which survives any rebuilt body
+  #   * a compaction request       -> the payload-scoped compaction claim, whose
+  #                                   own HMAC domain keeps it clear of the turn
+  #   * a `prewarm` or `memory`    -> a payload-scoped claim in a domain named
+  #                                   by the declared kind
+  #   * a later request of the turn -> the payload-scoped request claim: a
+  #                                   tool-result continuation, or the request
+  #                                   that resumes the turn from a compaction
+  #   * the request that opened it -> the BARE, payload-independent
+  #                                   `codex-turn:` claim, which survives any
+  #                                   rebuilt body
   #
-  # The continuation discriminator is the shared `NativeTurnContinuation`
-  # predicate, so the two transports cannot drift on it.
+  # Every discriminator above is `NativeTurnContinuation`'s, which the websocket
+  # codec reads too, so the two transports cannot drift on any of them. What is
+  # deliberately NOT shared is this module's fail-open gate: a websocket frame
+  # always takes some claim because the claim also feeds replay, while an HTTP
+  # request with nothing to go on keeps its generated correlation id.
   #
-  # Only an explicit `request_kind` of `turn` may reach the bare claim. A
-  # `prewarm` or `memory` request, an unknown kind, and a document that omits
-  # the field are all left unfenced rather than guessed at: they are requests
-  # *about* a turn that can carry its `turn_id`, and the cost of being wrong
-  # about one is a refusal of a request that never had a duplicate.
+  # KNOWN MISS, inherited by every payload-scoped claim: a request whose retry
+  # body has grown is a different claim and is not fenced. That is the price of
+  # keeping the several requests of one turn from colliding with each other, and
+  # the websocket path has the same miss for the same reason. A turn opened in a
+  # thread that was compacted earlier carries the old compaction item in its
+  # history, so it takes the payload-scoped claim and inherits the miss too; the
+  # alternative was refusing every native HTTP turn that triggers a remote
+  # compaction, one request after the compaction itself.
   #
   # ## Failing open
   #
   # A non-native route, a translated `/v1` request, a missing session, an absent
-  # header and body document, a malformed document and a document without a
-  # usable `turn_id` all return `:none`, which leaves the generated correlation
-  # id and today's behaviour exactly as they are.
+  # header and body document, a malformed document, a document without a usable
+  # `turn_id`, and a document declaring a `request_kind` this module has no rule
+  # for all return `:none`, which leaves the generated correlation id and
+  # today's behaviour exactly as they are.
 
   alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -67,11 +75,13 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
   @metadata_key "x-codex-turn-metadata"
 
-  # The routes that carry the canonical turn metadata
-  # (`UpstreamDispatch.@regular_runtime_metadata_endpoints`). Keep the two lists
-  # together: a route that does not carry the document cannot be fenced by it.
-  @compact_endpoint "/backend-api/codex/responses/compact"
-  @native_endpoints ["/backend-api/codex/responses", @compact_endpoint]
+  @native_endpoints NativeTurnContinuation.native_endpoints()
+
+  # Kinds that are about a turn rather than one of its model requests, and that
+  # the released client sends at most once for a given turn. They are fenced in
+  # their own domain so a duplicate still costs one dispatch; any other declared
+  # kind is unknown and fails open rather than being guessed at.
+  @kind_scoped_request_kinds ["prewarm", "memory"]
 
   @doc """
   True when this request is a native Codex HTTP turn, i.e. on a route this
@@ -91,12 +101,13 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   @spec request_claim_key(RequestOptions.t(), map()) :: {:ok, String.t()} | :none
   def request_claim_key(%RequestOptions{} = request_options, payload) when is_map(payload) do
     with true <- native_route?(request_options),
-         metadata when not is_nil(metadata) <- turn_metadata(request_options, payload),
+         metadata when not is_nil(metadata) <-
+           NativeTurnContinuation.canonical_document(payload, request_options),
          %CodexSession{id: session_id} when is_binary(session_id) <-
            Map.get(request_options.continuity, :codex_session),
          {:ok, identity} <-
            WebsocketTurnIdentity.resolve(canonical_payload(metadata), session_id),
-         {:ok, claim} <- claim_for(identity, request_options, payload, metadata) do
+         {:ok, claim} <- claim_for(identity, request_options, payload) do
       {:ok, claim}
     else
       _fail_open -> :none
@@ -105,61 +116,42 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
   def request_claim_key(_request_options, _payload), do: :none
 
-  defp claim_for(identity, request_options, payload, metadata) do
+  defp claim_for(identity, request_options, payload) do
     cond do
-      compaction_request?(request_options, metadata) ->
+      NativeTurnContinuation.compaction_request?(payload, request_options) ->
         {:ok, WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload)}
 
-      NativeTurnContinuation.ordinary_tool_continuation?(payload, request_options) ->
-        {:ok, WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)}
-
-      turn_request?(metadata) ->
-        {:ok, identity.turn_claim_key}
+      turn_request?(payload, request_options) ->
+        {:ok, turn_claim(identity, request_options, payload)}
 
       true ->
+        kind_claim(identity, request_options, payload)
+    end
+  end
+
+  # The bare claim names the request that opened the turn. Every later request
+  # of it is named by its own payload, or it would collide with the opener and
+  # be refused as a duplicate of a request it is not.
+  defp turn_claim(identity, request_options, payload) do
+    if NativeTurnContinuation.turn_opening_request?(payload, request_options) do
+      identity.turn_claim_key
+    else
+      WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)
+    end
+  end
+
+  defp kind_claim(identity, request_options, payload) do
+    case NativeTurnContinuation.request_kind(payload, request_options) do
+      kind when kind in @kind_scoped_request_kinds ->
+        {:ok, WebsocketTurnIdentity.kind_claim_key(identity.semantic_turn_key, payload, kind)}
+
+      _unknown_or_absent ->
         :none
     end
   end
 
-  # Either signal is enough, and neither is trusted alone: the canonical kind is
-  # what the client declares, and the compact endpoint is what the request
-  # actually is. A compaction that reached the turn arm would refuse its own
-  # turn.
-  defp compaction_request?(%RequestOptions{transport: %{upstream_endpoint: endpoint}}, metadata),
-    do: endpoint == @compact_endpoint or request_kind(metadata) == "compaction"
-
-  defp turn_request?(metadata), do: request_kind(metadata) == "turn"
-
-  defp request_kind(metadata) do
-    case NativeTurnContinuation.canonical_metadata_map(metadata) do
-      %{"request_kind" => kind} when is_binary(kind) -> kind
-      _absent -> nil
-    end
-  end
-
-  # The body is the authoritative document -- it is what the websocket frame
-  # carries, and the header copy is deliberately a bounded projection of it
-  # (`responses_metadata.rs:354-372`). A client that sends only the header is
-  # still fenced.
-  defp turn_metadata(request_options, payload) do
-    body_metadata(payload) || header_metadata(request_options)
-  end
-
-  defp body_metadata(%{"client_metadata" => %{@metadata_key => metadata}})
-       when is_map(metadata) or (is_binary(metadata) and metadata != ""),
-       do: metadata
-
-  defp body_metadata(_payload), do: nil
-
-  defp header_metadata(%RequestOptions{transport: %{forwarded_metadata_headers: headers}})
-       when is_list(headers) do
-    Enum.find_value(headers, fn
-      {@metadata_key, value} when is_binary(value) and value != "" -> value
-      _other -> nil
-    end)
-  end
-
-  defp header_metadata(%RequestOptions{}), do: nil
+  defp turn_request?(payload, request_options),
+    do: NativeTurnContinuation.request_kind(payload, request_options) == "turn"
 
   # Only the canonical document is offered to the resolver, never the request
   # body, so a body field named `turn_id`/`request_id` cannot become a turn

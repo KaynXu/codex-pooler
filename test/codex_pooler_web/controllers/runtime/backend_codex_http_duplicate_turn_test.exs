@@ -11,6 +11,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # already sends, the refusal is the public status and body, and the proof of
   # "no duplicated provider work" is the fake upstream's own request count,
   # not a fixture the test wrote.
+  #
+  # The released client sends the canonical document BOTH in the request body's
+  # `client_metadata` (`codex-rs/core/src/client.rs:893`) and as a bounded
+  # header copy, and the two carriers must classify identically. A suite that
+  # drove only one of them read as evidence for a path that was broken on the
+  # other (findings#212, row 212-49), so the core fence behaviours here are
+  # parameterised over both carriers through `post_turn/5`'s `:where` option.
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
@@ -28,30 +35,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   @session_header "session-id"
   @metadata_header "x-codex-turn-metadata"
 
-  test "an identical native HTTP resend is refused and buys no second upstream dispatch", %{
-    conn: conn
-  } do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_duplicate_turn"}))
-    setup = gateway_setup(upstream)
-    session = session_id()
+  for carrier <- [:header, :body] do
+    test "an identical native HTTP resend is refused and buys no second upstream dispatch (#{carrier})",
+         %{conn: conn} do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_duplicate_turn"}))
+      setup = gateway_setup(upstream)
+      session = session_id()
 
-    first = post_turn(conn, setup, session, @turn_id)
-    assert %{"id" => "resp_duplicate_turn"} = json_response(first, 200)
-    assert FakeUpstream.count(upstream) == 1
+      first = post_turn(conn, setup, session, @turn_id, where: unquote(carrier))
+      assert %{"id" => "resp_duplicate_turn"} = json_response(first, 200)
+      assert FakeUpstream.count(upstream) == 1
 
-    second = post_turn(conn, setup, session, @turn_id)
+      second = post_turn(conn, setup, session, @turn_id, where: unquote(carrier))
 
-    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(second, 409)
+      assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(second, 409)
 
-    # The whole point of the row: the provider is not paid a second time, and
-    # nothing was reserved, attempted or recorded for the refused resend.
-    assert FakeUpstream.count(upstream) == 1
-    assert [request] = pool_requests(setup)
-    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
+      # The whole point of the row: the provider is not paid a second time, and
+      # nothing was reserved, attempted or recorded for the refused resend.
+      assert FakeUpstream.count(upstream) == 1
+      assert [request] = pool_requests(setup)
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
 
-    # A turn's opening request is named by the turn alone, exactly as the
-    # websocket path names it, so the claim survives a rebuilt retry body.
-    assert String.starts_with?(request.correlation_id, "codex-turn:")
+      # A turn's opening request is named by the turn alone, exactly as the
+      # websocket path names it, so the claim survives a rebuilt retry body.
+      assert String.starts_with?(request.correlation_id, "codex-turn:")
+    end
   end
 
   # `409 duplicate_turn` is a public response on a runtime route, so the
@@ -293,37 +301,256 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert String.starts_with?(request.correlation_id, "codex-request:")
   end
 
-  # Only an explicit `turn` kind reaches the bare claim. A request kind that is
-  # about a turn rather than being one -- and a document that omits the field --
-  # is left unfenced rather than guessed at.
-  test "a prewarm sharing the turn id is not fenced against the turn", %{conn: conn} do
+  # THE ROW'S OWN FAILURE (findings#212, 212-48). A remote compaction is not a
+  # URL: the released client has no `/compact` route anywhere in `codex-rs`, it
+  # sends an ordinary Responses request carrying `request_kind: "compaction"`
+  # with `ResponseItem::CompactionTrigger {}` appended
+  # (`compact_remote_v2_attempt.rs:78`). The turn then RESUMES from the
+  # compacted history, which ends with the compaction output item
+  # (`compact.rs:600-660`), under the same `turn_id` and `request_kind: "turn"`.
+  # Serving the compaction while refusing the resume left the turn just as dead
+  # as refusing the compaction did, one request later.
+  test "a turn, its remote compaction and the resume after it are three served requests", %{
+    conn: conn
+  } do
     upstream =
       start_upstream(
         FakeUpstream.strict_sequence([
-          FakeUpstream.json_response(%{"id" => "resp_prewarm"}),
-          FakeUpstream.json_response(%{"id" => "resp_turn_after_prewarm"})
+          FakeUpstream.json_response(%{"id" => "resp_open"}),
+          FakeUpstream.json_response(%{"id" => "resp_compaction"}),
+          FakeUpstream.json_response(%{"id" => "resp_resume"})
         ])
       )
 
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, compact?: true)
     session = session_id()
 
-    prewarm =
-      conn
-      |> recycle()
-      |> auth(setup)
-      |> put_req_header(@session_header, session)
-      |> put_req_header(
-        @metadata_header,
-        CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "prewarm"})
-      )
-      |> post("/backend-api/codex/responses", turn_payload(setup))
+    assert %{"id" => "resp_open"} =
+             json_response(post_turn(conn, setup, session, @turn_id, where: :body), 200)
 
-    assert json_response(prewarm, 200)
-    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+    assert %{"id" => "resp_compaction"} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 document: kind_metadata("compaction"),
+                 input: native_text_input("history") ++ [%{"type" => "compaction_trigger"}]
+               ),
+               200
+             )
+
+    assert %{"id" => "resp_resume"} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 input: compacted_history()
+               ),
+               200
+             )
+
+    assert FakeUpstream.count(upstream) == 3
+    assert [open, compaction, resume] = pool_requests(setup)
+    assert String.starts_with?(open.correlation_id, "codex-turn:")
+    assert String.starts_with?(compaction.correlation_id, "codex-request:")
+
+    # The resume is a later request of the turn, so it is named by its payload
+    # rather than by the turn alone -- which is exactly what keeps it clear of
+    # the claim the opening request already holds.
+    assert String.starts_with?(resume.correlation_id, "codex-request:")
+    assert resume.correlation_id != compaction.correlation_id
+  end
+
+  # The compaction output item can be last, followed by the next user message,
+  # followed by output the resume already delivered, and it carries the
+  # `compaction_summary` serde alias (`protocol/src/models.rs:1224`). None of
+  # those four arrangements may collide with the turn's opening request.
+  for {label, tail, item_type} <- [
+        {"last", [], "compaction"},
+        {"followed by a user message", [:user], "compaction"},
+        {"followed by an assistant message", [:assistant], "compaction"},
+        {"under the compaction_summary alias", [], "compaction_summary"}
+      ] do
+    test "a post-compaction resume with the compaction item #{label} is served", %{conn: conn} do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.json_response(%{"id" => "resp_arrangement_open"}),
+            FakeUpstream.json_response(%{"id" => "resp_arrangement_resume"})
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+      session = session_id()
+
+      assert json_response(post_turn(conn, setup, session, @turn_id, where: :body), 200)
+
+      input =
+        native_text_input("before compaction") ++
+          [%{"type" => unquote(item_type)}] ++ Enum.map(unquote(tail), &trailing_item/1)
+
+      assert json_response(
+               post_turn(conn, setup, session, @turn_id, where: :body, input: input),
+               200
+             )
+
+      assert FakeUpstream.count(upstream) == 2
+      assert [open, resume] = pool_requests(setup)
+      assert String.starts_with?(open.correlation_id, "codex-turn:")
+      assert String.starts_with?(resume.correlation_id, "codex-request:")
+    end
+  end
+
+  # The other direction of the same change: serving the resume must not stop the
+  # fence catching a genuine duplicate of it.
+  test "an identical post-compaction resume is still refused", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_resume_open"}),
+          FakeUpstream.json_response(%{"id" => "resp_resume_once"})
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    assert json_response(post_turn(conn, setup, session, @turn_id, where: :body), 200)
+
+    resume = fn ->
+      post_turn(conn, setup, session, @turn_id, where: :body, input: compacted_history())
+    end
+
+    assert json_response(resume.(), 200)
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(resume.(), 409)
 
     assert FakeUpstream.count(upstream) == 2
     assert length(pool_requests(setup)) == 2
+  end
+
+  # A client that sends only the bounded header copy resolved its `request_kind`
+  # from the header while the continuation discriminator read the body alone, so
+  # every tool continuation of its turn landed on the claim the opening request
+  # already held and was refused `409` (findings#212, 212-49). Both carriers now
+  # go through one resolver.
+  for carrier <- [:header, :body] do
+    test "a tool continuation of a turn is served, not fenced against its own turn (#{carrier})",
+         %{conn: conn} do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.json_response(%{"id" => "resp_open_before_tool"}),
+            FakeUpstream.json_response(%{"id" => "resp_first_tool_round"}),
+            FakeUpstream.json_response(%{"id" => "resp_second_tool_round"})
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      session = session_id()
+
+      assert json_response(post_turn(conn, setup, session, @turn_id, where: unquote(carrier)), 200)
+
+      for call_id <- ["call_212_first", "call_212_second"] do
+        assert json_response(
+                 post_turn(conn, setup, session, @turn_id,
+                   where: unquote(carrier),
+                   input: [
+                     %{
+                       "type" => "function_call_output",
+                       "call_id" => call_id,
+                       "output" => "tool result"
+                     }
+                   ]
+                 ),
+                 200
+               )
+      end
+
+      assert FakeUpstream.count(upstream) == 3
+      assert [open | continuations] = pool_requests(setup)
+      assert String.starts_with?(open.correlation_id, "codex-turn:")
+
+      for continuation <- continuations do
+        assert String.starts_with?(continuation.correlation_id, "codex-request:")
+      end
+    end
+  end
+
+  # A `prewarm` is built from the turn's own `TurnMetadataState` and so carries
+  # the turn's `turn_id` (`session_startup_prewarm.rs:303-310`); a `memory`
+  # request mints its own (`turn_metadata.rs:133-139`). Neither may take the
+  # turn's bare claim, and neither has to give up being fenced to avoid it: each
+  # is named by its payload inside a domain named by its kind.
+  for kind <- ["prewarm", "memory"] do
+    test "a #{kind} request sharing the turn id is clear of the turn but still fenced", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          FakeUpstream.strict_sequence([
+            FakeUpstream.json_response(%{"id" => "resp_kind_one"}),
+            FakeUpstream.json_response(%{"id" => "resp_turn_after_kind"})
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      session = session_id()
+
+      kind_request = fn ->
+        post_turn(conn, setup, session, @turn_id, document: kind_metadata(unquote(kind)))
+      end
+
+      assert json_response(kind_request.(), 200)
+      # It does not collide with the turn that shares its id.
+      assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+      # And it is not unfenced: an identical resend of it is still refused.
+      assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(kind_request.(), 409)
+
+      assert FakeUpstream.count(upstream) == 2
+      assert [kind_row, turn_row] = pool_requests(setup)
+      assert String.starts_with?(kind_row.correlation_id, "codex-request:")
+      assert String.starts_with?(turn_row.correlation_id, "codex-turn:")
+    end
+  end
+
+  # A kind with no rule here, and a document that omits the field, are guessed
+  # at by nobody: they keep the generated correlation id and today's behaviour,
+  # per kind rather than by reading the selector.
+  for {label, document} <- [
+        {"an unknown kind",
+         CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "surprise"})},
+        {"no request_kind at all", CodexPooler.JSON.encode!(%{"turn_id" => @turn_id})}
+      ] do
+    test "#{label} keeps today's behaviour and a generated correlation id", %{conn: conn} do
+      assert_unfenced(conn, fn conn, setup, session ->
+        conn
+        |> auth(setup)
+        |> put_req_header(@session_header, session)
+        |> put_req_header(@metadata_header, unquote(document))
+        |> post("/backend-api/codex/responses", turn_payload(setup))
+      end)
+    end
+  end
+
+  # The fence must not have a one-string off switch. The released client emits
+  # the lowercase literal, but any intermediary that normalises the document
+  # would otherwise disable the whole thing with a case change or a stray space.
+  for {label, kind} <- [{"upper case", "TURN"}, {"a trailing space", "turn "}] do
+    test "a request_kind differing only by #{label} is still fenced", %{conn: conn} do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_kind_case"}))
+      setup = gateway_setup(upstream)
+      session = session_id()
+
+      document = CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => unquote(kind)})
+
+      assert json_response(post_turn(conn, setup, session, @turn_id, document: document), 200)
+
+      assert %{"error" => %{"code" => "duplicate_turn"}} =
+               json_response(post_turn(conn, setup, session, @turn_id, document: document), 409)
+
+      assert FakeUpstream.count(upstream) == 1
+      assert [request] = pool_requests(setup)
+      assert String.starts_with?(request.correlation_id, "codex-turn:")
+    end
   end
 
   # KNOWN MISS, documented deliberately. A tool-result continuation inside a
@@ -565,19 +792,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     end
   end
 
+  # `:where` selects the carrier: `:header` sends only the bounded header copy,
+  # `:body` sends only the canonical `client_metadata` document the released
+  # client puts in the body. Both must classify the request identically.
   defp post_turn(conn, setup, session, turn_id, opts \\ []) do
+    document = Keyword.get(opts, :document, turn_metadata(turn_id))
+    where = Keyword.get(opts, :where, :header)
+
+    payload =
+      case where do
+        :body -> put_body_document(turn_payload(setup, opts), document)
+        :header -> turn_payload(setup, opts)
+      end
+
     conn
     |> recycle()
     |> auth(setup)
     |> put_req_header(@session_header, session)
-    |> put_req_header(@metadata_header, turn_metadata(turn_id))
-    |> post("/backend-api/codex/responses", turn_payload(setup, opts))
+    |> then(&if where == :header, do: put_req_header(&1, @metadata_header, document), else: &1)
+    |> post(Keyword.get(opts, :path, "/backend-api/codex/responses"), payload)
   end
+
+  defp put_body_document(payload, document),
+    do: Map.put(payload, "client_metadata", %{@metadata_header => document})
 
   defp turn_payload(setup, opts \\ []) do
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => native_text_input("duplicate turn fence")
+      "input" => Keyword.get(opts, :input, native_text_input("duplicate turn fence"))
     }
 
     if Keyword.get(opts, :stream, false), do: Map.put(payload, "stream", true), else: payload
@@ -605,6 +847,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
   defp turn_metadata(turn_id),
     do: CodexPooler.JSON.encode!(%{"turn_id" => turn_id, "request_kind" => "turn"})
+
+  defp kind_metadata(kind),
+    do: CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => kind})
+
+  # What the client resumes a turn with after a remote compaction: the compacted
+  # history, whose last item is the compaction output (`compact.rs:600-660`).
+  defp compacted_history,
+    do: native_text_input("before compaction") ++ [%{"type" => "compaction"}]
+
+  defp trailing_item(:user),
+    do: %{
+      "type" => "message",
+      "role" => "user",
+      "content" => [%{"type" => "input_text", "text" => "next"}]
+    }
+
+  defp trailing_item(:assistant),
+    do: %{
+      "type" => "message",
+      "role" => "assistant",
+      "content" => [%{"type" => "output_text", "text" => "already delivered"}]
+    }
 
   defp pool_requests(setup) do
     Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at))
