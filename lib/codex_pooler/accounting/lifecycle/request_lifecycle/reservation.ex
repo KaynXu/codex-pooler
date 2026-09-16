@@ -196,9 +196,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # claim on a row that can never be met again and switch the fence off for that
   # turn permanently, letting a later attempt that DOES deliver output be
   # resent and dispatched a second time.
+  # At the bound the walk stops deriving, it does not start refusing. Every step
+  # it took was a ZERO-OUTPUT predecessor -- `rate_limit_exceeded`, a relayed
+  # 4xx, `no_eligible_backend`, a pre-first-event idle timeout -- and those are
+  # the states `delivered_provider_output?/1` deliberately serves, which the
+  # runbook records as served and a 409 for any of them as a defect. Rolling
+  # back here turned the seventeenth consecutive zero-output attempt of one turn
+  # into a hard terminal `409` on the default transport with no duplicate spend
+  # anywhere to protect, an edge the unbounded pre-chain behaviour did not have
+  # (findings#212, row 212-50).
+  #
+  # Falling open to a fresh id costs this turn its fence -- a LATER attempt that
+  # does deliver output can then be resent and dispatched twice -- which is the
+  # trade the chain exists to avoid. After sixteen consecutive attempts that
+  # bought nothing it is the cheaper of the two, and it is what the missing app
+  # secret arm below already does.
   defp walk_native_turn_chain(_session, _context, _claim, depth)
        when depth > @native_turn_chain_depth,
-       do: Repo.rollback(duplicate_request_error(:chain_exhausted))
+       do: {Ecto.UUID.generate(), nil}
 
   defp walk_native_turn_chain(session, context, claim, depth) do
     case native_turn_predecessor(claim) do
@@ -632,9 +647,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     end
   end
 
-  # Both claim shapes the native HTTP resolver can produce: the bare turn claim
-  # that names a turn's opening request, and the payload-scoped request claim
-  # that names one tool-result continuation within it.
+  # Every claim shape the native HTTP resolver can produce: the bare turn claim
+  # that names a turn's opening request, and the payload-scoped `codex-request:`
+  # claims that name one later request of it -- a tool-result continuation, the
+  # resume after a compaction, the compaction itself, and a `prewarm`/`memory`
+  # request that shares the turn id. Those four are one prefix on purpose: they
+  # differ by HMAC domain, not by name, so this predicate keeps routing all of
+  # them into the resend path without enumerating them (findings#212, 212-54).
   defp native_turn_claim?(correlation_id) when is_binary(correlation_id) do
     WebsocketTurnIdentity.request_claim?(correlation_id) or
       String.starts_with?(correlation_id, "codex-turn:")

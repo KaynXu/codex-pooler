@@ -26,7 +26,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Repo
 
   @moduletag capture_log: true
@@ -184,6 +184,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     assert FakeUpstream.count(upstream) == dispatched
     assert length(pool_requests(setup)) == 2
+  end
+
+  # The chain is bounded, and at the bound it stops DERIVING rather than
+  # starting to refuse. Every step of it is a zero-output predecessor, which is
+  # the cohort the fence deliberately serves and which the runbook records a 409
+  # for as a defect; rolling back at the bound turned a long
+  # `rate_limit_exceeded` run into a hard terminal error with no duplicate spend
+  # to protect (findings#212, rows 212-50 and 212-45).
+  #
+  # The routing circuit is cleared between attempts so the chain is the only
+  # thing under test: an open circuit would end the run with `no_eligible_backend`
+  # long before the depth bound is reached.
+  test "a turn past the chain depth bound is still served, not refused", %{conn: conn} do
+    upstream = start_upstream(first_event_terminal_sse("response.failed", "rate_limit_exceeded"))
+    setup = gateway_setup(upstream)
+    session = session_id()
+    pool_id = setup.pool.id
+
+    statuses =
+      for _attempt <- 1..20 do
+        Repo.delete_all(from(c in RoutingCircuitState, where: c.pool_id == ^pool_id))
+        post_turn(conn, setup, session, @turn_id, stream: true).status
+      end
+
+    assert Enum.uniq(statuses) == [200]
+    assert FakeUpstream.count(upstream) == 20
+    assert length(pool_requests(setup)) == 20
+
+    # Past the bound the successor gives up the turn's derived identity rather
+    # than the request, so the row exists and carries a generated id.
+    past_the_bound = setup |> pool_requests() |> List.last()
+    assert {:ok, _uuid} = Ecto.UUID.cast(past_the_bound.correlation_id)
   end
 
   # A predecessor left live by a killed node keeps `completed_at` null until the
