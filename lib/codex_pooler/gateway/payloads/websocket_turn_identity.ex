@@ -15,7 +15,21 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @request_claim_domain "native_websocket_response_claim_v1"
   @compaction_claim_domain "native_websocket_compaction_claim_v1"
   @kind_claim_domain_prefix "native_turn_kind_claim_v1:"
-  @compacted_history_claim_domain "native_turn_compacted_history_claim_v1"
+  @resume_claim_domain "native_turn_compaction_resume_claim_v1"
+
+  # One wire prefix per domain for the two claims only native HTTP produces, so
+  # an operator can tell from `requests.correlation_id` which arm named a row
+  # (findings#212, row 212-61). `codex-request:` still covers both the
+  # tool-result continuation and the compaction claim, because the websocket
+  # codec produces those two and keys on that prefix.
+  @kind_claim_prefix "codex-kind:"
+  @resume_claim_prefix "codex-resume:"
+  @native_claim_prefixes [
+    @claim_prefix,
+    @request_claim_prefix,
+    @kind_claim_prefix,
+    @resume_claim_prefix
+  ]
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
@@ -75,6 +89,18 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
 
   def request_claim?(_value), do: false
 
+  @doc """
+  True for any claim this module mints for a native Codex turn, whichever arm
+  produced it. Callers that route a claim into the resend path must use this
+  rather than `request_claim?/1`, or a new domain's wire prefix silently stops
+  being routed.
+  """
+  @spec native_claim?(term()) :: boolean()
+  def native_claim?(value) when is_binary(value),
+    do: Enum.any?(@native_claim_prefixes, &String.starts_with?(value, &1))
+
+  def native_claim?(_value), do: false
+
   @spec request_claim_key(<<_::256>>, map()) :: String.t()
   def request_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
@@ -88,26 +114,33 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   end
 
   @doc """
-  A claim for a request of a turn whose history has already been compacted,
-  scoped by the input prefix through the last compaction output item rather than
-  by the whole payload.
+  The claim for the request that resumes a turn from the compaction it just
+  produced, derived from the turn and an opaque digest of that compaction and
+  from NOTHING else in the body.
 
-  That prefix is the part a retry cannot change: the released client appends
-  delivered items to the tail and rebuilds from `clone_history()`, so a cut
-  request and its rebuilt retry share it byte for byte. Naming such a request by
-  its whole payload instead loses the fence for every turn after a session's
-  first compaction -- the retry grows and the claim moves (findings#212, row
-  212-48).
+  It cannot take the bare turn claim, which the turn's own opening request
+  already holds. It must not be payload-scoped either: ledger row 212-20 is the
+  record of why -- the claim is an HMAC over a projection, so whatever the
+  projection includes is what a retry can move. A resume retried with a grown
+  `input`, a changed `tools` list, a flipped `parallel_tool_calls` or a
+  reordered history therefore keeps this claim, because none of that is in it.
   """
-  @spec compacted_history_claim_key(<<_::256>>, map(), [term()]) :: String.t()
-  def compacted_history_claim_key(semantic_turn_key, payload, prefix)
+  @spec resume_claim_key(<<_::256>>, <<_::256>>) :: String.t()
+  def resume_claim_key(semantic_turn_key, anchor)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
-             is_map(payload) and is_list(prefix) do
-    scoped_request_claim_key(
-      semantic_turn_key,
-      Map.put(payload, "input", prefix),
-      @compacted_history_claim_domain
-    )
+             is_binary(anchor) and byte_size(anchor) == 32 do
+    digest =
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        request_claim_hmac_key(),
+        :erlang.term_to_binary(
+          {@resume_claim_domain, semantic_turn_key, anchor},
+          [:deterministic]
+        )
+      )
+
+    @resume_claim_prefix <> Base.url_encode64(digest, padding: false)
   end
 
   @doc """
@@ -125,10 +158,18 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   def kind_claim_key(semantic_turn_key, payload, kind)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
              is_map(payload) and is_binary(kind) do
-    scoped_request_claim_key(semantic_turn_key, payload, @kind_claim_domain_prefix <> kind)
+    scoped_claim_key(
+      semantic_turn_key,
+      payload,
+      @kind_claim_domain_prefix <> kind,
+      @kind_claim_prefix
+    )
   end
 
-  defp scoped_request_claim_key(semantic_turn_key, payload, domain) do
+  defp scoped_request_claim_key(semantic_turn_key, payload, domain),
+    do: scoped_claim_key(semantic_turn_key, payload, domain, @request_claim_prefix)
+
+  defp scoped_claim_key(semantic_turn_key, payload, domain, prefix) do
     projection = request_claim_projection(payload)
 
     digest =
@@ -142,7 +183,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
         )
       )
 
-    @request_claim_prefix <> Base.url_encode64(digest, padding: false)
+    prefix <> Base.url_encode64(digest, padding: false)
   end
 
   @spec replay_claim_digest(<<_::256>>, map()) ::

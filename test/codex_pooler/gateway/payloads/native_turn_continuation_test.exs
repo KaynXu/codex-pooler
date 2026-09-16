@@ -140,57 +140,120 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
     end
   end
 
-  describe "turn_opening_request?/2" do
+  describe "turn_role/1" do
     test "plain input with neither a tool result nor a compaction item opens a turn" do
-      assert NativeTurnContinuation.turn_opening_request?(
-               %{"input" => [user_message("hello")]},
-               options()
-             )
+      assert NativeTurnContinuation.turn_role(%{"input" => [user_message("hello")]}) == :opening
     end
 
     test "a tool result means a previous request of this turn produced the call" do
-      refute NativeTurnContinuation.turn_opening_request?(
-               %{
-                 "input" => [
-                   %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"}
-                 ]
-               },
-               options()
-             )
+      assert NativeTurnContinuation.turn_role(%{
+               "input" => [
+                 %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"}
+               ]
+             }) == :tool_continuation
     end
 
-    # A compaction of this thread has already completed, so this request is
-    # resuming the turn from its summary rather than opening it (212-48). All
-    # three serialisations of that item count, in any position.
+    # The compaction output item is the pivot, and what follows it decides.
     for item_type <- ["compaction", "compaction_summary", "context_compaction"] do
-      test "a #{item_type} item anywhere in the input means the turn is not being opened" do
-        item = %{"type" => unquote(item_type)}
+      test "a #{item_type} with nothing after it is a resume" do
+        assert {:post_compaction_resume, anchor} =
+                 NativeTurnContinuation.turn_role(%{
+                   "input" => [user_message("before"), %{"type" => unquote(item_type)}]
+                 })
 
-        for input <- [
-              [item],
-              [user_message("before"), item],
-              [item, user_message("after")],
-              [user_message("before"), item, assistant_message("delivered")]
-            ] do
-          refute NativeTurnContinuation.turn_opening_request?(%{"input" => input}, options())
-        end
+        assert byte_size(anchor) == 32
+      end
+
+      test "a #{item_type} followed by a user message opens a turn" do
+        assert NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   user_message("retained"),
+                   %{"type" => unquote(item_type)},
+                   user_message("the next thing")
+                 ]
+               }) == :opening
       end
     end
 
-    # The compaction TRIGGER is not a compaction output item: it is a request
-    # control appended to the compaction request itself, which the compaction
-    # arm catches first.
-    test "a compaction_trigger item does not make a request a later one" do
-      assert NativeTurnContinuation.turn_opening_request?(
-               %{"input" => [user_message("history"), %{"type" => "compaction_trigger"}]},
-               options()
-             )
+    # A retry of a resume appends what it already delivered; none of that is a
+    # user message, so the role and the anchor both hold (findings#212, 212-48).
+    test "a resume keeps one anchor across everything a retry can append" do
+      base = [user_message("retained"), %{"type" => "compaction"}]
+
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => base})
+
+      for appended <- [
+            [assistant_message("delivered")],
+            [assistant_message("one"), assistant_message("two")],
+            [%{"type" => "reasoning", "summary" => []}]
+          ] do
+        assert {:post_compaction_resume, ^anchor} =
+                 NativeTurnContinuation.turn_role(%{"input" => base ++ appended})
+      end
     end
 
-    test "a payload with no list input cannot be shown to be a later request" do
-      assert NativeTurnContinuation.turn_opening_request?(%{}, options())
-      assert NativeTurnContinuation.turn_opening_request?(%{"input" => "text"}, options())
-      assert NativeTurnContinuation.turn_opening_request?("not a payload", options())
+    # And the anchor ignores everything else in the input, which is what makes
+    # the resume claim payload-independent rather than prefix-independent.
+    test "the anchor ignores every item that is not a compaction output" do
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [user_message("a"), user_message("b"), %{"type" => "compaction"}]
+               })
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [user_message("b"), %{"type" => "compaction"}]
+               })
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [%{"type" => "compaction"}]})
+    end
+
+    test "a different compaction is a different anchor" do
+      assert {:post_compaction_resume, one} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [%{"type" => "compaction", "encrypted_content" => "first"}]
+               })
+
+      assert {:post_compaction_resume, two} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [%{"type" => "compaction", "encrypted_content" => "second"}]
+               })
+
+      refute one == two
+    end
+
+    # Asked of the segment after the last compaction item, so a tool result that
+    # is part of the compacted history does not move the role.
+    test "a tool result is judged after the last compaction item, not before it" do
+      assert {:post_compaction_resume, _anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"},
+                   %{"type" => "compaction"}
+                 ]
+               })
+
+      assert NativeTurnContinuation.turn_role(%{
+               "input" => [
+                 %{"type" => "compaction"},
+                 %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"}
+               ]
+             }) == :tool_continuation
+    end
+
+    # The compaction TRIGGER is a request control, not a compaction output.
+    test "a compaction_trigger item does not make a request a later one" do
+      assert NativeTurnContinuation.turn_role(%{
+               "input" => [user_message("history"), %{"type" => "compaction_trigger"}]
+             }) == :opening
+    end
+
+    test "a payload with no list input fails CLOSED, to the turn's own claim" do
+      assert NativeTurnContinuation.turn_role(%{}) == :opening
+      assert NativeTurnContinuation.turn_role(%{"input" => "text"}) == :opening
+      assert NativeTurnContinuation.turn_role("not a payload") == :opening
     end
   end
 

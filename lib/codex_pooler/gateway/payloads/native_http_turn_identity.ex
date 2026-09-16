@@ -155,37 +155,35 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
     end
   end
 
-  # The bare claim names the request that opened the turn. Every later request
-  # of it must be named by something else, or it would collide with the opener
-  # and be refused as a duplicate of a request it is not -- but "something else"
-  # is not automatically the whole payload. A tool continuation has to be, since
-  # nothing else separates the several tool rounds of one turn. A request whose
-  # history has already been compacted does not: its prefix through the last
-  # compaction output item separates it from every other request of the turn AND
-  # survives a rebuilt retry body, which the whole payload does not.
-  # The tool-result arm is asked first, and a request carrying both a tool result
-  # and a compaction item takes it: several tool rounds of one resumed turn share
-  # the compacted prefix and would otherwise collide with each other and with the
-  # resume.
+  # One rule, read from `NativeTurnContinuation`, so nothing here re-implements
+  # the discriminator the module exists to own (findings#212, row 212-51).
+  #
+  # WHAT THIS DOES NOT COVER, enumerated because every round of this ticket has
+  # closed on an unstated scope:
+  #
+  #   1. A tool-result continuation is named by its whole payload, so a retry
+  #      whose body has grown is a different claim and is not fenced. That is
+  #      the price of separating the several tool rounds of one turn, and the
+  #      websocket path has the same miss.
+  #   2. A compaction request is named by its whole payload, so a compaction
+  #      resent with a changed body is not fenced.
+  #   3. A request carrying a USER MESSAGE after the last compaction output item
+  #      is treated as a turn's opening request, because in the released client
+  #      that is a new turn with a new `turn_id`. A caller that reuses one
+  #      `turn_id` across a user message is refused rather than served.
+  #   4. Nothing here fences a websocket frame. The codec picks its own arms,
+  #      and for a post-compaction resume it still picks the bare claim, which
+  #      collides with that turn's opener (212-58).
   defp turn_claim(identity, payload) do
-    if NativeTurnContinuation.tool_result_continuation?(payload) do
-      WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)
-    else
-      compacted_or_bare_claim(identity, payload)
-    end
-  end
-
-  defp compacted_or_bare_claim(identity, payload) do
-    case NativeTurnContinuation.compacted_history_prefix(payload) do
-      {:ok, prefix} ->
-        WebsocketTurnIdentity.compacted_history_claim_key(
-          identity.semantic_turn_key,
-          payload,
-          prefix
-        )
-
-      :none ->
+    case NativeTurnContinuation.turn_role(payload) do
+      :opening ->
         identity.turn_claim_key
+
+      :tool_continuation ->
+        WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)
+
+      {:post_compaction_resume, anchor} ->
+        WebsocketTurnIdentity.resume_claim_key(identity.semantic_turn_key, anchor)
     end
   end
 

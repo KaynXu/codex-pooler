@@ -658,10 +658,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   # request that shares the turn id. Those four are one prefix on purpose: they
   # differ by HMAC domain, not by name, so this predicate keeps routing all of
   # them into the resend path without enumerating them (findings#212, 212-54).
-  defp native_turn_claim?(correlation_id) when is_binary(correlation_id) do
-    WebsocketTurnIdentity.request_claim?(correlation_id) or
-      String.starts_with?(correlation_id, "codex-turn:")
-  end
+  defp native_turn_claim?(correlation_id) when is_binary(correlation_id),
+    do: WebsocketTurnIdentity.native_claim?(correlation_id)
 
   defp native_turn_claim?(_correlation_id), do: false
 
