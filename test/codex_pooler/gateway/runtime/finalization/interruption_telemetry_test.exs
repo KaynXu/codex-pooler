@@ -98,6 +98,56 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     end)
   end
 
+  test "a candidate that goes stale between selection and settlement emits nothing" do
+    # The cleanup selects expired-owner candidates outside the per-session
+    # transaction, so a session that acquires a new owner in between is settled
+    # by nobody: `recover_expired_owner_locked/2` returns `:stale_owner` and the
+    # caller counts no recovery. Nothing may be emitted on that arm — an
+    # interrupted outcome for a turn that is still running would be a lie, and
+    # it is the arm a real rollout produces when a pod takes over a lease while
+    # the sweep is mid-pass.
+    fixture = committed_interruption_fixture!(:active_attempt)
+    expire_owner!(fixture)
+
+    barrier_ref = make_ref()
+    parent = self()
+
+    Application.put_env(
+      :codex_pooler,
+      :runtime_cleanup_owner_candidate_test_barrier,
+      {parent, barrier_ref}
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:codex_pooler, :runtime_cleanup_owner_candidate_test_barrier)
+    end)
+
+    capture_outcomes(fn ->
+      cleanup =
+        Task.async(fn -> run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end) end)
+
+      assert_receive {:runtime_cleanup_owner_candidates_selected, cleanup_pid, ^barrier_ref,
+                      candidates},
+                     @task_timeout
+
+      assert Enum.any?(candidates, &(&1.session_id == fixture.session.id)),
+             "the fixture session was not selected, so the stale arm was never reached"
+
+      # A successor takes the lease while the sweep holds its candidate list.
+      run_unboxed(fn ->
+        Repo.update_all(from(s in CodexSession, where: s.id == ^fixture.session.id),
+          set: [owner_lease_token: Ecto.UUID.generate()]
+        )
+      end)
+
+      send(cleanup_pid, {:release_runtime_cleanup_owner_candidates, barrier_ref})
+      assert Task.await(cleanup, @task_timeout) == :ok
+
+      refute_received {:stream_outcome, _}
+      assert committed_interruption_state(fixture).turn_status == "in_progress"
+    end)
+  end
+
   defp expire_owner!(fixture) do
     run_unboxed(fn ->
       past = DateTime.add(DateTime.utc_now(), -60, :second)
