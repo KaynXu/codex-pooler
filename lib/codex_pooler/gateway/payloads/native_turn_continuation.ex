@@ -29,43 +29,42 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   # exactly like one that sends the body. Reading the two carriers in different
   # places is what fenced a header-only client against its own turn (212-49).
   #
-  # `ordinary_tool_continuation?/2` and the two private helpers under it are the
-  # exception, and the exception is enforced rather than described: they read the
-  # body alone, they are the websocket codec's arm, and their head requires a
-  # websocket transport so an HTTP caller cannot get a header-blind answer out of
-  # them. A websocket frame always carries the document, so nothing is lost
-  # there.
+  # `ordinary_tool_continuation?/2` is the exception, and the exception is
+  # enforced rather than described: it and the three private helpers beneath it
+  # (`ordinary_turn_continuation?/1`, `final_compaction?/2` and
+  # `previous_response_present?/1`) read the body alone, they are the websocket
+  # codec's arm, and its head requires a websocket transport so an HTTP caller
+  # cannot get a header-blind answer out of it. All three helpers are private, so
+  # none of them can acquire a caller that bypasses that head. A websocket frame
+  # always carries the document, so nothing is lost there.
   #
   # ## What separates a turn's opening request from its later requests
   #
   # Nothing in the canonical document does: a turn's compaction, its
   # continuations and its resume all carry one `turn_id` and one `request_kind`
   # because they are built from one `TurnMetadataState` (`session.rs:686-701`,
-  # `turn_metadata.rs:169`). The input history is the only signal, and exactly
-  # two shapes prove a request cannot be the one that opened its turn:
+  # `turn_metadata.rs:169`). The input history is the only signal, and
+  # `turn_role/1` is the whole rule -- the claim resolver and the tests both call
+  # it, so there is no second copy to drift.
   #
-  #   * it carries a tool result -- the turn already ran a tool, so a previous
-  #     request of it produced the call
-  #   * it carries a compaction output item -- a compaction of this thread has
-  #     already completed, and the turn is being resumed from its summary
-  #     (`compact.rs:600-660` keeps that item last; `protocol/src/models.rs:1224`
-  #     serialises it as `compaction` with the `compaction_summary` alias, and
-  #     `context_compaction` is its sibling)
+  # Remote compaction REPLACES the session history
+  # (`compact_remote_history.rs:118`, `compact_remote_v2.rs:510`) and pushes the
+  # compaction output item last, so every turn for the rest of a session that
+  # compacts once carries that item. It is therefore the pivot, and what follows
+  # it is what decides -- a tool result, a user message, or nothing.
   #
-  # A request with neither is treated as the request that opens its turn and is
-  # named by the payload-independent claim.
-  #
-  # The compaction half of that is not a licence to fall back on the whole
-  # payload. Remote compaction REPLACES the session history
-  # (`compact_remote_history.rs:118`, `compact_remote_v2.rs:510`), so every turn
-  # for the rest of a session that compacts once carries a compaction item --
-  # and naming those by their whole payload cost the fence exactly where the row
-  # measured the spend: an opener in a compacted thread, retried with the grown
-  # body the client rebuilds, bought a SECOND BILLED DISPATCH on a predecessor
-  # that had already succeeded (measured, 2 dispatches and two `succeeded` rows,
-  # where the same sequence in an uncompacted thread is refused). So a compacted
-  # request is named by `compacted_history_prefix/1` instead: the part of its
-  # input a retry cannot change.
+  # Two earlier answers to this question are worth recording because each cost a
+  # round. Treating any compaction item as proof that a request is NOT its turn's
+  # opener refused every native HTTP turn that triggered a remote compaction, one
+  # request after the compaction itself. Then naming those requests by their
+  # payload -- whole, or narrowed to the prefix through the compaction item --
+  # broke the two properties the bare claim exists for: it stopped agreeing with
+  # the websocket codec, which gives such a frame the bare claim, so an HTTPS
+  # fallback of a drained websocket turn bought a second billed dispatch; and it
+  # made the claim move whenever any body field the client rebuilds moved, which
+  # ledger row 212-20 had predicted in as many words. A turn's opener keeps the
+  # bare claim in a compacted session for exactly the same reasons it keeps it in
+  # an uncompacted one.
   #
   # Note that the compaction *trigger* is not a compaction output item. Remote
   # compaction V2 appends `ResponseItem::CompactionTrigger {}`

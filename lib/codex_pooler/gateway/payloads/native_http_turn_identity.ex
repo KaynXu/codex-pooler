@@ -41,23 +41,23 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   #   * a tool-result continuation -> the payload-scoped request claim, which is
   #                                   what keeps the several tool rounds of one
   #                                   turn from colliding with each other
-  #   * anything else of a turn whose
-  #     history is already compacted -> a claim scoped by the input PREFIX
-  #                                   through the last compaction output item
+  #   * the request that RESUMES a
+  #     turn from its compaction   -> a claim derived from the turn and an opaque
+  #                                   digest of that compaction, and from nothing
+  #                                   else in the body
   #   * the request that opened it -> the BARE, payload-independent
   #                                   `codex-turn:` claim, which survives any
-  #                                   rebuilt body
+  #                                   rebuilt body -- including for a turn in a
+  #                                   session that has already compacted, which
+  #                                   is what keeps this module agreeing with the
+  #                                   websocket codec
   #
-  # The prefix arm exists because the obvious alternative is a regression into
-  # the class this fence was built for. Remote compaction replaces the session
-  # history (`compact_remote_history.rs:118`, `compact_remote_v2.rs:510`), so
-  # every turn for the REST OF A SESSION that compacts once carries a compaction
-  # item; naming all of those by their whole payload means the client's rebuilt
-  # retry body is a different claim, and a cut that already delivered output buys
-  # a second billed dispatch on a predecessor that succeeded. The prefix is the
-  # part a retry cannot change -- the client appends to the tail -- so it keeps
-  # the bare claim's payload-independence while still separating a turn's opener,
-  # its compaction and its resume from each other.
+  # Only the middle three are payload-scoped, and that is deliberate rather than
+  # incidental. Ledger row 212-20 is the record of why: a claim is an HMAC over a
+  # projection, so whatever the projection includes is what a retry can move, and
+  # the client rebuilds its whole `Prompt` from live session state on every
+  # attempt rather than resending a serialized body. The two claims that must
+  # survive a retry therefore include no body projection at all.
   #
   # Every discriminator above is `NativeTurnContinuation`'s, and this module
   # reaches only the ones that resolve the canonical document through
