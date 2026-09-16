@@ -111,7 +111,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   }
 
   test "the compatibility matrix claim shapes are the ones this route produces", %{conn: conn} do
-    shapes = CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn.claim_by_request_kind
+    shapes =
+      CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn.claim_by_request_kind
 
     upstream =
       start_upstream(
@@ -792,7 +793,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       setup = gateway_setup(upstream)
       session = session_id()
 
-      assert json_response(post_turn(conn, setup, session, @turn_id, where: unquote(carrier)), 200)
+      assert json_response(
+               post_turn(conn, setup, session, @turn_id, where: unquote(carrier)),
+               200
+             )
 
       for call_id <- ["call_212_first", "call_212_second"] do
         assert json_response(
@@ -885,7 +889,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       setup = gateway_setup(upstream)
       session = session_id()
 
-      document = CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => unquote(kind)})
+      document =
+        CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => unquote(kind)})
 
       assert json_response(post_turn(conn, setup, session, @turn_id, document: document), 200)
 

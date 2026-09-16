@@ -24,7 +24,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
                options()
              ) == body
 
-      assert NativeTurnContinuation.canonical_document(%{}, options(headers: [{@metadata_key, header}])) ==
+      assert NativeTurnContinuation.canonical_document(
+               %{},
+               options(headers: [{@metadata_key, header}])
+             ) ==
                header
 
       assert NativeTurnContinuation.canonical_document(
@@ -100,7 +103,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
                options()
              ) == nil
 
-      assert NativeTurnContinuation.request_kind(payload_for(:body, %{"turn_id" => "t"}), options()) ==
+      assert NativeTurnContinuation.request_kind(
+               payload_for(:body, %{"turn_id" => "t"}),
+               options()
+             ) ==
                nil
     end
   end
@@ -120,7 +126,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
                options(endpoint: @compact)
              )
 
-      assert NativeTurnContinuation.compaction_request?(%{"input" => []}, options(endpoint: @compact))
+      assert NativeTurnContinuation.compaction_request?(
+               %{"input" => []},
+               options(endpoint: @compact)
+             )
     end
 
     test "an ordinary turn on the ordinary route is not a compaction" do
@@ -260,7 +269,9 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
   describe "endpoints" do
     test "the compact route is one of the native routes, from one definition" do
       assert NativeTurnContinuation.compact_endpoint() == @compact
+
       assert NativeTurnContinuation.compact_endpoint() in NativeTurnContinuation.native_endpoints()
+
       assert @responses in NativeTurnContinuation.native_endpoints()
     end
   end

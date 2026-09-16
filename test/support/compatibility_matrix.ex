@@ -431,7 +431,10 @@ defmodule CodexPooler.CompatibilityMatrix do
         },
         claim_by_request_kind: %{
           turn: %{shape: "bare_payload_independent_codex_turn_claim", prefix: "codex-turn:"},
-          tool_result_continuation: %{shape: "payload_scoped_request_claim", prefix: "codex-request:"},
+          tool_result_continuation: %{
+            shape: "payload_scoped_request_claim",
+            prefix: "codex-request:"
+          },
           compaction: %{shape: "payload_scoped_request_claim", prefix: "codex-request:"},
           post_compaction_resume: %{
             shape: "compaction_anchored_resume_claim",

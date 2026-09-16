@@ -1024,7 +1024,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   defp ordinary_native_tool_continuation?(payload, options),
     do: NativeTurnContinuation.ordinary_tool_continuation?(payload, options)
 
-  defp canonical_metadata_map(metadata), do: NativeTurnContinuation.canonical_metadata_map(metadata)
+  defp canonical_metadata_map(metadata),
+    do: NativeTurnContinuation.canonical_metadata_map(metadata)
 
   defp replay_request_kind?(
          %{"client_metadata" => %{@canonical_metadata_key => metadata}},

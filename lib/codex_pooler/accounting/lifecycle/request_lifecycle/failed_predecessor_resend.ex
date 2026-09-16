@@ -77,7 +77,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   def resolve(claim, scope) when is_binary(claim) and is_map(scope) do
     cond do
       not (WebsocketTurnIdentity.native_claim?(claim) or
-             ClientRetry.failed_predecessor_claim?(claim)) ->
+               ClientRetry.failed_predecessor_claim?(claim)) ->
         {:error, :unsupported_claim}
 
       Map.get(scope, :anchor_present?) == true ->
