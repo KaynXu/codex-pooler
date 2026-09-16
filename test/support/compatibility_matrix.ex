@@ -432,7 +432,10 @@ defmodule CodexPooler.CompatibilityMatrix do
         claim_by_request_kind: %{
           turn: "bare_payload_independent_codex_turn_claim",
           tool_result_continuation: "payload_scoped_request_claim",
-          compaction: "payload_scoped_codex_request_claim"
+          compaction: "payload_scoped_codex_request_claim",
+          compacted_history_turn: "compacted_history_prefix_scoped_claim",
+          prewarm: "kind_scoped_request_claim",
+          memory: "kind_scoped_request_claim"
         },
         continuation_discriminator: "shared_native_turn_continuation_predicate",
         metadata_sources: ["body_client_metadata", "request_header"],
@@ -445,8 +448,7 @@ defmodule CodexPooler.CompatibilityMatrix do
           "malformed_turn_metadata",
           "absent_request_kind",
           "unknown_request_kind",
-          "prewarm_request_kind",
-          "memory_request_kind"
+          "contradictory_repeated_turn_metadata_header"
         ],
         refusal_dispositions: [
           "unsupported_claim",
@@ -457,6 +459,7 @@ defmodule CodexPooler.CompatibilityMatrix do
           "entitlement_present",
           "retry_expired",
           "chain_exhausted",
+          "http_stage_reports_the_predecessor_rows_disposition",
           "invalid_predecessor",
           "anchor_unavailable"
         ],
@@ -467,10 +470,14 @@ defmodule CodexPooler.CompatibilityMatrix do
           websocket_label_unchanged: true,
           claim_key_payload_or_frame: false
         },
-        known_gaps: %{tool_result_continuation_grown_body_retry_fenced: false}
+        known_gaps: %{
+          tool_result_continuation_grown_body_retry_fenced: false,
+          compaction_changed_body_retry_fenced: false,
+          compacted_history_turn_grown_body_retry_fenced: true
+        }
       },
       contract:
-        "409 duplicate_turn is a public runtime response on both transports: a native Codex HTTP turn on /backend-api/codex/responses and its compact route takes the same turn claim a websocket response.create frame takes, so a resend of one turn meets the resend policy instead of buying a second upstream dispatch. A turn request takes the bare payload-independent codex-turn claim so a rebuilt longer retry body still names the same turn, a tool-result continuation and a compaction each take their own payload-scoped claim, and the continuation discriminator is the predicate both transports share. The canonical x-codex-turn-metadata document is preferred from the request body and falls back to the header; a translated /v1 request, a non-native route, a missing Codex session, an absent or malformed document, an absent or unknown request kind, and the prewarm and memory kinds are not claimed at all and keep the generated correlation id. Every refusal fails closed through one disposition vocabulary, and only a predecessor that already bought provider output refuses a resend: a completed turn or a post-relay cut that had delivered output. A zero-output provider failure and an unfinished predecessor are served, and so are a prewarm sharing the turn id, a turn and its own compaction in either order, and the same turn id under a different session. Native HTTP refusals log their own stage and label with the transport field set, the websocket line is unchanged, and no line carries a claim key, payload, or frame. Tool-result continuations remain unfenced against grown-body retries on both transports because their claim is payload-scoped by construction"
+        "409 duplicate_turn is a public runtime response on both transports: a native Codex HTTP turn on /backend-api/codex/responses and its compact route takes the same turn claim a websocket response.create frame takes, so a resend of one turn meets the resend policy instead of buying a second upstream dispatch. One turn id covers every request made about a turn, so the claim depends on which request of the turn it is. The request that opened the turn, whose input carries neither a tool result nor a compaction output item, takes the bare payload-independent codex-turn claim so a rebuilt longer retry body still names the same turn. A tool-result continuation and a compaction each take their own payload-scoped claim. A request of a turn whose history already carries a compaction output item is named by the input prefix through the last such item, which is the part a retry cannot change, because remote compaction replaces the session history and every later turn of that session carries the item. A prewarm or memory request carrying the turn id takes a payload-scoped claim in a domain named by its kind, so it is clear of the turn and an identical resend of it is still refused. The canonical x-codex-turn-metadata document is preferred from the request body and falls back to the header, and the declared request kind is compared after trimming and case folding. Not claimed at all, keeping the generated correlation id: a translated /v1 request, a non-native route, a missing Codex session, an absent or malformed document, an absent or unknown request kind, and a repeated x-codex-turn-metadata header whose copies disagree. Every refusal fails closed through one disposition vocabulary, and only a predecessor that already bought provider output refuses a resend: a completed turn or a post-relay cut that had delivered output. The resend policy is scoped by the PREDECESSOR ROW's transport, not by the resend's, so a native HTTP refusal whose predecessor is a websocket turn reports that predecessor's disposition rather than authorization_changed, and every disposition in the vocabulary can reach the native HTTP stage. A zero-output provider failure and an unfinished predecessor are served, and so are a turn and its own compaction in either order, the request that resumes the turn from a compaction in every arrangement of the compacted history, a tool continuation of that resume, a prewarm or memory alongside the turn sharing its id, and the same turn id under a different session. The chain that steps over zero-output predecessors is bounded at sixteen hops and falls open to a generated id past the bound rather than refusing. Native HTTP refusals log their own stage and label with the transport field set, the websocket line is unchanged, and no line carries a claim key, payload, or frame. Two claims remain unfenced against a changed retry body because they are payload-scoped by construction: a tool-result continuation whose body has grown, on both transports, and a compaction resent with a changed body"
     },
     %{
       slug: :reasoning_minimal,
@@ -2237,16 +2244,24 @@ defmodule CodexPooler.CompatibilityMatrix do
         "identical_native_http_resend",
         "identical_compaction_resend",
         "every_further_resend_of_one_turn",
-        "resend_of_a_turn_that_delivered_output_after_a_served_zero_output_failure"
+        "resend_of_a_turn_that_delivered_output_after_a_served_zero_output_failure",
+        "grown_body_retry_of_an_uncompacted_turn",
+        "grown_body_retry_of_a_turn_in_a_compacted_thread",
+        "identical_post_compaction_resume",
+        "identical_prewarm_or_memory_sharing_the_turn_id"
       ],
       served: [
         "resend_after_a_zero_output_provider_failure",
         "retry_while_the_predecessor_is_unfinished",
         "prewarm_sharing_the_turn_id",
         "turn_and_its_own_compaction_in_either_order",
+        "post_compaction_resume_in_every_arrangement_of_the_compacted_history",
+        "tool_continuation_of_a_post_compaction_resume",
         "two_genuinely_different_native_http_turns",
         "same_turn_id_under_a_different_codex_session",
-        "tool_result_continuation_resent_with_a_grown_body"
+        "tool_result_continuation_resent_with_a_grown_body",
+        "compaction_resent_with_a_changed_body",
+        "attempt_past_the_chain_depth_bound"
       ]
     },
     reasoning_minimal: %{

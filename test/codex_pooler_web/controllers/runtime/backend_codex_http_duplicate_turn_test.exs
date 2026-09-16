@@ -96,6 +96,68 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
+  # The entry's machine-readable fields were prose the suite ran past: after the
+  # kind-scoped claims landed it still listed `prewarm` and `memory` as unfenced
+  # while a test in the same commit asserted the opposite (findings#212, 212-33).
+  # These assertions drive each shape and read the row back, so the contract file
+  # cannot describe a fence this route does not produce.
+  test "the compatibility matrix claim shapes are the ones this route produces", %{conn: conn} do
+    feature = CompatibilityMatrix.by_slug!(:duplicate_turn_fence)
+    shapes = feature.duplicate_turn.claim_by_request_kind
+    unfenced = feature.duplicate_turn.unfenced
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_shape_turn"}),
+          FakeUpstream.json_response(%{"id" => "resp_shape_compacted"}),
+          FakeUpstream.json_response(%{"id" => "resp_shape_kind"})
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    # The entry claims six shapes, and three of them are distinguishable from the
+    # row alone: the bare turn claim, the prefix-scoped claim of a compacted
+    # request, and the kind-scoped claim.
+    assert Map.has_key?(shapes, :compacted_history_turn)
+    assert Map.has_key?(shapes, :prewarm)
+    assert Map.has_key?(shapes, :memory)
+
+    assert json_response(post_turn(conn, setup, session, "turn_shape_bare", where: :body), 200)
+
+    assert json_response(
+             post_turn(conn, setup, session, "turn_shape_compacted",
+               where: :body,
+               input: compacted_history()
+             ),
+             200
+           )
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id, document: kind_metadata("memory")),
+             200
+           )
+
+    assert [bare, compacted, kind_scoped] = pool_requests(setup)
+    assert String.starts_with?(bare.correlation_id, "codex-turn:")
+    assert String.starts_with?(compacted.correlation_id, "codex-request:")
+    assert String.starts_with?(kind_scoped.correlation_id, "codex-request:")
+    assert compacted.correlation_id != kind_scoped.correlation_id
+
+    # And the kinds the entry no longer calls unfenced really are claimed: a
+    # generated correlation id would be a UUID.
+    assert :error = Ecto.UUID.cast(kind_scoped.correlation_id)
+    refute "prewarm_request_kind" in unfenced
+    refute "memory_request_kind" in unfenced
+
+    # What the entry still calls unfenced has to stay unfenced.
+    assert "unknown_request_kind" in unfenced
+    assert "absent_request_kind" in unfenced
+    assert "contradictory_repeated_turn_metadata_header" in unfenced
+  end
+
   # The cohort in the row is streaming: a native Codex turn resolves to
   # `http_sse`, which is exactly the transport that got a fresh UUID and a
   # second dispatch. The refusal lands before any upstream work, so the resend
