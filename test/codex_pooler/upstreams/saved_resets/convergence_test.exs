@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Repo
+  alias CodexPooler.Telemetry.RelayEvent
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
@@ -363,6 +364,41 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
                       canonical_to_lifecycle_ms: 0,
                       applied_to_lifecycle_ms: 0
                     }, %{source: "finalizer", outcome: "confirmed_by_quota"}}
+  end
+
+  test "an absurd timestamp drops its duration and keeps the convergence" do
+    # The relay refuses a whole sample whose measurement map the storage layer
+    # cannot hold, so an unclamped duration costs the `count` as well and is
+    # recorded as a refused sample. A convergence is worth more than one of its
+    # durations.
+    handler_id = attach_convergence_handler!([:codex_pooler, :saved_reset, :convergence])
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    ancient = ~U[0001-01-01 00:00:00Z]
+
+    :ok =
+      ConvergenceTelemetry.emit(
+        %{
+          "consumed_at" => DateTime.to_iso8601(ancient),
+          "finished_at" => DateTime.to_iso8601(observed_at),
+          "convergence_source" => "finalizer",
+          "convergence_outcome" => "confirmed_by_quota",
+          "confirmation_timing" => %{
+            "version" => 1,
+            "canonical_confirmed_at" => DateTime.to_iso8601(observed_at)
+          }
+        },
+        observed_at
+      )
+
+    assert_receive {^handler_id, measurements, %{source: "finalizer"}}
+
+    assert measurements.count == 1
+    assert measurements.canonical_to_lifecycle_ms == 0
+    refute Map.has_key?(measurements, :applied_to_canonical_ms)
+    refute Map.has_key?(measurements, :applied_to_lifecycle_ms)
+
+    assert RelayEvent.storable_measurements?(measurements),
+           "the emitted sample is one the relay would refuse whole"
   end
 
   defp attach_convergence_handler!(event) do
