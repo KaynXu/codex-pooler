@@ -101,8 +101,6 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
   @metadata_key "x-codex-turn-metadata"
 
-  @native_endpoints NativeTurnContinuation.native_endpoints()
-
   # Kinds that are about a turn rather than one of its model requests, and that
   # the released client sends at most once for a given turn. They are fenced in
   # their own domain so a duplicate still costs one dispatch; any other declared
@@ -205,12 +203,17 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # identity through `WebsocketTurnIdentity`'s legacy fallbacks.
   defp canonical_payload(metadata), do: %{"client_metadata" => %{@metadata_key => metadata}}
 
+  # The endpoint list is read at runtime rather than through a module
+  # attribute: evaluating `NativeTurnContinuation.native_endpoints/0` at
+  # compile time makes this module a compile-time dependent of that one, which
+  # `mix quality.xref` refuses (it forces a recompile cascade on every edit to
+  # the shared discriminator).
   defp native_route?(%RequestOptions{
          transport: %{transport: transport, upstream_endpoint: endpoint},
          openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
        })
        when is_binary(transport) and transport != "websocket",
-       do: endpoint in @native_endpoints
+       do: endpoint in NativeTurnContinuation.native_endpoints()
 
   defp native_route?(%RequestOptions{}), do: false
 end
