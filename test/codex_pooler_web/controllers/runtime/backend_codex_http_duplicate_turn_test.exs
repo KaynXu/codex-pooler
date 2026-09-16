@@ -1062,18 +1062,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       setup = gateway_setup(upstream, compact?: true)
       session = session_id()
 
-      input =
+      # The predecessor is a WEBSOCKET frame, and the codec's third arm gives
+      # every such frame the bare turn claim whatever its history looks like. So
+      # the seeding leg always sends the uncompacted body, which takes that same
+      # bare claim here; only the FALLBACK leg's history varies. Seeding with the
+      # compacted body instead would write whatever claim HTTP happens to choose
+      # today, which is how a broken revision passes its own test.
+      fallback_input =
         case unquote(history) do
           :uncompacted -> native_text_input("fallback history")
           :compacted -> compacted_session_turn()
         end
 
       assert response(
-               post_turn(conn, setup, session, @turn_id, stream: true, where: :body, input: input),
+               post_turn(conn, setup, session, @turn_id,
+                 stream: true,
+                 where: :body,
+                 input: native_text_input("fallback history")
+               ),
                200
              )
 
       assert [predecessor] = pool_requests(setup)
+      assert String.starts_with?(predecessor.correlation_id, "codex-turn:")
 
       {1, _} =
         Repo.update_all(
@@ -1086,7 +1097,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
                  post_turn(conn, setup, session, @turn_id,
                    stream: true,
                    where: :body,
-                   input: input
+                   input: fallback_input
                  ),
                  409
                )
