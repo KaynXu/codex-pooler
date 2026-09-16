@@ -626,6 +626,16 @@ defmodule CodexPooler.FakeUpstream do
   # `*_test.exs` frame names the caller (`file.exs:line`); a scenario may still
   # pass `:owner` for a more specific label. No test frame yields the generic
   # label rather than a guess.
+  #
+  # Two accepted residuals (findings#226). `:current_stacktrace` is truncated to
+  # the `backtrace_depth` system flag (default 8) and the test frame sits 3-4 up
+  # today, so it fits; a future helper layer between the caller and this
+  # function could push it past the cut, and the label would fall back to
+  # `barrier_sse` rather than name the wrong caller. Pass `:owner` explicitly if
+  # you add such a layer. Derived labels also carry the `.exs` extension
+  # (`fake_upstream_test.exs:687`) while hand-written owners do not
+  # (`fake_upstream_test:expected_close`); that is cosmetic, the charset allows
+  # `.`, and the two forms stay distinguishable.
   defp default_barrier_sse_owner do
     {:current_stacktrace, frames} = Process.info(self(), :current_stacktrace)
 
