@@ -244,6 +244,171 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     end
   end
 
+  @tag :websocket_connect_failover
+  test "a refused connect leaves the candidate that serves the turn routable, in either order" do
+    # 208-11 asks for the claim itself rather than for more seeds: a refused
+    # connect on the first candidate must not write route-health demotion or
+    # circuit state that makes the second candidate's success order-dependent.
+    # The refusal is real (a kernel-refused port), the success is real (a
+    # healthy fake upstream on the sibling assignment), and the ring order is
+    # pinned by the rendezvous seed rather than left to the ExUnit seed, so
+    # both orders are driven in one run.
+    #
+    # The conclusion rests on circuits being keyed per assignment: the refused
+    # connect does call `begin_candidate_circuit/2`, and it is the key that
+    # keeps the sibling out of it, not the absence of a write.
+    port = reserve_closed_port!()
+    refused = %FakeUpstream{url: "http://127.0.0.1:#{port}"}
+
+    healthy =
+      start_upstream(
+        FakeUpstream.websocket_text_frames([
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_failover_serves", "status" => "in_progress"}
+          }),
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.completed",
+            "response" => %{
+              "id" => "resp_failover_serves",
+              "status" => "completed",
+              "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+            }
+          })
+        ])
+      )
+
+    {setup, healthy_assignment} =
+      refused |> gateway_setup() |> with_returned_failover_candidate!(healthy)
+
+    refused_assignment_id = setup.assignment.id
+    healthy_assignment_id = healthy_assignment.id
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assignment_ids = [refused_assignment_id, healthy_assignment_id]
+
+    # Refused first: the turn has to fail over to reach its answer.
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               task_exception_probe_payload(setup, "refused first then served"),
+               %{
+                 request_id: seed_preferring_assignment(assignment_ids, refused_assignment_id),
+                 connect_timeout_ms: 2_000
+               },
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    [failover_request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert failover_request.status == "succeeded"
+
+    failover_attempts =
+      Repo.all(
+        from(a in Attempt,
+          where: a.request_id == ^failover_request.id,
+          order_by: a.attempt_number
+        )
+      )
+
+    assert [first, second] = failover_attempts
+    assert first.pool_upstream_assignment_id == refused_assignment_id
+    assert first.status == "retryable_failed"
+
+    assert %{"phase" => "connect", "reason" => "econnrefused"} =
+             Map.take(first.response_metadata["transport_failure"], ~w(phase reason))
+
+    assert second.pool_upstream_assignment_id == healthy_assignment_id
+    assert second.status == "succeeded"
+
+    # Whatever the refusal recorded is keyed to the assignment that refused.
+    # As of this revision a refused connect writes neither a routing-circuit row
+    # nor a demotion, so both sets are empty here; the assertion is written
+    # against the sibling rather than against emptiness so it still holds the
+    # real invariant if the refused candidate ever starts being demoted.
+    refute healthy_assignment_id in circuit_assignment_ids(setup)
+    refute healthy_assignment_id in demoted_assignment_ids(setup)
+
+    # A second turn, still starting at the refused candidate, still reaches the
+    # same answer: the first turn's route-health writes did not disqualify the
+    # candidate that served it.
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               task_exception_probe_payload(setup, "refused first again then served"),
+               %{
+                 request_id: seed_preferring_assignment(assignment_ids, refused_assignment_id),
+                 connect_timeout_ms: 2_000
+               },
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    # Healthy first: the same pool answers without touching the refused
+    # endpoint at all, so the outcome does not depend on the order.
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               task_exception_probe_payload(setup, "healthy first"),
+               %{
+                 request_id: seed_preferring_assignment(assignment_ids, healthy_assignment_id),
+                 connect_timeout_ms: 2_000
+               },
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert length(requests) == 3
+    assert Enum.all?(requests, &(&1.status == "succeeded"))
+
+    served_by =
+      Repo.all(
+        from(a in Attempt,
+          where: a.request_id in ^Enum.map(requests, & &1.id) and a.status == "succeeded",
+          select: a.pool_upstream_assignment_id
+        )
+      )
+
+    assert Enum.uniq(served_by) == [healthy_assignment_id]
+    assert length(served_by) == 3
+  end
+
+  defp circuit_assignment_ids(setup) do
+    Repo.all(
+      from(c in RoutingCircuitState,
+        where: c.pool_id == ^setup.pool.id,
+        select: c.pool_upstream_assignment_id,
+        distinct: true
+      )
+    )
+  end
+
+  defp demoted_assignment_ids(setup) do
+    Repo.all(
+      from(d in BridgeDemotion,
+        where: d.pool_id == ^setup.pool.id,
+        select: d.pool_upstream_assignment_id,
+        distinct: true
+      )
+    )
+  end
+
+  # `with_failover_candidate!/2` hides the fallback assignment; the ordering
+  # claim needs its id to pin the ring seed.
+  defp with_returned_failover_candidate!(setup, upstream) do
+    fallback =
+      gateway_upstream(setup.pool, upstream, "synthetic-ordered-fallback", compact?: false)
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {setup, fallback.assignment}
+  end
+
   defp assert_task_exception_resend(retry_kind) do
     barrier = make_ref()
     CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
