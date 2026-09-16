@@ -373,13 +373,50 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
         for metric <- Telemetry.prometheus_metrics(),
             coverage = RoleCoverage.coverage_for(metric.event_name),
             coverage != nil,
-            not RoleCoverage.marker_present?(metric.description, coverage),
+            not RoleCoverage.markers_correct?(metric.description, coverage),
             do: {Enum.join(metric.name, "."), RoleCoverage.required_marker(coverage)}
 
       assert silent == [],
              "these metrics are declared in RoleCoverage and their description does not carry " <>
-               "the marker their coverage state owes: " <>
+               "the marker their coverage state owes, or still carries the one it retires: " <>
                Enum.map_join(silent, ", ", fn {name, marker} -> "#{name} (#{marker})" end)
+    end
+
+    test "promoting a family forces its metric descriptions to be rewritten" do
+      # A :partial family's description has to name the relay, to say where the
+      # job share arrives once something drains it, so requiring the relay
+      # marker on promotion demands nothing new of it. The false
+      # "OBAN_MODE=worker or scheduler ... run no reporter" sentence would
+      # survive on a graph that had started carrying that share. What catches
+      # it is the marker a promoted description may NOT carry.
+      assert RoleCoverage.forbidden_marker(:relayed) == RoleCoverage.caveat_marker()
+      assert RoleCoverage.forbidden_marker(:partial) == nil
+
+      declared =
+        for metric <- Telemetry.prometheus_metrics(),
+            RoleCoverage.coverage_for(metric.event_name) != nil,
+            do: {Enum.join(metric.name, "."), metric.description}
+
+      assert declared != [], "no declared family has a metric; this check would pass vacuously"
+
+      presence_only =
+        for {name, description} <- declared,
+            RoleCoverage.marker_present?(description, :relayed),
+            do: name
+
+      assert presence_only != [],
+             "no shipped description names the relay, so requiring the relay marker would " <>
+               "already be discriminating and this test is measuring the wrong thing"
+
+      survives =
+        for {name, description} <- declared,
+            RoleCoverage.markers_correct?(description, :relayed),
+            do: name
+
+      assert survives == [],
+             "these declared metrics would pass the relayed check unchanged, so promoting " <>
+               "their family would leave a false OBAN_MODE caveat on a graph that now carries " <>
+               "the job share: " <> Enum.join(survives, ", ")
     end
 
     test "the marker a declaration owes follows its coverage state, not a fixed constant" do
@@ -400,6 +437,17 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert RoleCoverage.marker_present?(relayed_only, :relayed)
       refute RoleCoverage.marker_present?(relayed_only, :partial)
       refute RoleCoverage.marker_present?(nil, :relayed)
+
+      # A description carrying both is what every shipped family has, and it is
+      # exactly the case presence alone cannot decide.
+      both = partial_only <> " " <> relayed_only
+
+      assert RoleCoverage.marker_present?(both, :partial)
+      assert RoleCoverage.marker_present?(both, :relayed)
+      assert RoleCoverage.markers_correct?(both, :partial)
+      refute RoleCoverage.markers_correct?(both, :relayed)
+      assert RoleCoverage.markers_correct?(relayed_only, :relayed)
+      refute RoleCoverage.markers_correct?(nil, :relayed)
     end
 
     test "no shipped family is promoted while its live comparison is outstanding" do
@@ -460,7 +508,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
         for {panel, events} <- charting,
             event <- events,
             coverage = RoleCoverage.coverage_for(event),
-            not RoleCoverage.marker_present?(Map.get(panel, "description"), coverage),
+            not RoleCoverage.markers_correct?(Map.get(panel, "description"), coverage),
             do: {Map.get(panel, "title", "<untitled>"), RoleCoverage.required_marker(coverage)}
 
       assert silent == [],

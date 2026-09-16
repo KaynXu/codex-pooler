@@ -36,6 +36,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   than from a fixed constant, so flipping one family to `:relayed` without
   rewriting its descriptions and panels fails.
 
+  A `:partial` description already names the relay, because it has to say where
+  the job share goes once something drains it, so *requiring* the relay marker
+  on promotion demands nothing new. Each state therefore also names a marker its
+  descriptions may not carry: a promoted family's may not say `OBAN_MODE` at
+  all, which is what forces the false caveat out. Use `markers_correct?/2`, not
+  `marker_present?/2`, wherever a guard decides whether a description is honest.
+
   Promotion is not a rename. A family moves to `:relayed` only once its
   real-worker emission test, its double-emission pins, its relay round trip and
   a live comparison have each passed for that family; the four shipped families
@@ -104,6 +111,16 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
     unscraped_only: @caveat_marker,
     relayed: @relay_marker
   }
+
+  # The marker a coverage state's descriptions may not carry. Requiring the new
+  # marker cannot by itself force a rewrite on promotion: a `:partial` family's
+  # descriptions already name the relay, because they have to say where the job
+  # share arrives once it is drained. Both markers are therefore present on the
+  # day a family is promoted, `marker_present?/2` is satisfied, and the now-false
+  # "`OBAN_MODE`=worker or scheduler ... run no reporter" sentence survives on a
+  # graph that has started carrying that share. Naming what a promoted
+  # description may *not* say is what makes the replacement mandatory.
+  @forbidden_markers %{relayed: @caveat_marker}
 
   @unscraped_emissions %{
     [:codex_pooler, :instance_presence, :heartbeat] => %{
@@ -230,4 +247,29 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
     do: String.contains?(description, required_marker(coverage))
 
   def marker_present?(_description, coverage) when is_map_key(@markers, coverage), do: false
+
+  @doc """
+  The substring a declaration in `coverage` may not carry, or `nil` when it may say anything else.
+  """
+  @spec forbidden_marker(coverage()) :: String.t() | nil
+  def forbidden_marker(coverage) when is_map_key(@markers, coverage),
+    do: Map.get(@forbidden_markers, coverage)
+
+  @doc """
+  Whether `description` both carries the marker `coverage` owes and omits the one it retires.
+
+  This is the check a guard should use. `marker_present?/2` alone passes a
+  promoted family whose description still tells an operator its job share is not
+  measured here, because a `:partial` description names the relay already.
+  """
+  @spec markers_correct?(term(), coverage()) :: boolean()
+  def markers_correct?(description, coverage) when is_map_key(@markers, coverage),
+    do: marker_present?(description, coverage) and not marker_forbidden?(description, coverage)
+
+  defp marker_forbidden?(description, coverage) do
+    case forbidden_marker(coverage) do
+      nil -> false
+      marker -> String.contains?(description, marker)
+    end
+  end
 end
