@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -186,8 +187,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
        when is_binary(request_claim_key),
        do: request_claim_key
 
-  defp durable_request_correlation_id(%RequestOptions{} = request_options, payload),
-    do: RequestOptions.server_correlation_id(request_options, payload)
+  # A native Codex HTTP turn carries the same turn identity a websocket frame
+  # does, as the inbound `x-codex-turn-metadata` header, so it reserves under
+  # the same payload-scoped claim instead of a fresh UUID and a resend meets
+  # `requests_correlation_id_uq` (findings#212). Every other request, and every
+  # request without a usable identity, keeps the generated correlation id.
+  defp durable_request_correlation_id(%RequestOptions{} = request_options, payload) do
+    case NativeHttpTurnIdentity.request_claim_key(request_options, payload) do
+      {:ok, claim} -> claim
+      :none -> RequestOptions.server_correlation_id(request_options, payload)
+    end
+  end
 
   defp direct_cleanup_bind(nil), do: nil
 

@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+  alias CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
@@ -1828,9 +1829,35 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
 
       _ordinary ->
-        Accounting.reserve(auth, model, payload, attrs)
+        auth
+        |> Accounting.reserve(model, payload, attrs)
+        |> normalize_native_http_turn_duplicate(endpoint, request_options)
     end
   end
+
+  # A native Codex HTTP turn now reserves under the same turn claim a websocket
+  # frame does, so its resend meets the resend policy inside the reservation
+  # transaction and comes back as an accounting duplicate. It gets the public
+  # websocket verdict rather than a reservation failure (findings#212).
+  defp normalize_native_http_turn_duplicate(
+         {:error, %{code: :duplicate_request} = reason},
+         endpoint,
+         %RequestOptions{} = request_options
+       ) do
+    if NativeHttpTurnIdentity.fenced?(request_options) do
+      log_duplicate_turn(request_options, :reservation_duplicate,
+        stage: "native_http_turn_claim",
+        endpoint: endpoint,
+        extra: [resend_disposition: Map.get(reason, :resend_disposition)]
+      )
+
+      {:error, duplicate_turn_error()}
+    else
+      {:error, reason}
+    end
+  end
+
+  defp normalize_native_http_turn_duplicate(result, _endpoint, %RequestOptions{}), do: result
 
   defp reserve_client_retry(auth, model, payload, endpoint, request_options, attrs) do
     if native_full_history_compaction?(endpoint, request_options) do
@@ -2184,6 +2211,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        )
        when is_binary(request_claim_key),
        do: true
+
+  # The native HTTP fence resolves its predecessor under the codex session lock
+  # before inserting, so this is only the race backstop: a claim that met the
+  # constraint anyway is the same duplicate turn, not a gateway fault.
+  defp duplicate_turn_reservation_constraint?(
+         %Ecto.ConstraintError{constraint: "requests_correlation_id_uq"},
+         %RequestOptions{} = request_options
+       ),
+       do: NativeHttpTurnIdentity.fenced?(request_options)
 
   defp duplicate_turn_reservation_constraint?(_error, _opts), do: false
 

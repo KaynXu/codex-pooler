@@ -19,6 +19,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   alias CodexPooler.Accounting.RequestLifecycle.{FailedPredecessorResend, LedgerEntries}
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
   alias CodexPooler.Repo
 
@@ -169,6 +170,56 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       {:error, disposition} ->
         Repo.rollback(duplicate_request_error(disposition))
     end
+  end
+
+  defp native_turn_resend_claim!(nil, %{correlation_id: correlation_id}),
+    do: {correlation_id, nil}
+
+  # This reservation runs inside the caller's transaction, so a uniqueness
+  # conflict cannot be rescued and re-resolved in a second transaction the way
+  # `claim_websocket_turn/3` does: an aborted transaction cannot read. The
+  # predecessor is therefore looked up first, under the codex session lock that
+  # serializes concurrent resends of one turn, and only an actual predecessor
+  # reaches the resend policy. A turn nobody has recorded keeps its claim and
+  # inserts exactly as before, so an unfenceable first request is never taxed
+  # with the policy's anchored/entitlement refusals.
+  defp native_turn_resend_claim!(%CodexSession{} = session, context) do
+    %{correlation_id: correlation_id, pool: pool, api_key: api_key, model: model, opts: opts} =
+      context
+
+    if predecessor_claimed?(correlation_id) do
+      _locked = SessionContinuity.lock_codex_session_for_turn(session)
+
+      scope = %{
+        pool_id: pool.id,
+        api_key_id: api_key.id,
+        model_id: model.id,
+        endpoint: context.endpoint,
+        transport: context.transport,
+        codex_session_id: session.id,
+        native_client_retry_witness: attr(opts, :native_client_retry_witness),
+        anchor_present?: attr(opts, :anchor_present?) == true
+      }
+
+      case FailedPredecessorResend.resolve(correlation_id, scope) do
+        {:ok, %{claim: claim, predecessor: predecessor, predecessor_shape: shape}} ->
+          {claim,
+           %{
+             predecessor_request_id: predecessor.id,
+             reason: :failed_predecessor,
+             predecessor_shape: shape
+           }}
+
+        {:error, disposition} ->
+          Repo.rollback(duplicate_request_error(disposition))
+      end
+    else
+      {correlation_id, nil}
+    end
+  end
+
+  defp predecessor_claimed?(correlation_id) do
+    Repo.exists?(from request in Request, where: request.correlation_id == ^correlation_id)
   end
 
   defp claim_request_metadata(opts, nil),
@@ -476,8 +527,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         correlation_id,
         pricing,
         effective_model,
-        captured_epoch
+        captured_epoch,
+        native_turn_resend_session(opts, transport, correlation_id)
       )
+    end
+  end
+
+  # A native Codex HTTP turn reserves under the payload-scoped turn claim its
+  # websocket twin uses, so a resend of one turn meets
+  # `requests_correlation_id_uq` instead of buying a second upstream dispatch
+  # (findings#212). Only that shape takes the resend path; a generated
+  # correlation id, a websocket reservation (which already claimed its row in
+  # `claim_websocket_turn/3` and only updates it here), and a request without a
+  # codex session are untouched.
+  defp native_turn_resend_session(opts, transport, correlation_id) do
+    with true <- transport != "websocket",
+         true <- is_nil(attr(opts, :turn_claim)),
+         true <- WebsocketTurnIdentity.request_claim?(correlation_id),
+         %CodexSession{} = session <- attr(opts, :codex_session) do
+      session
+    else
+      _not_a_native_http_turn -> nil
     end
   end
 
@@ -497,12 +567,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
          correlation_id,
          pricing,
          effective_model,
-         captured_epoch
+         captured_epoch,
+         resend_session
        ) do
     Repo.transaction(fn ->
+      :ok = lock_resend_session(resend_session)
       api_key = authorize_runtime_turn!(api_key, captured_epoch)
       auth = Map.put(auth, :api_key, api_key)
       maybe_test_runtime_authorization_barrier(:reserve, :after)
+
+      {correlation_id, client_resend} =
+        native_turn_resend_claim!(resend_session, %{
+          correlation_id: correlation_id,
+          pool: pool,
+          api_key: api_key,
+          model: model,
+          endpoint: endpoint,
+          transport: transport,
+          opts: opts
+        })
 
       policy =
         ReservationPolicy.policy_for_update(
@@ -532,6 +615,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         endpoint: endpoint,
         transport: transport,
         correlation_id: correlation_id,
+        client_resend: client_resend,
         auth: auth,
         pricing: pricing,
         estimate: estimate,
@@ -670,7 +754,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp insert_reserved_request!(context) do
     request_metadata =
-      reserve_metadata(context.auth, context.pricing, context.estimate, context.opts)
+      context.auth
+      |> reserve_metadata(context.pricing, context.estimate, context.opts)
+      |> put_client_resend_metadata(Map.get(context, :client_resend))
 
     settings_snapshot =
       PricingResolution.request_settings_snapshot(
@@ -716,6 +802,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
     :ok = bind_direct_cleanup(context.opts, request)
     request
+  end
+
+  defp put_client_resend_metadata(metadata, nil), do: metadata
+
+  defp put_client_resend_metadata(metadata, %{predecessor_request_id: predecessor_request_id}) do
+    Map.put(metadata, "client_resend", %{
+      "predecessor_request_id" => predecessor_request_id,
+      "reason" => "failed_predecessor"
+    })
   end
 
   defp bind_direct_cleanup(opts, request) do
