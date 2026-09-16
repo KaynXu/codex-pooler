@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   # sample.
   use ExUnit.Case, async: false
 
+  alias CodexPooler.Telemetry.RelayRuntime
   alias CodexPoolerWeb.Telemetry
   alias CodexPoolerWeb.Telemetry.RoleCoverage
 
@@ -370,22 +371,85 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     test "every declared event's metrics say so in their description" do
       silent =
         for metric <- Telemetry.prometheus_metrics(),
-            RoleCoverage.declared?(metric.event_name),
-            not RoleCoverage.caveat_present?(metric.description),
-            do: Enum.join(metric.name, ".")
+            coverage = RoleCoverage.coverage_for(metric.event_name),
+            coverage != nil,
+            not RoleCoverage.marker_present?(metric.description, coverage),
+            do: {Enum.join(metric.name, "."), RoleCoverage.required_marker(coverage)}
 
       assert silent == [],
-             "these metrics are emitted from an unscraped role and their description does not " <>
-               "mention #{RoleCoverage.caveat_marker()}: #{Enum.join(silent, ", ")}"
+             "these metrics are declared in RoleCoverage and their description does not carry " <>
+               "the marker their coverage state owes: " <>
+               Enum.map_join(silent, ", ", fn {name, marker} -> "#{name} (#{marker})" end)
+    end
+
+    test "the marker a declaration owes follows its coverage state, not a fixed constant" do
+      # A promoted family's graph carries the job share, so the OBAN_MODE
+      # sentence would be false on it; an unpromoted one's does not, so the
+      # relay marker alone would be. Each coverage state is checked against a
+      # description carrying only the other state's marker.
+      partial_only = "exported only under OBAN_MODE=all"
+      relayed_only = "the job share arrives as via=\"job_relay\""
+
+      assert RoleCoverage.required_marker(:partial) == RoleCoverage.caveat_marker()
+      assert RoleCoverage.required_marker(:unscraped_only) == RoleCoverage.caveat_marker()
+      assert RoleCoverage.required_marker(:relayed) == RoleCoverage.relay_marker()
+      refute RoleCoverage.relay_marker() == RoleCoverage.caveat_marker()
+
+      assert RoleCoverage.marker_present?(partial_only, :partial)
+      refute RoleCoverage.marker_present?(partial_only, :relayed)
+      assert RoleCoverage.marker_present?(relayed_only, :relayed)
+      refute RoleCoverage.marker_present?(relayed_only, :partial)
+      refute RoleCoverage.marker_present?(nil, :relayed)
+    end
+
+    test "no shipped family is promoted while its live comparison is outstanding" do
+      # Phase 1 is shadowed on purpose: the relay carries the job share, the
+      # panels still select via="in_process", and the caveats stay true. A
+      # family promoted here without the per-family evidence would silently
+      # change what every panel means.
+      promoted =
+        for {event, %{coverage: :relayed}} <- RoleCoverage.unscraped_emissions(), do: event
+
+      assert promoted == [],
+             "#{inspect(promoted)} is declared :relayed. Promotion needs that family's " <>
+               "real-worker emission test, its double-emission pins, its relay round trip and " <>
+               "its live comparison, plus panels that stop filtering via=\"in_process\""
+    end
+
+    test "every job-reachable declaration is on the relay allowlist" do
+      relayed = MapSet.new(RelayRuntime.relayed_events())
+
+      unrelayed =
+        for {event, declaration} <- RoleCoverage.unscraped_emissions(),
+            declaration.entrypoints != [],
+            not MapSet.member?(relayed, event),
+            do: event
+
+      assert unrelayed == [],
+             "#{inspect(unrelayed)} is declared with an Oban entrypoint but is not on the " <>
+               "relay allowlist, so its job share has no transport to a reporter at all"
+
+      # The converse keeps the allowlist honest: a relayed event nothing
+      # declares would carry a job share the guard never checks.
+      undeclared = Enum.reject(relayed, &RoleCoverage.declared?/1)
+
+      assert undeclared == [],
+             "#{inspect(undeclared)} is relayed but undeclared in RoleCoverage"
     end
 
     test "every operator dashboard panel charting one says so in its description" do
-      series = declared_series()
+      by_series = declared_series_by_event()
+      panels = dashboard_panels()
 
       charting =
-        Enum.filter(dashboard_panels(), fn panel ->
-          Enum.any?(panel_series(panel), &MapSet.member?(series, &1))
-        end)
+        for panel <- panels,
+            events =
+              panel
+              |> panel_series()
+              |> Enum.flat_map(&Map.get(by_series, &1, []))
+              |> Enum.uniq(),
+            events != [],
+            do: {panel, events}
 
       # A dashboard that stopped charting these would pass vacuously.
       assert length(charting) >= 4,
@@ -393,14 +457,87 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
                "either the panels were dropped or this test stopped finding them"
 
       silent =
-        for panel <- charting,
-            not RoleCoverage.caveat_present?(Map.get(panel, "description")),
-            do: Map.get(panel, "title", "<untitled>")
+        for {panel, events} <- charting,
+            event <- events,
+            coverage = RoleCoverage.coverage_for(event),
+            not RoleCoverage.marker_present?(Map.get(panel, "description"), coverage),
+            do: {Map.get(panel, "title", "<untitled>"), RoleCoverage.required_marker(coverage)}
 
       assert silent == [],
-             "these operator dashboard panels chart a metric emitted from an unscraped role and " <>
-               "their description does not mention #{RoleCoverage.caveat_marker()}, so an empty " <>
-               "graph reads as \"this never happens\": #{Enum.join(silent, ", ")}"
+             "these operator dashboard panels chart a declared metric and their description " <>
+               "does not carry the marker its coverage state owes, so the graph misdescribes " <>
+               "itself: " <>
+               Enum.map_join(silent, ", ", fn {title, marker} -> "#{title} (#{marker})" end)
+    end
+
+    test "a shadowed family's panels select only the in-process share" do
+      # Phase 1 relays the job share but keeps it out of the operator totals:
+      # every panel charting a still-:partial relayed family pins
+      # via="in_process", so the caveat that panel carries stays true. A
+      # promoted family owes the opposite — its panels must stop pinning one
+      # share — and both directions are checked from the coverage state.
+      relayed = MapSet.new(RelayRuntime.relayed_events())
+      by_series = declared_series_by_event()
+      shadow_filter = ~s(via="in_process")
+
+      charted =
+        for panel <- dashboard_panels(),
+            target <- Map.get(panel, "targets", []),
+            expr = Map.get(target, "expr", ""),
+            series <- panel_series(%{"targets" => [target]}),
+            event <- Map.get(by_series, series, []),
+            MapSet.member?(relayed, event),
+            do:
+              {Map.get(panel, "title", "<untitled>"), series, expr,
+               RoleCoverage.coverage_for(event)}
+
+      assert charted != [],
+             "no operator dashboard panel charts a relayed family any more; this check would " <>
+               "pass vacuously"
+
+      unshadowed =
+        for {title, series, expr, :partial} <- charted,
+            not String.contains?(expr, shadow_filter),
+            do: "#{title} (#{series})"
+
+      assert unshadowed == [],
+             "these panels chart a family whose relay is still shadowed but do not pin " <>
+               "#{shadow_filter}, so the relayed share silently changes an operator total: " <>
+               Enum.join(unshadowed, ", ")
+
+      still_pinned =
+        for {title, series, expr, :relayed} <- charted,
+            String.contains?(expr, shadow_filter),
+            do: "#{title} (#{series})"
+
+      assert still_pinned == [],
+             "these panels chart a promoted family but still pin #{shadow_filter}, so the " <>
+               "relayed share it was promoted for stays invisible: " <>
+               Enum.join(still_pinned, ", ")
+    end
+
+    test "the panel check would catch a promoted family whose panels still say OBAN_MODE" do
+      # The shipped panels all carry OBAN_MODE because every family is
+      # :partial. Re-running the same selection against :relayed proves the
+      # check is reading the coverage state rather than passing on a constant
+      # that happens to be present everywhere.
+      by_series = declared_series_by_event()
+
+      charting =
+        for panel <- dashboard_panels(),
+            panel |> panel_series() |> Enum.any?(&Map.has_key?(by_series, &1)),
+            do: panel
+
+      assert charting != []
+
+      still_caveated =
+        for panel <- charting,
+            not RoleCoverage.marker_present?(Map.get(panel, "description"), :relayed),
+            do: Map.get(panel, "title", "<untitled>")
+
+      assert still_caveated != [],
+             "no shipped panel would fail the relayed-marker check, so promoting a family " <>
+               "would not force its panels to be rewritten"
     end
   end
 
@@ -487,13 +624,14 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   defp declared_metric_events,
     do: Telemetry.prometheus_metrics() |> Enum.map(& &1.event_name) |> Enum.uniq()
 
-  defp declared_series do
+  defp declared_series_by_event do
     for metric <- Telemetry.prometheus_metrics(),
         RoleCoverage.declared?(metric.event_name),
         base = Enum.map_join(metric.name, "_", &Atom.to_string/1),
         name <- [base | Enum.map(@distribution_suffixes, &(base <> &1))],
-        into: MapSet.new(),
-        do: name
+        reduce: %{} do
+      acc -> Map.update(acc, name, [metric.event_name], &Enum.uniq([metric.event_name | &1]))
+    end
   end
 
   defp dashboard_panels do

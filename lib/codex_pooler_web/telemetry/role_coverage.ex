@@ -25,6 +25,23 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   against the derived call graph too, so a second worker reaching an
   already-declared event also fails the guard.
 
+  ## Promotion
+
+  `coverage` is the promotion state, and it decides which sentence the metric
+  and its panels owe an operator. A `:partial` family's job share never becomes
+  a series, so every description has to name `OBAN_MODE`. A `:relayed` family's
+  job share arrives through the Postgres relay as `via="job_relay"`, so the
+  `OBAN_MODE` caveat would then be false and the descriptions owe the relay
+  marker instead. The guard reads that marker from the coverage state rather
+  than from a fixed constant, so flipping one family to `:relayed` without
+  rewriting its descriptions and panels fails.
+
+  Promotion is not a rename. A family moves to `:relayed` only once its
+  real-worker emission test, its double-emission pins, its relay round trip and
+  a live comparison have each passed for that family; the four shipped families
+  stay `:partial` until then, and the phase-1 panels keep selecting
+  `via="in_process"` so today's caveats stay true.
+
   ## What the derivation cannot see
 
   The derived call graph is intra-process: local calls, remote calls, function
@@ -47,7 +64,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   """
 
   @typedoc "How much of an event's traffic reaches Prometheus."
-  @type coverage :: :partial | :unscraped_only
+  @type coverage :: :partial | :unscraped_only | :relayed
 
   @typedoc "One declared event whose emissions cross the unscraped-role boundary."
   @type declaration :: %{
@@ -67,6 +84,26 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   # that empties it. `OBAN_MODE` is that name: it is what an operator greps for
   # and what the chart sets, and no honest caveat avoids it.
   @caveat_marker "OBAN_MODE"
+
+  # A promoted family owes the opposite sentence. Its graph is no longer empty
+  # on a split-role deployment, because the job share arrives through the
+  # Postgres relay, so the description has to say which share an operator is
+  # looking at and that the relayed one is best effort. `job_relay` is that
+  # name: it is the `via` label value the relayed samples carry, so it is both
+  # what an operator greps for and what a panel selector has to mention to
+  # include or exclude the job share.
+  @relay_marker "job_relay"
+
+  # Marker owed per coverage state. `:partial` and `:unscraped_only` describe a
+  # graph the job share never reaches, so they owe the `OBAN_MODE` caveat;
+  # `:relayed` describes one it does reach, so it owes the relay marker instead.
+  # Demanding both of a promoted family would keep the sentence an operator
+  # reads as "this is not measured here" on a graph that now measures it.
+  @markers %{
+    partial: @caveat_marker,
+    unscraped_only: @caveat_marker,
+    relayed: @relay_marker
+  }
 
   @unscraped_emissions %{
     [:codex_pooler, :instance_presence, :heartbeat] => %{
@@ -144,6 +181,33 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
   @spec declared?([atom()]) :: boolean()
   def declared?(event) when is_list(event), do: Map.has_key?(@unscraped_emissions, event)
 
+  @doc "Substring every metric and panel description for a promoted (relayed) event must contain."
+  @spec relay_marker() :: String.t()
+  def relay_marker, do: @relay_marker
+
+  @doc "The declared coverage state of `event`, or `nil` when it is not declared."
+  @spec coverage_for([atom()]) :: coverage() | nil
+  def coverage_for(event) when is_list(event) do
+    case Map.fetch(@unscraped_emissions, event) do
+      {:ok, %{coverage: coverage}} -> coverage
+      :error -> nil
+    end
+  end
+
+  @doc "The substring a declaration in `coverage` owes its metric and panel descriptions."
+  @spec required_marker(coverage()) :: String.t()
+  def required_marker(coverage) when is_map_key(@markers, coverage),
+    do: Map.fetch!(@markers, coverage)
+
+  @doc "The substring `event`'s metric and panel descriptions owe, or `nil` when undeclared."
+  @spec required_marker_for([atom()]) :: String.t() | nil
+  def required_marker_for(event) when is_list(event) do
+    case coverage_for(event) do
+      nil -> nil
+      coverage -> required_marker(coverage)
+    end
+  end
+
   @doc """
   Whether `description` carries the caveat a declared event's metric and panels owe an operator.
   """
@@ -152,4 +216,18 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
     do: String.contains?(description, @caveat_marker)
 
   def caveat_present?(_description), do: false
+
+  @doc """
+  Whether `description` carries the marker a declaration in `coverage` owes an operator.
+
+  A `:partial` family owes the `OBAN_MODE` caveat, because its graph is missing
+  whatever the job emitted. A `:relayed` family owes the relay marker instead,
+  because its graph now carries the job share under `via="job_relay"` and the
+  old caveat would misdescribe it.
+  """
+  @spec marker_present?(term(), coverage()) :: boolean()
+  def marker_present?(description, coverage) when is_binary(description),
+    do: String.contains?(description, required_marker(coverage))
+
+  def marker_present?(_description, coverage) when is_map_key(@markers, coverage), do: false
 end
