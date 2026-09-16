@@ -150,7 +150,8 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
   end
 
   test "a missing or stale heartbeat refuses inserts without borrowing another writer" do
-    assert {:error, :stale_heartbeat} = Relay.insert("stale_sweep", %{}, 1, %{}, "missing-writer")
+    assert {:error, :stale_heartbeat} =
+             Relay.insert("pre_attempt_release", %{}, 1, %{}, "missing-writer")
 
     Repo.query!(
       "UPDATE telemetry_relay_heartbeats SET heartbeat_at = NOW() - INTERVAL '2 minutes' WHERE owner = $1",
@@ -158,20 +159,20 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     )
 
     :ok = Relay.refresh_heartbeat("another-writer")
-    assert {:error, :stale_heartbeat} = Relay.insert("stale_sweep", %{})
+    assert {:error, :stale_heartbeat} = Relay.insert("pre_attempt_release", %{})
     assert Repo.aggregate(RelayEvent, :count) == 0
     :ok = Relay.refresh_heartbeat("relay-runtime")
-    assert {:ok, _} = Relay.insert("stale_sweep", %{})
+    assert {:ok, _} = Relay.insert("pre_attempt_release", %{})
   end
 
   test "inserts allowlisted bounded events and rejects invalid rows" do
-    assert {:ok, %RelayEvent{event: "stale_sweep", count: 2}} =
-             Relay.insert("stale_sweep", %{"via" => "in_process"}, 2)
+    assert {:ok, %RelayEvent{event: "pre_attempt_release", count: 2}} =
+             Relay.insert("pre_attempt_release", %{"via" => "in_process"}, 2)
 
     assert {:error, changeset} = Relay.insert("unknown", %{}, 1)
     assert %{event: ["is invalid"]} = errors_on(changeset)
-    assert {:error, _} = Relay.insert("stale_sweep", Map.new(1..17, &{"k#{&1}", "v"}), 1)
-    assert {:error, _} = Relay.insert("stale_sweep", %{}, -1)
+    assert {:error, _} = Relay.insert("pre_attempt_release", Map.new(1..17, &{"k#{&1}", "v"}), 1)
+    assert {:error, _} = Relay.insert("pre_attempt_release", %{}, -1)
   end
 
   test "claim marks rows and returns only unclaimed recent rows" do
@@ -224,7 +225,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
     fresh =
       Repo.insert!(%RelayEvent{
-        event: "stale_sweep",
+        event: "pre_attempt_release",
         labels: %{},
         count: 1,
         inserted_at: now,
@@ -234,7 +235,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
     stale =
       Repo.insert!(%RelayEvent{
-        event: "stale_sweep",
+        event: "pre_attempt_release",
         labels: %{},
         count: 1,
         inserted_at: now,
@@ -251,7 +252,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     for _ <- 1..4,
         do:
           Repo.insert!(%RelayEvent{
-            event: "stale_sweep",
+            event: "pre_attempt_release",
             labels: %{},
             count: 1,
             inserted_at: DateTime.utc_now()
@@ -280,14 +281,14 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     now = DateTime.utc_now()
 
     Repo.insert!(%RelayEvent{
-      event: "stale_sweep",
+      event: "pre_attempt_release",
       labels: %{},
       count: 1,
       inserted_at: DateTime.add(now, -3601, :second)
     })
 
     Repo.insert!(%RelayEvent{
-      event: "stale_sweep",
+      event: "pre_attempt_release",
       labels: %{},
       count: 1,
       inserted_at: DateTime.add(now, -86_401, :second)
@@ -302,7 +303,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
     old =
       Repo.insert!(%RelayEvent{
-        event: "stale_sweep",
+        event: "pre_attempt_release",
         labels: %{},
         count: 1,
         inserted_at: DateTime.add(now, -86_401, :second),
@@ -312,7 +313,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
     fresh =
       Repo.insert!(%RelayEvent{
-        event: "stale_sweep",
+        event: "pre_attempt_release",
         labels: %{},
         count: 1,
         inserted_at: now,
@@ -328,7 +329,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
   test "transaction rollback leaves no relay rows" do
     assert {:error, :rollback} =
              Repo.transaction(fn ->
-               {:ok, _} = Relay.insert("interrupted", %{}, 1)
+               {:ok, _} = Relay.insert("stream_outcome", %{}, 1)
                Repo.rollback(:rollback)
              end)
 

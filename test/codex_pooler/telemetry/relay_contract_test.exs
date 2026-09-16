@@ -95,6 +95,71 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       assert {:ok, _} = raw_insert(%{labels: Map.new(1..16, &{"k#{&1}", "v"})})
     end
 
+    test "the database bounds label strings themselves, not only how many there are" do
+      # Bounding the key count leaves a raw writer free to store one unbounded
+      # string, which is the same unbounded-storage hazard the key bound exists
+      # to close. The database mirrors `RelayRuntime.bounded/1`'s 80 bytes.
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: over}}} =
+               raw_insert(%{labels: %{"phase" => String.duplicate("x", 81)}})
+
+      assert over == "labels_values_bounded"
+
+      assert {:ok, _} = raw_insert(%{labels: %{"phase" => String.duplicate("x", 80)}})
+
+      # A non-string value has no length bound at all, so it is refused outright.
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: typed}}} =
+               raw_insert(%{labels: %{"phase" => 1}})
+
+      assert typed == "labels_values_bounded"
+
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: key}}} =
+               raw_insert(%{labels: %{String.duplicate("k", 41) => "v"}})
+
+      assert key == "labels_values_bounded"
+    end
+
+    test "the database refuses a measurement that is not a non-negative integer" do
+      # A relayed sample is a count or a millisecond duration. Nothing bounded
+      # the values at all, so a negative or fractional one would have been
+      # replayed into a Prometheus series as if an emitter had produced it.
+      for value <- [-1, 1.5, "x", true] do
+        assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} =
+                 raw_insert(%{measurements: %{"count" => value}}),
+               "measurement #{inspect(value)} was accepted by the database"
+
+        assert name == "measurements_non_negative_integers"
+      end
+
+      assert {:ok, _} = raw_insert(%{measurements: %{"count" => 1, "applied_to_ms" => 0}})
+    end
+
+    test "the changeset refuses the same values the database refuses" do
+      # The database is the backstop; the changeset is the path every producer
+      # actually takes, and it admitted negatives, floats and unbounded strings.
+      assert {:error, changeset} =
+               Relay.insert("pre_attempt_release", %{}, 1, %{count: -1})
+
+      assert %{measurements: _} = errors_on(changeset)
+
+      assert {:error, changeset} =
+               Relay.insert("pre_attempt_release", %{}, 1, %{count: 1.5})
+
+      assert %{measurements: _} = errors_on(changeset)
+
+      assert {:error, changeset} =
+               Relay.insert("pre_attempt_release", %{"phase" => String.duplicate("x", 81)}, 1)
+
+      assert %{labels: _} = errors_on(changeset)
+
+      assert {:error, changeset} = Relay.insert("pre_attempt_release", %{"phase" => 1}, 1)
+      assert %{labels: _} = errors_on(changeset)
+
+      assert {:ok, _} =
+               Relay.insert("pre_attempt_release", %{"phase" => String.duplicate("x", 80)}, 1, %{
+                 count: 1
+               })
+    end
+
     test "the database refuses an unknown event name and a negative count" do
       assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: event}}} =
                raw_insert(%{event: "not_an_allowlisted_event"})
@@ -111,6 +176,24 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       for event <- RelayEvent.events() do
         assert {:ok, _} = raw_insert(%{event: event}),
                "#{event} is on the schema allowlist but the database check refuses it"
+      end
+    end
+
+    test "every storable event name is one the runtime can replay" do
+      # Storing a name `RelayRuntime` cannot map back to a telemetry event is
+      # worse than refusing it: the row is claimed, then dropped by `emit/1`
+      # with no loss reason to count it. The allowlist held two such names —
+      # `stale_sweep` is a `pre_attempt_release` phase and `interrupted` a
+      # `stream_outcome` outcome, neither an event. Pinned in both directions,
+      # so promoting a family means adding it to both or failing here.
+      assert Enum.sort(RelayEvent.events()) == Enum.sort(RelayRuntime.relay_event_names())
+
+      for retired <- ~w(stale_sweep interrupted) do
+        assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} =
+                 raw_insert(%{event: retired}),
+               "#{retired} is storable but nothing can replay it"
+
+        assert name == "event_allowed"
       end
     end
   end
@@ -132,7 +215,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
         for id <- ids do
           Repo.insert!(%RelayEvent{
             id: id,
-            event: "stale_sweep",
+            event: "pre_attempt_release",
             labels: %{},
             count: 1,
             inserted_at: DateTime.utc_now()
@@ -323,7 +406,8 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       baseline = Relay.health()
       before_expired = expired_loss()
 
-      assert {:ok, %RelayEvent{}} = Relay.insert("stale_sweep", %{"via" => "job_relay"}, 3)
+      assert {:ok, %RelayEvent{}} =
+               Relay.insert("pre_attempt_release", %{"via" => "job_relay"}, 3)
 
       after_insert = Relay.health()
       assert after_insert.backlog_rows - baseline.backlog_rows == 1
@@ -346,9 +430,13 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
 
       # Production continues regardless of any consumer's state: the only gate
       # is the producer's own heartbeat, proven by removing it.
-      assert {:ok, %RelayEvent{}} = Relay.insert("stale_sweep", %{"via" => "job_relay"}, 2)
+      assert {:ok, %RelayEvent{}} =
+               Relay.insert("pre_attempt_release", %{"via" => "job_relay"}, 2)
+
       Repo.query!("DELETE FROM telemetry_relay_heartbeats WHERE owner = 'relay-runtime'")
-      assert {:error, :stale_heartbeat} = Relay.insert("stale_sweep", %{"via" => "job_relay"}, 1)
+
+      assert {:error, :stale_heartbeat} =
+               Relay.insert("pre_attempt_release", %{"via" => "job_relay"}, 1)
 
       # And an undrained backlog is reclaimed with its samples counted, not
       # silently dropped.
@@ -446,7 +534,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
   defp raw_insert(overrides) do
     attrs =
       Map.merge(
-        %{event: "stale_sweep", labels: %{}, count: 1, measurements: %{}},
+        %{event: "pre_attempt_release", labels: %{}, count: 1, measurements: %{}},
         overrides
       )
 

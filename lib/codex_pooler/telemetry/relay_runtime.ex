@@ -591,6 +591,10 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   defp emit(row) do
     case Map.get(@source_events, row.event) do
       nil ->
+        # Unreachable while the storage allowlist and `@events` agree, which
+        # `RelayContractTest` pins. If they ever drift again the row is still
+        # lost, but it says so instead of vanishing.
+        Logger.warning("telemetry relay drained an unmapped event=#{inspect(row.event)}")
         :ok
 
       event ->
@@ -640,6 +644,16 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   @doc false
   @spec relayed_events() :: [[atom()]]
   def relayed_events, do: Map.keys(@events)
+
+  @doc """
+  The stored `event` names this runtime can map back to a telemetry event.
+
+  A name the storage allowlist admits and this list omits is claimed on drain
+  and then discarded by `emit/1` with no loss reason to count it, so the
+  storage allowlist and this list are pinned equal in both directions.
+  """
+  @spec relay_event_names() :: [String.t()]
+  def relay_event_names, do: Map.values(@events)
 
   defp labels(metadata),
     do:
