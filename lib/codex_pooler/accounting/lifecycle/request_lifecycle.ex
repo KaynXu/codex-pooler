@@ -477,11 +477,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     |> tap_request_finalized_events_unless_stale()
   end
 
-  # Counted only once the release is committed and only for the write that
-  # created it, and counted apart from every settlement of a dispatched
-  # attempt: a pre-attempt abandonment that used to surface only as a
-  # six-hour backstop row is a live series here. An immutable release that
-  # already existed is not a second abandonment.
+  # Counted only for the write that created the release, and counted apart
+  # from every settlement of a dispatched attempt: a pre-attempt abandonment
+  # that used to surface only as a six-hour backstop row is a live series
+  # here. An immutable release that already existed is not a second
+  # abandonment.
+  #
+  # This runs on the return of `Repo.transaction/1`, which is a savepoint
+  # release rather than a commit whenever a caller already holds a
+  # transaction. `Interruption` calls `finalize_reservation_failure/2` from
+  # inside its own transaction, which can still roll back through
+  # `rollback_interrupted_accounting/4`, so on that path the counter can
+  # record a `turn_interrupted` release that was never committed. Unlike the
+  # convergence and stream-outcome emitters beside it, this one takes no
+  # `Repo.in_transaction?/0` guard and has no post-commit marker to defer to.
+  # The behaviour is pinned as observed, not desired, in
+  # `test/codex_pooler/telemetry/relay_job_emission_test.exs`; fixing it means
+  # deferring the marker to the outermost commit the way interrupted outcomes
+  # already are, and it is tracked on findings#195.
   defp tap_pre_attempt_release_count(result, nil, _last_error_code), do: result
 
   defp tap_pre_attempt_release_count(
