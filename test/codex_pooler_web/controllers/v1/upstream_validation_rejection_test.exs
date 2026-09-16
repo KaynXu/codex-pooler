@@ -436,6 +436,66 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
     assert Repo.aggregate(RoutingCircuitState, :count) == 0
   end
 
+  # The rejected value is quoted in the prefix *and* repeated in the trailing
+  # list. `ValidationRejection` drops it, so the public suffix must offer only
+  # the values the provider would actually accept. Every other fixture in this
+  # suite rejects a sentinel that never appears in the list, so without this
+  # case a regression in the exclusion would reach the wire unnoticed
+  # (findings#219).
+  test "POST /v1/responses excludes the rejected value from the public supported list", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            respond:
+              {:json_error, 400,
+               %{
+                 "error" => %{
+                   "code" => "unsupported_value",
+                   "message" =>
+                     "Unsupported value: 'medium' is not supported with this model. " <>
+                       "Supported values are: 'low', 'medium', and 'high'.",
+                   "param" => "reasoning.effort",
+                   "type" => "invalid_request_error"
+                 }
+               }}
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => @prompt_sentinel,
+        "stream" => false
+      })
+
+    assert json_response(response, 400) == %{
+             "error" => %{
+               "message" =>
+                 "upstream rejected parameter reasoning.effort (unsupported_value); " <>
+                   "supported values: low, high",
+               "type" => "invalid_request_error",
+               "code" => "unsupported_value",
+               "param" => "reasoning.effort"
+             }
+           }
+
+    refute response.resp_body =~ @prompt_sentinel
+
+    assert [attempt] = Repo.all(from(attempt in Attempt))
+    assert attempt.response_metadata["rejection_supported_values"] == ~w(low high)
+    assert attempt.response_metadata["rejection_supported_values_state"] == "present"
+  end
+
   # A rejection whose provider message carries no `Supported values are: …`
   # list, so neither path can append a suffix and the two bodies are
   # comparable field for field.
