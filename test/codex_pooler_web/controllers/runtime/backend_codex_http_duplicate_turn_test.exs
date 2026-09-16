@@ -428,14 +428,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   end
 
   # The compaction output item can be last, followed by the next user message,
-  # followed by output the resume already delivered, and it carries the
-  # `compaction_summary` serde alias (`protocol/src/models.rs:1224`). None of
-  # those four arrangements may collide with the turn's opening request.
+  # followed by output the resume already delivered; it carries the
+  # `compaction_summary` serde alias (`protocol/src/models.rs:1224`); and
+  # `ResponseItem::ContextCompaction` is its sibling. None of those five
+  # arrangements may collide with the turn's opening request.
   for {label, tail, item_type} <- [
         {"last", [], "compaction"},
         {"followed by a user message", [:user], "compaction"},
         {"followed by an assistant message", [:assistant], "compaction"},
-        {"under the compaction_summary alias", [], "compaction_summary"}
+        {"under the compaction_summary alias", [], "compaction_summary"},
+        {"as a context_compaction item", [], "context_compaction"}
       ] do
     test "a post-compaction resume with the compaction item #{label} is served", %{conn: conn} do
       upstream =
@@ -465,6 +467,144 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       assert String.starts_with?(open.correlation_id, "codex-turn:")
       assert String.starts_with?(resume.correlation_id, "codex-request:")
     end
+  end
+
+  # THE COST OF GETTING THE PREVIOUS TEST WRONG (findings#212, 212-48). Remote
+  # compaction REPLACES the session history (`compact_remote_history.rs:118`,
+  # `compact_remote_v2.rs:510`), so every turn for the rest of a session that
+  # compacts once carries a compaction item. Naming those by their whole payload
+  # loses the fence exactly where the row measured the spend: the client rebuilds
+  # a cut turn's prompt from `clone_history()` with the delivered items appended,
+  # so the retry is a different payload and buys a SECOND BILLED DISPATCH on a
+  # predecessor that already succeeded. The compacted-history PREFIX is the part
+  # a retry cannot change, and it is what names these requests.
+  test "a turn in a compacted thread is still fenced against its own grown retry", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_compacted_thread_turn"})
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    # The shape of every turn after the session's first compaction: the retained
+    # history, the compaction output the client pushed last, then this turn's
+    # user message.
+    history =
+      native_text_input("retained history") ++
+        [%{"type" => "compaction"}, trailing_item(:user)]
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id, where: :body, input: history),
+             200
+           )
+
+    # The cut retry: same turn, same compacted prefix, one delivered item more.
+    grown = history ++ [trailing_item(:assistant)]
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id, where: :body, input: grown),
+               409
+             )
+
+    assert FakeUpstream.count(upstream) == 1
+    assert [request] = pool_requests(setup)
+    assert String.starts_with?(request.correlation_id, "codex-request:")
+  end
+
+  # The control for the test above, and the fence's headline property: an
+  # uncompacted turn's grown retry is refused by the bare claim. Both halves have
+  # to hold, or the compacted branch is being compared against nothing.
+  test "an uncompacted turn is fenced against its own grown retry", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_uncompacted_turn"})
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    history = native_text_input("uncompacted history")
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id, where: :body, input: history),
+             200
+           )
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 input: history ++ [trailing_item(:assistant)]
+               ),
+               409
+             )
+
+    assert FakeUpstream.count(upstream) == 1
+    assert [request] = pool_requests(setup)
+    assert String.starts_with?(request.correlation_id, "codex-turn:")
+  end
+
+  # A turn resumed from a compaction still runs tools, so a continuation of the
+  # resume carries a compaction item AND a tool result. All four requests of that
+  # turn must be served and must be named differently from one another.
+  test "a tool continuation of a post-compaction resume is served", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_a1_open"}),
+          FakeUpstream.json_response(%{"id" => "resp_a1_compaction"}),
+          FakeUpstream.json_response(%{"id" => "resp_a1_resume"}),
+          FakeUpstream.json_response(%{"id" => "resp_a1_continuation"})
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    assert json_response(post_turn(conn, setup, session, @turn_id, where: :body), 200)
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id,
+               where: :body,
+               document: kind_metadata("compaction"),
+               input: native_text_input("history") ++ [%{"type" => "compaction_trigger"}]
+             ),
+             200
+           )
+
+    resume_input = compacted_history()
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id, where: :body, input: resume_input),
+             200
+           )
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id,
+               where: :body,
+               input:
+                 resume_input ++
+                   [
+                     %{
+                       "type" => "function_call_output",
+                       "call_id" => "call_212_after_compaction",
+                       "output" => "tool result"
+                     }
+                   ]
+             ),
+             200
+           )
+
+    assert FakeUpstream.count(upstream) == 4
+    requests = pool_requests(setup)
+    assert length(requests) == 4
+    assert requests |> Enum.map(& &1.correlation_id) |> Enum.uniq() |> length() == 4
   end
 
   # The other direction of the same change: serving the resume must not stop the
@@ -756,6 +896,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert logs =~ "transport=http_json"
     refute logs =~ "websocket replay rejection"
     refute logs =~ "transport=websocket"
+  end
+
+  # `FailedPredecessorResend.scoped?/2` requires `transport == "websocket"` of
+  # the PREDECESSOR ROW, not of the request being served. The bare `codex-turn:`
+  # claim is payload-independent and is the one claim that coincides across the
+  # two transports, so a websocket predecessor really can be judged for an HTTP
+  # resend -- and then the HTTP refusal reports that predecessor's disposition,
+  # not the `authorization_changed` an HTTP-predecessor refusal reports.
+  #
+  # This is the ticket's own headline cohort: a websocket turn cut by a rollout
+  # drain after visible output, whose client falls back to HTTPS and resends.
+  # Three rounds of review and one runbook revision asserted this could not
+  # happen, so it is pinned here (findings#212, rows 212-44 and 212-54). One
+  # non-`authorization_changed` disposition is enough: the HTTP stage passes
+  # whatever `FailedPredecessorResend.resolve/2` returned straight through, so
+  # the whole vocabulary reaches it or none of it does.
+  @tag capture_log: false
+  test "a native HTTP refusal reports a websocket predecessor's own disposition", %{conn: conn} do
+    upstream = start_upstream(stream_success_sse())
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    # The predecessor row is written by the real streaming path, so its turn
+    # carries a genuine `first_visible_output_at`; only the two fields that make
+    # it a drained websocket turn are then set.
+    assert response(post_turn(conn, setup, session, @turn_id, stream: true), 200)
+    assert [predecessor] = pool_requests(setup)
+
+    {1, _} =
+      Repo.update_all(
+        from(r in Request, where: r.id == ^predecessor.id),
+        set: [transport: "websocket", status: "failed", last_error_code: "owner_drained"]
+      )
+
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    logs =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert %{"error" => %{"code" => "duplicate_turn"}} =
+                 json_response(post_turn(conn, setup, session, @turn_id, stream: true), 409)
+      end)
+
+    assert logs =~ "stage=native_http_turn_claim"
+    assert logs =~ "resend_disposition=terminal_predecessor"
+    refute logs =~ "resend_disposition=authorization_changed"
+
+    # The refusal still costs nothing.
+    assert FakeUpstream.count(upstream) == 1
+    assert length(pool_requests(setup)) == 1
   end
 
   # The fence must never reach a client that does not send the metadata. These

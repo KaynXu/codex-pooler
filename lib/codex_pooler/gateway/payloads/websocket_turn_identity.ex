@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @request_claim_domain "native_websocket_response_claim_v1"
   @compaction_claim_domain "native_websocket_compaction_claim_v1"
   @kind_claim_domain_prefix "native_turn_kind_claim_v1:"
+  @compacted_history_claim_domain "native_turn_compacted_history_claim_v1"
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
@@ -84,6 +85,29 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   def compaction_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
     scoped_request_claim_key(semantic_turn_key, payload, @compaction_claim_domain)
+  end
+
+  @doc """
+  A claim for a request of a turn whose history has already been compacted,
+  scoped by the input prefix through the last compaction output item rather than
+  by the whole payload.
+
+  That prefix is the part a retry cannot change: the released client appends
+  delivered items to the tail and rebuilds from `clone_history()`, so a cut
+  request and its rebuilt retry share it byte for byte. Naming such a request by
+  its whole payload instead loses the fence for every turn after a session's
+  first compaction -- the retry grows and the claim moves (findings#212, row
+  212-48).
+  """
+  @spec compacted_history_claim_key(<<_::256>>, map(), [term()]) :: String.t()
+  def compacted_history_claim_key(semantic_turn_key, payload, prefix)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_map(payload) and is_list(prefix) do
+    scoped_request_claim_key(
+      semantic_turn_key,
+      Map.put(payload, "input", prefix),
+      @compacted_history_claim_domain
+    )
   end
 
   @doc """

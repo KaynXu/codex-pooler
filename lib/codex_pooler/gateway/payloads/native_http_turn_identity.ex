@@ -38,35 +38,53 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   #                                   own HMAC domain keeps it clear of the turn
   #   * a `prewarm` or `memory`    -> a payload-scoped claim in a domain named
   #                                   by the declared kind
-  #   * a later request of the turn -> the payload-scoped request claim: a
-  #                                   tool-result continuation, or the request
-  #                                   that resumes the turn from a compaction
+  #   * a tool-result continuation -> the payload-scoped request claim, which is
+  #                                   what keeps the several tool rounds of one
+  #                                   turn from colliding with each other
+  #   * anything else of a turn whose
+  #     history is already compacted -> a claim scoped by the input PREFIX
+  #                                   through the last compaction output item
   #   * the request that opened it -> the BARE, payload-independent
   #                                   `codex-turn:` claim, which survives any
   #                                   rebuilt body
   #
-  # Every discriminator above is `NativeTurnContinuation`'s. So is the websocket
-  # codec's continuation arm, and both transports resolve the canonical document
-  # and `request_kind` through the same reader, so they cannot drift on ANY of
-  # those. What the two transports do NOT share is the order they apply them in,
-  # and that is deliberate rather than an oversight: the websocket codec gives
-  # its native compaction bridge the bare turn claim on purpose, and its
-  # forwarded-final path depends on that collision to deduplicate -- running
-  # this module's order there was measured to buy a THIRD upstream dispatch
-  # where the path expects two. Reconciling the two orders is a change to the
-  # websocket compaction bridge, not to this fence, and it is tracked separately
-  # (findings#212, row 212-51). This module's fail-open gate is also its own: a
-  # websocket frame always takes some claim because the claim feeds replay,
-  # while an HTTP request with nothing to go on keeps its generated id.
+  # The prefix arm exists because the obvious alternative is a regression into
+  # the class this fence was built for. Remote compaction replaces the session
+  # history (`compact_remote_history.rs:118`, `compact_remote_v2.rs:510`), so
+  # every turn for the REST OF A SESSION that compacts once carries a compaction
+  # item; naming all of those by their whole payload means the client's rebuilt
+  # retry body is a different claim, and a cut that already delivered output buys
+  # a second billed dispatch on a predecessor that succeeded. The prefix is the
+  # part a retry cannot change -- the client appends to the tail -- so it keeps
+  # the bare claim's payload-independence while still separating a turn's opener,
+  # its compaction and its resume from each other.
   #
-  # KNOWN MISS, inherited by every payload-scoped claim: a request whose retry
-  # body has grown is a different claim and is not fenced. That is the price of
-  # keeping the several requests of one turn from colliding with each other, and
-  # the websocket path has the same miss for the same reason. A turn opened in a
-  # thread that was compacted earlier carries the old compaction item in its
-  # history, so it takes the payload-scoped claim and inherits the miss too; the
-  # alternative was refusing every native HTTP turn that triggers a remote
-  # compaction, one request after the compaction itself.
+  # Every discriminator above is `NativeTurnContinuation`'s, and this module
+  # reaches only the ones that resolve the canonical document through
+  # `canonical_document/2`, so a header-only client is classified exactly like a
+  # body client. What the two transports do NOT share is more than the
+  # discriminators suggest, and the difference is deliberate:
+  #
+  #   * the ORDER the arms are applied in. The websocket codec gives its native
+  #     compaction bridge the bare turn claim on purpose, and its forwarded-final
+  #     path depends on that collision to deduplicate -- running this module's
+  #     order there was measured to buy a THIRD upstream dispatch where the path
+  #     expects two. That is a change to the compaction bridge, not to this
+  #     fence, and is tracked separately (findings#212, rows 212-51/212-58).
+  #   * `request_kind`. The websocket compaction arm reads it from
+  #     `%NativeCodexTurnMetadata{}`, parsed by exact string match, so this
+  #     module's trimming and case folding does NOT reach it. A `"TURN"` frame is
+  #     a hard `:unsupported_request_kind` rejection on websocket and fences
+  #     normally here. The websocket behaviour is the stricter of the two.
+  #   * the fail-open gate. A websocket frame always takes some claim because the
+  #     claim feeds replay; an HTTP request with nothing to go on keeps its
+  #     generated id.
+  #
+  # KNOWN MISS, inherited by the two payload-scoped claims: a tool-result
+  # continuation or a compaction whose retry body has grown is a different claim
+  # and is not fenced. That is the price of keeping the several requests of one
+  # turn from colliding, and the websocket path has the same miss for the same
+  # reason. The prefix arm deliberately does NOT inherit it.
   #
   # ## Failing open
   #
@@ -130,7 +148,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
         {:ok, WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload)}
 
       turn_request?(payload, request_options) ->
-        {:ok, turn_claim(identity, request_options, payload)}
+        {:ok, turn_claim(identity, payload)}
 
       true ->
         kind_claim(identity, request_options, payload)
@@ -138,13 +156,36 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   end
 
   # The bare claim names the request that opened the turn. Every later request
-  # of it is named by its own payload, or it would collide with the opener and
-  # be refused as a duplicate of a request it is not.
-  defp turn_claim(identity, request_options, payload) do
-    if NativeTurnContinuation.turn_opening_request?(payload, request_options) do
-      identity.turn_claim_key
-    else
+  # of it must be named by something else, or it would collide with the opener
+  # and be refused as a duplicate of a request it is not -- but "something else"
+  # is not automatically the whole payload. A tool continuation has to be, since
+  # nothing else separates the several tool rounds of one turn. A request whose
+  # history has already been compacted does not: its prefix through the last
+  # compaction output item separates it from every other request of the turn AND
+  # survives a rebuilt retry body, which the whole payload does not.
+  # The tool-result arm is asked first, and a request carrying both a tool result
+  # and a compaction item takes it: several tool rounds of one resumed turn share
+  # the compacted prefix and would otherwise collide with each other and with the
+  # resume.
+  defp turn_claim(identity, payload) do
+    if NativeTurnContinuation.tool_result_continuation?(payload) do
       WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)
+    else
+      compacted_or_bare_claim(identity, payload)
+    end
+  end
+
+  defp compacted_or_bare_claim(identity, payload) do
+    case NativeTurnContinuation.compacted_history_prefix(payload) do
+      {:ok, prefix} ->
+        WebsocketTurnIdentity.compacted_history_claim_key(
+          identity.semantic_turn_key,
+          payload,
+          prefix
+        )
+
+      :none ->
+        identity.turn_claim_key
     end
   end
 

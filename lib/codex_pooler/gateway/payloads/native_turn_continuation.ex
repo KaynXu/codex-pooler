@@ -23,11 +23,18 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   #
   # The body's `client_metadata` is what a websocket frame carries and what the
   # released client sends over HTTP; the `x-codex-turn-metadata` request header
-  # is a bounded projection of it (`responses_metadata.rs:354-372`). Every
-  # reader here resolves body-or-header through `canonical_document/2`, so a
-  # client that sends only the header is classified exactly like one that sends
-  # the body. Reading the two carriers in different places is what fenced a
-  # header-only client against its own turn (212-49).
+  # is a bounded projection of it (`responses_metadata.rs:354-372`). Every reader
+  # THE NATIVE HTTP CLAIM REACHES resolves body-or-header through
+  # `canonical_document/2`, so a client that sends only the header is classified
+  # exactly like one that sends the body. Reading the two carriers in different
+  # places is what fenced a header-only client against its own turn (212-49).
+  #
+  # `ordinary_tool_continuation?/2` and the two private helpers under it are the
+  # exception, and the exception is enforced rather than described: they read the
+  # body alone, they are the websocket codec's arm, and their head requires a
+  # websocket transport so an HTTP caller cannot get a header-blind answer out of
+  # them. A websocket frame always carries the document, so nothing is lost
+  # there.
   #
   # ## What separates a turn's opening request from its later requests
   #
@@ -46,15 +53,19 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   #     `context_compaction` is its sibling)
   #
   # A request with neither is treated as the request that opens its turn and is
-  # named by the payload-independent claim. This is deliberately conservative in
-  # one direction only: a turn opened in a thread that was compacted earlier
-  # carries the older compaction item in its history, so it is named by its
-  # payload rather than by the turn alone. That costs the bare claim's survival
-  # of a rebuilt retry body for those turns -- the same KNOWN MISS a tool
-  # continuation already has -- and it never refuses a request that has no
-  # duplicate, which is what the alternative did: classifying the resume as an
-  # opening request refused every native HTTP turn that triggered a remote
-  # compaction, one request after the compaction itself (212-48).
+  # named by the payload-independent claim.
+  #
+  # The compaction half of that is not a licence to fall back on the whole
+  # payload. Remote compaction REPLACES the session history
+  # (`compact_remote_history.rs:118`, `compact_remote_v2.rs:510`), so every turn
+  # for the rest of a session that compacts once carries a compaction item --
+  # and naming those by their whole payload cost the fence exactly where the row
+  # measured the spend: an opener in a compacted thread, retried with the grown
+  # body the client rebuilds, bought a SECOND BILLED DISPATCH on a predecessor
+  # that had already succeeded (measured, 2 dispatches and two `succeeded` rows,
+  # where the same sequence in an uncompacted thread is refused). So a compacted
+  # request is named by `compacted_history_prefix/1` instead: the part of its
+  # input a retry cannot change.
   #
   # Note that the compaction *trigger* is not a compaction output item. Remote
   # compaction V2 appends `ResponseItem::CompactionTrigger {}`
@@ -92,11 +103,18 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   True for an ordinary native continuation of a turn already in flight: a
   tool-result round, rather than the request that opens the turn.
   """
+  # This arm and its two helpers read the canonical document from the BODY only,
+  # which is correct for the transport that reaches them and wrong for the other
+  # one -- a websocket frame always carries the document, an HTTP request may
+  # carry only the header. Rather than leave that as a comment a future caller
+  # can miss, the head requires a websocket transport: an HTTP caller gets
+  # `false` instead of a header-blind answer, which is the defect 212-49 fixed.
   @spec ordinary_tool_continuation?(map(), RequestOptions.t()) :: boolean()
   def ordinary_tool_continuation?(
         %{"input" => input} = payload,
         %RequestOptions{
           native_compaction_admission: nil,
+          transport: %{transport: "websocket"},
           payload_context: %{compaction_trigger_bridge?: false},
           openai_compatibility: %{public_openai_responses_stream: false}
         }
@@ -133,17 +151,60 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   neither a tool result nor a compaction output item. See the module comment for
   why those two shapes, and only those two, are decisive.
 
-  A payload with no list `input` cannot be shown to be a later request of its
-  turn, so it fails open to the turn's own claim.
+  A payload with no list `input` is treated as an opening request, which is the
+  FENCED direction rather than the open one -- two different requests of one
+  turn with a non-list `input` would collide. That shape is unreachable through
+  the native routes, which reject a non-list `input` with `400 invalid_request`
+  before the fence is consulted; a future payload coercion that made it
+  reachable would have to revisit this clause.
   """
   @spec turn_opening_request?(map(), RequestOptions.t()) :: boolean()
-  def turn_opening_request?(%{"input" => input}, %RequestOptions{}) when is_list(input) do
-    not (ToolResultShape.any?(input) or Enum.any?(input, &compaction_item?/1))
+  def turn_opening_request?(%{"input" => input} = payload, %RequestOptions{})
+      when is_list(input) do
+    not (tool_result_continuation?(payload) or compacted_history_prefix(payload) != :none)
   end
 
   def turn_opening_request?(payload, %RequestOptions{}) when is_map(payload), do: true
 
   def turn_opening_request?(_payload, _options), do: true
+
+  @doc """
+  True when the input carries a tool result, i.e. a previous request of this
+  turn produced the call. Payload shape only, so it answers the same for a
+  client that sends the canonical document in the body and one that sends only
+  the header.
+  """
+  @spec tool_result_continuation?(map()) :: boolean()
+  def tool_result_continuation?(%{"input" => input}) when is_list(input),
+    do: ToolResultShape.any?(input)
+
+  def tool_result_continuation?(_payload), do: false
+
+  @doc """
+  The input prefix through the LAST compaction output item, or `:none` when the
+  input carries no such item.
+
+  This is the part of a compacted request that a retry cannot change. The
+  released client records each completed output item into history as it arrives
+  and rebuilds the retry prompt from `clone_history()` with no rollback
+  (`stream_events_utils.rs:300-380`, `responses_retry.rs`), so a retry appends
+  to the tail and never rewrites what precedes the compaction item -- the
+  compaction output is pushed last when the history is rebuilt
+  (`compact_remote_v2.rs:510`, `compact.rs:600-660`) and the next turn's user
+  message lands after it. Naming a compacted request by this prefix therefore
+  keeps the payload-independence the bare claim has, while still separating the
+  several requests of one turn from each other: a turn's opener, the compaction
+  it triggers and the resume that follows all carry different prefixes.
+  """
+  @spec compacted_history_prefix(map()) :: {:ok, [term()]} | :none
+  def compacted_history_prefix(%{"input" => input}) when is_list(input) do
+    case last_compaction_index(input) do
+      nil -> :none
+      index -> {:ok, Enum.take(input, index + 1)}
+    end
+  end
+
+  def compacted_history_prefix(_payload), do: :none
 
   @doc """
   The declared `request_kind`, resolved from the body document or the header
@@ -243,6 +304,14 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   defp compaction_item?(%{"type" => type}) when type in @compaction_item_types, do: true
   defp compaction_item?(_item), do: false
 
+  defp last_compaction_index(input) do
+    input
+    |> Enum.with_index()
+    |> Enum.reduce(nil, fn {item, index}, last ->
+      if compaction_item?(item), do: index, else: last
+    end)
+  end
+
   defp ordinary_turn_continuation?(
          %{"client_metadata" => %{@canonical_metadata_key => metadata}} = payload
        ),
@@ -252,8 +321,16 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
 
   defp ordinary_turn_continuation?(payload), do: previous_response_present?(payload)
 
+  # Deliberately narrower than `@compaction_item_types`: this predicate asks
+  # "did the model's compaction output land at the end of this frame", which
+  # `context_compaction` -- a durable input control rather than a compaction
+  # result -- does not answer. The wider list answers "has this thread been
+  # compacted at all". Two questions, two lists, named so neither drifts into
+  # the other by accident.
+  @final_compaction_item_types ["compaction", "compaction_summary"]
+
   defp final_compaction?(input, payload) do
-    compaction? = &match?(%{"type" => type} when type in ["compaction", "compaction_summary"], &1)
+    compaction? = &match?(%{"type" => type} when type in @final_compaction_item_types, &1)
 
     if Enum.any?(input, compaction?) do
       metadata = get_in(payload, ["client_metadata", @canonical_metadata_key])
