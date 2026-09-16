@@ -2310,16 +2310,28 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         " #{key}=#{DiagnosticTaxonomy.reason_code(value) || "unknown"}"
       end)
 
+    {label, transport} = replay_rejection_channel(request_options)
+
     Logger.info(fn ->
-      "websocket replay rejection " <>
+      label <>
+        " replay rejection " <>
         "stage=#{stage} " <>
         "reason_code=#{reason_code} " <>
         "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
         "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
-        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket" <>
+        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=#{transport}" <>
         extra_fields
     end)
   end
+
+  # The websocket line is load-bearing for triage and greps, so it stays exactly
+  # as it was. A native HTTP refusal is a different path and must say so rather
+  # than claim a websocket that does not exist (findings#212).
+  defp replay_rejection_channel(%RequestOptions{transport: %{transport: transport}})
+       when is_binary(transport) and transport != "websocket",
+       do: {"native http", DiagnosticTaxonomy.safe_correlator(transport)}
+
+  defp replay_rejection_channel(%RequestOptions{}), do: {"websocket", "websocket"}
 
   defp maybe_log_client_resend_admitted(
          %RequestOptions{} = request_options,

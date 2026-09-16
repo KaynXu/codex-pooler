@@ -46,7 +46,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           required(:api_key_id) => Ecto.UUID.t(),
           required(:model_id) => Ecto.UUID.t(),
           required(:endpoint) => String.t() | nil,
-          optional(:transport) => String.t(),
+          optional(:transports) => [String.t()],
           optional(:codex_session_id) => Ecto.UUID.t(),
           optional(:native_client_retry_witness) => ClientRetry.OriginalWitness.t() | nil,
           optional(:anchor_present?) => boolean()
@@ -264,14 +264,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp lock_final_attempt(_turn, _request_id), do: nil
 
-  # A resend chains only inside its own transport. The scope carries it so the
-  # native HTTP claim path (findings#212) is judged by the same rules without
-  # widening anything: an absent key keeps the websocket claim path exactly as
-  # it was, and no claim can ever chain across transports.
+  # The transports a resend may chain from. The scope carries them so the native
+  # HTTP claim path (findings#212) is judged by the same rules without widening
+  # anything: an absent key keeps the websocket claim path's single-transport
+  # scope exactly as it was, while an HTTP resend after a transport switch
+  # reaches `validate_predecessor/3` instead of being refused as a scope
+  # mismatch it cannot distinguish from a stolen claim.
   defp scoped?(%Request{} = request, scope) do
     request.pool_id == scope.pool_id and request.api_key_id == scope.api_key_id and
       request.model_id == scope.model_id and
-      request.transport == Map.get(scope, :transport, "websocket") and
+      request.transport in Map.get(scope, :transports, ["websocket"]) and
       request.endpoint == scope.endpoint
   end
 

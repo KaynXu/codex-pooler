@@ -20,7 +20,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   alias CodexPooler.Accounting.RequestLifecycle.{FailedPredecessorResend, LedgerEntries}
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
-  alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Repo
 
   @usage_pending "usage_pending"
@@ -187,40 +187,92 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     %{correlation_id: correlation_id, pool: pool, api_key: api_key, model: model, opts: opts} =
       context
 
-    if predecessor_claimed?(correlation_id) do
-      _locked = SessionContinuity.lock_codex_session_for_turn(session)
+    case native_turn_predecessor(correlation_id) do
+      nil ->
+        {correlation_id, nil}
 
-      scope = %{
-        pool_id: pool.id,
-        api_key_id: api_key.id,
-        model_id: model.id,
-        endpoint: context.endpoint,
-        transport: context.transport,
-        codex_session_id: session.id,
-        native_client_retry_witness: attr(opts, :native_client_retry_witness),
-        anchor_present?: attr(opts, :anchor_present?) == true
-      }
+      %Request{} = predecessor ->
+        if delivered_provider_output?(predecessor) do
+          _locked = SessionContinuity.lock_codex_session_for_turn(session)
 
-      case FailedPredecessorResend.resolve(correlation_id, scope) do
-        {:ok, %{claim: claim, predecessor: predecessor, predecessor_shape: shape}} ->
-          {claim,
-           %{
-             predecessor_request_id: predecessor.id,
-             reason: :failed_predecessor,
-             predecessor_shape: shape
-           }}
+          scope = %{
+            pool_id: pool.id,
+            api_key_id: api_key.id,
+            model_id: model.id,
+            endpoint: context.endpoint,
+            transports: context.transports,
+            codex_session_id: session.id,
+            native_client_retry_witness: attr(opts, :native_client_retry_witness),
+            anchor_present?: attr(opts, :anchor_present?) == true
+          }
 
-        {:error, disposition} ->
-          Repo.rollback(duplicate_request_error(disposition))
-      end
-    else
-      {correlation_id, nil}
+          case FailedPredecessorResend.resolve(correlation_id, scope) do
+            {:ok, %{claim: claim, predecessor: resolved, predecessor_shape: shape}} ->
+              {claim,
+               %{
+                 predecessor_request_id: resolved.id,
+                 reason: :failed_predecessor,
+                 predecessor_shape: shape
+               }}
+
+            {:error, disposition} ->
+              Repo.rollback(duplicate_request_error(disposition))
+          end
+        else
+          {Ecto.UUID.generate(), nil}
+        end
     end
   end
 
-  defp predecessor_claimed?(correlation_id) do
-    Repo.exists?(from request in Request, where: request.correlation_id == ^correlation_id)
+  defp native_turn_predecessor(correlation_id) do
+    Repo.one(from request in Request, where: request.correlation_id == ^correlation_id)
   end
+
+  # Codes whose failure happened after the relay to this client had begun. A
+  # code outside this set failed before the provider produced anything for the
+  # turn (a first-event verdict, a refusal, or no dispatch at all), so a resend
+  # of it buys nothing twice.
+  @post_relay_cut_codes [
+    "owner_drained",
+    "client_disconnected",
+    "upstream_stream_error",
+    "stream_idle_timeout",
+    "owner_task_exception",
+    "dead_execution_recovered"
+  ]
+
+  # The fence exists to stop the provider being paid twice for one turn, so it
+  # refuses only a resend whose predecessor already delivered provider output
+  # for that turn: a completed turn, or a cut that happened mid-relay. Anything
+  # else falls open to today's behaviour -- a fresh correlation id and a
+  # dispatch -- because there is nothing to protect and a refusal would be a new
+  # terminal error on the default transport.
+  #
+  # `first_visible_output_at` alone cannot carry this: the Pooler marks a turn
+  # visible when any downstream-visible event is written, including a relayed
+  # error event, so a first-event `server_error` sets it exactly as a real
+  # stream does (measured). Pairing it with the cut vocabulary is what separates
+  # "output reached the client and was cut" from "the provider refused before
+  # producing anything".
+  #
+  # What this deliberately serves rather than refuses: a predecessor left live
+  # by a killed node (`completed_at` stays null until the `*/15` `runtime_cleanup`
+  # cron finalizes it), a pre-attempt drain, a pre-first-event idle timeout,
+  # `no_eligible_backend`, and every zero-output provider refusal such as
+  # `rate_limit_exceeded`, a relayed 4xx, or a retryable first-event verdict.
+  defp delivered_provider_output?(%Request{completed_at: nil}), do: false
+
+  defp delivered_provider_output?(%Request{status: "succeeded"}), do: true
+
+  defp delivered_provider_output?(%Request{last_error_code: code, id: request_id})
+       when code in @post_relay_cut_codes do
+    Repo.exists?(
+      from turn in CodexTurn,
+        where: turn.request_id == ^request_id and not is_nil(turn.first_visible_output_at)
+    )
+  end
+
+  defp delivered_provider_output?(%Request{}), do: false
 
   defp claim_request_metadata(opts, nil),
     do: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{})
@@ -533,23 +585,39 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     end
   end
 
-  # A native Codex HTTP turn reserves under the payload-scoped turn claim its
-  # websocket twin uses, so a resend of one turn meets
-  # `requests_correlation_id_uq` instead of buying a second upstream dispatch
-  # (findings#212). Only that shape takes the resend path; a generated
-  # correlation id, a websocket reservation (which already claimed its row in
-  # `claim_websocket_turn/3` and only updates it here), and a request without a
-  # codex session are untouched.
+  # A native Codex HTTP turn reserves under the same turn claim its websocket
+  # twin uses, so a resend of one turn meets `requests_correlation_id_uq`
+  # instead of buying a second upstream dispatch (findings#212). Only that shape
+  # takes the resend path; a generated correlation id, a websocket reservation
+  # (which already claimed its row in `claim_websocket_turn/3` and only updates
+  # it here), and a request without a codex session are untouched.
   defp native_turn_resend_session(opts, transport, correlation_id) do
     with true <- transport != "websocket",
          true <- is_nil(attr(opts, :turn_claim)),
-         true <- WebsocketTurnIdentity.request_claim?(correlation_id),
+         true <- native_turn_claim?(correlation_id),
          %CodexSession{} = session <- attr(opts, :codex_session) do
       session
     else
       _not_a_native_http_turn -> nil
     end
   end
+
+  # Both claim shapes the native HTTP resolver can produce: the bare turn claim
+  # that names a turn's opening request, and the payload-scoped request claim
+  # that names one tool-result continuation within it.
+  defp native_turn_claim?(correlation_id) when is_binary(correlation_id) do
+    WebsocketTurnIdentity.request_claim?(correlation_id) or
+      String.starts_with?(correlation_id, "codex-turn:")
+  end
+
+  defp native_turn_claim?(_correlation_id), do: false
+
+  # A resend may chain off a predecessor on either leg of a transport switch,
+  # so the failover retry is judged by the resend policy rather than refused by
+  # a scope accident. The websocket claim path passes no `:transports` and keeps
+  # its single-transport scope exactly as it was.
+  defp native_turn_resend_transports(transport),
+    do: Enum.uniq([transport, "http_sse", "http_json", "websocket"])
 
   # Existing reservation inputs stay explicit at the private handoff.
   # credo:disable-for-next-line Credo.Check.Refactor.FunctionArity
@@ -583,7 +651,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           api_key: api_key,
           model: model,
           endpoint: endpoint,
-          transport: transport,
+          transports: native_turn_resend_transports(transport),
           opts: opts
         })
 

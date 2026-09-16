@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.InputShape
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+  alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
@@ -1017,62 +1018,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp full_history_native_compaction?(_endpoint, %RequestOptions{}), do: false
 
-  defp ordinary_native_tool_continuation?(
-         %{"input" => input} = payload,
-         %RequestOptions{
-           native_compaction_admission: nil,
-           payload_context: %{compaction_trigger_bridge?: false},
-           openai_compatibility: %{public_openai_responses_stream: false}
-         }
-       )
-       when is_list(input) do
-    ordinary_native_turn_continuation?(payload) and ToolResultShape.any?(input) and
-      not native_final_compaction?(input, payload)
-  end
+  # The turn-vs-continuation discriminator is shared with the native HTTP claim
+  # path (findings#212): both transports carry the same `client_metadata`,
+  # anchor and tool-result shapes, so both must read one definition.
+  defdelegate ordinary_native_tool_continuation?(payload, options),
+    to: NativeTurnContinuation,
+    as: :ordinary_tool_continuation?
 
-  defp ordinary_native_tool_continuation?(_payload, %RequestOptions{}), do: false
-
-  defp ordinary_native_turn_continuation?(
-         %{
-           "client_metadata" => %{"x-codex-turn-metadata" => metadata}
-         } = payload
-       ),
-       do:
-         match?(%{"request_kind" => "turn"}, canonical_metadata_map(metadata)) or
-           previous_response_present?(payload)
-
-  defp ordinary_native_turn_continuation?(payload), do: previous_response_present?(payload)
-
-  defp native_final_compaction?(input, payload) do
-    compaction? =
-      &match?(%{"type" => type} when type in ["compaction", "compaction_summary"], &1)
-
-    if Enum.any?(input, compaction?) do
-      metadata = get_in(payload, ["client_metadata", "x-codex-turn-metadata"])
-      after_compaction = input |> Enum.reverse() |> Enum.take_while(&(not compaction?.(&1)))
-
-      not (match?(%{"request_kind" => "turn"}, canonical_metadata_map(metadata)) and
-             ToolResultShape.any?(after_compaction))
-    else
-      false
-    end
-  end
-
-  defp previous_response_present?(%{"previous_response_id" => value}) when is_binary(value),
-    do: String.trim(value) != ""
-
-  defp previous_response_present?(_payload), do: false
-
-  defp canonical_metadata_map(metadata) when is_map(metadata), do: metadata
-
-  defp canonical_metadata_map(metadata) when is_binary(metadata) do
-    case CodexPooler.JSON.decode(metadata) do
-      {:ok, decoded} when is_map(decoded) -> decoded
-      _invalid -> %{}
-    end
-  end
-
-  defp canonical_metadata_map(_metadata), do: %{}
+  defdelegate canonical_metadata_map(metadata), to: NativeTurnContinuation
 
   defp replay_request_kind?(
          %{"client_metadata" => %{@canonical_metadata_key => metadata}},

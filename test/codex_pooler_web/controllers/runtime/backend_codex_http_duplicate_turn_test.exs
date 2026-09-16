@@ -48,8 +48,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert [request] = pool_requests(setup)
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
 
-    # The durable identity is the shared turn claim, not a random UUID.
-    assert String.starts_with?(request.correlation_id, "codex-request:")
+    # A turn's opening request is named by the turn alone, exactly as the
+    # websocket path names it, so the claim survives a rebuilt retry body.
+    assert String.starts_with?(request.correlation_id, "codex-turn:")
   end
 
   # The cohort in the row is streaming: a native Codex turn resolves to
@@ -73,12 +74,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
   end
 
-  # The fence must not become a hard failure for ordinary error recovery. A
-  # predecessor that ended in a provider verdict the resend policy already
-  # admits on websocket is admitted on HTTP too, as a recorded successor of
-  # that predecessor -- one upstream dispatch per genuine attempt, not a 409
-  # that strands the user's turn.
-  test "a resend after a provider-terminal failure is admitted as a successor", %{conn: conn} do
+  # The fence must never become a hard failure for ordinary error recovery. It
+  # refuses only a resend whose predecessor already delivered provider output
+  # for the turn; a predecessor that was refused before producing anything has
+  # no spend to protect, so the retry is served exactly as it is today. A
+  # first-event `server_error` is that shape: the turn is marked visible because
+  # the error event itself is written downstream, but no model output was ever
+  # produced.
+  test "a resend after a zero-output provider failure is served, not refused", %{conn: conn} do
     upstream = start_upstream(first_event_terminal_sse("response.failed", "server_error"))
     setup = gateway_setup(upstream)
     session = session_id()
@@ -96,12 +99,141 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     assert FakeUpstream.count(upstream) > dispatched
     assert [^predecessor, successor] = pool_requests(setup)
-    assert successor.correlation_id != predecessor.correlation_id
+    assert {:ok, _uuid} = Ecto.UUID.cast(successor.correlation_id)
+  end
 
-    assert successor.request_metadata["client_resend"] == %{
-             "predecessor_request_id" => predecessor.id,
-             "reason" => "failed_predecessor"
-           }
+  # A predecessor left live by a killed node keeps `completed_at` null until the
+  # `*/15` `runtime_cleanup` cron finalizes it. Refusing every retry in that
+  # window would be a terminal error on the default transport with no duplicate
+  # spend to prevent, so an unfinished predecessor falls open.
+  test "a retry while the predecessor is still unfinished is served", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_live_one"}),
+          FakeUpstream.json_response(%{"id" => "resp_live_two"})
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+
+    # Strand the predecessor exactly as a killed node leaves it: accepted work,
+    # no completion, nothing for `runtime_cleanup` to have swept yet.
+    [predecessor] = pool_requests(setup)
+
+    {1, _} =
+      Repo.update_all(
+        from(r in Request, where: r.id == ^predecessor.id),
+        set: [status: "in_progress", completed_at: nil]
+      )
+
+    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+    assert FakeUpstream.count(upstream) == 2
+    assert length(pool_requests(setup)) == 2
+  end
+
+  # The released client sends the canonical turn metadata in the request body's
+  # `client_metadata` (`codex-rs/core/src/client.rs:893`); the header is a
+  # bounded copy. A client that sends only the body must still be fenced.
+  test "the real client body shape is fenced without any turn metadata header", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_body_metadata"}))
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    body = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("real client body shape"),
+      "client_metadata" => %{
+        "session_id" => "client-session",
+        "thread_id" => "client-thread",
+        "x-codex-window-id" => "client-window",
+        "turn_id" => @turn_id,
+        "x-codex-turn-metadata" => turn_metadata(@turn_id)
+      }
+    }
+
+    post_body = fn ->
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header(@session_header, session)
+      |> post("/backend-api/codex/responses", body)
+    end
+
+    assert json_response(post_body.(), 200)
+    assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(post_body.(), 409)
+
+    assert FakeUpstream.count(upstream) == 1
+    assert [request] = pool_requests(setup)
+    assert String.starts_with?(request.correlation_id, "codex-turn:")
+  end
+
+  # KNOWN MISS, documented deliberately. A tool-result continuation inside a
+  # turn must be named by its payload, or the several requests of one turn would
+  # collide with each other -- so a continuation whose retry body has grown is
+  # NOT fenced. The websocket path has exactly the same miss for exactly the
+  # same reason (`websocket_codec.ex:938-965`); this test pins the boundary so
+  # it cannot change silently.
+  test "a tool continuation resent with a grown body is NOT fenced (known miss)", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_continuation_one"}),
+          FakeUpstream.json_response(%{"id" => "resp_continuation_two"})
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    post_continuation = fn input ->
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header(@session_header, session)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => input,
+        "previous_response_id" => "resp_continuation_anchor",
+        "client_metadata" => %{"x-codex-turn-metadata" => turn_metadata(@turn_id)}
+      })
+    end
+
+    tool_output = [
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_212_continuation",
+        "output" => "tool result"
+      }
+    ]
+
+    assert json_response(post_continuation.(tool_output), 200)
+
+    grown =
+      tool_output ++
+        [
+          %{
+            "type" => "message",
+            "role" => "assistant",
+            "content" => [%{"type" => "output_text", "text" => "delivered before the cut"}]
+          }
+        ]
+
+    assert json_response(post_continuation.(grown), 200)
+
+    # Two dispatches: the grown body is a different payload-scoped claim. This
+    # is the residual, not a regression -- before the fence existed both of
+    # these dispatched too.
+    assert FakeUpstream.count(upstream) == 2
+    requests = pool_requests(setup)
+    assert length(requests) == 2
+
+    for %Request{correlation_id: correlation_id} <- requests do
+      assert String.starts_with?(correlation_id, "codex-request:")
+    end
   end
 
   # The cut cohort retries up to the client's whole budget, and a transport
@@ -145,6 +277,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     requests = pool_requests(setup)
     assert length(requests) == 2
     assert requests |> Enum.map(& &1.correlation_id) |> Enum.uniq() |> length() == 2
+  end
+
+  # A brand-new path must not log under the old path's name. Triage greps for
+  # "websocket replay rejection" and for `transport=websocket`; a native HTTP
+  # refusal that claimed either would send an operator looking for a websocket
+  # session that never existed.
+  @tag capture_log: false
+  test "a native HTTP refusal is logged as native http, not as websocket", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_log_label"}))
+    setup = gateway_setup(upstream)
+    session = session_id()
+
+    assert json_response(post_turn(conn, setup, session, @turn_id), 200)
+
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    logs =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert %{"error" => %{"code" => "duplicate_turn"}} =
+                 json_response(post_turn(conn, setup, session, @turn_id), 409)
+      end)
+
+    assert logs =~ "native http replay rejection"
+    assert logs =~ "stage=native_http_turn_claim"
+    assert logs =~ "transport=http_json"
+    refute logs =~ "websocket replay rejection"
+    refute logs =~ "transport=websocket"
   end
 
   # The fence must never reach a client that does not send the metadata. These
