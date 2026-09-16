@@ -35,11 +35,13 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
 
   describe "the row a relay event is allowed to be" do
     test "the table carries no identifier column and no free-text column" do
-      columns =
+      rows =
         Repo.query!(
-          "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'telemetry_relay_events' ORDER BY column_name"
+          "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'telemetry_relay_events' ORDER BY column_name"
         ).rows
-        |> Map.new(fn [name, type] -> {name, type} end)
+
+      columns = Map.new(rows, fn [name, type, _nullable] -> {name, type} end)
+      nullability = Map.new(rows, fn [name, _type, nullable] -> {name, nullable} end)
 
       # Every column is named here on purpose. A new one arrives in this
       # assertion before it can arrive in production, which is the point: the
@@ -59,6 +61,18 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       assert columns["labels"] == "jsonb"
       assert columns["measurements"] == "jsonb"
       assert columns["count"] == "bigint"
+
+      # Both JSONB bounds are `STRICT` SQL functions, so they return NULL for a
+      # NULL argument and a CHECK whose expression is NULL passes. Every refusal
+      # the two tests below prove therefore rests on these columns being NOT
+      # NULL: dropping that reopens "the column is wholly unchecked" with the
+      # rest of this file green, which is exactly the shape findings#195 row
+      # 195-23 is about.
+      assert nullability["labels"] == "NO"
+      assert nullability["measurements"] == "NO"
+      assert nullability["event"] == "NO"
+      assert nullability["count"] == "NO"
+      assert nullability["inserted_at"] == "NO"
     end
 
     test "the forwarded label vocabulary is a closed set of bounded category keys" do
@@ -283,7 +297,19 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
                "#{event} was read off event_allowed but the database refuses it"
       end
 
-      absent = ~w(stale_sweep interrupted) ++ ["ghost_#{System.unique_integer([:positive])}"]
+      # Names across every length and character class the column can hold, not
+      # only three short ones. A widening written without a string literal —
+      # `OR octet_length(event) > 30` is the one that found this — adds no name
+      # for the extraction to see, so what refuses it has to be a probe rather
+      # than a parse. The column is `varchar(255)`, so 200 bytes is the longest
+      # a refusal can be distinguished from a truncation.
+      generated =
+        for bytes <- [1, 8, 31, 64, 200],
+            do: String.pad_trailing("g#{System.unique_integer([:positive])}", bytes, "x")
+
+      absent =
+        ~w(stale_sweep interrupted) ++
+          generated ++ ["GHOST_EVENT", "ghost-event.1", "1234567890", " ", "%"]
 
       for refused <- absent do
         refute refused in storable
