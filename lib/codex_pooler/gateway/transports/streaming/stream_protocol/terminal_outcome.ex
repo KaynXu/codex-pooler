@@ -9,8 +9,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   @terminal_event_types ["response.failed", "response.incomplete", "error"]
   @success_event_types ["response.completed", "response.done"]
   @internal_control_event_types ["codex.rate_limits", "codex.response.metadata"]
+  # `response.created` and `response.in_progress` are forwarded downstream, but
+  # they carry no model output: the provider has accepted the turn and produced
+  # nothing yet. They must not be read as "the turn has started delivering", or
+  # a terminal error arriving behind them closes the retry window on an attempt
+  # that cost the client nothing.
+  @retry_window_preamble_event_types ["response.created", "response.in_progress"]
   @downstream_visible_event_types @terminal_event_types ++
-                                    ["response.created", "response.in_progress"]
+                                    @retry_window_preamble_event_types
 
   @type terminal_failure :: %{
           required(:code) => String.t(),
@@ -186,6 +192,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   def internal_rate_limit_event?(_data), do: false
 
+  @doc """
+  True for an event that is forwarded downstream but carries no model output.
+
+  The retry window stays open across these: nothing the client has received so
+  far is output, so another candidate can still serve the turn.
+  """
+  @spec retry_window_preamble_event?(term()) :: boolean()
+  def retry_window_preamble_event?(%{} = event) do
+    {event_type, data_type} = event_stream_types(event)
+
+    event_type in @retry_window_preamble_event_types or
+      data_type in @retry_window_preamble_event_types
+  end
+
+  def retry_window_preamble_event?(_event), do: false
+
   @spec internal_control_event?(term()) :: boolean()
   def internal_control_event?(%{} = event) do
     {event_type, data_type} = event_stream_types(event)
@@ -223,6 +245,64 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   end
 
   def downstream_visible_event?(_event), do: false
+
+  @doc """
+  Splits `data` into the bytes to relay and whether a preamble block was seen.
+
+  A fast provider failure arrives as one chunk carrying the preamble and the
+  terminal error together, so a replayed attempt has to be filtered block by
+  block rather than chunk by chunk. Residue that is not yet a complete block is
+  always kept: it belongs to an event this function cannot classify yet.
+  """
+  @spec split_preamble_blocks(term()) :: {binary(), boolean()}
+  def split_preamble_blocks(data) when is_binary(data) do
+    {blocks, residue} = SSEParser.complete_sse_blocks(data, bounded?: false)
+
+    {kept, seen?} =
+      Enum.reduce(blocks, {[], false}, fn block, {kept, seen?} ->
+        if preamble_block?(block),
+          do: {kept, true},
+          else: {[block | kept], seen?}
+      end)
+
+    # `complete_sse_blocks/2` strips each block's terminator, so it has to be
+    # put back: joining the bodies alone would run two events together and
+    # corrupt the framing for everything behind the dropped preamble.
+    kept = kept |> Enum.reverse() |> Enum.map_join(&(&1 <> "\n\n"))
+
+    {kept <> residue, seen?}
+  end
+
+  def split_preamble_blocks(data), do: {data, false}
+
+  defp preamble_block?(block) do
+    event_type = SSEParser.sse_field(block, "event")
+    decoded = block |> SSEParser.sse_field("data") |> SSEParser.decode_sse_data()
+    data_type = ErrorCanonicalization.decoded_string(decoded, "type")
+
+    retry_window_preamble_event?(%{event_type: event_type, data_type: data_type})
+  end
+
+  @doc """
+  True when every complete block in `data` is a zero-output preamble event.
+
+  Used to drop a retried attempt's `response.created` / `response.in_progress`
+  so one turn stays one stream downstream even when it is served twice.
+  """
+  @spec preamble_only_stream_data?(term()) :: boolean()
+  def preamble_only_stream_data?(data) when is_binary(data) do
+    {blocks, _buffer} = SSEParser.complete_sse_blocks(data, bounded?: false)
+
+    blocks != [] and
+      Enum.all?(blocks, fn block ->
+        event_type = SSEParser.sse_field(block, "event")
+        decoded = block |> SSEParser.sse_field("data") |> SSEParser.decode_sse_data()
+        data_type = ErrorCanonicalization.decoded_string(decoded, "type")
+        retry_window_preamble_event?(%{event_type: event_type, data_type: data_type})
+      end)
+  end
+
+  def preamble_only_stream_data?(_data), do: false
 
   @spec stream_data_visible?(term()) :: boolean()
   def stream_data_visible?(data) when is_binary(data) do

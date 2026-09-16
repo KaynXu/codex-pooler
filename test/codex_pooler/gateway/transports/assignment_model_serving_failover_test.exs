@@ -283,7 +283,29 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       end
     end
 
-    test "structured model_not_found after visible output cannot enter the retry branch" do
+    test "structured model_not_found after delivered output cannot enter the retry branch" do
+      delivered =
+        sse_event("response.output_text.delta", %{
+          "type" => "response.output_text.delta",
+          "delta" => "visible synthetic text"
+        })
+
+      assert {{:write, ^delivered}, state} =
+               StreamAttempt.classify_first_event(
+                 delivered,
+                 StreamAttempt.first_event_state(),
+                 true
+               )
+
+      terminal = terminal_event(error_payload("model_not_found", "model"))
+
+      assert {{:write_terminal_failure, ^terminal,
+               %{code: "model_not_found", upstream_error_param: "model"}},
+              %{classified?: true, buffer: "", parser: _parser}} =
+               StreamAttempt.classify_first_event(terminal, state, true)
+    end
+
+    test "structured model_not_found behind a zero-output preamble still fails over" do
       created =
         sse_event("response.created", %{
           "type" => "response.created",
@@ -299,9 +321,9 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
 
       terminal = terminal_event(error_payload("model_not_found", "model"))
 
-      assert {{:write_terminal_failure, ^terminal,
-               %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: "", parser: _parser}} =
+      # The provider accepted the turn and delivered none of it, so another
+      # assignment that advertises the model can still serve it.
+      assert {{:retry, %{code: "model_not_found", upstream_error_param: "model"}}, _state} =
                StreamAttempt.classify_first_event(terminal, state, true)
     end
   end

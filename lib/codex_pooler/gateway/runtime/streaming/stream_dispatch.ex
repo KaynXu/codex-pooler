@@ -393,6 +393,40 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp attach_withheld_body(classification, _previous_state, _data), do: classification
 
+  # The relay state is rebuilt for every attempt, so preamble delivery is
+  # tracked on the downstream connection, which is the one thing that spans
+  # them. Two flags, because "this attempt already wrote its preamble" and "an
+  # earlier attempt delivered one" need opposite answers: the first must still
+  # write `response.in_progress` behind its own `response.created`, the second
+  # must write neither.
+  @preamble_earlier :codex_pooler_preamble_delivered_earlier?
+  @preamble_this_attempt :codex_pooler_preamble_written_this_attempt?
+
+  defp preamble_delivered?(%{target: %Plug.Conn{private: private}}),
+    do: Map.get(private, @preamble_earlier, false) == true
+
+  defp preamble_delivered?(_state), do: false
+
+  defp mark_preamble_delivered(%{target: %Plug.Conn{} = target} = state),
+    do: %{state | target: Plug.Conn.put_private(target, @preamble_this_attempt, true)}
+
+  defp mark_preamble_delivered(state), do: state
+
+  defp carry_preamble_delivery(%{target: %Plug.Conn{private: private} = target} = state) do
+    delivered? =
+      Map.get(private, @preamble_earlier, false) or
+        Map.get(private, @preamble_this_attempt, false)
+
+    target =
+      target
+      |> Plug.Conn.put_private(@preamble_earlier, delivered?)
+      |> Plug.Conn.put_private(@preamble_this_attempt, false)
+
+    %{state | target: target}
+  end
+
+  defp carry_preamble_delivery(state), do: state
+
   # The first-event classifier can hold a large first event until the stream
   # ends, so both finalize hooks must flush the held bytes through the normal
   # write path first — a structurally complete trailing terminal without a
@@ -622,6 +656,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     {downstream_data, conn} =
       normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_visible?/1)
 
+    # A turn served on a second candidate opens a second upstream stream, so the
+    # provider sends `response.created` and `response.in_progress` again. The
+    # client is owed one stream per turn and those two carry no output, so a
+    # replayed preamble is stripped. A fast failure arrives as a single chunk
+    # carrying the preamble and the terminal error together, so this filters
+    # block by block rather than dropping whole chunks.
+    replayed? = preamble_delivered?(conn)
+    {without_preamble, preamble_seen?} = StreamProtocol.split_preamble_blocks(downstream_data)
+    downstream_data = if replayed?, do: without_preamble, else: downstream_data
+    conn = if preamble_seen?, do: mark_preamble_delivered(conn), else: conn
+
     if downstream_data == "" do
       {:ok, conn}
     else
@@ -631,6 +676,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp reset_first_event_retry_state(conn) do
     conn
+    |> carry_preamble_delivery()
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())

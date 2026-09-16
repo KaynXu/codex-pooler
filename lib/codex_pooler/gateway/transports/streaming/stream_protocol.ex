@@ -196,6 +196,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec downstream_visible_event?(term()) :: boolean()
   defdelegate downstream_visible_event?(event), to: TerminalOutcome
 
+  @spec retry_window_preamble_event?(term()) :: boolean()
+  defdelegate retry_window_preamble_event?(event), to: TerminalOutcome
+
+  @spec preamble_only_stream_data?(term()) :: boolean()
+  defdelegate preamble_only_stream_data?(data), to: TerminalOutcome
+
+  @spec split_preamble_blocks(term()) :: {binary(), boolean()}
+  defdelegate split_preamble_blocks(data), to: TerminalOutcome
+
   @spec stream_data_visible?(term()) :: boolean()
   defdelegate stream_data_visible?(data), to: TerminalOutcome
 

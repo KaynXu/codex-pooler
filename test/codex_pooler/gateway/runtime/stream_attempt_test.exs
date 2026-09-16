@@ -16,7 +16,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                )
 
       assert data == "data: {\"type\":\"response.created\"}\n\n"
-      assert_classified_state(state)
+      # `response.created` is relayed but carries no output, so the retry
+      # window stays open behind it.
+      assert state.classified? == false
       refute Process.get({:codex_first_stream_event_state, "attempt-stream-classification"})
       refute Process.get({:codex_first_stream_event_buffer, "attempt-stream-classification"})
     end
@@ -208,7 +210,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert_classified_state(state)
     end
 
-    test "does not retry websocket_connection_limit_reached after downstream-visible response.created" do
+    test "retries websocket_connection_limit_reached behind a zero-output response.created" do
       state = StreamAttempt.first_event_state()
 
       assert {{:write, _created}, state} =
@@ -227,8 +229,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
           "code" => "websocket_connection_limit_reached"
         })
 
-      assert {{:write_terminal_failure, ^terminal,
-               %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
+      # `response.created` announces that the provider accepted the turn, not
+      # that it delivered any of it: a terminal failure behind it is still
+      # safe to serve on another candidate, and the client keeps one stream
+      # because the replayed preamble is stripped downstream.
+      assert {{:retry, %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
       assert_classified_state(state)
