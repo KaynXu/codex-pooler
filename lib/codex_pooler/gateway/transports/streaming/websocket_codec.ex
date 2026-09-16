@@ -1021,11 +1021,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   # The turn-vs-continuation discriminator is shared with the native HTTP claim
   # path (findings#212): both transports carry the same `client_metadata`,
   # anchor and tool-result shapes, so both must read one definition.
-  defdelegate ordinary_native_tool_continuation?(payload, options),
-    to: NativeTurnContinuation,
-    as: :ordinary_tool_continuation?
+  defp ordinary_native_tool_continuation?(payload, options),
+    do: NativeTurnContinuation.ordinary_tool_continuation?(payload, options)
 
-  defdelegate canonical_metadata_map(metadata), to: NativeTurnContinuation
+  defp canonical_metadata_map(metadata), do: NativeTurnContinuation.canonical_metadata_map(metadata)
 
   defp replay_request_kind?(
          %{"client_metadata" => %{@canonical_metadata_key => metadata}},
