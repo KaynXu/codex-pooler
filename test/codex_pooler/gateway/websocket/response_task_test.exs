@@ -288,6 +288,20 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
 
     monitor = Process.monitor(pid)
     assert_receive {:natural_winner_completion_ready, ^pid, token, watcher}
+
+    # The coordinator is parked inside `before_completion_handoff` until the
+    # release below, so nothing has yet sent the watcher its stop message, and
+    # its other three receive clauses are fenced on this turn's own token and
+    # on its own monitor of a coordinator that is still alive. The watcher must
+    # therefore be alive here. Asserted rather than assumed because a run under
+    # `make test-fast` once monitored a watcher that was already gone and only
+    # showed it five assertions later as a `:noproc` DOWN (findings#221 row
+    # 221-75, unreproduced in 901 in-VM repeats of this file and in every
+    # isolated run since); if it happens again this names the moment rather
+    # than the symptom five assertions later.
+    assert Process.alive?(watcher),
+           "the cancellation watcher died before the completion handoff was released"
+
     watcher_monitor = Process.monitor(watcher)
     send(pid, {:release_natural_winner_completion, completion_ref})
     assert_receive {:websocket_response_activity, ^pid, ^token}
