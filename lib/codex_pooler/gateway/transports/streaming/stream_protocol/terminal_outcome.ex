@@ -9,12 +9,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   @terminal_event_types ["response.failed", "response.incomplete", "error"]
   @success_event_types ["response.completed", "response.done"]
   @internal_control_event_types ["codex.rate_limits", "codex.response.metadata"]
-  # `response.created` and `response.in_progress` are forwarded downstream, but
-  # they carry no model output: the provider has accepted the turn and produced
-  # nothing yet. They must not be read as "the turn has started delivering", or
-  # a terminal error arriving behind them closes the retry window on an attempt
-  # that cost the client nothing.
-  @retry_window_preamble_event_types ["response.created", "response.in_progress"]
+  # These events are forwarded downstream but carry no model output. They also
+  # carry candidate-specific client state: response identity/model headers on
+  # lifecycle events, and verification/moderation/safety/turn-state metadata on
+  # `response.metadata`. Keep them attempt-local until output or a terminal
+  # commits the candidate; otherwise a retry mixes state from two candidates.
+  @retry_window_preamble_event_types [
+    "response.created",
+    "response.in_progress",
+    "response.metadata"
+  ]
   @downstream_visible_event_types @terminal_event_types ++
                                     @retry_window_preamble_event_types
 

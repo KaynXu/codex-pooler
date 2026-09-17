@@ -393,12 +393,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp attach_withheld_body(classification, _previous_state, _data), do: classification
 
-  # A retryable terminal may arrive after `response.created` and
-  # `response.in_progress`, but before the provider has committed any model
-  # output to the client. Those records carry candidate-specific response ids
-  # and model headers, so retain them on the downstream connection until this
-  # attempt emits a visible non-preamble event. A retry discards the held
-  # candidate preamble; the successful attempt flushes its own exactly once.
+  # A retryable terminal may arrive after lifecycle or response metadata, but
+  # before the provider has committed model output to the client. Those records
+  # carry candidate-specific response ids, model headers, verification,
+  # moderation, safety, and turn-state state. Retain them on the downstream
+  # connection until this attempt commits. A retry discards the failed
+  # candidate's bytes; the successful attempt flushes its own exactly once.
   @withheld_preamble :codex_pooler_withheld_retry_preamble
 
   defp withheld_preamble(%{target: %Plug.Conn{private: private}}),

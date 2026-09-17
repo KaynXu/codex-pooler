@@ -11,6 +11,10 @@ data: {"type":"response.created"}
 data: {"type":"response.in_progress"}
 
 )
+  @metadata ~S(event: response.metadata
+data: {"type":"response.metadata","response_id":"resp_fixture"}
+
+)
   @delta ~S(event: response.output_text.delta
 data: {"type":"response.output_text.delta"}
 
@@ -21,9 +25,11 @@ data: {"type":"error","error":{"code":"server_error"}}
 )
 
   describe "retry_window_preamble_event?/1" do
-    test "names the two zero-output events and nothing else" do
+    test "names attempt-local zero-output events and excludes internal metadata" do
       assert StreamProtocol.retry_window_preamble_event?(%{data_type: "response.created"})
       assert StreamProtocol.retry_window_preamble_event?(%{data_type: "response.in_progress"})
+      assert StreamProtocol.retry_window_preamble_event?(%{data_type: "response.metadata"})
+      refute StreamProtocol.retry_window_preamble_event?(%{data_type: "codex.response.metadata"})
 
       refute StreamProtocol.retry_window_preamble_event?(%{
                data_type: "response.output_text.delta"
@@ -51,7 +57,9 @@ data: {"type":"error","error":{"code":"server_error"}}
 
   describe "split_preamble_blocks/1" do
     test "drops preamble blocks and keeps everything else" do
-      assert {"", true} = StreamProtocol.split_preamble_blocks(@created <> @in_progress)
+      assert {"", true} =
+               StreamProtocol.split_preamble_blocks(@created <> @in_progress <> @metadata)
+
       assert {@delta, true} = StreamProtocol.split_preamble_blocks(@created <> @delta)
       assert {@delta, false} = StreamProtocol.split_preamble_blocks(@delta)
     end
