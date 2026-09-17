@@ -205,6 +205,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec split_preamble_blocks(term()) :: {binary(), boolean()}
   defdelegate split_preamble_blocks(data), to: TerminalOutcome
 
+  @doc false
+  @spec partition_preamble_blocks(term()) :: {binary(), binary(), boolean()}
+  defdelegate partition_preamble_blocks(data), to: TerminalOutcome
+
   @spec stream_data_visible?(term()) :: boolean()
   defdelegate stream_data_visible?(data), to: TerminalOutcome
 

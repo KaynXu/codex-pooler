@@ -202,8 +202,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   def retry_window_preamble_event?(%{} = event) do
     {event_type, data_type} = event_stream_types(event)
 
-    event_type in @retry_window_preamble_event_types or
-      data_type in @retry_window_preamble_event_types
+    preamble_types_agree?(event_type, data_type)
   end
 
   def retry_window_preamble_event?(_event), do: false
@@ -256,24 +255,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   """
   @spec split_preamble_blocks(term()) :: {binary(), boolean()}
   def split_preamble_blocks(data) when is_binary(data) do
+    {_preamble, kept, seen?} = partition_preamble_blocks(data)
+    {kept, seen?}
+  end
+
+  def split_preamble_blocks(data), do: {data, false}
+
+  @doc false
+  @spec partition_preamble_blocks(term()) :: {binary(), binary(), boolean()}
+  def partition_preamble_blocks(data) when is_binary(data) do
     {blocks, residue} = SSEParser.complete_sse_blocks(data, bounded?: false)
 
-    {kept, seen?} =
-      Enum.reduce(blocks, {[], false}, fn block, {kept, seen?} ->
+    {preamble, kept, seen?} =
+      Enum.reduce(blocks, {[], [], false}, fn block, {preamble, kept, seen?} ->
         if preamble_block?(block),
-          do: {kept, true},
-          else: {[block | kept], seen?}
+          do: {[block | preamble], kept, true},
+          else: {preamble, [block | kept], seen?}
       end)
 
     # `complete_sse_blocks/2` strips each block's terminator, so it has to be
     # put back: joining the bodies alone would run two events together and
     # corrupt the framing for everything behind the dropped preamble.
+    preamble = preamble |> Enum.reverse() |> Enum.map_join(&(&1 <> "\n\n"))
     kept = kept |> Enum.reverse() |> Enum.map_join(&(&1 <> "\n\n"))
 
-    {kept <> residue, seen?}
+    {preamble, kept <> residue, seen?}
   end
 
-  def split_preamble_blocks(data), do: {data, false}
+  def partition_preamble_blocks(data), do: {"", data, false}
 
   defp preamble_block?(block) do
     event_type = SSEParser.sse_field(block, "event")
@@ -281,6 +290,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
     data_type = ErrorCanonicalization.decoded_string(decoded, "type")
 
     retry_window_preamble_event?(%{event_type: event_type, data_type: data_type})
+  end
+
+  defp preamble_types_agree?(event_type, data_type) do
+    cond do
+      is_binary(event_type) and event_type != "" and is_binary(data_type) and data_type != "" ->
+        event_type == data_type and event_type in @retry_window_preamble_event_types
+
+      event_type in @retry_window_preamble_event_types ->
+        true
+
+      data_type in @retry_window_preamble_event_types ->
+        true
+
+      true ->
+        false
+    end
   end
 
   @doc """

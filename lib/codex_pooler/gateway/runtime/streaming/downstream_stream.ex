@@ -71,6 +71,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
+  @spec flush_eof_data(String.t() | nil, RequestOptions.t(), state()) :: {iodata(), state()}
+  def flush_eof_data(endpoint, %RequestOptions{} = opts, state) do
+    if codex_responses_stream_endpoint?(endpoint) do
+      flush_codex_responses_sse_eof(opts, state)
+    else
+      {"", state}
+    end
+  end
+
   @spec keepalive_allowed?(state()) :: boolean()
   def keepalive_allowed?(%{
         public_openai_responses: %{buffer: buffer, passthrough?: passthrough?}
@@ -317,6 +326,37 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   defp normalize_codex_responses_stream_data(data, _endpoint, _opts, state), do: {data, state}
+
+  # An upstream EOF can supply the only missing SSE blank line. The ordinary
+  # incremental path retains that structurally complete final block while it
+  # waits for the separator; at EOF, feed just the terminator into the same
+  # bounded parser and normalization path. Incomplete residue remains withheld.
+  defp flush_codex_responses_sse_eof(
+         opts,
+         %{codex_responses_sse_block_state: %{buffer: buffer} = sse_block_state} = state
+       )
+       when is_binary(buffer) and buffer != "" do
+    {blocks, sse_block_state} =
+      StreamProtocol.complete_sse_blocks(sse_block_state, "\n\n", bounded?: true)
+
+    if blocks != [] and String.trim(sse_block_state.buffer) == "" do
+      data =
+        blocks
+        |> Enum.map(&normalize_codex_responses_sse_block(&1, opts, state))
+        |> IO.iodata_to_binary()
+
+      state =
+        state
+        |> Map.put(:codex_responses_sse_block_state, sse_block_state)
+        |> track_native_completion(blocks)
+
+      {data, state}
+    else
+      {"", state}
+    end
+  end
+
+  defp flush_codex_responses_sse_eof(_opts, state), do: {"", state}
 
   defp track_native_completion(%{target: :websocket} = state, _blocks), do: state
 

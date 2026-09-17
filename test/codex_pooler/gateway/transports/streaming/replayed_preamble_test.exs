@@ -3,10 +3,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.ReplayedPreambleTest do
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
-  @created "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
-  @in_progress "event: response.in_progress\ndata: {\"type\":\"response.in_progress\"}\n\n"
-  @delta "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\"}\n\n"
-  @error "event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"server_error\"}}\n\n"
+  @created ~S(event: response.created
+data: {"type":"response.created"}
+
+)
+  @in_progress ~S(event: response.in_progress
+data: {"type":"response.in_progress"}
+
+)
+  @delta ~S(event: response.output_text.delta
+data: {"type":"response.output_text.delta"}
+
+)
+  @error ~S(event: error
+data: {"type":"error","error":{"code":"server_error"}}
+
+)
 
   describe "retry_window_preamble_event?/1" do
     test "names the two zero-output events and nothing else" do
@@ -19,6 +31,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.ReplayedPreambleTest do
 
       refute StreamProtocol.retry_window_preamble_event?(%{data_type: "error"})
       refute StreamProtocol.retry_window_preamble_event?(%{data_type: "response.completed"})
+    end
+
+    test "requires redundant SSE labels to agree before naming a preamble" do
+      refute StreamProtocol.retry_window_preamble_event?(%{
+               event_type: "response.created",
+               data_type: "response.failed"
+             })
+
+      refute StreamProtocol.retry_window_preamble_event?(%{
+               event_type: "response.failed",
+               data_type: "response.created"
+             })
+
+      assert StreamProtocol.retry_window_preamble_event?(%{event_type: "response.created"})
+      assert StreamProtocol.retry_window_preamble_event?(%{data_type: "response.in_progress"})
     end
   end
 
@@ -34,6 +61,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.ReplayedPreambleTest do
       # would swallow the error the client is owed.
       assert {@error, true} =
                StreamProtocol.split_preamble_blocks(@created <> @in_progress <> @error)
+    end
+
+    test "keeps blocks whose event and JSON labels contradict each other" do
+      created_label_failed_data =
+        "event: response.created\ndata: {\"type\":\"response.failed\"}\n\n"
+
+      failed_label_created_data =
+        "event: response.failed\ndata: {\"type\":\"response.created\"}\n\n"
+
+      assert {^created_label_failed_data, false} =
+               StreamProtocol.split_preamble_blocks(created_label_failed_data)
+
+      assert {^failed_label_created_data, false} =
+               StreamProtocol.split_preamble_blocks(failed_label_created_data)
     end
 
     test "keeps residue that is not yet a complete block" do

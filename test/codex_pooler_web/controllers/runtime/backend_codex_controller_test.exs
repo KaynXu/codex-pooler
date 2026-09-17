@@ -9479,6 +9479,218 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :first_event_stream_retry
+  test "SSE retry publishes only the successful candidate preamble identity and metadata", %{
+    conn: conn
+  } do
+    first_id = "resp_retry_first_candidate"
+    second_id = "resp_retry_second_candidate"
+    first_model = "fixture-first-model"
+    second_model = "fixture-second-model"
+
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", first_id, first_model),
+          retry_preamble_event("response.in_progress", first_id),
+          first_event_terminal_payload("response.failed", "server_error")
+        ],
+        done: false
+      )
+
+    second_mode =
+      FakeUpstream.sse_stream([
+        retry_preamble_event("response.created", second_id, second_model),
+        retry_preamble_event("response.in_progress", second_id),
+        retry_completed_event(second_id)
+      ])
+
+    {setup, failing_upstream, success_upstream} = stream_retry_setup(first_mode, second_mode)
+
+    stream_conn =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("retry identity coherence fixture"),
+        "stream" => true
+      })
+
+    assert stream_conn.status == 200
+
+    assert [
+             %{"type" => "response.created", "response" => created_response},
+             %{"type" => "response.in_progress", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    assert created_response["id"] == second_id
+    assert get_in(created_response, ["headers", "OpenAI-Model"]) == second_model
+    refute stream_conn.resp_body =~ first_id
+    refute stream_conn.resp_body =~ first_model
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+  end
+
+  @tag :first_event_stream_retry
+  test "SSE EOF flush filters replayed preamble before relaying an unterminated completed terminal",
+       %{conn: conn} do
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", "resp_retry_eof_first"),
+          retry_preamble_event("response.in_progress", "resp_retry_eof_first"),
+          first_event_terminal_payload("response.failed", "server_error")
+        ],
+        done: false
+      )
+
+    second_id = "resp_retry_eof_second"
+
+    second_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", second_id),
+          "event: response.completed\ndata: #{CodexPooler.JSON.encode!(retry_completed_payload(second_id))}\n"
+        ],
+        done: false
+      )
+
+    {setup, failing_upstream, success_upstream} = stream_retry_setup(first_mode, second_mode)
+
+    stream_conn =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("retry EOF replay fixture"),
+        "stream" => true
+      })
+
+    assert stream_conn.status == 200
+
+    assert [
+             %{"type" => "response.created", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    refute stream_conn.resp_body =~ "resp_retry_eof_first"
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+  end
+
+  @tag :first_event_stream_retry
+  test "SSE retry cancels the failed candidate before the successful candidate completes", %{
+    conn: _conn
+  } do
+    first_release_ref = make_ref()
+    second_release_ref = make_ref()
+    first_id = "resp_retry_cancel_first"
+    second_id = "resp_retry_cancel_second"
+
+    first_mode =
+      FakeUpstream.barrier_sse_stream(
+        [
+          retry_preamble_event("response.created", first_id),
+          retry_preamble_event("response.in_progress", first_id),
+          first_event_terminal_payload("response.failed", "server_error"),
+          {"response.output_text.delta",
+           %{"type" => "response.output_text.delta", "delta" => "late-first"}}
+        ],
+        barrier_after: 3,
+        done: false,
+        notify: self(),
+        release_ref: first_release_ref,
+        on_client_close: :expected,
+        owner: "stream-retry-cancel-first"
+      )
+
+    second_mode =
+      FakeUpstream.barrier_sse_stream(
+        [
+          retry_preamble_event("response.created", second_id),
+          retry_completed_event(second_id)
+        ],
+        barrier_after: 1,
+        notify: self(),
+        release_ref: second_release_ref,
+        owner: "stream-retry-cancel-second"
+      )
+
+    {setup, first_upstream, second_upstream} = stream_retry_setup(first_mode, second_mode)
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        receive do
+          :sandbox_allowed -> :ok
+        after
+          1_000 -> raise "timed out waiting for cancellation stream sandbox allowance"
+        end
+
+        stream_conn =
+          Phoenix.ConnTest.build_conn()
+          |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+          |> auth(setup)
+          |> post("/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("retry cancellation fixture"),
+            "stream" => true
+          })
+
+        send(parent, {:retry_cancellation_stream_done, stream_conn})
+        :ok
+      end)
+
+    Sandbox.allow(Repo, self(), task.pid)
+    send(task.pid, :sandbox_allowed)
+
+    assert_receive {:fake_upstream_chunk_barrier, 3, first_handler, ^first_release_ref}, 15_000
+    assert_receive {:fake_upstream_client_gone, 3, ^first_handler, ^first_release_ref}, 15_000
+    assert_receive {:fake_upstream_chunk_barrier, 1, second_handler, ^second_release_ref}, 15_000
+
+    send(first_handler, {:fake_upstream_release_chunk, first_release_ref})
+
+    assert_receive {:fake_upstream_client_closed, 4, ^first_handler, ^first_release_ref}, 15_000
+
+    send(second_handler, {:fake_upstream_release_chunk, second_release_ref})
+
+    assert_receive {:retry_cancellation_stream_done, stream_conn}, 15_000
+    assert stream_conn.status == 200
+
+    assert [
+             %{"type" => "response.created", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    refute stream_conn.resp_body =~ first_id
+    refute stream_conn.resp_body =~ "late-first"
+
+    assert [%{outcome: :client_closed_expected, chunk_index: 4, chunk_count: 4}] =
+             FakeUpstream.sse_outcomes(first_upstream)
+
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(second_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where:
+                 entry.entry_kind == "settlement" and
+                   entry.request_id in subquery(
+                     from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id)
+                   )
+             ),
+             :count
+           ) == 1
+
+    assert Task.await(task, 15_000) == :ok
+  end
+
+  @tag :first_event_stream_retry
   test "SSE first-event retry clears failed-candidate usage before usage-free success" do
     success_without_usage =
       FakeUpstream.sse_stream([
@@ -16191,5 +16403,51 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       _incomplete ->
         false
     end
+  end
+
+  defp retry_preamble_event(event_type, response_id, model \\ nil)
+
+  defp retry_preamble_event("response.created", response_id, model) do
+    response =
+      %{"id" => response_id, "status" => "in_progress"}
+      |> then(fn response ->
+        if is_binary(model),
+          do: Map.put(response, "headers", %{"OpenAI-Model" => model}),
+          else: response
+      end)
+
+    {"response.created", %{"type" => "response.created", "response" => response}}
+  end
+
+  defp retry_preamble_event("response.in_progress", response_id, _model),
+    do:
+      {"response.in_progress",
+       %{
+         "type" => "response.in_progress",
+         "response" => %{"id" => response_id, "status" => "in_progress"}
+       }}
+
+  defp retry_completed_event(response_id),
+    do: {"response.completed", retry_completed_payload(response_id)}
+
+  defp retry_completed_payload(response_id) do
+    %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => response_id,
+        "status" => "completed",
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+      }
+    }
+  end
+
+  defp streamed_response_events(body) do
+    {blocks, _residue} = SSEParser.complete_sse_blocks(body, bounded?: false)
+
+    Enum.flat_map(blocks, fn block ->
+      {_event, decoded} = SSEParser.stream_block_event(block)
+
+      if is_binary(decoded["type"]), do: [decoded], else: []
+    end)
   end
 end
