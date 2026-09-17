@@ -718,10 +718,30 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> Map.fetch!(:http_first_event_retry)
     |> then(fn retry ->
       retry.(response_context,
+        retry_allowed?: not candidate_specific_http_headers_committed?(response_context),
         reset_state: &reset_first_event_retry_state/1,
         write_final_event: &write_final_first_event(response_context, &1, &2),
         stream_candidate: &stream_candidate_result/2
       )
+    end)
+  end
+
+  defp candidate_specific_http_headers_committed?(%ResponseContext{
+         context: context,
+         response: response
+       }) do
+    candidate_headers = [
+      "openai-model",
+      "x-reasoning-included",
+      "x-codex-safety-buffering-enabled",
+      "x-codex-safety-buffering-faster-model",
+      "x-codex-turn-state"
+    ]
+
+    response
+    |> stream_headers(context)
+    |> Enum.any?(fn {name, _value} ->
+      name in candidate_headers
     end)
   end
 

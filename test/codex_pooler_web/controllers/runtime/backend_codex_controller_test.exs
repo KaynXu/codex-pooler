@@ -9590,6 +9590,73 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "server_error")
   end
 
+  for header_name <- ["openai-model", "x-codex-turn-state"] do
+    @tag :first_event_stream_retry
+    test "SSE #{header_name} closes the retry window", %{conn: conn} do
+      header_name = unquote(header_name)
+      first = retry_metadata_fixture("header-first")
+      second = retry_metadata_fixture("header-second")
+
+      first_mode =
+        FakeUpstream.sse_stream(
+          [
+            retry_preamble_event("response.created", first.response_id, first.model),
+            retry_preamble_event("response.in_progress", first.response_id),
+            retry_response_metadata_event(first),
+            first_event_terminal_payload("response.failed", "server_error")
+          ],
+          done: false,
+          headers: [retry_candidate_http_header(header_name, first)]
+        )
+
+      second_mode =
+        FakeUpstream.sse_stream(
+          [
+            retry_preamble_event("response.created", second.response_id, second.model),
+            retry_response_metadata_event(second),
+            retry_completed_event(second.response_id)
+          ],
+          headers: [retry_candidate_http_header(header_name, second)]
+        )
+
+      {setup, first_upstream, second_upstream} = stream_retry_setup(first_mode, second_mode)
+
+      stream_conn =
+        conn
+        |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("retry HTTP header coherence fixture"),
+          "stream" => true
+        })
+
+      assert get_resp_header(stream_conn, header_name) == [retry_header_value(header_name, first)]
+
+      first_id = first.response_id
+
+      assert [
+               %{"type" => "response.created", "response" => %{"id" => ^first_id}},
+               %{"type" => "response.in_progress", "response" => %{"id" => ^first_id}},
+               %{"type" => "response.metadata"} = metadata,
+               %{"type" => "response.failed"}
+             ] = streamed_response_events(stream_conn.resp_body)
+
+      assert metadata == retry_response_metadata_payload(first)
+
+      for candidate_two_value <- Map.values(second) do
+        refute stream_conn.resp_body =~ candidate_two_value
+      end
+
+      assert FakeUpstream.count(first_upstream) == 1
+      assert FakeUpstream.count(second_upstream) == 0
+      assert_stream_terminal_failure!(setup, "server_error")
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.retry_count == 0
+    end
+  end
+
   @tag :first_event_stream_retry
   test "SSE EOF flush filters replayed preamble before relaying an unterminated completed terminal",
        %{conn: conn} do
@@ -16531,6 +16598,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       }
     }
   end
+
+  defp retry_candidate_http_header(header_name, fixture),
+    do: {header_name, retry_header_value(header_name, fixture)}
+
+  defp retry_header_value("openai-model", fixture), do: fixture.model
+  defp retry_header_value("x-codex-turn-state", fixture), do: fixture.turn_state
 
   defp streamed_response_events(body) do
     {blocks, _residue} = SSEParser.complete_sse_blocks(body, bounded?: false)
