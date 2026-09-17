@@ -1136,7 +1136,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
   defp remaining_percent(_window), do: nil
 
-  defp rendezvous_score(seed, assignment_id) do
+  @doc false
+  @spec rendezvous_score(String.t(), String.t()) :: non_neg_integer()
+  def rendezvous_score(seed, assignment_id) do
     :crypto.hash(:sha256, [to_string(seed), ?:, assignment_id])
     |> :binary.decode_unsigned()
   end
