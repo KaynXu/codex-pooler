@@ -115,15 +115,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     "codex-resume:" => "compaction_anchored_resume_claim",
     "codex-kind:" => "kind_scoped_request_claim"
   }
+  @public_error %{status: 409, code: "duplicate_turn"}
+  @public_error_transports ["http_json", "http_sse", "websocket"]
 
-  test "the compatibility matrix claim shapes are the ones this route produces", %{conn: conn} do
+  test "the compatibility matrix executable split names every route-driven value" do
     contract = CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn
-    shapes = contract.claim_by_request_kind
 
     assert contract.executable_fields == [
              :claim_by_request_kind,
              :known_gaps,
-             :payload_independent_claims
+             :payload_independent_claims,
+             :public_error
            ]
 
     assert contract.documentary_fields == [
@@ -132,7 +134,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
              :diagnostics,
              :disposition_scope,
              :metadata_sources,
-             :public_error,
              :refusal_dispositions,
              :unfenced
            ]
@@ -141,6 +142,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
            |> Map.keys()
            |> Enum.reject(&(&1 in [:executable_fields, :documentary_fields]))
            |> Enum.sort() == Enum.sort(contract.executable_fields ++ contract.documentary_fields)
+  end
+
+  test "the compatibility matrix claim shapes are the ones this route produces", %{conn: conn} do
+    contract = CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn
+    shapes = contract.claim_by_request_kind
+
+    assert Map.take(contract.public_error, [:status, :code]) == @public_error
+    assert Enum.sort(contract.public_error.transports) == Enum.sort(@public_error_transports)
 
     upstream =
       start_upstream(

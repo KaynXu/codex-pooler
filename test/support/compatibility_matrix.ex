@@ -427,7 +427,8 @@ defmodule CodexPooler.CompatibilityMatrix do
         executable_fields: [
           :claim_by_request_kind,
           :known_gaps,
-          :payload_independent_claims
+          :payload_independent_claims,
+          :public_error
         ],
         documentary_fields: [
           :bare_claim_request_kinds,
@@ -435,7 +436,6 @@ defmodule CodexPooler.CompatibilityMatrix do
           :diagnostics,
           :disposition_scope,
           :metadata_sources,
-          :public_error,
           :refusal_dispositions,
           :unfenced
         ],
