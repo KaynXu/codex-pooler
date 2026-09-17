@@ -23,10 +23,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Access
+  alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Repo
 
   @moduletag capture_log: true
@@ -65,8 +69,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # `409 duplicate_turn` is a public response on a runtime route, so the
   # machine-readable route/feature contract has to carry it for both transports
   # and has to be answerable from the route itself rather than from prose
-  # (findings#212). The grown-body gap the entry records is proven behaviourally
-  # by "a tool continuation resent with a grown body is NOT fenced" below.
+  # (findings#212). The two grown-body gaps the entry records are proven
+  # behaviorally by the known-gap test below.
   test "the compatibility matrix duplicate-turn entry is the refusal this route produces", %{
     conn: conn
   } do
@@ -99,7 +103,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # The entry's machine-readable fields were prose the suite ran past: a nonsense
   # claim-shape string and an inverted `known_gaps` value both left the contract
   # suites green (findings#212, 212-33). This test now compares every value it
-  # names against an outcome it drove, so a stale entry fails.
+  # names against an outcome it drove, so a stale executable entry fails. The
+  # matrix classifies the remaining descriptive fields outside that executable
+  # subset, and this test asserts that classification exhaustively.
   #
   # The table is the test's own, not the matrix's; asserting the matrix against
   # itself is what made the previous version self-referential.
@@ -111,8 +117,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   }
 
   test "the compatibility matrix claim shapes are the ones this route produces", %{conn: conn} do
-    shapes =
-      CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn.claim_by_request_kind
+    contract = CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn
+    shapes = contract.claim_by_request_kind
+
+    assert contract.executable_fields == [
+             :claim_by_request_kind,
+             :known_gaps,
+             :payload_independent_claims
+           ]
+
+    assert contract.documentary_fields == [
+             :bare_claim_request_kinds,
+             :continuation_discriminator,
+             :diagnostics,
+             :disposition_scope,
+             :metadata_sources,
+             :public_error,
+             :refusal_dispositions,
+             :unfenced
+           ]
+
+    assert contract
+           |> Map.keys()
+           |> Enum.reject(&(&1 in [:executable_fields, :documentary_fields]))
+           |> Enum.sort() == Enum.sort(contract.executable_fields ++ contract.documentary_fields)
 
     upstream =
       start_upstream(
@@ -121,6 +149,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
           FakeUpstream.json_response(%{"id" => "resp_shape_continuation"}),
           FakeUpstream.json_response(%{"id" => "resp_shape_resume"}),
           FakeUpstream.json_response(%{"id" => "resp_shape_compaction"}),
+          FakeUpstream.json_response(%{"id" => "resp_shape_prewarm"}),
           FakeUpstream.json_response(%{"id" => "resp_shape_kind"})
         ])
       )
@@ -142,8 +171,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
          document: kind_metadata("compaction"),
          input: native_text_input("h") ++ [%{"type" => "compaction_trigger"}]
        )},
+      {:prewarm,
+       post_turn(conn, setup, session, "shape_prewarm",
+         document: kind_metadata("prewarm", "shape_prewarm")
+       )},
       {:memory,
-       post_turn(conn, setup, session, "shape_memory", document: kind_metadata("memory"))}
+       post_turn(conn, setup, session, "shape_memory",
+         document: kind_metadata("memory", "shape_memory")
+       )}
     ]
 
     for {_kind, conn} <- driven, do: assert(json_response(conn, 200))
@@ -158,7 +193,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       assert entry.shape == Map.fetch!(@claim_shape_by_prefix, entry.prefix)
     end
 
-    # `prewarm` shares `memory`'s shape, and nothing above drove it.
     assert Map.fetch!(shapes, :prewarm) == Map.fetch!(shapes, :memory)
   end
 
@@ -172,7 +206,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       start_upstream(
         FakeUpstream.strict_sequence([
           FakeUpstream.json_response(%{"id" => "resp_gap_one"}),
-          FakeUpstream.json_response(%{"id" => "resp_gap_two"})
+          FakeUpstream.json_response(%{"id" => "resp_gap_two"}),
+          FakeUpstream.json_response(%{"id" => "resp_compaction_gap_one"}),
+          FakeUpstream.json_response(%{"id" => "resp_compaction_gap_two"})
         ])
       )
 
@@ -190,6 +226,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert gaps.tool_result_continuation_grown_body_retry_fenced == (second.status == 409)
     refute gaps.tool_result_continuation_grown_body_retry_fenced
 
+    compaction = fn text ->
+      post_turn(conn, setup, session, "matrix_compaction_gap",
+        where: :body,
+        document: kind_metadata("compaction", "matrix_compaction_gap"),
+        input: native_text_input(text) ++ [%{"type" => "compaction_trigger"}]
+      )
+    end
+
+    assert json_response(compaction.("history as it stood"), 200)
+    changed_compaction = compaction.("history as it stood, plus one more item")
+
+    assert gaps.compaction_changed_body_retry_fenced == (changed_compaction.status == 409)
+    refute gaps.compaction_changed_body_retry_fenced
+
     # The claims the entry calls payload-independent are the two that carry no
     # `known_gaps` entry, and neither names a payload-scoped domain.
     assert feature.payload_independent_claims == [:turn, :post_compaction_resume]
@@ -199,7 +249,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     end
   end
 
-  # The cohort in the row is streaming:  # The cohort in the row is streaming: a native Codex turn resolves to
+  # The cohort in the row is streaming: a native Codex turn resolves to
   # `http_sse`, which is exactly the transport that got a fresh UUID and a
   # second dispatch. The refusal lands before any upstream work, so the resend
   # is answered with the pre-dispatch JSON error rather than an event stream.
@@ -250,6 +300,60 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     # the turn: the successor is still named by this turn, through the same
     # deterministic derivation the websocket resend chain uses. A fresh UUID
     # here would switch the fence off for this turn permanently.
+    assert String.starts_with?(successor.correlation_id, "codex-request-retry:")
+  end
+
+  test "a post-compaction resume routes a zero-output resend through the native claim chain", %{
+    conn: conn
+  } do
+    upstream = start_upstream(first_event_terminal_sse("response.failed", "server_error"))
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    resume = fn ->
+      post_turn(conn, setup, session, @turn_id,
+        where: :body,
+        input: compacted_history(),
+        stream: true
+      )
+    end
+
+    assert response(resume.(), 200)
+    assert [predecessor] = pool_requests(setup)
+    assert String.starts_with?(predecessor.correlation_id, "codex-resume:")
+
+    dispatched = FakeUpstream.count(upstream)
+    assert response(resume.(), 200)
+
+    assert FakeUpstream.count(upstream) > dispatched
+    assert [^predecessor, successor] = pool_requests(setup)
+    assert String.starts_with?(successor.correlation_id, "codex-request-retry:")
+  end
+
+  test "a kind-scoped request routes a zero-output resend through the native claim chain", %{
+    conn: conn
+  } do
+    upstream = start_upstream(first_event_terminal_sse("response.failed", "server_error"))
+    setup = gateway_setup(upstream)
+    session = session_id()
+    prefix = compatibility_claim_prefix(:memory)
+
+    memory = fn ->
+      post_turn(conn, setup, session, @turn_id,
+        document: kind_metadata("memory"),
+        stream: true
+      )
+    end
+
+    assert response(memory.(), 200)
+    assert [predecessor] = pool_requests(setup)
+    assert String.starts_with?(predecessor.correlation_id, prefix)
+
+    dispatched = FakeUpstream.count(upstream)
+    assert response(memory.(), 200)
+
+    assert FakeUpstream.count(upstream) > dispatched
+    assert [^predecessor, successor] = pool_requests(setup)
     assert String.starts_with?(successor.correlation_id, "codex-request-retry:")
   end
 
@@ -610,8 +714,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # loses the fence exactly where the row measured the spend: the client rebuilds
   # a cut turn's prompt from `clone_history()` with the delivered items appended,
   # so the retry is a different payload and buys a SECOND BILLED DISPATCH on a
-  # predecessor that already succeeded. The compacted-history PREFIX is the part
-  # a retry cannot change, and it is what names these requests.
+  # predecessor that already succeeded. The turn's bare claim projects none of
+  # that rebuilt body, so both requests keep the same identity.
   test "a turn in a compacted thread is still fenced against its own grown retry", %{conn: conn} do
     upstream =
       start_upstream(
@@ -767,10 +871,60 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     assert json_response(resume.(), 200)
 
+    before = pool_accounting_counts(setup)
+    dispatched = FakeUpstream.count(upstream)
+
     assert %{"error" => %{"code" => "duplicate_turn"}} = json_response(resume.(), 409)
 
+    assert FakeUpstream.count(upstream) == dispatched
+    assert pool_accounting_counts(setup) == before
+  end
+
+  test "a resume is anchored only by the latest compaction pivot", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_latest_pivot"}),
+          FakeUpstream.json_response(%{"id" => "resp_different_latest_pivot"})
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    old = %{"type" => "compaction", "encrypted_content" => "old"}
+    latest = %{"type" => "compaction", "encrypted_content" => "latest"}
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id,
+               where: :body,
+               input: [old, latest]
+             ),
+             200
+           )
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 input: [latest, %{"type" => "future_output"}, "malformed"]
+               ),
+               409
+             )
+
+    assert json_response(
+             post_turn(conn, setup, session, @turn_id,
+               where: :body,
+               input: [%{latest | "encrypted_content" => "different-latest"}]
+             ),
+             200
+           )
+
     assert FakeUpstream.count(upstream) == 2
-    assert length(pool_requests(setup)) == 2
+    assert [first, second] = pool_requests(setup)
+    assert String.starts_with?(first.correlation_id, "codex-resume:")
+    assert String.starts_with?(second.correlation_id, "codex-resume:")
+    refute first.correlation_id == second.correlation_id
   end
 
   # A client that sends only the bounded header copy resolved its `request_kind`
@@ -1067,35 +1221,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       setup = gateway_setup(upstream, compact?: true)
       session = session_id()
 
-      # The predecessor is a WEBSOCKET frame, and the codec's third arm gives
-      # every such frame the bare turn claim whatever its history looks like. So
-      # the seeding leg always sends the uncompacted body, which takes that same
-      # bare claim here; only the FALLBACK leg's history varies. Seeding with the
-      # compacted body instead would write whatever claim HTTP happens to choose
-      # today, which is how a broken revision passes its own test.
       fallback_input =
         case unquote(history) do
           :uncompacted -> native_text_input("fallback history")
           :compacted -> compacted_session_turn()
         end
 
+      # Establish the persisted session, then ask the production websocket
+      # writer for the exact claim it would put on this frame. The predecessor
+      # is reserved through the websocket accounting boundary under that claim;
+      # no HTTP-written claim is relabelled into a websocket row.
       assert response(
-               post_turn(conn, setup, session, @turn_id,
-                 stream: true,
-                 where: :body,
-                 input: native_text_input("fallback history")
-               ),
+               post_turn(conn, setup, session, "session_seed_#{unquote(history)}", stream: true),
                200
              )
 
-      assert [predecessor] = pool_requests(setup)
-      assert String.starts_with?(predecessor.correlation_id, "codex-turn:")
-
-      {1, _} =
-        Repo.update_all(
-          from(r in Request, where: r.id == ^predecessor.id),
-          set: [transport: "websocket", status: "failed", last_error_code: "owner_drained"]
-        )
+      codex_session = pool_session!(setup, session)
+      claim = websocket_request_claim!(setup, codex_session, @turn_id, fallback_input)
+      predecessor = reserve_delivered_websocket_predecessor!(setup, codex_session, claim)
 
       assert %{"error" => %{"code" => "duplicate_turn"}} =
                json_response(
@@ -1108,11 +1251,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
                )
 
       assert FakeUpstream.count(upstream) == 1
-      assert [row] = pool_requests(setup)
+      assert Repo.get!(Request, predecessor.id).correlation_id == claim
 
       # The bare claim is the one claim that coincides across the two
       # transports, which is what makes the failover fenceable at all.
-      assert String.starts_with?(row.correlation_id, "codex-turn:")
+      assert String.starts_with?(claim, "codex-turn:")
     end
   end
 
@@ -1362,8 +1505,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   defp turn_metadata(turn_id),
     do: CodexPooler.JSON.encode!(%{"turn_id" => turn_id, "request_kind" => "turn"})
 
-  defp kind_metadata(kind),
-    do: CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => kind})
+  defp kind_metadata(kind, turn_id \\ @turn_id),
+    do: CodexPooler.JSON.encode!(%{"turn_id" => turn_id, "request_kind" => kind})
 
   # What the client resumes a turn with after a remote compaction: the compacted
   # history, whose last item is the compaction output (`compact.rs:600-660`).
@@ -1394,6 +1537,89 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
   defp pool_requests(setup) do
     Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at))
+  end
+
+  defp pool_accounting_counts(setup) do
+    request_ids =
+      Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id))
+
+    %{
+      requests: length(request_ids),
+      attempts:
+        Repo.aggregate(from(a in Attempt, where: a.request_id in ^request_ids), :count, :id),
+      ledger:
+        Repo.aggregate(from(l in LedgerEntry, where: l.request_id in ^request_ids), :count, :id)
+    }
+  end
+
+  defp compatibility_claim_prefix(kind) do
+    CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn.claim_by_request_kind
+    |> Map.fetch!(kind)
+    |> Map.fetch!(:prefix)
+  end
+
+  defp pool_session!(setup, session_key) do
+    Repo.one!(
+      from(s in CodexSession,
+        where: s.pool_id == ^setup.pool.id and s.session_key == ^session_key
+      )
+    )
+  end
+
+  defp websocket_request_claim!(setup, %CodexSession{} = session, turn_id, input) do
+    payload = %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "input" => input,
+      "stream" => true,
+      "client_metadata" => %{
+        "turn_id" => turn_id,
+        @metadata_header => turn_metadata(turn_id)
+      }
+    }
+
+    options =
+      %{
+        transport: "websocket",
+        upstream_websocket_session: self(),
+        codex_session: session
+      }
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.put_model_serving_mode(%{
+        configured_mode: "full",
+        effective_mode: "full",
+        source: "override"
+      })
+
+    assert {:ok, prepared} =
+             WebsocketCodec.prepare_frame(CodexPooler.JSON.encode!(payload), options, fn _ ->
+               :ok
+             end)
+
+    prepared.request_options.continuity.request_claim_key
+  end
+
+  defp reserve_delivered_websocket_predecessor!(setup, session, claim) do
+    assert {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %{request: predecessor}} =
+             Accounting.claim_websocket_turn(auth, setup.model, %{
+               endpoint: "/backend-api/codex/responses",
+               correlation_id: claim,
+               codex_session: session,
+               requested_model: setup.model.exposed_model_id
+             })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    Repo.update!(
+      Ecto.Changeset.change(predecessor,
+        status: "succeeded",
+        usage_status: "usage_known",
+        response_status_code: 200,
+        completed_at: now
+      )
+    )
   end
 
   defp session_id, do: "codex-session-" <> unique_suffix()

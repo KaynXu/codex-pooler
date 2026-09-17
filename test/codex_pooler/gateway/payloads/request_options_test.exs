@@ -532,6 +532,52 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert invalid.continuity.request_claim_key == request_claim_key
     end
 
+    test "normalizes every native durable claim domain with the same digest validation" do
+      digest = :crypto.hash(:sha256, "synthetic-native-claim")
+      encoded = Base.url_encode64(digest, padding: false)
+
+      for prefix <- ["codex-request:", "codex-resume:", "codex-kind:"] do
+        claim = prefix <> encoded
+
+        options =
+          RequestOptions.build(
+            %{transport: "websocket", request_claim_key: claim},
+            "/backend-api/codex/responses",
+            %{"model" => "example-model"}
+          )
+
+        assert options.continuity.request_claim_key == claim
+        assert RequestOptions.server_correlation_id(options) == claim
+
+        invalid = RequestOptions.put_continuity(options, request_claim_key: prefix <> "invalid")
+        assert invalid.continuity.request_claim_key == claim
+      end
+    end
+
+    test "rejects unknown prefixes and non-32-byte native claim digests" do
+      valid =
+        "codex-resume:" <>
+          (:crypto.hash(:sha256, "valid-resume-claim")
+           |> Base.url_encode64(padding: false))
+
+      options =
+        RequestOptions.build(
+          %{request_claim_key: valid},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      for invalid <- [
+            "codex-unknown:" <> String.duplicate("A", 43),
+            "codex-kind:" <> Base.url_encode64(:crypto.strong_rand_bytes(31), padding: false),
+            "codex-resume:" <> Base.url_encode64(:crypto.strong_rand_bytes(33), padding: false),
+            "codex-request:not-base64"
+          ] do
+        updated = RequestOptions.put_continuity(options, request_claim_key: invalid)
+        assert updated.continuity.request_claim_key == valid
+      end
+    end
+
     test "websocket correlations fall back through turn claim and request id" do
       turn_claim_key =
         "codex-turn:" <>

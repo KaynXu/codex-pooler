@@ -181,9 +181,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
       gives such a frame the bare claim too.
     * neither -> `{:post_compaction_resume, anchor}`. The model is being asked
       to continue from the compaction it just produced. `anchor` is an opaque
-      digest of the compaction items alone, so it is identical across every
-      retry of that resume no matter what else in the body changed, and
-      different from the compaction of any other turn.
+      digest of the last recognized compaction pivot alone, so it is identical
+      across every retry of that resume no matter what else in the body changed,
+      unaffected when an older pivot is pruned, and different from a different
+      latest compaction.
 
   With no compaction output item the question is the older one: a tool result
   anywhere in the input is `:tool_continuation`, everything else is `:opening`.
@@ -214,21 +215,22 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
     cond do
       ToolResultShape.any?(tail) -> :tool_continuation
       Enum.any?(tail, &user_message?/1) -> :opening
-      true -> {:post_compaction_resume, compaction_anchor(input)}
+      true -> {:post_compaction_resume, compaction_anchor(input, index)}
     end
   end
 
-  # An opaque digest of the compaction items, and nothing else in the body. This
-  # is what makes the resume claim payload-independent: ledger row 212-20 says
-  # the claim is an HMAC over the payload projection and that the projection is
-  # where the fence lives, so the projection here is the one part of the body a
-  # retry cannot regenerate. Raw input never leaves this module.
-  defp compaction_anchor(input) do
-    items = Enum.filter(input, &compaction_item?/1)
+  # An opaque digest of the last compaction pivot, and nothing else in the body.
+  # `turn_role/1` already defines the last recognized item as the semantic pivot;
+  # including older ones here made the claim move when a released client pruned
+  # superseded compacted history. Keeping the item in a singleton list preserves
+  # the established claim bytes for the ordinary one-pivot shape. Raw input
+  # never leaves this module.
+  defp compaction_anchor(input, index) do
+    latest_pivot = Enum.at(input, index)
 
     :crypto.hash(
       :sha256,
-      :erlang.term_to_binary({@anchor_domain, items}, [:deterministic])
+      :erlang.term_to_binary({@anchor_domain, [latest_pivot]}, [:deterministic])
     )
   end
 

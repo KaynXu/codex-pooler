@@ -233,6 +233,61 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
       refute one == two
     end
 
+    test "only the last compaction pivot anchors a resume" do
+      latest = %{"type" => "compaction", "encrypted_content" => "latest"}
+
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction", "encrypted_content" => "old"},
+                   latest
+                 ]
+               })
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [latest]})
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction_summary", "encrypted_content" => "old"},
+                   latest
+                 ]
+               })
+    end
+
+    test "the latest compaction content remains part of the resume anchor" do
+      assert {:post_compaction_resume, first} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction", "encrypted_content" => "old"},
+                   %{"type" => "compaction", "encrypted_content" => "latest-one"}
+                 ]
+               })
+
+      assert {:post_compaction_resume, second} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction", "encrypted_content" => "old"},
+                   %{"type" => "compaction", "encrypted_content" => "latest-two"}
+                 ]
+               })
+
+      refute first == second
+    end
+
+    test "unknown and malformed tail items do not move the latest-pivot anchor" do
+      pivot = %{"type" => "compaction", "encrypted_content" => "latest"}
+
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [pivot]})
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [pivot, %{"type" => "future_output"}, "malformed"]
+               })
+    end
+
     # Asked of the segment after the last compaction item, so a tool result that
     # is part of the compacted history does not move the role.
     test "a tool result is judged after the last compaction item, not before it" do

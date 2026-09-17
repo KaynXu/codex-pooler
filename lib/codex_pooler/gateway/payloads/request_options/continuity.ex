@@ -141,14 +141,25 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
   @spec request_claim_key(term()) :: String.t() | nil
   defp request_claim_key("codex-turn:" <> _encoded = value), do: turn_claim_key(value)
 
-  defp request_claim_key("codex-request:" <> encoded = value) when byte_size(encoded) == 43 do
-    case Base.url_decode64(encoded, padding: false) do
-      {:ok, digest} when byte_size(digest) == 32 -> value
+  defp request_claim_key(prefix_and_encoded) when is_binary(prefix_and_encoded) do
+    with {prefix, encoded} <- split_request_claim(prefix_and_encoded),
+         true <- prefix in ["codex-request:", "codex-resume:", "codex-kind:"],
+         true <- byte_size(encoded) == 43,
+         {:ok, digest} when byte_size(digest) == 32 <- Base.url_decode64(encoded, padding: false) do
+      prefix <> encoded
+    else
       _invalid -> nil
     end
   end
 
   defp request_claim_key(_value), do: nil
+
+  defp split_request_claim(value) do
+    case :binary.split(value, ":") do
+      [name, encoded] -> {name <> ":", encoded}
+      _invalid -> :error
+    end
+  end
 
   defp digest(value) when is_binary(value) and byte_size(value) == 32, do: value
   defp digest(_value), do: nil
