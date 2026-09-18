@@ -23,12 +23,16 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
 
   alias CodexPooler.Dev.RoutingStrategyFixture
 
+  @private_receipt_env "CODEX_POOLER_ROUTING_STRATEGY_FIXTURE_RECEIPT_PATH"
+  @private_receipt_relative ~r/^tmp\/routing-strategy-fixture\/build-[^\/]+\/fixture\/setup\.json$/
+
   @requirements ["app.config"]
   @shortdoc "Manage the reversible local routing strategy fixture"
 
   @impl Mix.Task
   def run(args) do
     with {:ok, action, options} <- parse_args(args),
+         {:ok, options} <- fixture_options(options),
          :ok <- maybe_start_application(action),
          result <- run_action(action, options) do
       case result do
@@ -91,6 +95,31 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
       Keyword.put(options, :allow_isolated_dev_database, true)
     else
       Keyword.delete(options, :allow_isolated_dev_database)
+    end
+  end
+
+  defp fixture_options(options) do
+    case private_receipt_path() do
+      {:ok, nil} -> {:ok, options}
+      {:ok, path} -> {:ok, Keyword.put(options, :receipt_path, path)}
+      {:error, message} -> {:error, message}
+    end
+  end
+
+  defp private_receipt_path do
+    case System.get_env(@private_receipt_env) do
+      nil ->
+        {:ok, nil}
+
+      value when is_binary(value) ->
+        path = Path.expand(value, File.cwd!())
+
+        with relative <- Path.relative_to(path, File.cwd!()),
+             true <- Regex.match?(@private_receipt_relative, relative) do
+          {:ok, path}
+        else
+          _invalid -> {:error, "routing strategy fixture private receipt path is invalid"}
+        end
     end
   end
 
