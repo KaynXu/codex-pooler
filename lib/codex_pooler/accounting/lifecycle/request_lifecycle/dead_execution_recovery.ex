@@ -10,7 +10,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     RequestReplayEntitlement
   }
 
-  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Repo
 
@@ -137,8 +137,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     case result do
       {:ok, :recovered} ->
         unless caller_owned_transaction? do
-          Streaming.emit_stream_outcome(
-            "interrupted",
+          InterruptionOutcome.emit(
             bounded_transport(request.transport),
             bounded_transport(attempt.transport)
           )

@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
+    InterruptionOutcome,
     Metadata,
     ResponseUsage,
     SettlementAttrs,
@@ -1149,11 +1150,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
     if AttemptSettlement.first_settlement?(finalized) do
-      Streaming.emit_stream_outcome(
-        outcome,
-        transports.downstream_transport,
-        transports.upstream_transport
-      )
+      if outcome == "interrupted" do
+        InterruptionOutcome.emit(
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+      else
+        Streaming.emit_stream_outcome(
+          outcome,
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+      end
     end
   end
 

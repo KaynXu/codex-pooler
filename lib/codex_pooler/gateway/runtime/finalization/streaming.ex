@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
+    InterruptionOutcome,
     Metadata,
     ResponseUsage,
     SettlementAttrs,
@@ -332,11 +333,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
     if AttemptSettlement.first_settlement?(finalized) do
-      emit_stream_outcome(
-        outcome,
-        transports.downstream_transport,
-        transports.upstream_transport
-      )
+      if outcome == "interrupted" do
+        InterruptionOutcome.emit(
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+      else
+        emit_stream_outcome(
+          outcome,
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+      end
     end
   end
 
@@ -778,7 +786,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   @doc false
   @spec emit_stream_outcome(String.t(), String.t(), String.t()) :: :ok
-  def emit_stream_outcome(outcome, downstream_transport, upstream_transport) do
+  def emit_stream_outcome(outcome, downstream_transport, upstream_transport)
+      when outcome in ["succeeded", "failed", "settlement_failed"] do
     :telemetry.execute(
       [:codex_pooler, :gateway, :stream, :outcome],
       %{count: 1},

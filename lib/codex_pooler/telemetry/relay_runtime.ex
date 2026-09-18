@@ -731,7 +731,12 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   A name the storage allowlist admits and this list omits is claimed on drain
   and then discarded by `emit/1` with no loss reason to count it, so the
-  storage allowlist and this list are pinned equal in both directions.
+  storage allowlist and this list must remain equal in both directions.
+
+  `RelayContractTest` reads the live PostgreSQL `event_allowed` constraint and
+  compares it with both this function and `RelayEvent.events/0`; adding a name
+  to only one boundary therefore fails against the persisted contract rather
+  than relying on this documentation claim.
   """
   @spec relay_event_names() :: [String.t()]
   def relay_event_names, do: Map.values(@events)

@@ -752,8 +752,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # forbidden too — and the promoted description has nothing true left to say
       # about them, because the relay now carries exactly the share they withhold.
       reworded =
-        "The job share arrives as via=\"job_relay\". When the pooler runs as worker or " <>
-          "scheduler, no reporter runs, so this graph is empty."
+        "The promoted total combines in_process and job_relay. When the pooler runs as " <>
+          "worker or scheduler, no reporter runs, so this graph is empty."
 
       refute String.contains?(reworded, RoleCoverage.caveat_marker())
       assert RoleCoverage.marker_present?(reworded, :relayed)
@@ -764,10 +764,11 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # to pass: a bare word boundary rejects a following `s`, and treating `_`
       # as a word character rejects a preceding one.
       for escape <- [
-            "the job share arrives as via=\"job_relay\". When the pooler runs as workers or " <>
+            "in_process plus job_relay form the total. When the pooler runs as workers or " <>
               "schedulers, no reporter runs, so this graph is empty.",
-            "job_relay carries it; the oban_worker and oban_scheduler roles run no reporter",
-            "job_relay; SCHEDULERS export nothing"
+            "in_process plus job_relay carry it; the oban_worker and oban_scheduler roles " <>
+              "run no reporter",
+            "in_process plus job_relay; SCHEDULERS export nothing"
           ] do
         assert RoleCoverage.marker_present?(escape, :relayed)
 
@@ -778,17 +779,20 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # Case and word boundaries: the token itself is caught however it is cased,
       # and a longer word that merely contains a role name is not a caveat.
       refute RoleCoverage.markers_correct?(
-               "job_relay, exported only under oban_mode=all",
+               "in_process plus job_relay, exported only under oban_mode=all",
                :relayed
              )
 
-      assert RoleCoverage.markers_correct?("job_relay from coworkers and reschedulers", :relayed)
+      assert RoleCoverage.markers_correct?(
+               "in_process plus job_relay from coworkers and reschedulers",
+               :relayed
+             )
 
       # The residual no word list closes: a caveat that never names a role. It is
       # left to review, and pinned here so the limit is not mistaken for a gap.
       assert RoleCoverage.markers_correct?(
-               "job_relay; on a split-role deployment the job pods run no reporter, so this " <>
-                 "graph is empty",
+               "in_process plus job_relay; on a split-role deployment the job pods run no " <>
+                 "reporter, so this graph is empty",
                :relayed
              )
 
@@ -825,7 +829,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # relay marker alone would be. Each coverage state is checked against a
       # description carrying only the other state's marker.
       partial_only = "exported only under OBAN_MODE=all"
-      relayed_only = "the job share arrives as via=\"job_relay\""
+      relayed_only = "in_process plus job_relay form the promoted total"
+      relay_name_only = "the job share arrives as via=\"job_relay\""
 
       assert RoleCoverage.required_marker(:partial) == RoleCoverage.caveat_marker()
       assert RoleCoverage.required_marker(:unscraped_only) == RoleCoverage.caveat_marker()
@@ -835,8 +840,22 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert RoleCoverage.marker_present?(partial_only, :partial)
       refute RoleCoverage.marker_present?(partial_only, :relayed)
       assert RoleCoverage.marker_present?(relayed_only, :relayed)
+      refute RoleCoverage.marker_present?(relay_name_only, :relayed)
       refute RoleCoverage.marker_present?(relayed_only, :partial)
       refute RoleCoverage.marker_present?(nil, :relayed)
+
+      refute RoleCoverage.marker_present?("exported only under OBAN_MODEX=all", :partial)
+      refute RoleCoverage.marker_present?("exported only under OBAN_MODE_worker", :partial)
+
+      refute RoleCoverage.marker_present?(
+               "in_process_total plus job_relay_total form the promoted total",
+               :relayed
+             )
+
+      refute RoleCoverage.marker_present?(
+               "in_process plus job_relay_total form the promoted total",
+               :relayed
+             )
 
       # A description carrying both is what every shipped family has, and it is
       # exactly the case presence alone cannot decide.
@@ -847,6 +866,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert RoleCoverage.markers_correct?(both, :partial)
       refute RoleCoverage.markers_correct?(both, :relayed)
       assert RoleCoverage.markers_correct?(relayed_only, :relayed)
+      refute RoleCoverage.markers_correct?(relay_name_only, :relayed)
+      refute RoleCoverage.markers_correct?("in_process_total job_relay_total", :relayed)
       refute RoleCoverage.markers_correct?(nil, :relayed)
     end
 

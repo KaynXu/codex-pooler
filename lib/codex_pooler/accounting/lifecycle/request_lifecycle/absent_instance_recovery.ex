@@ -6,7 +6,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestReplayEntitlement}
   alias CodexPooler.Accounting.RequestLifecycle
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
-  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Platform.InstancePresence.Identity
   alias CodexPooler.Repo
@@ -224,8 +224,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   end
 
   defp emit_recovery_outcome(marker) do
-    Streaming.emit_stream_outcome(
-      marker.outcome,
+    InterruptionOutcome.emit(
       marker.downstream_transport,
       marker.upstream_transport
     )

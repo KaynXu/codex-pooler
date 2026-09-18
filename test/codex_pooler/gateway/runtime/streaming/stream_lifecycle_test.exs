@@ -197,17 +197,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       }
     }
 
-    assert :ok = Streaming.emit_stream_outcome("interrupted", "websocket", "websocket")
+    assert :ok = Streaming.emit_stream_outcome("failed", "websocket", "websocket")
 
     assert_receive {
       [:codex_pooler, :gateway, :stream, :outcome],
       %{count: 1},
       %{
-        outcome: "interrupted",
+        outcome: "failed",
         downstream_transport: "websocket",
         upstream_transport: "websocket"
       }
     }
+
+    assert_raise FunctionClauseError, fn ->
+      Streaming.emit_stream_outcome("interrupted", "websocket", "websocket")
+    end
   end
 
   test "stream success persists public Responses summary metadata" do

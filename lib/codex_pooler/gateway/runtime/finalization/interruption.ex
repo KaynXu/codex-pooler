@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding
@@ -1457,6 +1458,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp emit_after_commit_marker(%{kind: :pre_attempt_release} = marker),
     do: PreAttemptRelease.emit_marker(marker)
+
+  defp emit_after_commit_marker(%{kind: :stream_outcome, outcome: "interrupted"} = marker) do
+    InterruptionOutcome.emit(
+      marker.downstream_transport,
+      marker.upstream_transport
+    )
+  end
 
   defp emit_after_commit_marker(%{kind: :stream_outcome} = marker) do
     Streaming.emit_stream_outcome(

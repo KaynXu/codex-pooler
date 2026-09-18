@@ -2,7 +2,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting.PreAttemptRelease
-  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -168,11 +168,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   end
 
   test "producer shutdown flushes the final captured sample", %{runtime: runtime} do
-    Streaming.emit_stream_outcome(
-      "interrupted",
-      "http_sse",
-      "websocket"
-    )
+    InterruptionOutcome.emit("http_sse", "websocket")
 
     assert Repo.aggregate(RelayEvent, :count) == 0
     :ok = GenServer.stop(runtime)

@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
   alias CodexPooler.Platform.ExecutionIdentity
@@ -29,6 +30,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
 
   # Failure-detection budget for the ordered-operations tasks, not a behaviour timer.
   @task_timeout 15_000
+
+  test "interrupted stream outcomes are emitted only through the interruption owner" do
+    capture_outcomes(fn ->
+      assert InterruptionOutcome.emit("http_sse", "websocket") == :ok
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "websocket"
+                      }}
+    end)
+  end
 
   test "cleanup worker emits each expired-owner interruption after commit exactly once" do
     fixtures =

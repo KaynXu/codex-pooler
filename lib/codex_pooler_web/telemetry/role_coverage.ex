@@ -130,18 +130,17 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
 
   # A promoted family owes the opposite sentence. Its graph is no longer empty
   # on a split-role deployment, because the job share arrives through the
-  # Postgres relay, so the description has to say which share an operator is
-  # looking at and that the relayed one is best effort. `job_relay` is that
-  # name: it is the `via` label value the relayed samples carry, so it is both
-  # what an operator greps for and what a panel selector has to mention to
-  # include or exclude the job share.
+  # Postgres relay, so the description has to name both shares that form the
+  # promoted total. `job_relay` is the relayed `via` value and `in_process` is
+  # the native share; either token alone leaves the panel's total ambiguous.
   @relay_marker "job_relay"
+  @in_process_marker "in_process"
 
   # Marker owed per coverage state. `:partial` and `:unscraped_only` describe a
   # graph the job share never reaches, so they owe the `OBAN_MODE` caveat;
-  # `:relayed` describes one it does reach, so it owes the relay marker instead.
-  # Demanding both of a promoted family would keep the sentence an operator
-  # reads as "this is not measured here" on a graph that now measures it.
+  # `:relayed` describes one it does reach, so it owes both share names instead.
+  # Keeping the old caveat would leave the sentence an operator reads as "this
+  # is not measured here" on a graph that now measures it.
   @markers %{
     partial: @caveat_marker,
     unscraped_only: @caveat_marker,
@@ -377,24 +376,34 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
     end
   end
 
-  @doc "The substring a declaration in `coverage` owes its metric and panel descriptions."
+  @doc "The primary marker a declaration in `coverage` owes its metric and panel descriptions."
   @spec required_marker(coverage()) :: String.t()
   def required_marker(coverage) when is_map_key(@markers, coverage),
     do: Map.fetch!(@markers, coverage)
 
   @doc """
-  Whether `description` carries the marker a declaration in `coverage` owes an operator.
+  Whether `description` carries every marker a declaration in `coverage` owes an operator.
 
-  A `:partial` family owes the `OBAN_MODE` caveat, because its graph is missing
-  whatever the job emitted. A `:relayed` family owes the relay marker instead,
-  because its graph now carries the job share under `via="job_relay"` and the
-  old caveat would misdescribe it.
+  A `:partial` family owes the exact `OBAN_MODE` caveat token, because its graph
+  is missing whatever the job emitted. A `:relayed` family owes both share names:
+  `in_process` and `job_relay`. Naming only the relayed share does not tell an
+  operator whether the panel charts one share or their promoted total.
   """
   @spec marker_present?(term(), coverage()) :: boolean()
-  def marker_present?(description, coverage) when is_binary(description),
-    do: String.contains?(description, required_marker(coverage))
+  def marker_present?(description, coverage) when is_binary(description) do
+    coverage
+    |> required_markers()
+    |> Enum.all?(&exact_marker_present?(description, &1))
+  end
 
   def marker_present?(_description, coverage) when is_map_key(@markers, coverage), do: false
+
+  defp required_markers(coverage) do
+    case coverage_class(coverage) do
+      :shadowed -> [@caveat_marker]
+      :promoted -> [@in_process_marker, @relay_marker]
+    end
+  end
 
   @doc """
   The words a declaration in `coverage` may not carry, empty when it may say anything else.
@@ -408,7 +417,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
     do: Map.get(@forbidden_markers, coverage, [])
 
   @doc """
-  Whether `description` both carries the marker `coverage` owes and omits the one it retires.
+  Whether `description` carries every marker `coverage` owes and omits the one it retires.
 
   This is the check a guard should use. `marker_present?/2` alone passes a
   promoted family whose description still tells an operator its job share is not
@@ -419,12 +428,24 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverage do
     do: marker_present?(description, coverage) and not marker_forbidden?(description, coverage)
 
   defp marker_forbidden?(description, coverage) do
-    Enum.any?(forbidden_markers(coverage), &word_present?(description, &1))
+    Enum.any?(forbidden_markers(coverage), &claim_word_present?(description, &1))
   end
 
-  defp word_present?(description, word) when is_binary(description) do
+  # Required markers are identifiers, not English nouns. Treat `_` as part of
+  # the identifier so `OBAN_MODE_worker`, `in_process_total` and
+  # `job_relay_total` cannot satisfy an exact-token contract.
+  defp exact_marker_present?(description, marker) when is_binary(description) do
+    Regex.match?(
+      ~r/(?<![A-Za-z0-9_])#{Regex.escape(marker)}(?![A-Za-z0-9_])/i,
+      description
+    )
+  end
+
+  # Forbidden role words deliberately have looser English boundaries: plural
+  # forms and snake_case compounds still express the false promotion caveat.
+  defp claim_word_present?(description, word) when is_binary(description) do
     Regex.match?(~r/(?<![A-Za-z0-9])#{Regex.escape(word)}s?(?![A-Za-z0-9])/i, description)
   end
 
-  defp word_present?(_description, _word), do: false
+  defp claim_word_present?(_description, _word), do: false
 end
