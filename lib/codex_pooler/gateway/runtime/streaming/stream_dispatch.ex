@@ -242,9 +242,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp chunk_write_failure?(_reason), do: false
 
   defp write_downstream_chunk(state, data) do
+    case write_downstream_chunk_preserving_state(state, data) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason, _state} -> {:error, reason}
+    end
+  end
+
+  defp write_downstream_chunk_preserving_state(state, data) do
     case update_relay_target(state, &Plug.Conn.chunk(&1, data)) do
       {:ok, state} -> {:ok, DownstreamDeliveryEvidence.record_write(state, data)}
-      {:error, _reason} = error -> error
+      {:error, reason} -> {:error, reason, state}
     end
   end
 
@@ -558,16 +565,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp terminate_complete_sse_block_at_eof(buffer) do
     terminated = buffer <> "\n\n"
 
-    case StreamProtocol.complete_sse_blocks(terminated, bounded?: false) do
-      {[_block | _rest], ""} -> terminated
-      _incomplete -> buffer
+    with {[_block], ""} <- StreamProtocol.complete_sse_blocks(terminated, bounded?: false),
+         {:ok, %{kind: kind}} <- StreamProtocol.terminal_outcome(terminated),
+         true <- kind in [:completed, :incomplete, :failed] do
+      terminated
+    else
+      _incomplete_or_nonterminal -> buffer
     end
   end
 
   defp write_flushed_first_event(%ResponseContext{} = response_context, state, buffer) do
-    case write_stream_data(response_context, state, buffer) do
+    case write_stream_data_preserving_state(response_context, state, buffer) do
       {:ok, state} -> write_eof_normalized_stream_data(response_context, state)
-      {:error, reason} -> {:chunk_error, state, reason}
+      {:error, reason, state} -> {:chunk_error, state, reason}
     end
   end
 
@@ -578,9 +588,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     {data, state} =
       DownstreamStream.flush_eof_data(DownstreamStream.endpoint(payload, opts), opts, state)
 
-    case write_normalized_stream_data(state, data) do
+    case write_normalized_stream_data_preserving_state(state, data) do
       {:ok, state} -> {:ok, state}
-      {:error, reason} -> {:chunk_error, state, reason}
+      {:error, reason, state} -> {:chunk_error, state, reason}
     end
   end
 
@@ -672,13 +682,20 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp write_stream_data(%ResponseContext{} = response_context, conn, data) do
+    case write_stream_data_preserving_state(response_context, conn, data) do
+      {:ok, conn} -> {:ok, conn}
+      {:error, reason, _conn} -> {:error, reason}
+    end
+  end
+
+  defp write_stream_data_preserving_state(%ResponseContext{} = response_context, conn, data) do
     {downstream_data, conn} =
       normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_visible?/1)
 
-    write_normalized_stream_data(conn, downstream_data)
+    write_normalized_stream_data_preserving_state(conn, downstream_data)
   end
 
-  defp write_normalized_stream_data(conn, downstream_data) do
+  defp write_normalized_stream_data_preserving_state(conn, downstream_data) do
     {preamble, downstream_data, _preamble_seen?} =
       StreamProtocol.partition_preamble_blocks(downstream_data)
 
@@ -690,10 +707,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
       commits_withheld_preamble?(downstream_data) ->
         {preamble, conn} = take_withheld_preamble(conn)
-        write_downstream_chunk(conn, preamble <> downstream_data)
+        write_downstream_chunk_preserving_state(conn, preamble <> downstream_data)
 
       true ->
-        write_downstream_chunk(conn, downstream_data)
+        write_downstream_chunk_preserving_state(conn, downstream_data)
     end
   end
 
