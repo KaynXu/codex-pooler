@@ -440,7 +440,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       enabled?: enabled?,
       kind: kind,
       key_hash: key_hash,
-      seed: key_value || input.correlation_id,
+      seed: routing_seed(kind, key_value, key_hash, input.correlation_id),
       row: affinity,
       status: affinity_status(enabled?, affinity),
       fallback_reason: nil,
@@ -465,6 +465,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
     :crypto.hash(:sha256, canonical_key)
   end
+
+  defp routing_seed("idempotency_key", _key_value, key_hash, _correlation_id)
+       when is_binary(key_hash),
+       do: key_hash
+
+  defp routing_seed(_kind, key_value, _key_hash, correlation_id),
+    do: key_value || correlation_id
 
   defp active_affinity(auth, model, kind, key_hash) do
     active_status = BridgeAffinity.active_status()

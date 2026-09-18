@@ -101,9 +101,11 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert second_plan.affinity.kind == "idempotency_key"
       assert first_plan.affinity.key_hash == second_plan.affinity.key_hash
       assert byte_size(first_plan.affinity.key_hash) == 32
+      assert first_plan.affinity.seed == first_plan.affinity.key_hash
+      assert second_plan.affinity.seed == second_plan.affinity.key_hash
       assert candidate_ids(first_plan.candidates) == candidate_ids(second_plan.candidates)
-      refute inspect(first_plan.request_metadata) =~ raw_key
-      refute inspect(second_plan.request_metadata) =~ raw_key
+      refute inspect(first_plan, limit: :infinity, printable_limit: :infinity) =~ raw_key
+      refute inspect(second_plan, limit: :infinity, printable_limit: :infinity) =~ raw_key
     end
 
     test "deterministic_rotation rotates the current candidate list by seed" do
