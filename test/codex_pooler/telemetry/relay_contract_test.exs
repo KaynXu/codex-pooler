@@ -227,6 +227,28 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
                })
     end
 
+    test "label storage predicates agree on NUL and invalid UTF-8" do
+      invalid_utf8 = <<0xFF, 0xFE>>
+
+      for labels <- [
+            %{"phase" => "in_process" <> <<0>>},
+            %{("phase" <> <<0>>) => "in_process"},
+            %{"phase" => invalid_utf8},
+            %{invalid_utf8 => "in_process"}
+          ] do
+        refute RelayEvent.storable_labels?(labels)
+
+        assert {:error, changeset} = Relay.insert("pre_attempt_release", labels, 1)
+        assert %{labels: _} = errors_on(changeset)
+      end
+
+      assert {:error, %Postgrex.Error{postgres: %{pg_code: "22P05"}}} =
+               raw_insert(%{labels: %{"phase" => "in_process" <> <<0>>}})
+
+      assert {:error, %Postgrex.Error{postgres: %{pg_code: "22021"}}} =
+               raw_insert_rejected_label("convert_from(decode('ff', 'hex'), 'UTF8')")
+    end
+
     test "and refuses nothing the database would have stored" do
       # The two bounds have to agree in both directions, not just overlap. A
       # value the changeset refuses and the database accepts is only untidy; a
@@ -248,7 +270,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       end
     end
 
-    test "the database refuses an unknown event name and a negative count" do
+    test "the database refuses an unknown event name and an out-of-range count" do
       assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: event}}} =
                raw_insert(%{event: "not_an_allowlisted_event"})
 
@@ -257,7 +279,24 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: count}}} =
                raw_insert(%{count: -1})
 
-      assert count == "count_non_negative"
+      assert count == "count_bounded"
+
+      assert {:ok, _} = raw_insert(%{count: RelayEvent.max_count()})
+
+      assert {:error, changeset} =
+               Relay.insert("pre_attempt_release", %{}, RelayEvent.max_count() + 1)
+
+      assert {:count,
+              {"must be less than or equal to %{number}",
+               [validation: :number, kind: :less_than_or_equal_to, number: max]}} =
+               List.keyfind(changeset.errors, :count, 0)
+
+      assert max == RelayEvent.max_count()
+
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: over}}} =
+               raw_insert(%{count: RelayEvent.max_count() + 1})
+
+      assert over == "count_bounded"
 
       # The allowlist the database enforces is the one the schema declares, so
       # adding an event to one without the other cannot pass unnoticed.
@@ -282,6 +321,9 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       # unreplayable and uncounted, and neither constant can see it. This is
       # the direction the row is about, so it is the database that is asked.
       storable = database_event_allowlist()
+
+      assert database_event_constraint_definition() == expected_event_constraint_definition(),
+             "event_allowed must remain an exact finite IN allowlist"
 
       refute storable == [],
              "no values were read off event_allowed; the extraction, not the schema, is broken"
@@ -662,15 +704,42 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
   # The single-row match is part of the assertion: a renamed or dropped
   # constraint fails here rather than quietly reporting an empty allowlist.
   defp database_event_allowlist do
-    %{rows: [[definition]]} =
-      Repo.query!(
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'telemetry_relay_events'::regclass AND conname = 'event_allowed'"
-      )
+    definition = database_event_constraint_definition()
 
     ~r/'((?:[^']|'')*)'/
     |> Regex.scan(definition)
     |> Enum.map(fn [_match, value] -> String.replace(value, "''", "'") end)
     |> Enum.sort()
+  end
+
+  defp database_event_constraint_definition do
+    %{rows: [[definition]]} =
+      Repo.query!(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'telemetry_relay_events'::regclass AND conname = 'event_allowed'"
+      )
+
+    definition
+  end
+
+  defp expected_event_constraint_definition do
+    table = "relay_event_allowlist_expected_#{System.unique_integer([:positive])}"
+
+    events =
+      RelayEvent.events()
+      |> Enum.map_join(",", fn event -> "'#{String.replace(event, "'", "''")}'" end)
+
+    Repo.query!("CREATE TEMP TABLE #{table} (event varchar(255)) ON COMMIT DROP")
+
+    Repo.query!(
+      "ALTER TABLE #{table} ADD CONSTRAINT expected_event_allowed CHECK (event IN (#{events}))"
+    )
+
+    %{rows: [[definition]]} =
+      Repo.query!(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = '#{table}'::regclass AND conname = 'expected_event_allowed'"
+      )
+
+    definition
   end
 
   defp raw_insert(overrides) do
@@ -701,6 +770,13 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       "INSERT INTO telemetry_relay_events (event, labels, count, measurements, inserted_at) " <>
         "VALUES ('pre_attempt_release', #{if column == "labels", do: "'#{literal}'::jsonb", else: "'{}'::jsonb"}, 1, " <>
         "#{if column == "measurements", do: "'#{literal}'::jsonb", else: "'{}'::jsonb"}, now())"
+    )
+  end
+
+  defp raw_insert_rejected_label(label_expression) do
+    Repo.query(
+      "INSERT INTO telemetry_relay_events (event, labels, count, measurements, inserted_at) " <>
+        "VALUES ('pre_attempt_release', jsonb_build_object('phase', #{label_expression}), 1, '{}', now())"
     )
   end
 

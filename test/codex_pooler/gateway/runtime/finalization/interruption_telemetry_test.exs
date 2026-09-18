@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     BridgeOwnerLease,
     CodexSession,
     CodexTurn,
+    RuntimeCleanup,
     SessionContinuity
   }
 
@@ -129,6 +130,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     # different between the two halves except whether a transaction is open.
     markers = [
       %{
+        kind: :stream_outcome,
         outcome: "interrupted",
         downstream_transport: "websocket",
         upstream_transport: "unknown"
@@ -153,8 +155,27 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     end)
   end
 
-  test "a multi-turn expired-owner recovery counts a release its own rollback erases" do
-    # Recorded, not desired. `interrupt_session_transaction/4` maps
+  test "every successful expired-owner result reaches the outcome emitter" do
+    marker = %{
+      kind: :stream_outcome,
+      outcome: "interrupted",
+      downstream_transport: "websocket",
+      upstream_transport: "unknown"
+    }
+
+    capture_outcomes(fn ->
+      assert RuntimeCleanup.complete_expired_owner_recovery(
+               {:ok, {0, %{interrupted_outcomes: [marker]}}},
+               7
+             ) == {:cont, {:ok, 7}}
+
+      assert_receive {:stream_outcome, %{outcome: "interrupted"}}
+      assert_receive {:stream_outcome_transaction, false}
+    end)
+  end
+
+  test "a multi-turn expired-owner recovery does not count a release its rollback erases" do
+    # `interrupt_session_transaction/4` maps
     # `interrupt_turn!/5` over EVERY in-progress turn of a session inside one
     # transaction. The first turn's `release_unattempted_request!/6` counts a
     # `turn_interrupted` pre-attempt release; the second turn then raises, and
@@ -216,9 +237,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     assert run_unboxed(fn -> release_entry_count(fixture) end) == 0
     assert run_unboxed(fn -> turn_statuses(fixture) end) == ["in_progress", "in_progress"]
 
-    # And yet the first turn's release was counted, from inside the caller's
-    # still-open transaction.
-    assert [%{phase: "turn_interrupted", in_transaction?: true}] = drain_samples(samples)
+    # The first turn's release marker stayed attached to the shared transaction
+    # and was discarded with it.
+    assert drain_samples(samples) == []
   end
 
   test "cleanup worker recovery raises past the accounting rollback and emits nothing" do
@@ -451,7 +472,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     assert run_unboxed(fn -> Repo.get!(CodexSession, fixture.session.id).status end) == "active"
   end
 
-  test "caller-owned transaction commit and rollback emit zero outcomes permanently" do
+  test "caller-owned transaction hands markers to the commit owner and rollback discards them" do
     for outer_result <- [:commit, :rollback] do
       fixture = committed_interruption_fixture!(:active_attempt)
 
@@ -459,25 +480,31 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
         result =
           run_unboxed(fn ->
             Repo.transaction(fn ->
-              assert interrupt_turn(fixture) ==
-                       {:ok, %{interrupted_turn_count: 1, turn_authority: :selected}}
+              assert {:ok,
+                      %{
+                        interrupted_turn_count: 1,
+                        turn_authority: :selected,
+                        after_commit_markers: markers
+                      }} = interrupt_turn(fixture)
 
               case outer_result do
-                :commit -> :committed
+                :commit -> {:committed, markers}
                 :rollback -> Repo.rollback(:caller_rollback)
               end
             end)
           end)
 
-        expected_result =
-          case outer_result do
-            :commit -> {:ok, :committed}
-            :rollback -> {:error, :caller_rollback}
-          end
+        case outer_result do
+          :commit ->
+            assert {:ok, {:committed, [_marker] = markers}} = result
+            assert Interruption.emit_committed_deferred_outcomes(markers) == :ok
+            assert_receive {:stream_outcome, %{outcome: "interrupted"}}
+            assert_receive {:stream_outcome_transaction, false}
 
-        assert result == expected_result
-
-        refute_received {:stream_outcome, _metadata}
+          :rollback ->
+            assert result == {:error, :caller_rollback}
+            refute_received {:stream_outcome, _metadata}
+        end
       end)
 
       state = committed_interruption_state(fixture)
@@ -513,7 +540,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
         run_unboxed(fn ->
           Repo.transaction(fn ->
             result = interrupt_turn(fixture)
-            assert {:error, {:interrupt_accounting_failed, %Ecto.NoResultsError{}}} = result
+
+            assert {:error,
+                    {:deferred_after_commit,
+                     {:interrupt_accounting_failed, %Ecto.NoResultsError{}},
+                     [
+                       %{
+                         kind: :stream_outcome,
+                         outcome: "settlement_failed",
+                         downstream_transport: "websocket",
+                         upstream_transport: "websocket"
+                       }
+                     ]}} = result
+
             :caller_callback_returned
           end)
         end)

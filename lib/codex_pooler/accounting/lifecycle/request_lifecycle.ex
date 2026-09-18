@@ -401,6 +401,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   @spec finalize_reserved_request_failure(Request.t(), map()) :: request_result()
   def finalize_reserved_request_failure(%Request{} = request, attrs \\ %{}) do
+    caller_owned_transaction? = Repo.in_transaction?()
     request_status = Map.get(attrs, :request_status, Map.get(attrs, :status, "failed"))
     last_error_code = blank_to_nil(Map.get(attrs, :last_error_code))
     usage_status = Map.get(attrs, :usage_status, @usage_not_applicable)
@@ -472,7 +473,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       }
     end)
     |> unwrap_transaction()
-    |> tap_pre_attempt_release_count(pre_attempt_phase, last_error_code)
+    |> attach_pre_attempt_release_marker(pre_attempt_phase, last_error_code)
+    |> emit_pre_attempt_release_after_commit(caller_owned_transaction?)
     |> strip_release_status()
     |> tap_request_finalized_events_unless_stale()
   end
@@ -483,38 +485,33 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   # here. An immutable release that already existed is not a second
   # abandonment.
   #
-  # This runs on the return of `Repo.transaction/1`, which is a savepoint
-  # release rather than a commit whenever a caller already holds a
-  # transaction. `Interruption.interrupt_session_transaction/4` maps
-  # `interrupt_turn!/5` over every in-progress turn of a session inside ONE
-  # transaction, and a turn with no active attempt reaches
-  # `finalize_reserved_request_failure/2` through
-  # `release_unattempted_request!/6` (one with an attempt goes to
-  # `finalize_interrupted_request!/5` instead). So the first such turn's release
-  # is counted here and then any later failure in that transaction erases it — whether the failure returns an
-  # error into `rollback_interrupted_accounting/4` or raises straight past it,
-  # as an `Ecto.NoResultsError` on a detached reservation does. Either way the
-  # counter keeps a `turn_interrupted` sample for a release that was never
-  # committed. Unlike the convergence and stream-outcome emitters beside it,
-  # this one takes no `Repo.in_transaction?/0` guard and has no post-commit
-  # marker to defer to. The behaviour is pinned as observed, not desired, in
-  # `test/codex_pooler/telemetry/relay_job_emission_test.exs` and
-  # `test/codex_pooler/gateway/runtime/finalization/interruption_telemetry_test.exs`;
-  # fixing it means deferring the marker to the outermost commit the way
-  # interrupted outcomes already are, and it is tracked on findings#195 as rows
-  # 195-94 and 195-12.
-  defp tap_pre_attempt_release_count(result, nil, _last_error_code), do: result
+  # A nested transaction has released only a savepoint. It hands the marker to
+  # its owner, while the outermost call emits only after its transaction has
+  # returned successfully. This is the same commit boundary used by stream
+  # interruption outcomes and prevents a later turn failure from counting a
+  # release row the shared transaction rolls back.
+  defp attach_pre_attempt_release_marker(result, nil, _last_error_code), do: result
 
-  defp tap_pre_attempt_release_count(
-         {:ok, %{request: request, release_status: :inserted}} = result,
+  defp attach_pre_attempt_release_marker(
+         {:ok, %{request: request, release_status: :inserted} = value},
          pre_attempt_phase,
          last_error_code
        ) do
-    PreAttemptRelease.emit(pre_attempt_phase, request.transport, last_error_code)
-    result
+    marker = PreAttemptRelease.marker(pre_attempt_phase, request.transport, last_error_code)
+    {:ok, Map.put(value, :after_commit_markers, [marker])}
   end
 
-  defp tap_pre_attempt_release_count(result, _pre_attempt_phase, _last_error_code), do: result
+  defp attach_pre_attempt_release_marker(result, _pre_attempt_phase, _last_error_code), do: result
+
+  defp emit_pre_attempt_release_after_commit(
+         {:ok, %{after_commit_markers: markers} = value},
+         false
+       ) do
+    Enum.each(markers, &PreAttemptRelease.emit_marker/1)
+    {:ok, Map.delete(value, :after_commit_markers)}
+  end
+
+  defp emit_pre_attempt_release_after_commit(result, _caller_owned_transaction?), do: result
 
   defp strip_release_status({:ok, %{} = value}), do: {:ok, Map.delete(value, :release_status)}
   defp strip_release_status(result), do: result

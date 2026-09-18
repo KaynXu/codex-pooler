@@ -79,26 +79,11 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
       assert drain(events) == []
     end
 
-    test "a caller transaction does not suppress the count, and a rollback still counts it" do
-      # Recorded, not desired, and this is the acceptance criterion of
-      # findings#195 row 195-12 pinned as its own negation. That row asks that
-      # wrapping this worker's context in an outer transaction FAIL the guard.
-      # It does not, because there is no guard: the convergence emitters ask
-      # `Repo.in_transaction?/0` before counting and this one does not
-      # (`accounting/lifecycle/request_lifecycle.ex` `tap_pre_attempt_release_count/3`
-      # runs on the value of `Repo.transaction/1`, which is a savepoint when a
-      # caller already holds a transaction). So wrapping the worker neither
-      # deletes the series nor keeps it honest: the rollback arm counts a
-      # release that does not exist.
-      #
-      # The negation is what ships, deliberately. The fix is row 195-94's, and
-      # it is a behavioural change to accounting — a post-commit marker threaded
-      # through `finalize_reserved_request_failure/2` and the interruption
-      # paths, or an after-commit hook on `Repo.transaction/2` that would change
-      # every transaction in the application. Landing either unreviewed
-      # mid-burn-down was judged worse than a bounded upward bias on one series.
-      # So the behaviour is pinned as observed rather than left unpinned, both
-      # rows stay OPEN, and fixing the defect must change this test.
+    test "a caller rollback suppresses the uncommitted release count" do
+      # The finalizer now hands its marker to an enclosing transaction instead
+      # of emitting at savepoint release. The worker is bare in production; this
+      # wrapper is the negative control proving a caller rollback cannot leave a
+      # sample for a release row that never committed.
       %{request: request, now: now} = stale_reservation_fixture!("relay-stale-sweep-rollback")
       events = capture!(@pre_attempt_release, :release)
 
@@ -110,7 +95,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
                Repo.rollback(:caller_rollback)
              end) == {:error, :caller_rollback}
 
-      assert [{%{count: 1}, %{phase: "stale_sweep"}, true}] = drain(events)
+      assert drain(events) == []
       assert Repo.reload!(request).status == "in_progress"
       assert release_entries(request) == []
     end

@@ -220,15 +220,24 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   # gate, no log and no test — the shape findings#195 row 195-05's third site
   # had. There is now one `{:ok, _}` shape and it always carries the markers.
   defp recover_expired_owner_session(candidate, {:ok, recovered_count}) do
-    case Repo.transaction(fn -> recover_expired_owner_session_locked(candidate) end) do
-      {:ok, {recovered, result}} ->
-        emit_recovery_outcomes(result)
-        {:cont, {:ok, recovered_count + recovered}}
-
-      {:error, reason} ->
-        {:halt, {:error, reason}}
-    end
+    candidate
+    |> then(&Repo.transaction(fn -> recover_expired_owner_session_locked(&1) end))
+    |> complete_expired_owner_recovery(recovered_count)
   end
+
+  @doc false
+  @spec complete_expired_owner_recovery(
+          {:ok, {non_neg_integer(), map()}} | {:error, term()},
+          non_neg_integer()
+        ) :: {:cont, {:ok, non_neg_integer()}} | {:halt, {:error, term()}}
+  def complete_expired_owner_recovery({:ok, {recovered, result}}, recovered_count)
+      when is_integer(recovered) and recovered >= 0 do
+    emit_recovery_outcomes(result)
+    {:cont, {:ok, recovered_count + recovered}}
+  end
+
+  def complete_expired_owner_recovery({:error, reason}, _recovered_count),
+    do: {:halt, {:error, reason}}
 
   # The after-commit property of these outcomes rests on this step running bare,
   # which `RuntimeStateCleanup.run/1` guarantees today. If a future caller wraps

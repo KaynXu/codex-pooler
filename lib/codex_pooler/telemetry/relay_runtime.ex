@@ -648,40 +648,25 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     end
   end
 
-  # A server that answered and refused the statement has refused this sample:
-  # the next flush writes the same bytes and gets the same answer. So a server
-  # error is permanent unless it is one of the few that are about the server
-  # rather than the row, while a failure with no server answer at all — a
-  # closed connection, a refused checkout, a stale heartbeat, the shutdown
-  # deadline — is an outage whose sample must be kept.
-  #
-  # Enumerating the transient codes rather than the permanent ones is the whole
-  # point. The permanent set is open: the previous version of this matched
-  # `Ecto.Changeset` alone, and a label value carrying a NUL byte arrived as a
-  # raw 22P05 one value class over and re-queued forever.
-  @transient_postgres_codes [
-    :admin_shutdown,
-    :cannot_connect_now,
-    :configuration_limit_exceeded,
-    :crash_shutdown,
-    :deadlock_detected,
-    :disk_full,
-    :idle_in_transaction_session_timeout,
-    :lock_not_available,
-    :object_in_use,
-    :out_of_memory,
-    :query_canceled,
-    :read_only_sql_transaction,
-    :serialization_failure,
-    :too_many_connections
-  ]
+  # PostgreSQL reserves the first two SQLSTATE bytes for the error class. The
+  # five classes below describe failures of the transaction, connection, or
+  # server rather than a refusal of this row, so every subclass must requeue.
+  # Everything outside them is a statement answer and therefore permanent for
+  # the exact bytes being retried. Classifying the class root keeps new server
+  # subclasses retryable without turning the open set of row refusals into an
+  # allowlist that silently loses samples when PostgreSQL adds a code.
+  @transient_postgres_classes ~w(08 40 53 57 58)
 
   defp permanent_refusal?(%Ecto.Changeset{}), do: true
   defp permanent_refusal?(%Ecto.ConstraintError{}), do: true
   defp permanent_refusal?(%Ecto.InvalidChangesetError{}), do: true
 
-  defp permanent_refusal?(%Postgrex.Error{postgres: %{code: code}}),
-    do: code not in @transient_postgres_codes
+  defp permanent_refusal?(%Postgrex.Error{
+         postgres: %{pg_code: <<class::binary-size(2), _::binary>>}
+       }),
+       do: class not in @transient_postgres_classes
+
+  defp permanent_refusal?(%Postgrex.Error{}), do: false
 
   defp permanent_refusal?(_other), do: false
 

@@ -711,7 +711,11 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
     for {code, label, permanent?} <- [
           {"22P05", "a refusal no changeset declares", true},
-          {"40001", "a serialization failure", false}
+          {"40001", "a serialization failure", false},
+          {"08006", "a connection failure", false},
+          {"53000", "an insufficient-resources failure", false},
+          {"57000", "an operator-intervention failure", false},
+          {"58000", "a system failure", false}
         ] do
       @tag code: code, permanent?: permanent?
       test "#{label} is #{if permanent?, do: "counted", else: "re-queued"}, by its SQLSTATE", %{

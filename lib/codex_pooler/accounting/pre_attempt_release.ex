@@ -43,6 +43,13 @@ defmodule CodexPooler.Accounting.PreAttemptRelease do
 
   @telemetry_event [:codex_pooler, :accounting, :reservation, :pre_attempt_release]
 
+  @type marker :: %{
+          required(:kind) => :pre_attempt_release,
+          required(:phase) => String.t(),
+          required(:transport) => String.t() | nil,
+          required(:release_reason) => String.t() | nil
+        }
+
   @doc "Ledger-entry `details` key carrying the bounded phase."
   @spec detail_key() :: String.t()
   def detail_key, do: @detail_key
@@ -125,6 +132,17 @@ defmodule CodexPooler.Accounting.PreAttemptRelease do
   @spec telemetry_event() :: [atom()]
   def telemetry_event, do: @telemetry_event
 
+  @doc false
+  @spec marker(String.t(), String.t() | nil, String.t() | nil) :: marker()
+  def marker(phase, transport, release_reason) do
+    %{
+      kind: :pre_attempt_release,
+      phase: phase(phase),
+      transport: transport,
+      release_reason: release_reason
+    }
+  end
+
   @doc """
   Counts one committed pre-attempt release.
 
@@ -139,5 +157,16 @@ defmodule CodexPooler.Accounting.PreAttemptRelease do
       %{count: 1},
       %{phase: phase(phase), transport: transport, release_reason: release_reason}
     )
+  end
+
+  @doc false
+  @spec emit_marker(marker()) :: :ok
+  def emit_marker(%{
+        kind: :pre_attempt_release,
+        phase: phase,
+        transport: transport,
+        release_reason: release_reason
+      }) do
+    emit(phase, transport, release_reason)
   end
 end

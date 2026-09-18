@@ -87,11 +87,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
         {:not_matched, clause} ->
           log_direct_interrupt_not_matched(receipt, reason, clause)
+          []
       end
     end)
     |> case do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+      {:ok, markers} ->
+        emit_committed_markers(markers)
+        :ok
+
+      {:error, [public_error: public_error, interrupted_outcomes: markers]} ->
+        emit_committed_markers(markers)
+        {:error, public_error}
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 
@@ -271,6 +280,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         |> Repo.update!()
 
         RequestLogFacts.record_request_created!(request)
+        []
 
       {"in_progress", %CodexTurn{} = turn, nil} ->
         case Accounting.finalize_reservation_failure(request, %{
@@ -279,16 +289,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
                usage_status: "usage_unknown",
                pre_attempt_phase: PreAttemptRelease.turn_interrupted()
              }) do
-          {:ok, _} -> complete_interrupted_turn!(turn, nil, @turn_interrupted, reason, now())
-          {:error, error} -> Repo.rollback(error)
+          {:ok, released} ->
+            complete_interrupted_turn!(turn, nil, @turn_interrupted, reason, now())
+            after_commit_markers(released)
+
+          {:error, error} ->
+            Repo.rollback(error)
         end
 
       _ ->
         opts = RequestOptions.for_websocket(%{request_id: request.correlation_id, reason: reason})
 
         case interrupt_codex_turn(session, opts) do
-          {:ok, _} -> :ok
-          {:error, error} -> Repo.rollback(error)
+          {:ok, result} ->
+            Map.get(result, :after_commit_markers, [])
+
+          {:error, {:deferred_after_commit, public_error, markers}} ->
+            Repo.rollback(public_error: public_error, interrupted_outcomes: markers)
+
+          {:error, error} ->
+            Repo.rollback(error)
         end
     end
   end
@@ -326,12 +346,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
            request.status in ["accepted", "in_progress"] do
         fail_task_exception_locked(turn, request, attempt, reason)
       else
-        :noop
+        []
       end
     end)
     |> case do
-      {:ok, _} -> :ok
-      {:error, error} -> {:error, error}
+      {:ok, markers} ->
+        emit_committed_markers(markers)
+        :ok
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 
@@ -402,12 +426,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     end
   end
 
-  defp complete_task_exception_turn!({:ok, _result}, turn, attempt, reason, now) do
+  defp complete_task_exception_turn!({:ok, result}, turn, attempt, reason, now) do
     if match?(%CodexTurn{status: @turn_in_progress}, turn) do
       complete_interrupted_turn!(turn, attempt, @turn_failed, reason, now)
     end
 
-    :finalized
+    after_commit_markers(result)
   end
 
   defp complete_task_exception_turn!({:error, error}, _turn, _attempt, _reason, _now),
@@ -768,8 +792,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
       interrupted_outcomes =
         in_progress_turns
-        |> Enum.map(&interrupt_turn!(&1, opts, reason, now, caller_owned_transaction?))
-        |> Enum.reject(&is_nil/1)
+        |> Enum.flat_map(&interrupt_turn!(&1, opts, reason, now, caller_owned_transaction?))
 
       session
       |> Ecto.Changeset.change(%{
@@ -935,8 +958,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
          now,
          caller_owned_transaction?
        ) do
-    marker = interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)
-    {1, if(marker, do: [marker], else: [])}
+    {1, interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)}
   end
 
   defp interrupt_selected_turn(_turn, _opts, _reason, _now, _caller_owned_transaction?),
@@ -949,10 +971,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     cond do
       request_completed_successfully?(request, attempt) ->
         complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
-        nil
+        []
 
       request && request.status in ["accepted", "in_progress"] && active_attempt?(attempt) ->
-        marker =
+        markers =
           finalize_interrupted_request!(
             request,
             attempt,
@@ -962,7 +984,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           )
 
         complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
-        marker
+        List.wrap(markers)
 
       request && request.status in ["accepted", "in_progress"] ->
         # Release only. This branch is not drain-specific: it also serves
@@ -997,18 +1019,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         # receipt's exact request id or records that it holds no turn identity
         # (icoretech/codex-pooler-findings#179). Neither shape revives this
         # branch from that caller.
-        release_unattempted_request!(
-          request,
-          attempt,
-          opts,
-          reason,
-          now,
-          caller_owned_transaction?
-        )
+        release_markers =
+          release_unattempted_request!(
+            request,
+            attempt,
+            opts,
+            reason,
+            now,
+            caller_owned_transaction?
+          )
 
         complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
 
-        interruption_marker("interrupted", opts, bounded_transport(attempt && attempt.transport))
+        release_markers ++
+          [
+            interruption_marker(
+              "interrupted",
+              opts,
+              bounded_transport(attempt && attempt.transport)
+            )
+          ]
 
       true ->
         complete_interrupted_turn!(
@@ -1019,7 +1049,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           now
         )
 
-        nil
+        []
     end
   end
 
@@ -1062,12 +1092,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
              now: now,
              released_after_attempt: attempt
            }) do
-        {:ok, _released} ->
+        {:ok, released} ->
           # The armed entitlement that produced this terminal attempt has no
           # reservation left to consume; close it so the sweep does not
           # re-select it every pass (findings#221).
           _ = Accounting.revoke_armed_replay_entitlement!(request.id, attempt, now)
-          :ok
+          after_commit_markers(released)
 
         {:error, error} ->
           rollback_interrupted_accounting(error, opts, attempt, caller_owned_transaction?)
@@ -1089,8 +1119,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
              now: now,
              pre_attempt_phase: PreAttemptRelease.turn_interrupted()
            }) do
-        {:ok, _released} ->
-          :ok
+        {:ok, released} ->
+          after_commit_markers(released)
 
         {:error, error} ->
           rollback_interrupted_accounting(error, opts, nil, caller_owned_transaction?)
@@ -1106,7 +1136,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       })
       |> Repo.update!()
 
-      :ok
+      []
     end
   end
 
@@ -1134,18 +1164,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       rollback_interrupted_accounting(exception, opts, attempt, caller_owned_transaction?)
   end
 
-  # The one place `caller_owned_transaction?` still decides anything. It is not
-  # an emission decision — `emit_outcomes_after_commit/1` owns those — but a
-  # production decision: inside a caller's transaction no `settlement_failed`
-  # marker is built at all, and the caller gets the bare error tuple its own
-  # tests pin. Behaviourally the same as producing one, because the gate would
-  # defer it and this path has nowhere to hand a deferral back to; recorded
-  # because the module otherwise reads as though the flag were gone.
-  defp rollback_interrupted_accounting(error, _opts, _attempt, true) do
-    Repo.rollback({:interrupt_accounting_failed, error})
-  end
-
-  defp rollback_interrupted_accounting(error, opts, attempt, false) do
+  # Failure markers are built before rollback for every caller. The outermost
+  # transaction publishes them after it finishes; a caller-owned transaction
+  # receives them in the deferred error result and can publish only if its own
+  # transaction commits. A rollback therefore loses neither error identity nor
+  # the information needed to make the commit decision.
+  defp rollback_interrupted_accounting(error, opts, attempt, _caller_owned_transaction?) do
     Repo.rollback(
       public_error: {:interrupt_accounting_failed, error},
       interrupted_outcomes: [
@@ -1352,6 +1376,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp interruption_marker(outcome, opts, upstream_transport) do
     %{
+      kind: :stream_outcome,
       outcome: outcome,
       downstream_transport: Streaming.downstream_transport(opts),
       upstream_transport: upstream_transport
@@ -1382,6 +1407,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   def emit_committed_recovery_outcomes(%{interrupted_outcomes: markers}),
     do: emit_outcomes_after_commit(markers)
 
+  @doc false
+  @spec emit_committed_deferred_outcomes([map()]) :: :ok | {:deferred, [map()]}
+  def emit_committed_deferred_outcomes(markers) when is_list(markers),
+    do: emit_outcomes_after_commit(markers)
+
   # The only place an interrupted outcome is emitted, and the only place the
   # after-commit rule is decided.
   #
@@ -1400,39 +1430,40 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     if Repo.in_transaction?() do
       {:deferred, markers}
     else
-      Enum.each(markers, &emit_interrupted_outcome/1)
+      emit_committed_markers(markers)
       :ok
     end
   end
 
-  # These two paths return a public result to a caller that may own the
-  # transaction, and have no channel to hand markers back through, so a
-  # deferral is a drop. It is the same drop as before the gate existed; what
-  # changed is that the decision not to emit is no longer theirs to get wrong.
-  defp emit_or_drop_deferred(markers) do
+  defp finalize_transaction({:ok, %{public_result: public_result, interrupted_outcomes: markers}}) do
     case emit_outcomes_after_commit(markers) do
-      :ok -> :ok
-      {:deferred, _markers} -> :ok
+      :ok -> {:ok, public_result}
+      {:deferred, deferred} -> {:ok, Map.put(public_result, :after_commit_markers, deferred)}
     end
   end
 
-  defp finalize_transaction({:ok, %{public_result: public_result, interrupted_outcomes: markers}}) do
-    emit_or_drop_deferred(markers)
-    {:ok, public_result}
-  end
-
   defp finalize_transaction({:error, [public_error: public_error, interrupted_outcomes: markers]}) do
-    emit_or_drop_deferred(markers)
-    {:error, public_error}
+    case emit_outcomes_after_commit(markers) do
+      :ok -> {:error, public_error}
+      {:deferred, deferred} -> {:error, {:deferred_after_commit, public_error, deferred}}
+    end
   end
 
   defp finalize_transaction({:error, reason}), do: {:error, reason}
 
-  defp emit_interrupted_outcome(marker) do
+  defp emit_committed_markers(markers), do: Enum.each(markers, &emit_after_commit_marker/1)
+
+  defp emit_after_commit_marker(%{kind: :pre_attempt_release} = marker),
+    do: PreAttemptRelease.emit_marker(marker)
+
+  defp emit_after_commit_marker(%{kind: :stream_outcome} = marker) do
     Streaming.emit_stream_outcome(
       marker.outcome,
       marker.downstream_transport,
       marker.upstream_transport
     )
   end
+
+  defp after_commit_markers(%{after_commit_markers: markers}) when is_list(markers), do: markers
+  defp after_commit_markers(_result), do: []
 end
