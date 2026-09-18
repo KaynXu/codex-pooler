@@ -483,6 +483,9 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       )
 
     assert successor.status == "succeeded"
+    assert is_nil(successor.native_client_retry_version)
+    assert is_nil(successor.native_client_retry_digest)
+    assert is_nil(successor.native_client_retry_auth_epoch)
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^successor.id), :count) == 1
   end
 

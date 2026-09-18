@@ -460,7 +460,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
             auth: auth,
             pricing: pricing,
             estimate: estimate,
-            opts: Map.put(opts, :turn_claim, nil),
+            # Original witnesses belong to generation zero; a successor must
+            # dispatch through its link authority instead.
+            opts:
+              opts
+              |> Map.put(:turn_claim, nil)
+              |> Map.delete(:native_client_retry_witness),
             timestamp: timestamp
           }
 
