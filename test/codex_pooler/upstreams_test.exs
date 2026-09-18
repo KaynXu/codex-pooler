@@ -5163,16 +5163,12 @@ defmodule CodexPooler.UpstreamsTest do
 
       {:ok, upstream} =
         FakeUpstream.start_link(
+          # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "GET",
               path: "/backend-api/wham/usage",
               respond: {:timeout_before_headers, self(), release_ref}
-            ),
-            FakeUpstream.expect_request(
-              method: "GET",
-              path: "/backend-api/codex/usage",
-              respond: FakeUpstream.json_response(%{"error" => "unavailable"}, 503)
             )
           ])
         )
@@ -5188,20 +5184,34 @@ defmodule CodexPooler.UpstreamsTest do
           DateTime.utc_now() |> DateTime.truncate(:second),
           "Provider limit alpha"
         )
+        |> Repo.reload!()
 
       parent = self()
 
       task =
         Task.async(fn ->
           Sandbox.allow(Repo, parent, self())
-          Upstreams.reconcile_pool_account(pool, assignment, receive_timeout: 1)
+          Upstreams.reconcile_pool_account(pool, assignment, receive_timeout: 100)
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref}
-      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
-      assert {:ok, _result} = Task.await(task)
-      assert Enum.any?(QuotaWindows.list_evidence(identity), &(&1.id == existing.id))
-      assert :ok = FakeUpstream.verify!(upstream)
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                      ^release_ref},
+                     15_000
+
+      try do
+        # Keep the response blocked until the real HTTP timeout has completed.
+        # Releasing first races a 200 unusable payload (which permits fallback)
+        # against a transport timeout (which stops probing).
+        assert {:ok, result} = Task.await(task, 15_000)
+        assert result.quota.status == :failed
+        assert result.quota.code == "quota_refresh_unavailable"
+        assert result.quota.message == "quota windows were not available (timeout)"
+        assert Repo.reload!(existing) == existing
+        assert FakeUpstream.count(upstream) == 1
+        assert :ok = FakeUpstream.verify!(upstream)
+      after
+        send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+      end
     end
 
     @tag :quota_descriptor_coverage
