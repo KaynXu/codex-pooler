@@ -68,9 +68,11 @@ defmodule CodexPooler.Dev.RoutingStrategyFixtureTest do
       assert status.status == "ready"
       assert status.leases == 1
       assert status.routing_strategy == "quota_first"
+      assert status.receipt == "private"
       assert status.assignment_count == @assignments
       assert status.bridge_ring_size == @ring_size
       refute Map.has_key?(status, :api_key)
+      refute inspect(status) =~ context.receipt_path
 
       assert_private_mode(context.root, 0o700)
       assert_private_mode(context.receipt_path, 0o600)
@@ -120,7 +122,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixtureTest do
       assert Repo.get_by(Pool, slug: Names.pool_slug())
 
       assert {:ok, released} = RoutingStrategyFixture.release(context.options)
-      assert released == %{status: "released", leases: 0, receipt_path: context.receipt_path}
+      assert released == %{status: "released", leases: 0, receipt: "private"}
       refute File.exists?(context.receipt_path)
 
       assert %RoutingSettings{
@@ -144,6 +146,12 @@ defmodule CodexPooler.Dev.RoutingStrategyFixtureTest do
                from assignment in PoolUpstreamAssignment,
                  where: assignment.pool_id == ^pool.id
              ) == []
+    end
+
+    test "public status uses a bounded receipt label instead of an absolute path", context do
+      assert {:ok, status} = RoutingStrategyFixture.status(context.options)
+      assert status == %{status: "absent", leases: 0, receipt: "private"}
+      refute inspect(status) =~ context.receipt_path
     end
 
     test "rejects an unknown routing strategy before any receipt or database mutation", context do

@@ -115,11 +115,54 @@ defmodule Mix.Tasks.Dev.RoutingStrategyFixture do
         path = Path.expand(value, File.cwd!())
 
         with relative <- Path.relative_to(path, File.cwd!()),
-             true <- Regex.match?(@private_receipt_relative, relative) do
+             true <- Regex.match?(@private_receipt_relative, relative),
+             :ok <- validate_private_receipt_path(path) do
           {:ok, path}
         else
           _invalid -> {:error, "routing strategy fixture private receipt path is invalid"}
         end
+    end
+  end
+
+  defp validate_private_receipt_path(path) do
+    root = Path.expand(Path.join(["tmp", "routing-strategy-fixture"]), File.cwd!())
+    parent = Path.dirname(path)
+
+    with :ok <- validate_directory_chain(File.cwd!(), parent),
+         :ok <- validate_receipt_target(path),
+         relative when is_binary(relative) <- Path.relative_to(parent, root),
+         false <- relative == ".." or String.starts_with?(relative, "../") do
+      :ok
+    else
+      _invalid -> {:error, :invalid_private_receipt_path}
+    end
+  end
+
+  defp validate_directory_chain(base, target) do
+    relative = Path.relative_to(target, base)
+
+    if relative == ".." or String.starts_with?(relative, "../") do
+      {:error, :invalid_private_receipt_path}
+    else
+      relative
+      |> Path.split()
+      |> Enum.scan(base, &Path.join(&2, &1))
+      |> Enum.reduce_while(:ok, &validate_directory_component/2)
+    end
+  end
+
+  defp validate_directory_component(component, :ok) do
+    case File.lstat(component) do
+      {:ok, %File.Stat{type: :directory}} -> {:cont, :ok}
+      _invalid -> {:halt, {:error, :invalid_private_receipt_path}}
+    end
+  end
+
+  defp validate_receipt_target(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular}} -> :ok
+      {:error, :enoent} -> :ok
+      _invalid -> {:error, :invalid_private_receipt_path}
     end
   end
 

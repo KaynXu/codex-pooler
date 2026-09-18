@@ -59,7 +59,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
   @type status :: %{
           required(:status) => String.t(),
           required(:leases) => non_neg_integer(),
-          required(:receipt_path) => String.t(),
+          required(:receipt) => String.t(),
           optional(:pool_slug) => String.t(),
           optional(:routing_strategy) => String.t(),
           optional(:assignment_count) => pos_integer(),
@@ -108,7 +108,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
 
     case Receipt.read(path) do
       {:ok, setup} -> public_status(setup, path)
-      :missing -> {:ok, %{status: "absent", leases: 0, receipt_path: path}}
+      :missing -> {:ok, %{status: "absent", leases: 0, receipt: receipt_label(path)}}
       {:error, message} -> {:error, message}
     end
   end
@@ -214,14 +214,14 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
       {:ok, %{"leases" => 1} = setup} ->
         with :ok <- restore_setup(setup) do
           Receipt.remove!(path)
-          {:ok, %{status: "released", leases: 0, receipt_path: path}}
+          {:ok, %{status: "released", leases: 0, receipt: receipt_label(path)}}
         end
 
       {:ok, _setup} ->
         {:error, "routing strategy fixture receipt has an invalid lease count"}
 
       :missing ->
-        {:ok, %{status: "absent", leases: 0, receipt_path: path}}
+        {:ok, %{status: "absent", leases: 0, receipt: receipt_label(path)}}
 
       {:error, message} ->
         {:error, message}
@@ -307,7 +307,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
     with state when is_binary(state) <- setup["state"],
          leases when is_integer(leases) and leases >= 0 <- setup["leases"] do
       {:ok,
-       %{status: state, leases: leases, receipt_path: path}
+       %{status: state, leases: leases, receipt: receipt_label(path)}
        |> put_optional(:pool_slug, setup["pool_slug"])
        |> put_optional(:routing_strategy, setup["routing_strategy"])
        |> put_optional(:assignment_count, setup["assignment_count"])
@@ -365,4 +365,8 @@ defmodule CodexPooler.Dev.RoutingStrategyFixture do
 
   defp put_optional(map, _key, nil), do: map
   defp put_optional(map, key, value), do: Map.put(map, key, value)
+
+  defp receipt_label(path) do
+    if path == receipt_path(), do: "default", else: "private"
+  end
 end
