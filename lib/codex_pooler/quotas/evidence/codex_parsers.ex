@@ -90,11 +90,13 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   end
 
   defp account_availability(payload, account_windows) do
+    rate_limit_signal = rate_limit_signal(payload)
+
     signals =
       [
-        rate_limit_signal(payload),
+        rate_limit_signal,
         credits_signal(payload),
-        spend_control_signal(payload),
+        account_spend_control_signal(payload, rate_limit_signal),
         reached_type_signal(payload),
         window_signal(account_windows),
         additional_integrity_signal(payload)
@@ -109,6 +111,16 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       basis
       |> basis_state()
       |> AccountAvailability.new!(basis, account_windows)
+    end
+  end
+
+  # Spend control governs additional credits, not quota included with the
+  # subscription. Only a valid reached signal yields to explicit included
+  # quota permission; malformed spend-control input remains fail-closed.
+  defp account_spend_control_signal(payload, rate_limit_signal) do
+    case {rate_limit_signal, spend_control_signal(payload)} do
+      {:affirmative, :blocker} -> nil
+      {_rate_limit_signal, spend_signal} -> spend_signal
     end
   end
 
