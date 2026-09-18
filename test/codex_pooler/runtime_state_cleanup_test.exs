@@ -919,6 +919,85 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
            |> Enum.sort() == ["release", "reservation", "settlement"]
   end
 
+  test "one cleanup pass settles a superseded owner through absent-instance recovery first" do
+    setup = accounting_setup()
+    now = InstancePresence.database_now()
+    dispatched_at = DateTime.add(now, -10, :minute)
+    expired_at = DateTime.add(now, -1, :second)
+    node_name = "codex_pooler@10.78.#{System.unique_integer([:positive])}.9"
+    first = Identity.new(node_name, Ecto.UUID.generate())
+    second = Identity.new(node_name, Ecto.UUID.generate())
+
+    assert {:ok, _} = InstancePresence.record_heartbeat(first, dispatched_at)
+    assert {:ok, _} = InstancePresence.record_heartbeat(second, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat()
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "stream" => true,
+                 "max_output_tokens" => 10
+               },
+               %{
+                 correlation_id: "corr-cleanup-superseded-owner",
+                 now: dispatched_at,
+                 transport: "websocket"
+               }
+             )
+
+    assert {:ok, attempt} =
+             Accounting.create_attempt(reserved.request, setup.assignment, %{
+               now: dispatched_at,
+               owner_instance_id: first.node_name,
+               owner_instance_boot_id: first.boot_id
+             })
+
+    attempt =
+      attempt
+      |> Ecto.Changeset.change(owner_execution_id: nil, owner_process_id: nil)
+      |> Repo.update!()
+
+    session = session_fixture(setup.pool, setup.api_key, setup.assignment, dispatched_at)
+
+    session =
+      session
+      |> Ecto.Changeset.change(
+        owner_instance_id: first.node_name,
+        owner_instance_boot_id: first.boot_id,
+        owner_lease_expires_at: expired_at
+      )
+      |> Repo.update!()
+
+    lease = lease_fixture(session, setup.pool, setup.api_key, setup.assignment, expired_at, now)
+
+    lease
+    |> Ecto.Changeset.change(
+      owner_instance_id: first.node_name,
+      owner_instance_boot_id: first.boot_id
+    )
+    |> Repo.update!()
+
+    turn = turn_fixture(session, reserved.request, attempt, now)
+
+    assert InstancePresence.status(first) == :unknown
+    assert InstancePresence.superseded?(first)
+    assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
+    assert summary.absent_instance_attempts_recovered == 1
+    assert summary.expired_owner_sessions_recovered == 0
+
+    assert %Request{status: "failed", last_error_code: "absent_instance_recovered"} =
+             Repo.reload!(reserved.request)
+
+    assert %Attempt{status: "failed", network_error_code: "absent_instance_recovered"} =
+             Repo.reload!(attempt)
+
+    assert %CodexTurn{status: "interrupted", error_code: "absent_instance_recovered"} =
+             Repo.reload!(turn)
+  end
+
   defp turn_fixture(session, request, attempt, now) do
     timestamp = now |> DateTime.add(-30, :second) |> usec()
 

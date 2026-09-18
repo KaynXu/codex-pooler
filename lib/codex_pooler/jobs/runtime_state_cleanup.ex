@@ -34,12 +34,14 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
   defp steps(now) do
     [
       {:files, fn -> Files.cleanup_expired(now) end},
-      {:gateway_runtime, fn -> RuntimeCleanup.cleanup_expired_runtime_state(now) end},
       {:stale_reservations, fn -> Accounting.recover_stale_reservations(now) end},
       # Ownership recovery runs on the liveness window, not the six-hour stale
       # window, so an attempt orphaned by a kill, a crash, or a drain that could
-      # not reach it stops holding its reservation in minutes.
+      # not reach it stops holding its reservation in minutes. It must precede
+      # gateway runtime cleanup: expired-owner interruption opens a reconnect
+      # window, and running it first can shelter the same orphan from this pass.
       {:absent_instances, fn -> Accounting.recover_absent_instance_attempts(now) end},
+      {:gateway_runtime, fn -> RuntimeCleanup.cleanup_expired_runtime_state(now) end},
       {:dead_executions, fn -> Accounting.recover_dead_execution_attempts(now) end},
       {:execution_proofs, fn -> ExecutionTerminalProofs.prune(now) end},
       {:instance_presence, fn -> InstancePresence.prune(now) end},

@@ -99,15 +99,26 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     |> Enum.any?(&owner_may_be_alive?(&1, opts))
   end
 
-  # Database freshness selects a candidate; exact reachable VM identity is
-  # the authority. An RPC failure or non-distributed name collision is unknown.
+  # Database freshness selects a candidate. Exact reachable VM identity is the
+  # normal authority; when it is unreachable, a later incarnation publishing
+  # under the same node name is the same exact death proof absent-instance
+  # recovery accepts. A live owner vetoes both, and anonymous/non-incarnation
+  # identities remain unknown.
   defp owner_may_be_alive?({node_name, boot_id}, opts) do
     identity = InstancePresence.Identity.owner(node_name, boot_id)
     presence_now = InstancePresence.database_now()
 
     not (InstancePresence.observer_fresh?(presence_now, opts) and
            InstancePresence.absent?(identity, presence_now, opts) and
-           InstancePresence.status(identity) == :dead)
+           owner_proven_gone?(identity))
+  end
+
+  defp owner_proven_gone?(identity) do
+    case InstancePresence.status(identity) do
+      :dead -> true
+      :alive -> false
+      :unknown -> InstancePresence.superseded?(identity)
+    end
   end
 
   @spec recover_stale_request_turn(request_ref(), attempt_ref(), keyword()) :: :ok

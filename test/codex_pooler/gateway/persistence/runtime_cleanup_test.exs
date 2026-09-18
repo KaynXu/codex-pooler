@@ -12,6 +12,9 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     RuntimeCleanup
   }
 
+  alias CodexPooler.Platform.InstancePresence
+  alias CodexPooler.Platform.InstancePresence.Identity
+
   test "active_runtime_request?/2 detects in-progress turns with a live owner lease" do
     pool = pool_fixture()
     %{api_key: api_key} = active_api_key_fixture(pool)
@@ -45,6 +48,38 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
 
     assert RuntimeCleanup.active_runtime_request?(request, now)
     refute RuntimeCleanup.active_runtime_request?(expired_request.id, now)
+  end
+
+  test "a disconnected successor incarnation proves the old runtime owner is gone" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = InstancePresence.database_now()
+    stale = DateTime.add(now, -10, :minute)
+    node_name = "codex_pooler@10.77.#{System.unique_integer([:positive])}.9"
+    first = Identity.new(node_name, Ecto.UUID.generate())
+    second = Identity.new(node_name, Ecto.UUID.generate())
+    request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    _attempt = attempt_fixture(request, assignment, %{status: "in_progress", completed_at: nil})
+
+    session =
+      session_fixture(pool, api_key, assignment, stale,
+        owner_instance_id: first.node_name,
+        owner_instance_boot_id: first.boot_id,
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, 5, :minute),
+        last_heartbeat_at: stale
+      )
+
+    _turn = turn_fixture(session, request, stale, status: CodexTurn.in_progress_status())
+
+    assert {:ok, _} = InstancePresence.record_heartbeat(first, stale)
+    assert {:ok, _} = InstancePresence.record_heartbeat(second, now)
+    assert {:ok, _} = InstancePresence.record_heartbeat()
+    assert InstancePresence.status(first) == :unknown
+    assert InstancePresence.superseded?(first)
+
+    refute RuntimeCleanup.active_runtime_request?(request, now)
   end
 
   test "recover_stale_request_turn/3 interrupts only matching in-progress turns" do
@@ -156,6 +191,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
       pool_upstream_assignment_id: assignment.id,
       status: "active",
       owner_instance_id: Keyword.get(attrs, :owner_instance_id),
+      owner_instance_boot_id: Keyword.get(attrs, :owner_instance_boot_id),
       owner_lease_token: Keyword.get(attrs, :owner_lease_token),
       owner_lease_expires_at: Keyword.get(attrs, :owner_lease_expires_at),
       last_heartbeat_at: Keyword.get(attrs, :last_heartbeat_at),
