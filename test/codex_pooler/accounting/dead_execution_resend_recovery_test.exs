@@ -14,6 +14,7 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
   }
 
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
 
   @endpoint "/backend-api/codex/responses"
@@ -109,6 +110,67 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
            ) == 1
 
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
+  end
+
+  test "direct disconnect cleanup preserves exact dead-execution attribution" do
+    setup = accounting_setup()
+    session = insert_session!(setup)
+    claim = "codex-turn:" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    witness =
+      ClientRetry.original_witness!(
+        :crypto.strong_rand_bytes(32),
+        setup.api_key.runtime_revocation_epoch
+      )
+
+    assert {:ok, %{request: claimed}} =
+             Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+               endpoint: @endpoint,
+               correlation_id: claim,
+               codex_session: session,
+               native_client_retry_witness: witness
+             })
+
+    assert {:ok, %{request: request}} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id, "input" => []},
+               %{
+                 endpoint: @endpoint,
+                 transport: "websocket",
+                 correlation_id: claim,
+                 turn_claim: claimed
+               }
+             )
+
+    attempt = create_dead_attempt!(setup, request)
+    turn = insert_turn!(session, request, attempt)
+    CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
+    attach_outcome_handler!()
+
+    assert :ok =
+             Interruption.interrupt_direct_request(
+               %{
+                 session_id: session.id,
+                 request_id: request.id,
+                 correlation_id: request.correlation_id,
+                 api_key_id: request.api_key_id,
+                 attempt_id: attempt.id,
+                 replay_generation: attempt.replay_generation
+               },
+               "client_disconnected"
+             )
+
+    assert_receive {:dead_resend_outcome,
+                    %{
+                      outcome: "interrupted",
+                      downstream_transport: "websocket",
+                      upstream_transport: "websocket"
+                    }, false}
+
+    assert_recovered!(request, attempt, turn)
+    assert ledger_kinds(request.id) == ["release", "reservation", "settlement"]
   end
 
   defp create_dead_attempt!(setup, request) do

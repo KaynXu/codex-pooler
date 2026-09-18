@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestReplayEntitlement}
   alias CodexPooler.Accounting.PreAttemptRelease
+  alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery
   alias CodexPooler.Accounting.RequestLogFacts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
@@ -257,6 +258,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     turn = Repo.get_by(CodexTurn, request_id: request.id)
     attempt = latest_attempt_for_update(request.id)
 
+    case recover_proven_dead_direct_request(request, attempt) do
+      {:recovered, marker} ->
+        [marker]
+
+      :not_recovered ->
+        do_interrupt_direct_locked(session, request, turn, attempt, reason)
+    end
+  end
+
+  defp recover_proven_dead_direct_request(request, %Attempt{}) do
+    case DeadExecutionResendRecovery.recover(request, true, now()) do
+      {:ok, _recovered, %{kind: :stream_outcome} = marker} -> {:recovered, marker}
+      {:ok, _request, nil} -> :not_recovered
+      {:error, :active_predecessor} -> :not_recovered
+    end
+  end
+
+  defp recover_proven_dead_direct_request(_request, _attempt), do: :not_recovered
+
+  defp do_interrupt_direct_locked(session, request, turn, attempt, reason) do
     case {request.status, turn, attempt} do
       {"accepted", nil, _} ->
         request
