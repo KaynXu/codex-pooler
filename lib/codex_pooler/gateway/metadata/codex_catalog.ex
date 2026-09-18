@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
   @etag_prefix ~s(W/"cp-models-v1-)
+  @known_reasoning_efforts ~w(none minimal low medium high xhigh max ultra)
   @reasoning_level_keys ~w(reasoning_efforts supported_reasoning_levels)
 
   @type normalized_policy :: map()
@@ -379,36 +380,46 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   defp reasoning_union_source(anchor, family_pairs, routable_assignment_ids) do
     source_pairs = routable_family_pairs(family_pairs, routable_assignment_ids)
 
+    base_source =
+      Map.drop(anchor.source, ["default_reasoning_level" | @reasoning_level_keys])
+
     reasoning_levels =
       source_pairs
       |> Enum.sort_by(&partition_pair_key/1)
       |> Enum.flat_map(&ModelMetadata.metadata_reasoning_levels(&1.source))
       |> Enum.uniq()
+      |> Enum.sort_by(&reasoning_level_sort_key/1)
 
     case reasoning_levels do
       [] ->
-        anchor.source
+        base_source
 
       [_ | _] ->
         levels = Enum.map(reasoning_levels, &%{"effort" => &1, "description" => &1})
 
-        anchor.source
-        |> Map.drop(@reasoning_level_keys)
+        base_source
         |> Map.put("supported_reasoning_levels", levels)
         |> Map.put(
           "default_reasoning_level",
-          reasoning_union_default(source_pairs, anchor.source, reasoning_levels)
+          reasoning_union_default(source_pairs, reasoning_levels)
         )
     end
   end
 
-  defp reasoning_union_default(source_pairs, anchor_source, reasoning_levels) do
+  defp reasoning_union_default(source_pairs, reasoning_levels) do
     source_pairs
     |> Enum.sort_by(&partition_pair_key/1)
     |> Enum.find_value(&reasoning_default(&1.source, reasoning_levels))
     |> case do
-      nil -> reasoning_default(anchor_source, reasoning_levels) || List.first(reasoning_levels)
+      nil -> List.first(reasoning_levels)
       default -> default
+    end
+  end
+
+  defp reasoning_level_sort_key(effort) do
+    case Enum.find_index(@known_reasoning_efforts, &(&1 == effort)) do
+      nil -> {1, effort}
+      index -> {0, index}
     end
   end
 

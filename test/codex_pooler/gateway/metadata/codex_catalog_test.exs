@@ -618,6 +618,148 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
                ~w(low high max)
     end
+
+    test "does not leak reasoning metadata from an unroutable family anchor", context do
+      anchor_source =
+        context.model.metadata["source_assignment_models"][context.anchor_id]
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      routable_source =
+        context.model.metadata["source_assignment_models"][context.sibling_id]
+        |> Map.delete("default_reasoning_level")
+        |> Map.delete("supported_reasoning_levels")
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => anchor_source,
+          context.sibling_id => routable_source,
+          context.alternate_id => Map.put(anchor_source, "context_window", 111_111)
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{model.id => MapSet.new([context.sibling_id])}
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      refute Map.has_key?(partition.source, "default_reasoning_level")
+      refute Map.has_key?(partition.source, "supported_reasoning_levels")
+      refute Map.has_key?(partition.source, "reasoning_efforts")
+    end
+
+    test "derives the default only from routable reasoning metadata", context do
+      anchor_source =
+        context.model.metadata["source_assignment_models"][context.anchor_id]
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      routable_source =
+        context.model.metadata["source_assignment_models"][context.sibling_id]
+        |> Map.delete("default_reasoning_level")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "max", "description" => "max"},
+          %{"effort" => "low", "description" => "low"}
+        ])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => anchor_source,
+          context.sibling_id => routable_source,
+          context.alternate_id => Map.put(anchor_source, "context_window", 111_111)
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{model.id => MapSet.new([context.sibling_id])}
+                 end
+               )
+
+      assert partition.source["default_reasoning_level"] == "low"
+
+      assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
+               ~w(low max)
+    end
+
+    test "canonicalizes equivalent reasoning-level order for stable ETags", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      first =
+        base_source
+        |> Map.put("default_reasoning_level", "high")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "high", "description" => "high"},
+          %{"effort" => "low", "description" => "low"}
+        ])
+
+      second =
+        base_source
+        |> Map.put("default_reasoning_level", "high")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "high", "description" => "high"}
+        ])
+
+      first_model =
+        put_source_models(context.model, %{
+          context.anchor_id => first,
+          context.sibling_id => second,
+          context.alternate_id => Map.put(first, "context_window", 111_111)
+        })
+
+      second_model =
+        put_source_models(context.model, %{
+          context.anchor_id => first,
+          context.sibling_id => second,
+          context.alternate_id => Map.put(first, "context_window", 111_111)
+        })
+
+      first_partition =
+        CodexCatalog.select_canonical_sources([first_model], context.candidates,
+          routable_assignment_ids_by_model_id: fn ->
+            %{first_model.id => MapSet.new([context.anchor_id])}
+          end
+        )
+
+      second_partition =
+        CodexCatalog.select_canonical_sources([second_model], context.candidates,
+          routable_assignment_ids_by_model_id: fn ->
+            %{second_model.id => MapSet.new([context.sibling_id])}
+          end
+        )
+
+      assert [first_selected] = first_partition
+      assert [second_selected] = second_partition
+      assert first_selected.source == second_selected.source
+
+      assert {:ok, first_catalog} =
+               CodexCatalog.build_selected_partitions(
+                 first_partition,
+                 unrestricted_policy(),
+                 %{},
+                 %{},
+                 %{}
+               )
+
+      assert {:ok, second_catalog} =
+               CodexCatalog.build_selected_partitions(
+                 second_partition,
+                 unrestricted_policy(),
+                 %{},
+                 %{},
+                 %{}
+               )
+
+      assert first_catalog.body == second_catalog.body
+      assert first_catalog.etag == second_catalog.etag
+    end
   end
 
   test "selects a newer routable majority instead of pinning an older singleton" do
