@@ -312,8 +312,14 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp reasoning_source_default(source) do
     case Map.get(source, "default_reasoning_level") do
-      value when is_binary(value) -> ReasoningEffort.normalize_known(value) || String.trim(value)
-      _value -> nil
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> ReasoningEffort.normalize_known(trimmed) || trimmed
+        end
+
+      _value ->
+        nil
     end
   end
 

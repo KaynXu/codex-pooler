@@ -785,6 +785,29 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       assert_received :resolved_default_routability
       assert partition.source["default_reasoning_level"] == "low"
     end
+
+    test "does not resolve routability for blank versus absent reasoning defaults", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => Map.put(base_source, "default_reasoning_level", "   "),
+          context.sibling_id => Map.delete(base_source, "default_reasoning_level"),
+          context.alternate_id =>
+            base_source
+            |> Map.delete("default_reasoning_level")
+            |> Map.delete("context_window")
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   flunk("blank and absent defaults must not trigger a quota read")
+                 end
+               )
+
+      assert partition.partition_count == 1
+    end
   end
 
   test "selects a newer routable majority instead of pinning an older singleton" do
