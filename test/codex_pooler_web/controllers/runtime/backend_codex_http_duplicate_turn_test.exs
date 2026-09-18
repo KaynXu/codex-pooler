@@ -286,29 +286,105 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # first-event `server_error` is that shape: the turn is marked visible because
   # the error event itself is written downstream, but no model output was ever
   # produced.
-  test "a resend after a zero-output provider failure is served, not refused", %{conn: conn} do
-    upstream = start_upstream(first_event_terminal_sse("response.failed", "server_error"))
+  for code <- ["server_error", "rate_limit_exceeded"] do
+    test "a resend after zero-output provider failure #{code} is served, not refused", %{
+      conn: conn
+    } do
+      code = unquote(code)
+      upstream = start_upstream(first_event_terminal_sse("response.failed", code))
+      setup = gateway_setup(upstream)
+      session = session_id()
+
+      first = post_turn(conn, setup, session, @turn_id, stream: true)
+      assert response(first, 200)
+
+      assert [predecessor] = pool_requests(setup)
+      assert predecessor.status == "failed"
+      assert predecessor.last_error_code == code
+      dispatched = FakeUpstream.count(upstream)
+
+      second = post_turn(conn, setup, session, @turn_id, stream: true)
+      assert response(second, 200)
+
+      assert FakeUpstream.count(upstream) > dispatched
+      assert [^predecessor, successor] = pool_requests(setup)
+
+      # Falling open steps OVER the zero-output predecessor rather than abandoning
+      # the turn: the successor is still named by this turn, through the same
+      # deterministic derivation the websocket resend chain uses. A fresh UUID
+      # here would switch the fence off for this turn permanently.
+      assert String.starts_with?(successor.correlation_id, "codex-request-retry:")
+    end
+  end
+
+  test "a resend after no eligible backend is served once routing recovers", %{conn: conn} do
+    upstream = start_upstream(stream_success_sse())
+    setup = gateway_setup(upstream)
+    session = session_id()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %RoutingCircuitState{
+      pool_id: setup.pool.id,
+      pool_upstream_assignment_id: setup.assignment.id,
+      upstream_identity_id: setup.identity.id,
+      model_identifier: setup.model.exposed_model_id,
+      route_class: "proxy_stream",
+      status: "open",
+      reason_code: "upstream_network_error",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 60, :second),
+      metadata: %{"probe_in_flight_count" => 0},
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+
+    first = post_turn(conn, setup, session, @turn_id, stream: true)
+    assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(first, 503)
+    assert [predecessor] = pool_requests(setup)
+    assert predecessor.last_error_code == "no_eligible_backend"
+    assert FakeUpstream.count(upstream) == 0
+
+    Repo.delete_all(from(c in RoutingCircuitState, where: c.pool_id == ^setup.pool.id))
+
+    second = post_turn(conn, setup, session, @turn_id, stream: true)
+    assert response(second, 200)
+    assert FakeUpstream.count(upstream) == 1
+    assert [^predecessor, successor] = pool_requests(setup)
+
+    # The pre-dispatch denial never reserved the turn claim, so recovery uses
+    # the original claim rather than stepping over a claimed predecessor.
+    assert String.starts_with?(successor.correlation_id, "codex-turn:")
+    refute predecessor.correlation_id == successor.correlation_id
+  end
+
+  test "a resend after a relayed 4xx is served, not refused", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(
+            %{"error" => %{"type" => "invalid_request_error", "code" => "bad_request"}},
+            400
+          ),
+          stream_success_sse()
+        ])
+      )
+
     setup = gateway_setup(upstream)
     session = session_id()
 
     first = post_turn(conn, setup, session, @turn_id, stream: true)
-    assert response(first, 200)
-
+    assert response(first, 400)
     assert [predecessor] = pool_requests(setup)
-    assert predecessor.status == "failed"
-    assert predecessor.last_error_code == "server_error"
-    dispatched = FakeUpstream.count(upstream)
+    assert predecessor.last_error_code == "upstream_status"
+    assert FakeUpstream.count(upstream) == 1
 
     second = post_turn(conn, setup, session, @turn_id, stream: true)
     assert response(second, 200)
-
-    assert FakeUpstream.count(upstream) > dispatched
+    assert FakeUpstream.count(upstream) == 2
     assert [^predecessor, successor] = pool_requests(setup)
-
-    # Falling open steps OVER the zero-output predecessor rather than abandoning
-    # the turn: the successor is still named by this turn, through the same
-    # deterministic derivation the websocket resend chain uses. A fresh UUID
-    # here would switch the fence off for this turn permanently.
     assert String.starts_with?(successor.correlation_id, "codex-request-retry:")
   end
 
