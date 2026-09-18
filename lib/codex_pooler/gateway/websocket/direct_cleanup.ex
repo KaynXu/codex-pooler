@@ -178,14 +178,16 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
   defp cancellation_exit_reason("owner_drained"), do: {:shutdown, :owner_drained}
   defp cancellation_exit_reason(_reason), do: {:shutdown, :client_disconnected}
 
-  @spec interrupt(receipt(), String.t()) :: :ok | {:error, term()}
+  @spec interrupt(receipt(), String.t()) ::
+          :ok | {:ok, %{after_commit_markers: [map()]}} | {:error, term()}
   defdelegate interrupt(receipt, reason), to: Interruption, as: :interrupt_direct_request
 
   # Called by the response task itself after it rescued an exception. The
   # task settles its own pending admission first (idempotent) so the receipt
   # lookup cannot wait on a readiness call only this process could make, then
   # fails the request, attempt, and turn it bound.
-  @spec fail_task_exception(t(), String.t()) :: :ok | :none | {:error, term()}
+  @spec fail_task_exception(t(), String.t()) ::
+          :ok | :none | {:ok, %{after_commit_markers: [map()]}} | {:error, term()}
   def fail_task_exception(%__MODULE__{} = context, reason) do
     case task_receipt(context) || registry_receipt(context) do
       {:ok, receipt} -> Interruption.finalize_task_exception_request(receipt, reason)

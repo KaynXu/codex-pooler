@@ -714,6 +714,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
           {"40001", "a serialization failure", false},
           {"08006", "a connection failure", false},
           {"53000", "an insufficient-resources failure", false},
+          {"55P03", "a lock-unavailable failure", false},
           {"57000", "an operator-intervention failure", false},
           {"58000", "a system failure", false}
         ] do

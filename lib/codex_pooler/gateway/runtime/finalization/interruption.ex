@@ -64,7 +64,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @spec interrupt_direct_request(
           CodexPooler.Gateway.Websocket.DirectCleanup.receipt(),
           String.t()
-        ) :: :ok | {:error, term()}
+        ) :: :ok | {:ok, %{after_commit_markers: [map()]}} | {:error, term()}
   def interrupt_direct_request(receipt, reason) do
     Repo.transaction(fn ->
       session = codex_session_for_update(receipt.session_id)
@@ -90,18 +90,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           []
       end
     end)
-    |> case do
-      {:ok, markers} ->
-        emit_committed_markers(markers)
-        :ok
-
-      {:error, [public_error: public_error, interrupted_outcomes: markers]} ->
-        emit_committed_markers(markers)
-        {:error, public_error}
-
-      {:error, error} ->
-        {:error, error}
-    end
+    |> finalize_marker_transaction()
   end
 
   defp direct_receipt_matches?(%CodexSession{} = session, %Request{} = request, receipt),
@@ -324,7 +313,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @spec finalize_task_exception_request(
           CodexPooler.Gateway.Websocket.DirectCleanup.receipt(),
           String.t()
-        ) :: :ok | {:error, term()}
+        ) :: :ok | {:ok, %{after_commit_markers: [map()]}} | {:error, term()}
   def finalize_task_exception_request(receipt, reason) when is_binary(reason) do
     Repo.transaction(fn ->
       session = codex_session_for_update(receipt.session_id)
@@ -349,14 +338,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         []
       end
     end)
-    |> case do
-      {:ok, markers} ->
-        emit_committed_markers(markers)
-        :ok
-
-      {:error, error} ->
-        {:error, error}
-    end
+    |> finalize_marker_transaction()
   end
 
   defp task_exception_attempt_matches?(nil, _receipt), do: true
@@ -1450,6 +1432,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   defp finalize_transaction({:error, reason}), do: {:error, reason}
+
+  defp finalize_marker_transaction({:ok, []}), do: :ok
+
+  defp finalize_marker_transaction({:ok, markers}) when is_list(markers) do
+    case emit_outcomes_after_commit(markers) do
+      :ok -> :ok
+      {:deferred, deferred} -> {:ok, %{after_commit_markers: deferred}}
+    end
+  end
+
+  defp finalize_marker_transaction(
+         {:error, [public_error: public_error, interrupted_outcomes: markers]}
+       ) do
+    case emit_outcomes_after_commit(markers) do
+      :ok -> {:error, public_error}
+      {:deferred, deferred} -> {:error, {:deferred_after_commit, public_error, deferred}}
+    end
+  end
+
+  defp finalize_marker_transaction({:error, error}), do: {:error, error}
 
   defp emit_committed_markers(markers), do: Enum.each(markers, &emit_after_commit_marker/1)
 

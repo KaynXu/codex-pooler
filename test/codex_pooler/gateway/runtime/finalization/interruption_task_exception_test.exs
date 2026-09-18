@@ -18,7 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     fixture = fixture()
     session_before = Repo.reload!(fixture.session)
 
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
 
     assert %Request{
              status: "failed",
@@ -63,7 +63,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
 
     # Idempotent: a second finalization changes nothing.
     request_after = Repo.get!(Request, fixture.request.id)
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
     assert Repo.get!(Request, fixture.request.id) == request_after
 
     assert Repo.aggregate(
@@ -83,7 +83,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
              })
 
     attempt_before = Repo.reload!(fixture.attempt)
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
     assert Repo.reload!(fixture.attempt) == attempt_before
 
     assert Enum.sort(
@@ -94,7 +94,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
              )
            ) == ["release", "reservation", "settlement"]
 
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
 
     assert Repo.aggregate(
              from(e in LedgerEntry, where: e.request_id == ^fixture.request.id),
@@ -137,7 +137,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
     fixture = fixture()
     Repo.delete!(fixture.attempt)
 
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
 
     assert %Request{status: "failed", last_error_code: @reason, usage_status: "usage_unknown"} =
              Repo.get!(Request, fixture.request.id)
@@ -161,7 +161,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
 
   test "the byte-identical resend is admitted as one successor after a task exception" do
     fixture = fixture()
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
 
     assert {:ok, %ClientRetry.SuccessorClaim{request: successor}} = claim(fixture)
     assert successor.id != fixture.request.id
@@ -245,7 +245,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
 
   test "only the exact task-exception shape admits a successor" do
     fixture = fixture()
-    assert :ok = Interruption.finalize_task_exception_request(fixture.receipt, @reason)
+    assert_task_exception_finalized(fixture.receipt)
 
     for mutate <- [
           fn -> update!(Request, fixture.request.id, response_status_code: 499) end,
@@ -358,6 +358,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTaskExceptionTest
       fixture.payload,
       fixture.opts
     )
+  end
+
+  defp assert_task_exception_finalized(receipt) do
+    case Interruption.finalize_task_exception_request(receipt, @reason) do
+      :ok -> :ok
+      {:ok, %{after_commit_markers: markers}} -> assert(markers != [])
+    end
   end
 
   defp update!(schema, id, attrs),

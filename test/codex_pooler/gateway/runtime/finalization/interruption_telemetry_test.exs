@@ -174,6 +174,77 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     end)
   end
 
+  for {name, finalizer, reason, phase, committed_turn_status} <- [
+        {"direct interrupt", :direct, "owner_drained", "turn_interrupted", "interrupted"},
+        {"task exception", :task_exception, "owner_task_exception", "task_exception", "failed"}
+      ] do
+    test "caller-owned #{name} publishes only after commit and stays silent on rollback" do
+      for outer_result <- [:commit, :rollback] do
+        fixture = committed_interruption_fixture!(:without_attempt)
+        receipt = pre_attempt_receipt(fixture)
+        samples = capture_pre_attempt_releases()
+
+        result =
+          run_unboxed(fn ->
+            Repo.transaction(fn ->
+              finalization =
+                case unquote(finalizer) do
+                  :direct ->
+                    Interruption.interrupt_direct_request(receipt, unquote(reason))
+
+                  :task_exception ->
+                    Interruption.finalize_task_exception_request(receipt, unquote(reason))
+                end
+
+              assert {:ok, %{after_commit_markers: markers}} = finalization
+              assert markers != []
+
+              case outer_result do
+                :commit -> {:committed, markers}
+                :rollback -> Repo.rollback(:caller_rollback)
+              end
+            end)
+          end)
+
+        case outer_result do
+          :commit ->
+            assert {:ok, {:committed, markers}} = result
+            assert Interruption.emit_committed_deferred_outcomes(markers) == :ok
+
+            assert [
+                     %{
+                       phase: unquote(phase),
+                       release_reason: unquote(reason),
+                       in_transaction?: false
+                     }
+                   ] = drain_samples(samples)
+
+            assert committed_interruption_state(fixture) == %{
+                     request_status: "failed",
+                     attempt_status: nil,
+                     turn_status: unquote(committed_turn_status),
+                     settlement_count: 0
+                   }
+
+            assert committed_release_count(fixture) == 1
+
+          :rollback ->
+            assert result == {:error, :caller_rollback}
+            assert drain_samples(samples) == []
+
+            assert committed_interruption_state(fixture) == %{
+                     request_status: "in_progress",
+                     attempt_status: nil,
+                     turn_status: "in_progress",
+                     settlement_count: 0
+                   }
+
+            assert committed_release_count(fixture) == 0
+        end
+      end
+    end
+  end
+
   test "a multi-turn expired-owner recovery does not count a release its rollback erases" do
     # `interrupt_session_transaction/4` maps
     # `interrupt_turn!/5` over EVERY in-progress turn of a session inside one
@@ -803,6 +874,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     Interruption.interrupt_codex_turn(fixture.session, fixture.request_options)
   end
 
+  defp pre_attempt_receipt(fixture) do
+    %{
+      session_id: fixture.session.id,
+      request_id: fixture.request.id,
+      correlation_id: fixture.request.correlation_id,
+      api_key_id: fixture.request.api_key_id,
+      owner_binding: nil
+    }
+  end
+
   defp transport_finalize(fixture) do
     Finalization.finalize_failed_websocket_response(fixture.selected_context, %{
       body: "",
@@ -827,6 +908,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
             :id
           )
       }
+    end)
+  end
+
+  defp committed_release_count(fixture) do
+    run_unboxed(fn ->
+      Repo.aggregate(
+        from(entry in LedgerEntry,
+          where: entry.request_id == ^fixture.request.id and entry.entry_kind == "release"
+        ),
+        :count,
+        :id
+      )
     end)
   end
 

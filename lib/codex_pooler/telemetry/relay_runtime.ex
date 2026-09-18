@@ -648,14 +648,13 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     end
   end
 
-  # PostgreSQL reserves the first two SQLSTATE bytes for the error class. The
-  # five classes below describe failures of the transaction, connection, or
-  # server rather than a refusal of this row, so every subclass must requeue.
-  # Everything outside them is a statement answer and therefore permanent for
-  # the exact bytes being retried. Classifying the class root keeps new server
-  # subclasses retryable without turning the open set of row refusals into an
-  # allowlist that silently loses samples when PostgreSQL adds a code.
-  @transient_postgres_classes ~w(08 40 53 57 58)
+  # PostgreSQL reserves the first two SQLSTATE bytes for the error class. These
+  # classes describe failures of the connection, transaction, resources,
+  # object readiness, operator, or server rather than a stable refusal of this
+  # row, so every subclass must requeue. Unknown classes remain permanent until
+  # deliberately classified; the policy does not claim that every other server
+  # answer is intrinsically row-specific.
+  @transient_postgres_classes ~w(08 40 53 55 57 58)
 
   defp permanent_refusal?(%Ecto.Changeset{}), do: true
   defp permanent_refusal?(%Ecto.ConstraintError{}), do: true
