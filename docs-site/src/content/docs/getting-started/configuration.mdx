@@ -31,6 +31,15 @@ as `https://localhost`; the port mapping is the local URL to open.
 
 Set release environment variables for values the app needs before it can read database settings.
 
+Set `http_proxy` and `https_proxy` to `http://` proxy URLs to route outbound HTTP,
+HTTPS, and WebSocket traffic by target scheme. Credentials embedded in a proxy
+URL are sent as HTTP Basic proxy authentication. Use the comma-separated
+`no_proxy` list for exact hosts, leading-dot or wildcard domain suffixes, IP
+addresses, CIDR ranges, optional ports, or `*`. Lowercase variables take
+precedence over `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`; an explicitly empty
+lowercase value disables its uppercase fallback.
+Proxy and `no_proxy` selection is evaluated again when an allowed Req caller follows a redirect, so the redirected destination cannot inherit the first URL's proxy route.
+
 <table>
   <thead>
     <tr>
@@ -50,6 +59,18 @@ Set release environment variables for values the app needs before it can read da
     <tr>
       <td><code>CODEX_POOLER_HTTP_PORT</code></td>
       <td>Local host port, default <code>4000</code></td>
+    </tr>
+    <tr>
+      <td><code>http_proxy</code> / <code>HTTP_PROXY</code></td>
+      <td>Optional HTTP proxy for outbound HTTP and WS destinations; lowercase takes precedence</td>
+    </tr>
+    <tr>
+      <td><code>https_proxy</code> / <code>HTTPS_PROXY</code></td>
+      <td>Optional HTTP CONNECT proxy for outbound HTTPS and WSS destinations; lowercase takes precedence</td>
+    </tr>
+    <tr>
+      <td><code>no_proxy</code> / <code>NO_PROXY</code></td>
+      <td>Optional comma-separated destination bypass list; lowercase takes precedence</td>
     </tr>
     <tr>
       <td><code>DATABASE_URL</code></td>

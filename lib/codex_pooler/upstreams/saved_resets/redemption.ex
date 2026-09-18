@@ -691,7 +691,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp list_recovery_chatgpt_credits(recovery) do
-    case Req.get(recovery.list_url,
+    case OutboundHTTP.get(recovery.list_url,
            headers:
              CloudflareCookies.request_headers(
                recovery.list_url,
@@ -703,7 +703,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ),
            retry: false,
            receive_timeout: recovery.receive_timeout,
-           finch: OutboundHTTP.pool_options()
+           finch: OutboundHTTP.pool_options_for_url(recovery.list_url)
          )
          |> store_cloudflare_cookies(recovery.list_url) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
@@ -999,7 +999,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       %{"redeem_request_id" => idempotency_key(recovery)}
       |> maybe_put_recovery_credit_id(endpoint_kind, credit_id)
 
-    case Req.post(recovery.consume_url,
+    case OutboundHTTP.post(recovery.consume_url,
            headers:
              CloudflareCookies.request_headers(
                recovery.consume_url,
@@ -1012,7 +1012,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
            receive_timeout: recovery.receive_timeout,
-           finch: OutboundHTTP.pool_options()
+           finch: OutboundHTTP.pool_options_for_url(recovery.consume_url)
          )
          |> store_cloudflare_cookies(recovery.consume_url) do
       {:ok, %{status: status, body: response_body}} ->
@@ -2274,7 +2274,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp list_chatgpt_credits(url, identity, access_token, receive_timeout) do
-    case Req.get(url,
+    case OutboundHTTP.get(url,
            headers:
              CloudflareCookies.request_headers(
                url,
@@ -2282,7 +2282,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ),
            retry: false,
            receive_timeout: receive_timeout,
-           finch: OutboundHTTP.pool_options()
+           finch: OutboundHTTP.pool_options_for_url(url)
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
@@ -2372,7 +2372,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         do: Map.put(body, "credit_id", reserved_credit_id),
         else: body
 
-    case Req.post(url,
+    case OutboundHTTP.post(url,
            headers:
              CloudflareCookies.request_headers(
                url,
@@ -2385,7 +2385,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
            receive_timeout: reserved_claim.receive_timeout,
-           finch: OutboundHTTP.pool_options()
+           finch: OutboundHTTP.pool_options_for_url(url)
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: response_body}} ->

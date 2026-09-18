@@ -175,13 +175,13 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
   end
 
   defp post_webhook(url, body, headers) do
-    Req.post(url,
+    OutboundHTTP.post(url,
       body: body,
       headers: headers,
       decode_body: false,
       receive_timeout: @receive_timeout_ms,
       retry: false,
-      finch: OutboundHTTP.pool_options()
+      finch: OutboundHTTP.pool_options_for_url(url)
     )
   rescue
     exception in [

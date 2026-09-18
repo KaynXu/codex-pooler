@@ -210,6 +210,23 @@ defmodule CodexPooler.Gateway.OperationalSettings do
     OutboundHTTP.pool_options(current().upstream_conn_max_idle_time_ms)
   end
 
+  @spec upstream_http_pool_options(keyword()) :: OutboundHTTP.pool_options()
+  def upstream_http_pool_options(conn_opts) when is_list(conn_opts) do
+    OutboundHTTP.pool_options_with_conn_opts(
+      current().upstream_conn_max_idle_time_ms,
+      conn_opts
+    )
+  end
+
+  @spec upstream_http_pool_options(String.t(), keyword()) :: OutboundHTTP.pool_options()
+  def upstream_http_pool_options(url, conn_opts) when is_binary(url) and is_list(conn_opts) do
+    OutboundHTTP.pool_options_for_url(
+      url,
+      current().upstream_conn_max_idle_time_ms,
+      conn_opts
+    )
+  end
+
   @spec firewall_enabled?(t()) :: boolean()
   def firewall_enabled?(%__MODULE__{firewall_allowlist: allowlist}), do: allowlist != []
 

@@ -21,10 +21,32 @@ postgres_password="$(openssl rand -hex 24)"
 http_port="${CODEX_POOLER_HTTP_PORT:-4000}"
 phx_host="${PHX_HOST:-localhost}"
 
+if [ "${http_proxy+x}" = x ]; then
+  http_proxy_value=$http_proxy
+else
+  http_proxy_value=${HTTP_PROXY:-}
+fi
+
+if [ "${https_proxy+x}" = x ]; then
+  https_proxy_value=$https_proxy
+else
+  https_proxy_value=${HTTPS_PROXY:-}
+fi
+
+if [ "${no_proxy+x}" = x ]; then
+  no_proxy_value=$no_proxy
+else
+  no_proxy_value=${NO_PROXY:-}
+fi
+
 cat > "$target" <<EOF
 CODEX_POOLER_IMAGE=${CODEX_POOLER_IMAGE:-ghcr.io/icoretech/codex-pooler}
 CODEX_POOLER_IMAGE_TAG=${CODEX_POOLER_IMAGE_TAG:-latest}
 CODEX_POOLER_HTTP_PORT=${http_port}
+
+http_proxy=${http_proxy_value}
+https_proxy=${https_proxy_value}
+no_proxy=${no_proxy_value}
 
 PHX_HOST=${phx_host}
 OBAN_MODE=${OBAN_MODE:-all}

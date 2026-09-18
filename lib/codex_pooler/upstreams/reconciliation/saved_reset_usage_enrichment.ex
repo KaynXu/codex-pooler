@@ -79,13 +79,13 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
     usage_url
     |> reset_credits_urls()
     |> Enum.reduce_while(:error, fn url, _last_result ->
-      case Req.get(url,
+      case OutboundHTTP.get(url,
              headers: CloudflareCookies.request_headers(url, headers),
              decode_body: false,
              into: &collect_bounded_body/2,
              retry: false,
              receive_timeout: timeout,
-             finch: OutboundHTTP.pool_options()
+             finch: OutboundHTTP.pool_options_for_url(url)
            ) do
         {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
           handle_successful_reset_credits_response(url, response, observed_at)

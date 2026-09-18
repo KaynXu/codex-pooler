@@ -68,10 +68,10 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
     with {:ok, token} <-
            Secrets.decrypt_active_secret(identity, @secret_kind),
          {:ok, url} <- model_catalog_url(identity, assignment) do
-      case Req.get(url,
+      case OutboundHTTP.get(url,
              retry: false,
              receive_timeout: 30_000,
-             finch: OutboundHTTP.pool_options(),
+             finch: OutboundHTTP.pool_options_for_url(url),
              headers:
                CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
            )

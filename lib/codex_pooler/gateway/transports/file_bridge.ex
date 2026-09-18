@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Routing.RoutingSelection
   alias CodexPooler.Gateway.Transports.TransportFailureReason
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
@@ -68,7 +69,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     with {:ok, body, byte_size} <- readable_file_stream(path) do
       upload_url
       |> upload_request()
-      |> Req.put(upload_req_options(body, content_type, byte_size))
+      |> OutboundHTTP.put(upload_req_options(upload_url, body, content_type, byte_size))
       |> normalize_upload_response(opts)
     end
   rescue
@@ -214,10 +215,10 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         retry: false,
         headers: headers(identity, token, forwarded_headers(opts))
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
     url
-    |> Req.post(request_options)
+    |> OutboundHTTP.post(request_options)
     |> normalize_transport_result(identity, opts)
   rescue
     exception in [
@@ -267,7 +268,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     path == root or String.starts_with?(path, root <> "/")
   end
 
-  defp upload_req_options(body, content_type, byte_size) do
+  defp upload_req_options(upload_url, body, content_type, byte_size) do
     configured_upload_req_options()
     |> Keyword.merge(
       body: body,
@@ -278,7 +279,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       ],
       redirect: false,
       retry: false,
-      finch: OperationalSettings.upstream_http_pool_options()
+      finch: OperationalSettings.upstream_http_pool_options(upload_url, [])
     )
   end
 

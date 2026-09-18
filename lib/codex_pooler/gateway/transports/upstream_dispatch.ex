@@ -37,6 +37,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV7
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
@@ -401,9 +402,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             ])
           )
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
-    result = Req.post(url, request_options)
+    result = OutboundHTTP.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
     result = maybe_drain_rejection_body(result, opts)
 
@@ -462,7 +463,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         retry: false,
         headers: upstream_header_list
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
     request_options =
       if streaming_request?(payload, opts) do
@@ -475,7 +476,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         )
       end
 
-    result = Req.post(url, request_options)
+    result = OutboundHTTP.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
     result = maybe_drain_rejection_body(result, opts)
 
