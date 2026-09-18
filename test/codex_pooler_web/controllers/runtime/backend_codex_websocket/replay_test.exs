@@ -469,7 +469,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
       }
     end
 
-    assert_replay_red_boundary(payload)
+    assert_replay_red_boundary(payload, "codex-request:")
   end
 
   @tag :replay_matrix
@@ -500,7 +500,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
       }
     end
 
-    assert_replay_red_boundary(payload)
+    assert_replay_red_boundary(payload, "codex-resume:")
   end
 
   @tag :replay_matrix
@@ -1210,7 +1210,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     )
   end
 
-  defp assert_replay_red_boundary(payload_builder) do
+  defp assert_replay_red_boundary(payload_builder, expected_claim_prefix) do
     previous_owner_forwarding =
       Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
 
@@ -1313,7 +1313,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     assert byte_size(turn.semantic_turn_digest) == 32
     assert get_in(request.request_metadata, ["websocket_owner_forwarding", "enabled"]) == true
-    assert request.correlation_id =~ ~r/\Acodex-(?:request|turn):[A-Za-z0-9_-]{43}\z/
+    assert String.starts_with?(request.correlation_id, expected_claim_prefix)
+
+    assert String.replace_prefix(request.correlation_id, expected_claim_prefix, "") =~
+             ~r/\A[A-Za-z0-9_-]{43}\z/
 
     assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(turn.codex_session_id)
     owner_state = :sys.get_state(owner_pid)
