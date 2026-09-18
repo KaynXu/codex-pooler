@@ -72,7 +72,8 @@ defmodule CodexPooler.Release do
 
   Returns `:ok` when the node can serve and raises with a sanitized reason
   class otherwise, so any probe wrapper sees a non-zero exit. It is a read; it
-  starts nothing and changes nothing.
+  starts nothing and changes only the node-local readiness grace state after a
+  successful database check.
   """
   @spec readiness_check() :: :ok
   def readiness_check do

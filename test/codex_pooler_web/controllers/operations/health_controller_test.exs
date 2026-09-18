@@ -10,44 +10,18 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Platform.Readiness
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL
 
   setup do
-    previous_config = Application.get_env(:codex_pooler, Readiness)
+    CodexPooler.TestAppEnv.restore_on_exit(Readiness)
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalStatus)
+    CodexPooler.TestAppEnv.restore_on_exit(RolloutDrain)
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     # The grace window is a per-node fact that outlives a single test, so every
     # test here starts from a node that has never been ready.
     :ok = Readiness.reset_state!()
     on_exit(&Readiness.reset_state!/0)
-
-    previous_operational_status_config = Application.get_env(:codex_pooler, OperationalStatus)
-    previous_rollout_drain_config = Application.get_env(:codex_pooler, RolloutDrain)
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
-
-    on_exit(fn ->
-      if previous_config do
-        Application.put_env(:codex_pooler, Readiness, previous_config)
-      else
-        Application.delete_env(:codex_pooler, Readiness)
-      end
-
-      if previous_operational_status_config do
-        Application.put_env(:codex_pooler, OperationalStatus, previous_operational_status_config)
-      else
-        Application.delete_env(:codex_pooler, OperationalStatus)
-      end
-
-      if previous_rollout_drain_config do
-        Application.put_env(:codex_pooler, RolloutDrain, previous_rollout_drain_config)
-      else
-        Application.delete_env(:codex_pooler, RolloutDrain)
-      end
-
-      if previous_operational_settings do
-        Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
-      else
-        Application.delete_env(:codex_pooler, OperationalSettings)
-      end
-    end)
   end
 
   test "GET /healthz returns a lightweight liveness response", %{conn: conn} do
@@ -89,6 +63,33 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     assert log =~ "readiness probe failed path=/readyz reason_class=undefined_table"
   end
 
+  test "GET /readyz returns 503 when packaged migrations cannot be verified", %{conn: conn} do
+    missing =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-missing-migrations-#{System.unique_integer([:positive])}"
+      )
+
+    Application.put_env(:codex_pooler, Readiness, migrations_path: missing)
+
+    {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+
+    assert log =~
+             "readiness probe failed path=/readyz reason_class=migration_directory_unreadable"
+  end
+
+  test "GET /readyz bounds query encoding exceptions as sanitized 503 responses", %{conn: conn} do
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.EncodingErrorProbe)
+
+    {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+    assert log =~ "readiness probe failed path=/readyz reason_class=DBConnection.EncodeError"
+    refute log =~ "example-secret"
+  end
+
   test "GET /readyz keeps readiness through a brief connectivity failure", %{conn: conn} do
     assert conn |> get(~p"/readyz") |> json_response(200) == %{"status" => "ready"}
 
@@ -99,7 +100,10 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     {conn, log} = with_log([level: :info], fn -> get(recycle(conn), ~p"/readyz") end)
 
     assert json_response(conn, 200) == %{"status" => "ready"}
-    assert log =~ "readiness probe degraded path=/readyz reason_class=RuntimeError"
+
+    assert log =~
+             "readiness probe degraded path=/readyz reason_class=DBConnection.ConnectionError"
+
     refute log =~ "readiness probe failed"
   end
 
@@ -112,7 +116,9 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
 
     assert json_response(conn, 503) == %{"status" => "unavailable"}
-    assert log =~ "readiness probe failed path=/readyz reason_class=RuntimeError"
+
+    assert log =~
+             "readiness probe failed path=/readyz reason_class=DBConnection.ConnectionError"
   end
 
   @tag :capture_log
@@ -255,7 +261,10 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
       end)
 
     assert json_response(conn, 503) == %{"status" => "unavailable"}
-    assert log =~ "readiness probe failed path=/readyz reason_class=RuntimeError"
+
+    assert log =~
+             "readiness probe failed path=/readyz reason_class=DBConnection.ConnectionError"
+
     refute log =~ "database refused example-secret"
     refute log =~ "GET /readyz"
     refute log =~ "Sent 503"
@@ -330,7 +339,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   defmodule AvailableReadinessProbe do
     def query(repo, statement, params, opts) do
       send(self(), :available_readiness_probe_called)
-      Ecto.Adapters.SQL.query(repo, statement, params, opts)
+      SQL.query(repo, statement, params, opts)
     end
   end
 
@@ -355,7 +364,13 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
   defmodule UnavailableReadinessProbe do
     def query(_repo, _statement, _params, _opts) do
-      {:error, %RuntimeError{message: "database refused example-secret"}}
+      {:error, %DBConnection.ConnectionError{message: "database refused example-secret"}}
+    end
+  end
+
+  defmodule EncodingErrorProbe do
+    def query(_repo, _statement, _params, _opts) do
+      raise DBConnection.EncodeError, "raw value example-secret"
     end
   end
 end

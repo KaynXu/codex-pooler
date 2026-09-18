@@ -17,6 +17,7 @@ defmodule CodexPooler.Application do
 
     children = [
       CodexPooler.Platform.ExecutionRegistry,
+      CodexPooler.Platform.Readiness,
       CodexPoolerWeb.Telemetry,
       CodexPooler.Repo,
       CodexPooler.Platform.ExecutionProofPublisher,
