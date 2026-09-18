@@ -430,42 +430,58 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       end)
     end
 
-    defp re2_unsupported?(pattern), do: re2_unsupported_scan?(pattern, false)
+    defp re2_unsupported?(pattern), do: re2_unsupported_scan?(pattern, :outside)
 
-    defp re2_unsupported_scan?(<<>>, _in_character_class), do: false
-    defp re2_unsupported_scan?(<<"\\">>, _in_character_class), do: true
+    defp re2_unsupported_scan?(<<>>, _class_state), do: false
+    defp re2_unsupported_scan?(<<"\\">>, _class_state), do: true
 
-    defp re2_unsupported_scan?(<<"\\", digit, _rest::binary>>, _in_character_class)
+    defp re2_unsupported_scan?(<<"\\", digit, _rest::binary>>, _class_state)
          when digit in ?1..?9,
          do: true
 
-    defp re2_unsupported_scan?(<<"\\", escape, rest::binary>>, in_character_class)
+    defp re2_unsupported_scan?(<<"\\", escape, rest::binary>>, class_state)
          when escape in ?A..?Z or escape in ?a..?z do
       if escape in ~c"AbBdDsSwWafnrtvx",
-        do: re2_unsupported_scan?(rest, in_character_class),
+        do: re2_unsupported_scan?(rest, after_class_member(class_state)),
         else: true
     end
 
-    defp re2_unsupported_scan?(<<"\\", _escaped::utf8, rest::binary>>, in_character_class),
-      do: re2_unsupported_scan?(rest, in_character_class)
+    defp re2_unsupported_scan?(<<"\\", _escaped::utf8, rest::binary>>, class_state),
+      do: re2_unsupported_scan?(rest, after_class_member(class_state))
 
-    defp re2_unsupported_scan?(<<"[", rest::binary>>, false),
-      do: re2_unsupported_scan?(rest, true)
+    defp re2_unsupported_scan?(<<"[", rest::binary>>, :outside),
+      do: re2_unsupported_scan?(rest, :class_open)
 
-    defp re2_unsupported_scan?(<<"[:", _rest::binary>>, true), do: true
+    defp re2_unsupported_scan?(<<"^", rest::binary>>, :class_open),
+      do: re2_unsupported_scan?(rest, :class_first)
 
-    defp re2_unsupported_scan?(<<"]", rest::binary>>, true),
-      do: re2_unsupported_scan?(rest, false)
+    defp re2_unsupported_scan?(pattern, :class_open),
+      do: re2_unsupported_scan?(pattern, :class_first)
 
-    defp re2_unsupported_scan?(<<"(?", _rest::binary>>, false), do: true
-    defp re2_unsupported_scan?(<<"(*", _rest::binary>>, false), do: true
+    defp re2_unsupported_scan?(<<"[:", _rest::binary>>, state)
+         when state in [:class_first, :class_body],
+         do: true
 
-    defp re2_unsupported_scan?(<<quantifier, "+", _rest::binary>>, false)
+    defp re2_unsupported_scan?(<<"]", rest::binary>>, :class_first),
+      do: re2_unsupported_scan?(rest, :class_body)
+
+    defp re2_unsupported_scan?(<<"]", rest::binary>>, :class_body),
+      do: re2_unsupported_scan?(rest, :outside)
+
+    defp re2_unsupported_scan?(<<"(?", _rest::binary>>, :outside), do: true
+    defp re2_unsupported_scan?(<<"(*", _rest::binary>>, :outside), do: true
+
+    defp re2_unsupported_scan?(<<quantifier, "+", _rest::binary>>, :outside)
          when quantifier in ~c"*+?}",
          do: true
 
-    defp re2_unsupported_scan?(<<_char::utf8, rest::binary>>, in_character_class),
-      do: re2_unsupported_scan?(rest, in_character_class)
+    defp re2_unsupported_scan?(<<_char::utf8, rest::binary>>, class_state),
+      do: re2_unsupported_scan?(rest, after_class_member(class_state))
+
+    defp after_class_member(class_state) when class_state in [:class_open, :class_first],
+      do: :class_body
+
+    defp after_class_member(class_state), do: class_state
 
     defp tokens(expr), do: tokens(expr, [])
 
@@ -1312,7 +1328,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
                series
              )
 
-      for pattern <- ["[a[:alpha:]_]+", "[^[:digit:]]+"] do
+      for pattern <- ["[a[:alpha:]_]+", "[^[:digit:]]+", "[^][:digit:]]+"] do
         invalid = ~s|sum(rate(#{series}{via="in_process", via!~"#{pattern}"}[5m]))|
         assert PromQL.occurrences(invalid, series) == :invalid
         refute series_pinned?(invalid, series)
@@ -1445,6 +1461,16 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert PromQL.charted_series(~s|sum(rate({__name__=~"codex_pooler_.*"}[5m]))|, candidates) ==
                candidates
 
+      assert PromQL.charted_series(
+               ~s|sum(rate({__name__=~"codex_pooler_[]a-z_]+"}[5m]))|,
+               candidates
+             ) == candidates
+
+      assert PromQL.charted_series(
+               ~s|sum(rate({__name__=~"codex_pooler_[^]0-9]+"}[5m]))|,
+               candidates
+             ) == candidates
+
       # Prometheus anchors the pattern, so a fragment that would match unanchored
       # does not name the series.
       assert PromQL.charted_series(~s|sum(rate({__name__=~"quota_cycle"}[5m]))|, candidates) == []
@@ -1464,7 +1490,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
             ~S|codex_pooler_\u0061|,
             "codex_pooler_[[:alpha:]_]+",
             "codex_pooler_[a[:alpha:]_]+",
-            "codex_pooler_[^[:digit:]]+"
+            "codex_pooler_[^[:digit:]]+",
+            "codex_pooler_[][:alpha:]_]+"
           ] do
         encoded = String.replace(pattern, "\\", "\\\\")
         invalid = ~s|sum(rate({__name__=~"#{encoded}", via="in_process"}[5m]))|
