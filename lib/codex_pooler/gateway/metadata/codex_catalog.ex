@@ -279,7 +279,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   # the same source — the overwhelmingly common shape — stays read-free and
   # keeps byte-identical behavior.
   defp resolve_routable_assignment_ids_by_model_id(pairs_by_model, opts) do
-    if Enum.any?(pairs_by_model, &multi_partition?/1) do
+    if Enum.any?(pairs_by_model, &selection_requires_routability?/1) do
       case Keyword.get(opts, :routable_assignment_ids_by_model_id) do
         resolver when is_function(resolver, 0) ->
           resolver.()
@@ -294,6 +294,27 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp multi_partition?({_model, pairs}) do
     pairs |> Enum.uniq_by(& &1.digest) |> length() > 1
+  end
+
+  defp selection_requires_routability?({_model, pairs} = pair_group) do
+    multi_partition?(pair_group) or
+      pairs |> Enum.uniq_by(&reasoning_projection_signature/1) |> length() > 1
+  end
+
+  defp reasoning_projection_signature(pair) do
+    levels =
+      pair.source
+      |> ModelMetadata.metadata_reasoning_levels()
+      |> Enum.sort_by(&reasoning_level_sort_key/1)
+
+    {reasoning_source_default(pair.source), levels}
+  end
+
+  defp reasoning_source_default(source) do
+    case Map.get(source, "default_reasoning_level") do
+      value when is_binary(value) -> ReasoningEffort.normalize_known(value) || String.trim(value)
+      _value -> nil
+    end
   end
 
   defp canonical_pairs(%Model{} = model, candidates) do

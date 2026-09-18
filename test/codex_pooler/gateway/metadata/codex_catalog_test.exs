@@ -760,6 +760,31 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       assert first_catalog.body == second_catalog.body
       assert first_catalog.etag == second_catalog.etag
     end
+
+    test "resolves routability when only the reasoning default differs", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      exhausted_anchor = Map.put(base_source, "default_reasoning_level", "high")
+      routable_sibling = Map.put(base_source, "default_reasoning_level", "low")
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => exhausted_anchor,
+          context.sibling_id => routable_sibling,
+          context.alternate_id => Map.put(base_source, "context_window", 111_111)
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   send(self(), :resolved_default_routability)
+                   %{model.id => MapSet.new([context.sibling_id])}
+                 end
+               )
+
+      assert_received :resolved_default_routability
+      assert partition.source["default_reasoning_level"] == "low"
+    end
   end
 
   test "selects a newer routable majority instead of pinning an older singleton" do
