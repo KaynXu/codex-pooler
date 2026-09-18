@@ -5750,6 +5750,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     ])
 
     refute inspect(attempt.response_metadata) =~ "sensitive transport body"
+
+    assert [%BridgeDemotion{reason_code: "upstream_network_error", status: "active"}] =
+             Repo.all(
+               from(d in BridgeDemotion,
+                 where:
+                   d.pool_id == ^setup.pool.id and
+                     d.pool_upstream_assignment_id == ^setup.assignment.id
+               )
+             )
+
+    assert [
+             %RoutingCircuitState{
+               reason_code: "upstream_network_error",
+               status: "closed",
+               failure_count: 1
+             }
+           ] =
+             Repo.all(
+               from(c in RoutingCircuitState,
+                 where:
+                   c.pool_id == ^setup.pool.id and
+                     c.pool_upstream_assignment_id == ^setup.assignment.id and
+                     c.route_class == "proxy_http"
+               )
+             )
   end
 
   @tag :prompt_cache_adaptation
@@ -6020,6 +6045,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.network_error_code == "upstream_network_error"
     assert attempt.response_metadata["error_code"] == "upstream_network_error"
     assert_safe_transport_failure_metadata!(attempt, ["pre-header timeout fixture"])
+
+    assert [%BridgeDemotion{reason_code: "upstream_network_error", status: "active"}] =
+             Repo.all(
+               from(d in BridgeDemotion,
+                 where:
+                   d.pool_id == ^setup.pool.id and
+                     d.pool_upstream_assignment_id == ^setup.assignment.id
+               )
+             )
+
+    assert [
+             %RoutingCircuitState{
+               reason_code: "upstream_network_error",
+               status: "closed",
+               failure_count: 1
+             }
+           ] =
+             Repo.all(
+               from(c in RoutingCircuitState,
+                 where:
+                   c.pool_id == ^setup.pool.id and
+                     c.pool_upstream_assignment_id == ^setup.assignment.id and
+                     c.route_class == "proxy_http"
+               )
+             )
   end
 
   test "POST /backend-api/codex/responses keeps silent pre-first-event SSE stalls metadata-only" do
