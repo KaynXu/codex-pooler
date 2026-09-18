@@ -17,7 +17,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     ReservationPolicy
   }
 
-  alias CodexPooler.Accounting.RequestLifecycle.{FailedPredecessorResend, LedgerEntries}
+  alias CodexPooler.Accounting.RequestLifecycle.{
+    DeadExecutionResendRecovery,
+    FailedPredecessorResend,
+    LedgerEntries
+  }
+
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
@@ -73,6 +78,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp do_claim_websocket_turn(pool, api_key, model, opts, resend_session) do
     timestamp = now(opts)
     captured_epoch = runtime_revocation_epoch(api_key, opts)
+    caller_owned_transaction? = Repo.in_transaction?()
     maybe_test_runtime_authorization_barrier(:claim, :before)
 
     Repo.transaction(fn ->
@@ -108,11 +114,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       link_semantic_execution_retry!(opts, client_resend, request, timestamp)
 
       case client_resend do
-        nil -> %{request: request}
-        %{} -> %{request: request, client_resend: client_resend}
+        nil ->
+          %{request: request}
+
+        %{} ->
+          %{request: request, client_resend: Map.delete(client_resend, :recovery_markers)}
+          |> DeadExecutionResendRecovery.put_markers(client_resend)
       end
     end)
     |> unwrap_transaction()
+    |> DeadExecutionResendRecovery.emit_after_commit(caller_owned_transaction?)
   rescue
     error in Ecto.ConstraintError ->
       if error.constraint == "requests_correlation_id_uq" do
@@ -165,12 +176,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     }
 
     case FailedPredecessorResend.resolve(attr(opts, :correlation_id), scope) do
-      {:ok, %{claim: claim, predecessor: predecessor, predecessor_shape: shape}} ->
+      {:ok,
+       %{
+         claim: claim,
+         predecessor: predecessor,
+         predecessor_shape: shape,
+         recovery_markers: recovery_markers
+       }} ->
         {claim,
          %{
            predecessor_request_id: predecessor.id,
            reason: :failed_predecessor,
-           predecessor_shape: shape
+           predecessor_shape: shape,
+           recovery_markers: recovery_markers
          }}
 
       {:error, disposition} ->
@@ -259,12 +277,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     }
 
     case FailedPredecessorResend.resolve(claim, scope) do
-      {:ok, %{claim: resolved_claim, predecessor: resolved, predecessor_shape: shape}} ->
+      {:ok,
+       %{
+         claim: resolved_claim,
+         predecessor: resolved,
+         predecessor_shape: shape,
+         recovery_markers: recovery_markers
+       }} ->
         {resolved_claim,
          %{
            predecessor_request_id: resolved.id,
            reason: :failed_predecessor,
-           predecessor_shape: shape
+           predecessor_shape: shape,
+           recovery_markers: recovery_markers
          }}
 
       {:error, disposition} ->
@@ -681,6 +706,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
          captured_epoch,
          resend_session
        ) do
+    caller_owned_transaction? = Repo.in_transaction?()
+
     Repo.transaction(fn ->
       :ok = lock_resend_session(resend_session)
       api_key = authorize_runtime_turn!(api_key, captured_epoch)
@@ -749,8 +776,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         reservation: reservation,
         estimate: estimate
       }
+      |> DeadExecutionResendRecovery.put_markers(client_resend)
     end)
     |> unwrap_transaction()
+    |> DeadExecutionResendRecovery.emit_after_commit(caller_owned_transaction?)
   end
 
   @spec record_denied_request(CodexPooler.Access.auth_context(), term(), map()) ::

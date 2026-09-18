@@ -30,6 +30,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
     RequestReplayEntitlement
   }
 
+  alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionResendRecovery
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
@@ -69,7 +70,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   @type resolution :: %{
           claim: String.t(),
           predecessor: Request.t(),
-          predecessor_shape: predecessor_shape()
+          predecessor_shape: predecessor_shape(),
+          recovery_markers: [map()]
         }
 
   @doc false
@@ -90,6 +92,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
           nil,
           Map.put(scope, :semantic_claim?, semantic_claim?(claim)),
           db_now(),
+          [],
           0
         )
     end
@@ -100,25 +103,39 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   defp semantic_claim?("codex-turn:" <> _digest), do: true
   defp semantic_claim?(_claim), do: false
 
-  defp resolve_chain(_claim, _predecessor, _shape, _scope, _now, depth)
+  defp resolve_chain(_claim, _predecessor, _shape, _scope, _now, _markers, depth)
        when depth > @max_chain_depth,
        do: {:error, :chain_exhausted}
 
-  defp resolve_chain(claim, predecessor, shape, scope, now, depth) do
+  defp resolve_chain(claim, predecessor, shape, scope, now, markers, depth) do
     case lock_request_by_claim(claim) do
       nil when is_nil(predecessor) ->
         {:error, :missing_predecessor}
 
       nil ->
-        {:ok, %{claim: claim, predecessor: predecessor, predecessor_shape: shape}}
+        {:ok,
+         %{
+           claim: claim,
+           predecessor: predecessor,
+           predecessor_shape: shape,
+           recovery_markers: Enum.reverse(markers)
+         }}
 
       %Request{} = request ->
-        with {:ok, request_shape} <- validate_predecessor(request, scope, now),
-             :ok <- validate_semantic_retry(request, scope),
-             {:ok, derived} <-
-               ClientRetry.deterministic_failed_predecessor_claim(claim, request.id) do
-          resolve_chain(derived, request, request_shape, scope, now, depth + 1)
-        end
+        continue_chain(request, claim, scope, now, markers, depth)
+    end
+  end
+
+  defp continue_chain(request, claim, scope, now, markers, depth) do
+    with {:ok, request, marker} <-
+           DeadExecutionResendRecovery.recover(request, scoped?(request, scope), now),
+         effective_now <- if(marker, do: db_now(), else: now),
+         {:ok, request_shape} <- validate_predecessor(request, scope, effective_now),
+         :ok <- validate_semantic_retry(request, scope),
+         {:ok, derived} <-
+           ClientRetry.deterministic_failed_predecessor_claim(claim, request.id) do
+      markers = if marker, do: [marker | markers], else: markers
+      resolve_chain(derived, request, request_shape, scope, now, markers, depth + 1)
     end
   end
 
