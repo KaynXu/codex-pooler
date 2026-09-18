@@ -13,6 +13,7 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
     RequestClientRetryLink
   }
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
@@ -173,6 +174,54 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
     assert ledger_kinds(request.id) == ["release", "reservation", "settlement"]
   end
 
+  test "owner crash interruption preserves exact dead-execution attribution" do
+    fixture = active_dead_execution_fixture!()
+    CodexPooler.ExecutionProofSupport.publish_terminal!(fixture.attempt)
+    attach_outcome_handler!()
+
+    assert {:ok, %{interrupted_turn_count: 1}} =
+             Interruption.interrupt_codex_turn(
+               fixture.session,
+               RequestOptions.for_websocket(%{
+                 request_id: fixture.request.correlation_id,
+                 interrupt_reason: "owner_crashed",
+                 reconnect_window_seconds: 300
+               })
+             )
+
+    assert_receive {:dead_resend_outcome,
+                    %{
+                      outcome: "interrupted",
+                      downstream_transport: "websocket",
+                      upstream_transport: "websocket"
+                    }, false}
+
+    assert_recovered!(fixture.request, fixture.attempt, fixture.turn)
+  end
+
+  test "owner crash interruption keeps owner_crashed without a terminal proof" do
+    fixture = active_dead_execution_fixture!()
+
+    assert {:ok, %{interrupted_turn_count: 1}} =
+             Interruption.interrupt_codex_turn(
+               fixture.session,
+               RequestOptions.for_websocket(%{
+                 request_id: fixture.request.correlation_id,
+                 interrupt_reason: "owner_crashed",
+                 reconnect_window_seconds: 300
+               })
+             )
+
+    assert %Request{status: "failed", last_error_code: "owner_crashed"} =
+             Repo.reload!(fixture.request)
+
+    assert %Attempt{status: "failed", network_error_code: "owner_crashed"} =
+             Repo.reload!(fixture.attempt)
+
+    assert %CodexTurn{status: "interrupted", error_code: "owner_crashed"} =
+             Repo.reload!(fixture.turn)
+  end
+
   defp create_dead_attempt!(setup, request) do
     parent = self()
 
@@ -192,6 +241,61 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
     Process.exit(owner_pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^owner_pid, :killed}, @detection_timeout_ms
     attempt
+  end
+
+  defp active_dead_execution_fixture! do
+    setup = accounting_setup()
+    now = db_now()
+
+    session =
+      setup
+      |> insert_session!()
+      |> Ecto.Changeset.change(
+        owner_instance_id: "owner-node@example",
+        owner_instance_boot_id: "owner-boot",
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, 300, :second),
+        last_heartbeat_at: now
+      )
+      |> Repo.update!()
+
+    claim = "codex-turn:" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    witness =
+      ClientRetry.original_witness!(
+        :crypto.strong_rand_bytes(32),
+        setup.api_key.runtime_revocation_epoch
+      )
+
+    assert {:ok, %{request: claimed}} =
+             Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+               endpoint: @endpoint,
+               correlation_id: claim,
+               codex_session: session,
+               native_client_retry_witness: witness
+             })
+
+    assert {:ok, %{request: request}} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id, "input" => []},
+               %{
+                 endpoint: @endpoint,
+                 transport: "websocket",
+                 correlation_id: claim,
+                 turn_claim: claimed
+               }
+             )
+
+    attempt = create_dead_attempt!(setup, request)
+
+    %{
+      request: request,
+      attempt: attempt,
+      turn: insert_turn!(session, request, attempt),
+      session: session
+    }
   end
 
   defp insert_session!(setup) do

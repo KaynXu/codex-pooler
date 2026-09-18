@@ -268,10 +268,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   defp recover_proven_dead_direct_request(request, %Attempt{}) do
-    case DeadExecutionResendRecovery.recover(request, true, now()) do
-      {:ok, _recovered, %{kind: :stream_outcome} = marker} -> {:recovered, marker}
-      {:ok, _request, nil} -> :not_recovered
-      {:error, :active_predecessor} -> :not_recovered
+    case recover_proven_dead_request(request, latest_attempt_for_update(request.id)) do
+      %{kind: :stream_outcome} = marker -> {:recovered, marker}
+      nil -> :not_recovered
     end
   end
 
@@ -972,6 +971,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     request = request_for_update(turn.request_id)
     attempt = latest_attempt_for_update(turn.request_id)
 
+    case recover_proven_dead_request(request, attempt) do
+      %{kind: :stream_outcome} = marker ->
+        [marker]
+
+      nil ->
+        do_interrupt_turn!(turn, request, attempt, opts, reason, now, caller_owned_transaction?)
+    end
+  end
+
+  defp do_interrupt_turn!(turn, request, attempt, opts, reason, now, caller_owned_transaction?) do
     cond do
       request_completed_successfully?(request, attempt) ->
         complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
@@ -1056,6 +1065,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         []
     end
   end
+
+  defp recover_proven_dead_request(%Request{} = request, %Attempt{}) do
+    case DeadExecutionResendRecovery.recover(request, true, now()) do
+      {:ok, _recovered, %{kind: :stream_outcome} = marker} -> marker
+      {:ok, _request, nil} -> nil
+      {:error, :active_predecessor} -> nil
+    end
+  end
+
+  defp recover_proven_dead_request(_request, _attempt), do: nil
 
   # A turn interrupted before any attempt existed still holds whatever the
   # reservation reserved, so the release is written for every reason this
