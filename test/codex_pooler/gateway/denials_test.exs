@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.DenialsTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.AccountingBoundaryTrace
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -61,6 +62,40 @@ defmodule CodexPooler.Gateway.DenialsTest do
                "applied_effort" => nil
              }
            }
+  end
+
+  test "gateway denial omits the raw idempotency key at the accounting boundary" do
+    fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(fake)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "synthetic"}
+    raw_key = "denial-private-key-#{System.unique_integer([:positive])}"
+    opts = RequestOptions.build(%{idempotency_key: raw_key}, @endpoint_path, payload)
+
+    reason = %{
+      status: 400,
+      code: "reasoning_effort_not_allowed",
+      message: "reasoning effort is not available for this API key"
+    }
+
+    {result, [_auth, _model, attrs]} =
+      AccountingBoundaryTrace.capture_call(
+        {CodexPooler.Accounting, :record_denied_request, 3},
+        fn ->
+          Denials.log_gateway(%Denials.Context{
+            auth: auth,
+            model: setup.model,
+            reason: reason,
+            endpoint: @endpoint_path,
+            payload: payload,
+            opts: opts
+          })
+        end
+      )
+
+    assert {:error, ^reason} = result
+    refute Map.has_key?(attrs, :idempotency_key)
+    refute inspect(attrs, limit: :infinity, printable_limit: :infinity) =~ raw_key
   end
 
   test "a policy denial answers a disabled key with the auth boundary's 401" do

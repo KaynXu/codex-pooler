@@ -87,6 +87,25 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert second_plan.selected_assignment_id == hd(expected_ids)
     end
 
+    test "idempotency affinity survives request-id changes without exposing the raw key" do
+      setup = routing_setup(3)
+      raw_key = "idempotency-affinity-private-key"
+
+      first_plan =
+        plan_for(setup, "bridge_ring", "first-request-id", idempotency_key: raw_key)
+
+      second_plan =
+        plan_for(setup, "bridge_ring", "second-request-id", idempotency_key: raw_key)
+
+      assert first_plan.affinity.kind == "idempotency_key"
+      assert second_plan.affinity.kind == "idempotency_key"
+      assert first_plan.affinity.key_hash == second_plan.affinity.key_hash
+      assert byte_size(first_plan.affinity.key_hash) == 32
+      assert candidate_ids(first_plan.candidates) == candidate_ids(second_plan.candidates)
+      refute inspect(first_plan.request_metadata) =~ raw_key
+      refute inspect(second_plan.request_metadata) =~ raw_key
+    end
+
     test "deterministic_rotation rotates the current candidate list by seed" do
       setup = routing_setup(4)
       seed = "rotation-seed"
@@ -2237,7 +2256,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       })
 
     request_options =
-      RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
+      RequestOptions.build(
+        %{
+          request_id: seed,
+          idempotency_key: Keyword.get(opts, :idempotency_key)
+        },
+        "/backend-api/codex/responses",
+        %{}
+      )
 
     request_options =
       case Keyword.fetch(opts, :session_assignment_id) do

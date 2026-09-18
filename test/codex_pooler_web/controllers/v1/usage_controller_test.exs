@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting.{DailyRollup, Request}
   alias CodexPooler.Accounting.UsageReadModel.UpstreamUsage
+  alias CodexPooler.AccountingBoundaryTrace
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Usage
   alias CodexPooler.Repo
@@ -38,6 +39,26 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     assert request.request_metadata["operation"] == "usage"
     refute inspect(request.request_metadata) =~ "prompt"
     refute inspect(request.request_metadata) =~ "upload_url"
+  end
+
+  test "GET /v1/usage omits the raw idempotency key at the accounting boundary", %{conn: conn} do
+    setup = active_api_key_fixture()
+    raw_key = "usage-private-key-#{System.unique_integer([:positive])}"
+
+    {conn, [_auth, attrs]} =
+      AccountingBoundaryTrace.capture_call(
+        {CodexPooler.Accounting, :record_metadata_request, 2},
+        fn ->
+          conn
+          |> auth(setup)
+          |> put_req_header("idempotency-key", raw_key)
+          |> get("/v1/usage")
+        end
+      )
+
+    assert %{"request_count" => 0} = json_response(conn, 200)
+    refute Map.has_key?(attrs, :idempotency_key)
+    refute inspect(attrs, limit: :infinity, printable_limit: :infinity) =~ raw_key
   end
 
   test "GET /v1/usage scopes totals and upstream limits to the authenticated key and pool", %{
