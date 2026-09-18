@@ -264,8 +264,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
-  test "forwarded final validates the submitted compaction item instead of the stored digest" do
+  for topology <- [:direct, :forwarded] do
+    test "#{topology} final validates the submitted compaction item instead of the stored digest" do
+      assert_final_compaction_item_binding(unquote(topology))
+    end
+  end
+
+  defp assert_final_compaction_item_binding(topology) do
     enable_owner_forwarding_for_trace!()
+
+    Application.put_env(
+      :codex_pooler,
+      :websocket_owner_forwarding_enabled,
+      topology == :forwarded
+    )
+
     turn = "final-digest-check"
     context = "00000000-0000-4000-8000-000000000991"
     item = incremental_compaction_item("final-digest-check")
@@ -374,7 +387,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, final)
       {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"type" => "error"} = CodexPooler.JSON.decode!(frame)
+
+      assert %{
+               "type" => "error",
+               "status" => 409,
+               "error" => %{"code" => "invalid_runtime_admission"}
+             } = CodexPooler.JSON.decode!(frame)
+
       assert FakeUpstream.count(upstream) == 2
       assert :ok = FakeUpstream.verify!(upstream)
     after

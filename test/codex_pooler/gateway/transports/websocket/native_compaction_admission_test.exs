@@ -146,12 +146,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmissionTest
         compaction_item_digest: digest
       )
 
-    for invalid <- [
-          %{valid | compaction_item_digest: nil},
-          %{valid | compaction_item_digest: <<94::256>>},
-          %{valid | window_number: binding.window_number}
+    for {invalid, reason} <- [
+          {%{valid | compaction_item_digest: nil}, :compaction_item_mismatch},
+          {%{valid | compaction_item_digest: <<94::256>>}, :compaction_item_mismatch},
+          {%{valid | window_number: binding.window_number}, :binding_mismatch}
         ] do
-      assert {:error, :binding_mismatch} =
+      assert {:error, ^reason} =
                NativeCompactionAdmission.reserve(
                  pending_final,
                  :final,

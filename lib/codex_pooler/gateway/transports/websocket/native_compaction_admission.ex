@@ -419,6 +419,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
           :invalid_binding
           | :invalid_transition
           | :binding_mismatch
+          | :compaction_item_mismatch
           | :capability_mismatch
           | :expired
 
@@ -451,6 +452,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       when is_reference(control_ref) and is_integer(now_ms) and now_ms >= 0 do
     with :ok <- expected_pending_phase(pending_phase, requested_phase),
          :ok <- not_expired(expires_at_ms, now_ms),
+         :ok <- validate_final_item(requested_phase, binding, requested_binding),
          true <- reservation_binding_match?(requested_phase, binding, requested_binding) do
       capability = %Capability{
         phase: requested_phase,
@@ -475,6 +477,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
 
   def reserve(%__MODULE__{}, _requested_phase, _binding, _control_ref, _now_ms),
     do: {:error, :invalid_transition}
+
+  defp validate_final_item(:final, original, candidate)
+       when original.semantic_turn_key == candidate.semantic_turn_key and
+              is_binary(original.compaction_item_digest) do
+    if digest_match?(original.compaction_item_digest, candidate.compaction_item_digest),
+      do: :ok,
+      else: {:error, :compaction_item_mismatch}
+  end
+
+  defp validate_final_item(_phase, _original, _candidate), do: :ok
 
   @spec mark_accounting_started(t(), Capability.t(), non_neg_integer()) ::
           {:ok, t()} | {:error, error()}

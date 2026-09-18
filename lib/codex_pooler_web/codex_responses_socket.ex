@@ -2042,6 +2042,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
            ) do
       put_owner_capability(prepared, capability, {:direct, owner}, lifecycle)
     else
+      {:error, :compaction_item_mismatch} -> {:error, invalid_compaction_binding_error()}
       _unavailable -> {:error, :owner_unavailable}
     end
   end
@@ -2099,8 +2100,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
       put_owner_capability(prepared, capability, owner_ref, lifecycle)
     else
+      {:error, :compaction_item_mismatch} -> {:error, invalid_compaction_binding_error()}
       _unavailable -> {:error, :owner_unavailable}
     end
+  end
+
+  defp invalid_compaction_binding_error do
+    %{
+      status: 409,
+      code: "invalid_runtime_admission",
+      message: "websocket compaction admission binding is invalid"
+    }
   end
 
   defp owner_admission_control(action, downstream, updates \\ []) do
