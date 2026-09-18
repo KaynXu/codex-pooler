@@ -2,7 +2,7 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting.PreAttemptRelease
-  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
+  alias CodexPooler.Gateway.Runtime.Finalization.InterruptionOutcome
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
   alias CodexPooler.Upstreams.Quota.Windows.Routing
   alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
@@ -51,11 +51,7 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
         "stale_reservation_recovered"
       )
 
-      Streaming.emit_stream_outcome(
-        "interrupted",
-        "http_sse",
-        "websocket"
-      )
+      InterruptionOutcome.emit("http_sse", "websocket")
 
       ConvergenceTelemetry.emit(
         %{

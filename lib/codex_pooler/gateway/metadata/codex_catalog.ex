@@ -407,6 +407,20 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   defp reasoning_union_source(anchor, family_pairs, routable_assignment_ids) do
     source_pairs = routable_family_pairs(family_pairs, routable_assignment_ids)
 
+    if one_reasoning_projection?(family_pairs) do
+      anchor.source
+    else
+      union_reasoning_source(anchor, source_pairs)
+    end
+  end
+
+  defp one_reasoning_projection?(source_pairs) do
+    source_pairs
+    |> Enum.uniq_by(&reasoning_projection_signature/1)
+    |> length() == 1
+  end
+
+  defp union_reasoning_source(anchor, source_pairs) do
     base_source =
       Map.drop(anchor.source, ["default_reasoning_level" | @reasoning_level_keys])
 
