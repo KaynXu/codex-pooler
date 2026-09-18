@@ -70,7 +70,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       fixture: :backend_models_etag,
       canonical_partition: %{
         source: "assignment_scoped_pristine_source_metadata",
-        identity: "canonical_source_digest_after_provenance_and_presentation_hint_removal",
+        identity:
+          "canonical_capability_family_digest_after_provenance_presentation_and_reasoning_variant_removal",
         digest_excluded_hints: [
           "default_reasoning_level",
           "default_service_tier",
@@ -92,6 +93,14 @@ defmodule CodexPooler.CompatibilityMatrix do
         ],
         selection: "largest_quota_routable_partition",
         selection_fallback: "largest_partition_when_none_routable",
+        reasoning_variants: %{
+          stable_catalog_projection: "routable_capability_family_reasoning_union",
+          canonical_allowance: "all_reasoning_variants_in_quota_selected_capability_family",
+          native_turn_selection: "post_eligibility_assignment_advertising_effective_known_effort",
+          non_reasoning_capability_boundary: "never_crossed",
+          no_advertiser_fallback: "quota_selected_partition",
+          circuit_state_input: false
+        },
         quota_routing: %{
           snapshot: "one_shared_candidate_identity_snapshot",
           classification: "independent_per_model",
@@ -117,7 +126,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         }
       },
       contract:
-        "backend model aliases return the same policy-visible native catalog body and deterministic weak ETag from the canonical pristine-source partition selected by quota-routable member count, total member count, then the oldest created_at plus assignment id anchor, falling back to the largest partition when none is routable, so the catalog body and ETag can change when the preferred cohort changes; shell_type values default, local, shell_command, and unified_exec are equivalent for partitioning, disabled is separate, and unknown, missing, or malformed values do not silently collapse, while the selected anchor's raw shell_type remains served; quota routing reads one shared candidate-identity snapshot and classifies it independently per model; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
+        "backend model aliases return the same policy-visible native catalog body and deterministic weak ETag from the canonical pristine-source capability family selected by quota-routable member count, total member count, then the oldest created_at plus assignment id anchor, falling back to the largest family when none is routable, so the catalog body and ETag can change when the preferred family changes; reasoning-level-only variants inside that quota-selected capability family advertise the union from its quota-routable assignments and remain inside the native turn's canonical allowance, after which the established post-quota and post-circuit reasoning preference selects an eligible assignment that lists the effective known effort; this never crosses another capability family, changes the stable catalog body, or lets an ineligible advertiser hide a healthy fallback; when no eligible assignment lists the effort every effective candidate remains upstream-authoritative; shell_type values default, local, shell_command, and unified_exec are equivalent for partitioning, disabled is separate, and unknown, missing, or malformed values do not silently collapse, while the selected anchor's raw shell_type remains served; quota routing reads one shared candidate-identity snapshot and classifies it independently per model; API-key policy decides admission and projection before assignment selection and never clamps the request; backend Codex catalog-driven new turns use the selected capability family, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-family exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
     },
     %{
       slug: :backend_responses_etag,
@@ -133,7 +142,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :backend_responses_etag,
       contract:
-        "backend Responses HTTP SSE response headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the request snapshot; websocket upgrade headers retain the same backward-compatible connection-opening value, while each accepted backend websocket turn emits an authoritative codex.response.metadata x-models-etag from that turn's current predispatch snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes; a native websocket replay re-emits the original turn's preserved snapshot value, provider codex.response.metadata events are relayed after the Pooler event with x-models-etag removed, and consumers must take the ETag only from metadata events that carry it"
+        "backend Responses HTTP SSE response headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the request snapshot, including when the turn routes within a reasoning-variant capability family represented by that catalog's stable routable-family union; websocket upgrade headers retain the same backward-compatible connection-opening value, while each accepted backend websocket turn emits an authoritative codex.response.metadata x-models-etag from that turn's current predispatch snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes; a native websocket replay re-emits the original turn's preserved snapshot value, provider codex.response.metadata events are relayed after the Pooler event with x-models-etag removed, and consumers must take the ETag only from metadata events that carry it"
     },
     %{
       slug: :pool_model_serving_modes,

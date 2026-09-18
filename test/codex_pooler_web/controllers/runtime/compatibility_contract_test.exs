@@ -948,13 +948,23 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert models_etag.canonical_partition.selection_fallback ==
                "largest_partition_when_none_routable"
 
+      assert models_etag.canonical_partition.reasoning_variants == %{
+               stable_catalog_projection: "routable_capability_family_reasoning_union",
+               canonical_allowance: "all_reasoning_variants_in_quota_selected_capability_family",
+               native_turn_selection:
+                 "post_eligibility_assignment_advertising_effective_known_effort",
+               non_reasoning_capability_boundary: "never_crossed",
+               no_advertiser_fallback: "quota_selected_partition",
+               circuit_state_input: false
+             }
+
       assert models_etag.canonical_partition.pinned_continuation == %{
                valid_canonical_hard_pin: "may_cross_partition",
                malformed_or_retired_source: "unavailable"
              }
 
       assert models_etag.contract =~
-               "backend Codex catalog-driven new turns use the selected partition"
+               "backend Codex catalog-driven new turns use the selected capability family"
 
       assert models_etag.contract =~
                "translated OpenAI Responses capacity includes all valid canonical assignments"

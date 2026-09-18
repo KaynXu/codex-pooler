@@ -466,6 +466,158 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       assert partition.assignment_ids ==
                Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
     end
+
+    test "admits reasoning variants and projects the routable family union", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      max_source =
+        base_source
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.put("description", "alternate reasoning rollout")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => base_source,
+          context.sibling_id => base_source,
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{
+                     model.id =>
+                       MapSet.new([
+                         context.anchor_id,
+                         context.sibling_id,
+                         context.alternate_id
+                       ])
+                   }
+                 end
+               )
+
+      assert partition.assignment_ids ==
+               Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
+
+      refute partition.routable_selection?
+      assert partition.source["default_reasoning_level"] == base_source["default_reasoning_level"]
+      assert partition.source["description"] == base_source["description"]
+
+      assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
+               ~w(low high max)
+    end
+
+    test "excludes an unroutable variant from the advertised union without removing its allowance",
+         context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      max_source =
+        base_source
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.delete("supported_reasoning_levels")
+        |> Map.put("reasoning_efforts", ["low", "max"])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => base_source,
+          context.sibling_id => base_source,
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{model.id => MapSet.new([context.anchor_id, context.sibling_id])}
+                 end
+               )
+
+      assert partition.assignment_ids ==
+               Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
+
+      assert partition.source["default_reasoning_level"] == base_source["default_reasoning_level"]
+      refute Map.has_key?(partition.source, "reasoning_efforts")
+      refute "max" in Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"])
+    end
+
+    test "does not admit a reasoning variant from a different capability family", context do
+      max_source =
+        context.model.metadata["source_assignment_models"][context.alternate_id]
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id =>
+            context.model.metadata["source_assignment_models"][context.anchor_id],
+          context.sibling_id =>
+            context.model.metadata["source_assignment_models"][context.sibling_id],
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{
+                     model.id =>
+                       MapSet.new([
+                         context.anchor_id,
+                         context.sibling_id,
+                         context.alternate_id
+                       ])
+                   }
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      assert partition.source["context_window"] != max_source["context_window"]
+      refute "max" in Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"])
+    end
+
+    test "ranks aggregate capability-family capacity across reasoning variants", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      max_source =
+        Map.put(base_source, "supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      older_singleton = Map.put(base_source, "context_window", 111_111)
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => older_singleton,
+          context.sibling_id => base_source,
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{
+                     model.id =>
+                       MapSet.new([
+                         context.anchor_id,
+                         context.sibling_id,
+                         context.alternate_id
+                       ])
+                   }
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.sibling_id, context.alternate_id])
+      assert partition.partition_count == 2
+      assert partition.source["context_window"] != older_singleton["context_window"]
+
+      assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
+               ~w(low high max)
+    end
   end
 
   test "selects a newer routable majority instead of pinning an older singleton" do

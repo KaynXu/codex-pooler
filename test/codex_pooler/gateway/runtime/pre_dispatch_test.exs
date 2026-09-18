@@ -2624,9 +2624,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     # so both catalogs are candidates and the Pool-wide union is the only thing
     # that admitted `max`. Sending the turn to the sibling whose own catalog
     # stops at `xhigh` is a backend 400 for a level this Pool advertises
-    # (findings#221). Backend catalog-driven turns are narrower only by
-    # accident: `supported_reasoning_levels` sits in the canonical partition
-    # digest, so divergent catalogs are already in different partitions there.
+    # (findings#221). Native backend turns admit every reasoning variant in the
+    # quota-selected capability family, then apply the same preference after
+    # quota and circuit eligibility.
     advertising_upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -2689,6 +2689,180 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert [attempt] = Repo.all(Attempt)
     assert attempt.pool_upstream_assignment_id == setup.assignment.id
+  end
+
+  test "native backend turns select a routable canonical partition that advertises the effort", %{
+    conn: conn
+  } do
+    nonadvertising_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_reasoning_partition_nonadvertiser",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    advertising_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_reasoning_partition_advertiser",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(nonadvertising_upstream)
+
+    nonadvertising_sibling =
+      gateway_upstream(
+        setup.pool,
+        nonadvertising_upstream,
+        "upstream-token-reasoning-partition-sibling",
+        compact?: false
+      )
+
+    advertiser =
+      gateway_upstream(
+        setup.pool,
+        advertising_upstream,
+        "upstream-token-reasoning-partition-advertiser",
+        compact?: false
+      )
+
+    prime_routing_quota!(nonadvertising_sibling.identity)
+    prime_routing_quota!(advertiser.identity)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!([
+        setup.assignment,
+        nonadvertising_sibling.assignment,
+        advertiser.assignment
+      ])
+      |> put_assignment_reasoning_levels!(setup.assignment.id, ~w(low medium high xhigh))
+      |> put_assignment_reasoning_levels!(
+        nonadvertising_sibling.assignment.id,
+        ~w(low medium high xhigh)
+      )
+      |> put_assignment_reasoning_levels!(advertiser.assignment.id, ~w(low medium high xhigh max))
+
+    setup = %{setup | model: model}
+    {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("select the max partition"),
+      "reasoning" => %{"effort" => "max"}
+    }
+
+    options =
+      request_options(auth_context, payload,
+        requested_model: model.exposed_model_id,
+        effective_model: model.exposed_model_id
+      )
+
+    context = CandidateEligibility.visible_model_context(setup.pool, model.exposed_model_id)
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth_context,
+               @endpoint_path,
+               payload,
+               options,
+               model,
+               context
+             )
+
+    assert Enum.sort(prepared.route_state.visible_model_context.selected_partition_assignment_ids) ==
+             Enum.sort([
+               setup.assignment.id,
+               nonadvertising_sibling.assignment.id,
+               advertiser.assignment.id
+             ])
+
+    models_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+    assert [request_neutral_etag] = get_resp_header(models_conn, "etag")
+    turn_etag = RouteState.codex_models_etag(prepared.route_state)
+    assert is_binary(turn_etag)
+    assert turn_etag == request_neutral_etag
+
+    assert {:ok, response} = Gateway.execute(auth_context, @endpoint_path, payload, options)
+    assert response.status == 200
+
+    assert %{"id" => "resp_reasoning_partition_advertiser"} =
+             CodexPooler.JSON.decode!(response.raw_body)
+
+    assert FakeUpstream.count(nonadvertising_upstream) == 0
+    assert FakeUpstream.count(advertising_upstream) == 1
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id == advertiser.assignment.id
+  end
+
+  test "native reasoning variants keep a healthy fallback when the advertiser is exhausted" do
+    exhausted_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_exhausted_native_advertiser_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    healthy_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_native_reasoning_fallback",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(exhausted_upstream, quota?: false)
+
+    fallback =
+      gateway_upstream(
+        setup.pool,
+        healthy_upstream,
+        "upstream-token-native-reasoning-fallback",
+        compact?: false
+      )
+
+    prime_weekly_exhausted_quota!(setup.identity)
+    prime_routing_quota!(fallback.identity)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!([setup.assignment, fallback.assignment])
+      |> put_assignment_reasoning_levels!(setup.assignment.id, ~w(low medium high xhigh max))
+      |> put_assignment_reasoning_levels!(fallback.assignment.id, ~w(low medium high xhigh))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("keep the native reasoning fallback"),
+      "reasoning" => %{"effort" => "max"}
+    }
+
+    options =
+      request_options(auth, payload,
+        requested_model: model.exposed_model_id,
+        effective_model: model.exposed_model_id
+      )
+
+    assert {:ok, response} = Gateway.execute(auth, @endpoint_path, payload, options)
+    assert response.status == 200
+
+    assert %{"id" => "resp_native_reasoning_fallback"} =
+             CodexPooler.JSON.decode!(response.raw_body)
+
+    assert FakeUpstream.count(exhausted_upstream) == 0
+    assert FakeUpstream.count(healthy_upstream) == 1
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id == fallback.assignment.id
   end
 
   test "a hard-pinned continuation keeps its assignment ahead of reasoning preference" do

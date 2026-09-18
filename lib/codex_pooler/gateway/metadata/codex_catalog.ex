@@ -5,11 +5,13 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
+  alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
   @etag_prefix ~s(W/"cp-models-v1-)
+  @reasoning_level_keys ~w(reasoning_efforts supported_reasoning_levels)
 
   @type normalized_policy :: map()
   @type body :: %{required(String.t()) => [map()]}
@@ -336,23 +338,23 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   # sake. The contract is recorded under the `:backend_models_etag` entry in
   # `CodexPooler.CompatibilityMatrix`.
   defp select_anchored_partition(pairs, %Model{} = model, routable_assignment_ids) do
-    partitions =
+    capability_families =
       pairs
-      |> Enum.group_by(& &1.digest)
+      |> Enum.group_by(& &1.reasoning_agnostic_digest)
       |> Map.values()
       |> Enum.sort_by(&partition_anchor_key/1)
 
-    baseline_members = select_partition(partitions, nil)
-    members = select_partition(partitions, routable_assignment_ids)
+    baseline_members = select_partition(capability_families, nil)
+    members = select_partition(capability_families, routable_assignment_ids)
     anchor = partition_anchor(members)
 
     %{
       assignment_ids: members |> Enum.map(& &1.assignment_id) |> Enum.sort(),
       digest: anchor.digest,
       model: model,
-      partition_count: length(partitions),
+      partition_count: length(capability_families),
       routable_selection?: members != baseline_members,
-      source: anchor.source
+      source: reasoning_union_source(anchor, members, routable_assignment_ids)
     }
   end
 
@@ -365,11 +367,73 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   end
 
   defp partition_selection_key(members, %MapSet{} = routable_assignment_ids) do
-    routable_count =
-      Enum.count(members, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+    routable_count = partition_routable_count(members, routable_assignment_ids)
 
     {-routable_count, -length(members), partition_anchor_key(members)}
   end
+
+  defp partition_routable_count(members, %MapSet{} = routable_assignment_ids) do
+    Enum.count(members, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+  end
+
+  defp reasoning_union_source(anchor, family_pairs, routable_assignment_ids) do
+    source_pairs = routable_family_pairs(family_pairs, routable_assignment_ids)
+
+    reasoning_levels =
+      source_pairs
+      |> Enum.sort_by(&partition_pair_key/1)
+      |> Enum.flat_map(&ModelMetadata.metadata_reasoning_levels(&1.source))
+      |> Enum.uniq()
+
+    case reasoning_levels do
+      [] ->
+        anchor.source
+
+      [_ | _] ->
+        levels = Enum.map(reasoning_levels, &%{"effort" => &1, "description" => &1})
+
+        anchor.source
+        |> Map.drop(@reasoning_level_keys)
+        |> Map.put("supported_reasoning_levels", levels)
+        |> Map.put(
+          "default_reasoning_level",
+          reasoning_union_default(source_pairs, anchor.source, reasoning_levels)
+        )
+    end
+  end
+
+  defp reasoning_union_default(source_pairs, anchor_source, reasoning_levels) do
+    source_pairs
+    |> Enum.sort_by(&partition_pair_key/1)
+    |> Enum.find_value(&reasoning_default(&1.source, reasoning_levels))
+    |> case do
+      nil -> reasoning_default(anchor_source, reasoning_levels) || List.first(reasoning_levels)
+      default -> default
+    end
+  end
+
+  defp reasoning_default(source, reasoning_levels) do
+    case Map.get(source, "default_reasoning_level") do
+      value when is_binary(value) ->
+        normalized = ReasoningEffort.normalize_known(value) || String.trim(value)
+        if normalized in reasoning_levels, do: normalized
+
+      _value ->
+        nil
+    end
+  end
+
+  defp routable_family_pairs(family_pairs, %MapSet{} = routable_assignment_ids) do
+    routable =
+      Enum.filter(family_pairs, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+
+    case routable do
+      [] -> family_pairs
+      [_ | _] -> routable
+    end
+  end
+
+  defp routable_family_pairs(family_pairs, _routable_assignment_ids), do: family_pairs
 
   defp partition_anchor(members), do: Enum.min_by(members, &partition_pair_key/1)
 
