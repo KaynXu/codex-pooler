@@ -559,9 +559,9 @@ defmodule CodexPooler.SchemaContractTest do
     assert column_type("alert_delivery_attempts", "retryable") == "boolean"
   end
 
-  test "requests have no raw idempotency-key storage surface" do
+  test "requests keep only a rolling-upgrade compatibility column for raw idempotency keys" do
     refute :idempotency_key in CodexPooler.Accounting.Request.__schema__(:fields)
-    refute Map.has_key?(table_columns("requests"), "idempotency_key")
+    assert table_columns("requests")["idempotency_key"] == {"text", "YES"}
   end
 
   test "preserves final foreign key actions including cascades and set-null behavior" do
