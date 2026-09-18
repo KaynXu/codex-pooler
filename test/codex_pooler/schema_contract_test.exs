@@ -25,6 +25,7 @@ defmodule CodexPooler.SchemaContractTest do
     DailyRollupCoverage,
     HourlyModelUsageRollup,
     LedgerEntry,
+    Request,
     RequestLogFact,
     RequestReplayEntitlement
   }
@@ -87,7 +88,7 @@ defmodule CodexPooler.SchemaContractTest do
     CodexTurn,
     CodexPooler.Gateway.Persistence.IdempotencyKey,
     Settings,
-    CodexPooler.Accounting.Request,
+    Request,
     CodexPooler.Gateway.Persistence.RoutingCircuitState,
     CodexPooler.Pools.Membership,
     OperatorPoolAssignment,
@@ -560,7 +561,7 @@ defmodule CodexPooler.SchemaContractTest do
   end
 
   test "requests keep only a rolling-upgrade compatibility column for raw idempotency keys" do
-    refute :idempotency_key in CodexPooler.Accounting.Request.__schema__(:fields)
+    refute :idempotency_key in Request.__schema__(:fields)
     assert table_columns("requests")["idempotency_key"] == {"text", "YES"}
   end
 
