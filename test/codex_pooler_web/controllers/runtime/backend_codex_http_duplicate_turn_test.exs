@@ -577,6 +577,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert FakeUpstream.count(upstream) == 1
     assert [request] = pool_requests(setup)
     assert String.starts_with?(request.correlation_id, "codex-turn:")
+    assert request.request_metadata["native_http_claim_arm"] == "opening"
   end
 
   # A compaction request is built from the SAME `turn_metadata_state` as the turn
@@ -623,6 +624,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert FakeUpstream.count(upstream) == 1
     assert [request] = pool_requests(setup)
     assert String.starts_with?(request.correlation_id, "codex-request:")
+    assert request.request_metadata["native_http_claim_arm"] == "compaction"
   end
 
   # KNOWN MISS, documented deliberately: the compaction arm's own copy of the
@@ -711,12 +713,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     assert [open, compaction, resume] = pool_requests(setup)
     assert String.starts_with?(open.correlation_id, "codex-turn:")
     assert String.starts_with?(compaction.correlation_id, "codex-request:")
+    assert open.request_metadata["native_http_claim_arm"] == "opening"
+    assert compaction.request_metadata["native_http_claim_arm"] == "compaction"
 
     # The resume is named by the turn and an opaque digest of the compaction it
     # is resuming from, and by nothing else in the body -- clear of the claim the
     # opening request already holds, and immune to a rebuilt retry body.
     assert String.starts_with?(resume.correlation_id, "codex-resume:")
     assert resume.correlation_id != compaction.correlation_id
+    assert resume.request_metadata["native_http_claim_arm"] == "post_compaction_resume"
   end
 
   # The compaction output item can be last, followed by the next user message,
@@ -1056,9 +1061,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       assert FakeUpstream.count(upstream) == 3
       assert [open | continuations] = pool_requests(setup)
       assert String.starts_with?(open.correlation_id, "codex-turn:")
+      assert open.request_metadata["native_http_claim_arm"] == "opening"
 
       for continuation <- continuations do
         assert String.starts_with?(continuation.correlation_id, "codex-request:")
+        assert continuation.request_metadata["native_http_claim_arm"] == "tool_continuation"
       end
     end
   end
@@ -1097,6 +1104,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
       assert [kind_row, turn_row] = pool_requests(setup)
       assert String.starts_with?(kind_row.correlation_id, "codex-kind:")
       assert String.starts_with?(turn_row.correlation_id, "codex-turn:")
+      assert kind_row.request_metadata["native_http_claim_arm"] == unquote(kind)
+      assert turn_row.request_metadata["native_http_claim_arm"] == "opening"
     end
   end
 
@@ -1532,6 +1541,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     for %Request{correlation_id: correlation_id} <- requests do
       assert {:ok, _uuid} = Ecto.UUID.cast(correlation_id)
     end
+
+    assert Enum.all?(requests, fn request ->
+             not Map.has_key?(request.request_metadata, "native_http_claim_arm")
+           end)
   end
 
   # `:where` selects the carrier: `:header` sends only the bounded header copy,

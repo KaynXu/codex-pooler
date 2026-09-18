@@ -101,6 +101,16 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
 
   @metadata_key "x-codex-turn-metadata"
 
+  @type claim_arm ::
+          :opening
+          | :tool_continuation
+          | :compaction
+          | :post_compaction_resume
+          | :prewarm
+          | :memory
+
+  @type request_claim :: %{required(:key) => String.t(), required(:arm) => claim_arm()}
+
   # Kinds that are about a turn rather than one of its model requests, and that
   # the released client sends at most once for a given turn. They are fenced in
   # their own domain so a duplicate still costs one dispatch; any other declared
@@ -124,6 +134,23 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   """
   @spec request_claim_key(RequestOptions.t(), map()) :: {:ok, String.t()} | :none
   def request_claim_key(%RequestOptions{} = request_options, payload) when is_map(payload) do
+    case request_claim(request_options, payload) do
+      {:ok, %{key: key}} -> {:ok, key}
+      :none -> :none
+    end
+  end
+
+  def request_claim_key(_request_options, _payload), do: :none
+
+  @doc """
+  Resolves the durable request claim and its bounded semantic arm.
+
+  The arm is persisted only as metadata so operators can distinguish claim
+  domains whose rolling-compatible wire prefix is shared. It never
+  participates in the HMAC or uniqueness key.
+  """
+  @spec request_claim(RequestOptions.t(), map()) :: {:ok, request_claim()} | :none
+  def request_claim(%RequestOptions{} = request_options, payload) when is_map(payload) do
     with true <- native_route?(request_options),
          metadata when not is_nil(metadata) <-
            NativeTurnContinuation.canonical_document(payload, request_options),
@@ -138,15 +165,18 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
     end
   end
 
-  def request_claim_key(_request_options, _payload), do: :none
+  def request_claim(_request_options, _payload), do: :none
 
   defp claim_for(identity, request_options, payload) do
     cond do
       NativeTurnContinuation.compaction_request?(payload, request_options) ->
-        {:ok, WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload)}
+        claim(
+          WebsocketTurnIdentity.compaction_claim_key(identity.semantic_turn_key, payload),
+          :compaction
+        )
 
       turn_request?(payload, request_options) ->
-        {:ok, turn_claim(identity, payload)}
+        turn_claim(identity, payload)
 
       true ->
         kind_claim(identity, request_options, payload)
@@ -175,25 +205,38 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   defp turn_claim(identity, payload) do
     case NativeTurnContinuation.turn_role(payload) do
       :opening ->
-        identity.turn_claim_key
+        claim(identity.turn_claim_key, :opening)
 
       :tool_continuation ->
-        WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload)
+        claim(
+          WebsocketTurnIdentity.request_claim_key(identity.semantic_turn_key, payload),
+          :tool_continuation
+        )
 
       {:post_compaction_resume, anchor} ->
-        WebsocketTurnIdentity.resume_claim_key(identity.semantic_turn_key, anchor)
+        claim(
+          WebsocketTurnIdentity.resume_claim_key(identity.semantic_turn_key, anchor),
+          :post_compaction_resume
+        )
     end
   end
 
   defp kind_claim(identity, request_options, payload) do
     case NativeTurnContinuation.request_kind(payload, request_options) do
       kind when kind in @kind_scoped_request_kinds ->
-        {:ok, WebsocketTurnIdentity.kind_claim_key(identity.semantic_turn_key, payload, kind)}
+        claim(
+          WebsocketTurnIdentity.kind_claim_key(identity.semantic_turn_key, payload, kind),
+          kind_claim_arm(kind)
+        )
 
       _unknown_or_absent ->
         :none
     end
   end
+
+  defp claim(key, arm), do: {:ok, %{key: key, arm: arm}}
+  defp kind_claim_arm("prewarm"), do: :prewarm
+  defp kind_claim_arm("memory"), do: :memory
 
   defp turn_request?(payload, request_options),
     do: NativeTurnContinuation.request_kind(payload, request_options) == "turn"

@@ -156,6 +156,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     } = request_options
 
     accounting_endpoint = accounting_endpoint(endpoint, request_options)
+    native_http_claim = NativeHttpTurnIdentity.request_claim(request_options, payload)
 
     %{
       endpoint: accounting_endpoint,
@@ -163,7 +164,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       transport: transport.transport,
       correlation_id:
         authorized_correlation_id ||
-          durable_request_correlation_id(request_options, payload),
+          durable_request_correlation_id(request_options, payload, native_http_claim),
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
       runtime_revocation_epoch: request_options.runtime.api_key_runtime_epoch,
@@ -172,7 +173,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       codex_session: Map.get(request_options.continuity, :codex_session),
       anchor_present?: not is_nil(Map.get(request_options.continuity, :previous_response_id)),
       request_metadata:
-        request_metadata_attrs(auth, payload, accounting_endpoint, request_options, route_state)
+        request_metadata_attrs(
+          auth,
+          payload,
+          accounting_endpoint,
+          request_options,
+          route_state,
+          native_http_claim
+        )
     }
   end
 
@@ -181,7 +189,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
            transport: %{transport: "websocket"},
            continuity: %{request_claim_key: request_claim_key}
          },
-         _payload
+         _payload,
+         _native_http_claim
        )
        when is_binary(request_claim_key),
        do: request_claim_key
@@ -191,9 +200,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   # the same payload-scoped claim instead of a fresh UUID and a resend meets
   # `requests_correlation_id_uq` (findings#212). Every other request, and every
   # request without a usable identity, keeps the generated correlation id.
-  defp durable_request_correlation_id(%RequestOptions{} = request_options, payload) do
-    case NativeHttpTurnIdentity.request_claim_key(request_options, payload) do
-      {:ok, claim} -> claim
+  defp durable_request_correlation_id(%RequestOptions{} = request_options, payload, claim) do
+    case claim do
+      {:ok, %{key: key}} -> key
       :none -> RequestOptions.server_correlation_id(request_options, payload)
     end
   end
@@ -297,7 +306,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       }}}
   end
 
-  defp request_metadata_attrs(auth, payload, endpoint, request_options, route_state) do
+  defp request_metadata_attrs(
+         auth,
+         payload,
+         endpoint,
+         request_options,
+         route_state,
+         native_http_claim
+       ) do
     %RequestOptions{
       request_metadata: request_metadata,
       transport: transport,
@@ -322,6 +338,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     |> Map.merge(owner_forwarding_metadata(request_options))
     |> Map.merge(reservation_snapshot_metadata(route_state))
     |> Map.merge(compaction_bridge_metadata(request_options.payload_context))
+    |> Map.merge(native_http_claim_metadata(native_http_claim))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
     |> SessionContinuity.put_session_metadata(request_options)
@@ -360,6 +377,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   end
 
   defp compaction_bridge_metadata(%PayloadContext{}), do: %{}
+
+  defp native_http_claim_metadata({:ok, %{arm: arm}}),
+    do: %{"native_http_claim_arm" => Atom.to_string(arm)}
+
+  defp native_http_claim_metadata(:none), do: %{}
 
   defp request_class(
          _endpoint,
