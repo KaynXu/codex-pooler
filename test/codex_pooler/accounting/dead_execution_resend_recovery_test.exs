@@ -14,7 +14,7 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
   }
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
 
@@ -222,6 +222,62 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
              Repo.reload!(fixture.turn)
   end
 
+  test "released-client retry admits an owner crash once exact death proof arrives" do
+    fixture = active_dead_execution_fixture!()
+
+    assert {:ok, %{interrupted_turn_count: 1}} =
+             Interruption.interrupt_codex_turn(
+               fixture.session,
+               RequestOptions.for_websocket(%{
+                 request_id: fixture.request.correlation_id,
+                 interrupt_reason: "owner_crashed",
+                 reconnect_window_seconds: 300
+               })
+             )
+
+    input = retry_input(fixture)
+
+    assert {:error, :terminal_predecessor} =
+             Accounting.client_retry_preflight_snapshot(
+               fixture.session,
+               fixture.setup.api_key,
+               fixture.setup.model,
+               input
+             )
+
+    CodexPooler.ExecutionProofSupport.publish_terminal!(fixture.attempt)
+
+    assert {:ok,
+            %{
+              replay_generation: 0,
+              client_retry_predecessor_request_id: predecessor_id
+            }} =
+             Accounting.client_retry_preflight_snapshot(
+               fixture.session,
+               fixture.setup.api_key,
+               fixture.setup.model,
+               input
+             )
+
+    assert predecessor_id == fixture.request.id
+
+    assert {:ok, %ClientRetry.SuccessorClaim{} = successor} =
+             Accounting.claim_client_retry_successor(
+               fixture.setup.auth,
+               fixture.setup.model,
+               %{"model" => fixture.setup.model.exposed_model_id, "input" => []},
+               Map.merge(input, %{
+                 codex_session: fixture.session,
+                 owner_idle_validated?: true,
+                 owner_lease_token: fixture.session.owner_lease_token,
+                 owner_instance_id: fixture.session.owner_instance_id
+               })
+             )
+
+    assert successor.predecessor_request_id == fixture.request.id
+    assert ClientRetry.reserved_successor_claim?(successor.correlation_id)
+  end
+
   defp create_dead_attempt!(setup, request) do
     parent = self()
 
@@ -259,6 +315,23 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
       )
       |> Repo.update!()
 
+    Repo.insert!(%BridgeOwnerLease{
+      codex_session_id: session.id,
+      pool_id: setup.pool.id,
+      api_key_id: setup.api_key.id,
+      pool_upstream_assignment_id: setup.assignment.id,
+      owner_instance_id: session.owner_instance_id,
+      owner_instance_boot_id: session.owner_instance_boot_id,
+      lease_token: session.owner_lease_token,
+      status: "active",
+      acquired_at: now,
+      renewed_at: now,
+      expires_at: session.owner_lease_expires_at,
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+
     claim = "codex-turn:" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     witness =
@@ -291,10 +364,33 @@ defmodule CodexPooler.Accounting.DeadExecutionResendRecoveryTest do
     attempt = create_dead_attempt!(setup, request)
 
     %{
+      setup: setup,
       request: request,
       attempt: attempt,
       turn: insert_turn!(session, request, attempt),
-      session: session
+      session: session,
+      replay_claim_digest: witness.digest
+    }
+  end
+
+  defp retry_input(fixture) do
+    %{
+      endpoint: @endpoint,
+      requested_model: fixture.setup.model.exposed_model_id,
+      runtime_revocation_epoch: fixture.setup.api_key.runtime_revocation_epoch,
+      semantic_turn_digest: fixture.turn.semantic_turn_digest,
+      original_request_claim: fixture.request.correlation_id,
+      replay_claim_digest: fixture.replay_claim_digest,
+      anchor_present?: false,
+      reservation_estimate: %{
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        estimated_cost_micros: Decimal.new(0),
+        strategy: "exact"
+      }
     }
   end
 

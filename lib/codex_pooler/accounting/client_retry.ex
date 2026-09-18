@@ -17,6 +17,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Repo
 
   @version 1
@@ -1042,6 +1043,9 @@ defmodule CodexPooler.Accounting.ClientRetry do
       verified_dead_execution?(turn, request, attempt) ->
         :ok
 
+      verified_proven_owner_crash?(turn, request, attempt) ->
+        :ok
+
       verified_provider_terminal_failure?(turn, request, attempt) ->
         :ok
 
@@ -1147,6 +1151,43 @@ defmodule CodexPooler.Accounting.ClientRetry do
       do: true
 
   def verified_dead_execution?(_turn, _request, _attempt), do: false
+
+  # Owner-forwarded cleanup can commit milliseconds before the one-second
+  # terminal-proof publisher reaches PostgreSQL. The row then carries the
+  # generic owner_crashed reason even though exact executor death becomes
+  # durable immediately afterwards. Admit only that exact generation-zero
+  # shape, and only while the matching proof still exists; the existing sealed
+  # payload witness, authorization, session, lineage and retry-window checks
+  # remain mandatory around this predicate.
+  defp verified_proven_owner_crash?(
+         %CodexTurn{
+           status: "interrupted",
+           error_code: "owner_crashed",
+           final_attempt_id: attempt_id,
+           transport_kind: "websocket",
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           response_status_code: 499,
+           last_error_code: "owner_crashed",
+           usage_status: "usage_unknown",
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           id: attempt_id,
+           status: "failed",
+           network_error_code: "owner_crashed",
+           transport: "websocket",
+           replay_generation: 0,
+           usage_status: "usage_unknown",
+           completed_at: %DateTime{}
+         } = attempt
+       )
+       when is_binary(attempt_id),
+       do: ExecutionTerminalProofs.terminal?(attempt)
+
+  defp verified_proven_owner_crash?(_turn, _request, _attempt), do: false
 
   # Only the provider's own terminal failure finalization writes this shape:
   # turn, request, and attempt failed together with the same provider code on
