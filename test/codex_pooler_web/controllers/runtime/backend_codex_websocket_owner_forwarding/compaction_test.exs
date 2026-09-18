@@ -446,6 +446,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
                   }),
                   terminal.("resp_fresh_compact", [compact_item])
                 ])
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [
+                valid: true,
+                equals: %{"type" => "response.create", "input.0.type" => "compaction"},
+                forbidden: ["previous_response_id"]
+              ],
+              respond: FakeUpstream.websocket_text_frames([terminal.("resp_fresh_resume", [])])
             )
           ])
         )
@@ -536,15 +546,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
       assert_receive {:DOWN, ^compact_monitor, :process, ^compact_task, _},
                      @handoff_detection_timeout_ms
 
+      resume =
+        websocket_input_payload(setup, [compact_item], %{
+          "client_metadata" => %{
+            "x-codex-turn-metadata" => CodexPooler.JSON.encode!(turn_metadata)
+          }
+        })
+
+      assert {:ok, state} = CodexResponsesSocket.handle_in({resume, [opcode: :text]}, state)
+      [resume_task] = Enum.to_list(state.tasks)
+      resume_monitor = Process.monitor(resume_task)
+      assert {:push, {:text, _frame}, state} = receive_owner_socket_push(state)
+      assert {:ok, state} = receive_socket_turn_done(state)
+
+      assert_receive {:DOWN, ^resume_monitor, :process, ^resume_task, _},
+                     @handoff_detection_timeout_ms
+
       assert FakeUpstream.http_request_count(upstream) == 0
-      assert length(FakeUpstream.requests(upstream)) == 2
+      assert length(FakeUpstream.requests(upstream)) == 3
 
       assert Enum.sort(Enum.map(request_logs(setup.pool.id), & &1.status)) == [
+               "succeeded",
                "succeeded",
                "succeeded"
              ]
 
-      assert length(pool_attempts(setup.pool.id)) == 2
+      [ordinary_log, compact_log, resume_log] = request_logs(setup.pool.id)
+      assert String.starts_with?(ordinary_log.correlation_id, "codex-turn:")
+      assert String.starts_with?(compact_log.correlation_id, "codex-request:")
+      assert String.starts_with?(resume_log.correlation_id, "codex-resume:")
+
+      assert length(pool_attempts(setup.pool.id)) == 3
       request_ids = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id))
 
       assert Repo.aggregate(
@@ -562,7 +594,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
 
       assert CodexPooler.JSON.decode!(duplicate)["error"]["code"] == "duplicate_turn"
       assert FakeUpstream.http_request_count(upstream) == 0
-      assert length(FakeUpstream.requests(upstream)) == 2
+      assert length(FakeUpstream.requests(upstream)) == 3
       assert :ok = FakeUpstream.verify!(upstream)
       assert :ok = CodexResponsesSocket.terminate(:closed, duplicate_state)
     end

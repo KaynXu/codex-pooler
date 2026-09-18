@@ -12,12 +12,11 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
   # (findings#212, rows 212-48/212-49/212-51).
   #
   # What lives here is every DISCRIMINATOR, not the claim selection itself: the
-  # websocket codec applies its own arms in its own order because its native
-  # compaction bridge deliberately puts a compaction on the turn's bare claim
-  # and its forwarded-final path deduplicates on that collision. Anything that
-  # changes what a compaction, a tool continuation, an opening request or a
-  # `request_kind` IS belongs here and reaches both transports; anything that
-  # changes which claim the websocket bridge picks belongs to that bridge.
+  # websocket codec retains a transport-specific compaction arm for its native
+  # bridge. Opening, tool-continuation and post-compaction-resume roles are
+  # shared across HTTP and websocket; anything that changes those discriminators
+  # or `request_kind` belongs here, while the compaction bridge's claim ordering
+  # remains owned by the websocket codec.
   #
   # ## The canonical document has two carriers, and both are authoritative
   #

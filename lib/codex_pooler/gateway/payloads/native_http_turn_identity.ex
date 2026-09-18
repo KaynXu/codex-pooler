@@ -62,15 +62,13 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   # Every discriminator above is `NativeTurnContinuation`'s, and this module
   # reaches only the ones that resolve the canonical document through
   # `canonical_document/2`, so a header-only client is classified exactly like a
-  # body client. What the two transports do NOT share is more than the
-  # discriminators suggest, and the difference is deliberate:
+  # body client. The deliberate transport difference is narrower than the
+  # discriminators suggest:
   #
-  #   * the ORDER the arms are applied in. The websocket codec gives its native
-  #     compaction bridge the bare turn claim on purpose, and its forwarded-final
-  #     path depends on that collision to deduplicate -- running this module's
-  #     order there was measured to buy a THIRD upstream dispatch where the path
-  #     expects two. That is a change to the compaction bridge, not to this
-  #     fence, and is tracked separately (findings#212, rows 212-51/212-58).
+  #   * the COMPACTION arm. The websocket codec keeps the native compaction
+  #     bridge's established claim ordering, while HTTP names compaction in its
+  #     payload-scoped domain. Opening, tool-continuation and post-compaction
+  #     resume roles use the shared discriminator and corresponding claims.
   #   * `request_kind`. The websocket compaction arm reads it from
   #     `%NativeCodexTurnMetadata{}`, parsed by exact string match, so this
   #     module's trimming and case folding does NOT reach it. A `"TURN"` frame is
@@ -199,9 +197,8 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   #      is treated as a turn's opening request, because in the released client
   #      that is a new turn with a new `turn_id`. A caller that reuses one
   #      `turn_id` across a user message is refused rather than served.
-  #   4. Nothing here fences a websocket frame. The codec picks its own arms,
-  #      and for a post-compaction resume it still picks the bare claim, which
-  #      collides with that turn's opener (212-58).
+  #   4. Websocket and HTTP share the post-compaction resume claim, while the
+  #      websocket compaction bridge retains its established claim ordering.
   defp turn_claim(identity, payload) do
     case NativeTurnContinuation.turn_role(payload) do
       :opening ->

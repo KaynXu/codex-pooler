@@ -1,8 +1,9 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeHttpTurnIdentity, RequestOptions}
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
@@ -869,8 +870,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
         for {kind, input, distinct?} <- [
               {"turn", [summary, output], true},
-              {"turn", [output, summary], false},
-              {"turn", [summary, output, summary], false},
+              {"turn", [output, summary], true},
+              {"turn", [summary, output, summary], true},
               {"turn",
                [summary, %{"type" => "message", "role" => "user", "content" => "synthetic"}],
                false},
@@ -922,6 +923,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
             refute WebsocketCodec.valid_prepared_frame?(forged)
           end
         end
+      end
+    end
+
+    test "post-compaction resume uses the same payload-independent claim on HTTP and websocket" do
+      turn_id = "turn-post-compaction-resume"
+      session_id = "018f60df-713f-7ca8-b9a0-0d12c508a902"
+      metadata = CodexPooler.JSON.encode!(%{"turn_id" => turn_id, "request_kind" => "turn"})
+      compaction = %{"type" => "context_compaction", "encrypted_content" => "synthetic"}
+      earlier_tool = %{"type" => "function_call_output", "call_id" => "call_old", "output" => ""}
+
+      for tail <- [[], [%{"type" => "message", "role" => "assistant"}]] do
+        payload =
+          native_request_claim_payload(turn_id, nil, [earlier_tool, compaction] ++ tail)
+          |> put_in(["client_metadata", "x-codex-turn-metadata"], metadata)
+
+        assert {:ok, prepared} =
+                 WebsocketCodec.prepare_frame(
+                   CodexPooler.JSON.encode!(payload),
+                   native_responses_options(payload, session_id),
+                   fn _frame -> :ok end
+                 )
+
+        websocket_claim = prepared.request_options.continuity.request_claim_key
+        assert websocket_claim =~ ~r/\Acodex-resume:[A-Za-z0-9_-]{43}\z/
+        refute websocket_claim == prepared.turn_claim_key
+
+        http_options =
+          RequestOptions.build(
+            %{codex_session: %CodexSession{id: session_id}},
+            "/backend-api/codex/responses",
+            payload
+          )
+
+        assert {:ok, ^websocket_claim} =
+                 NativeHttpTurnIdentity.request_claim_key(http_options, payload)
       end
     end
 

@@ -953,17 +953,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
          } = prepared
        )
        when is_binary(semantic_turn_key) and is_binary(turn_claim_key) do
-    request_claim_key =
-      cond do
-        full_history_native_compaction?(prepared.endpoint, request_options) ->
-          WebsocketTurnIdentity.compaction_claim_key(semantic_turn_key, payload)
-
-        ordinary_native_tool_continuation?(payload, request_options) ->
-          WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
-
-        true ->
-          turn_claim_key
-      end
+    request_claim_key = native_request_claim(prepared, request_options)
 
     case WebsocketTurnIdentity.replay_claim_digest(semantic_turn_key, payload) do
       {:ok, replay_claim_digest} ->
@@ -1000,6 +990,26 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp put_native_request_claim(%PreparedWebsocketFrame{} = prepared), do: {:ok, prepared}
 
+  defp native_request_claim(%PreparedWebsocketFrame{} = prepared, request_options) do
+    payload = prepared.payload
+    semantic_turn_key = prepared.semantic_turn_key
+
+    cond do
+      full_history_native_compaction?(prepared.endpoint, request_options) ->
+        WebsocketTurnIdentity.compaction_claim_key(semantic_turn_key, payload)
+
+      post_compaction_resume?(payload, request_options) ->
+        {:post_compaction_resume, anchor} = NativeTurnContinuation.turn_role(payload)
+        WebsocketTurnIdentity.resume_claim_key(semantic_turn_key, anchor)
+
+      ordinary_native_tool_continuation?(payload, request_options) ->
+        WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
+
+      true ->
+        prepared.turn_claim_key
+    end
+  end
+
   defp full_history_native_compaction?(
          "/backend-api/codex/responses/compact",
          %RequestOptions{
@@ -1023,6 +1033,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   # anchor and tool-result shapes, so both must read one definition.
   defp ordinary_native_tool_continuation?(payload, options),
     do: NativeTurnContinuation.ordinary_tool_continuation?(payload, options)
+
+  defp post_compaction_resume?(payload, options) do
+    NativeTurnContinuation.request_kind(payload, options) == "turn" and
+      match?({:post_compaction_resume, _anchor}, NativeTurnContinuation.turn_role(payload))
+  end
 
   defp canonical_metadata_map(metadata),
     do: NativeTurnContinuation.canonical_metadata_map(metadata)
