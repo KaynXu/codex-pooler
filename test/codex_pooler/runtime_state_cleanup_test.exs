@@ -984,9 +984,25 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
     assert InstancePresence.status(first) == :unknown
     assert InstancePresence.superseded?(first)
-    assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
-    assert summary.absent_instance_attempts_recovered == 1
-    assert summary.expired_owner_sessions_recovered == 0
+
+    capture_stream_outcomes(fn ->
+      assert {:ok, summary} = Jobs.cleanup_runtime_state(now)
+      assert summary.absent_instance_attempts_recovered == 1
+      assert summary.expired_owner_sessions_recovered == 0
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert_receive {:stream_outcome_transaction, false}
+
+      assert {:ok, repeated} = Jobs.cleanup_runtime_state(now)
+      assert repeated.absent_instance_attempts_recovered == 0
+      refute_received {:stream_outcome, _metadata}
+    end)
 
     assert %Request{status: "failed", last_error_code: "absent_instance_recovered"} =
              Repo.reload!(reserved.request)
@@ -1023,5 +1039,29 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
   defp usec(%DateTime{} = timestamp) do
     %{timestamp | microsecond: {elem(timestamp.microsecond, 0), 6}}
+  end
+
+  defp capture_stream_outcomes(fun) do
+    handler_id = "runtime-cleanup-outcome-#{System.unique_integer([:positive, :monotonic])}"
+    parent = self()
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+          send(parent, {:stream_outcome_transaction, Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
   end
 end

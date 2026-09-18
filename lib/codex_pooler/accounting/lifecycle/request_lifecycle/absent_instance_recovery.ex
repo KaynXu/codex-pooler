@@ -6,6 +6,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestReplayEntitlement}
   alias CodexPooler.Accounting.RequestLifecycle
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
+  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Platform.InstancePresence.Identity
   alias CodexPooler.Repo
@@ -157,11 +158,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
 
   defp recover({request, attempt}, {summary, failures}, now, opts) do
     stamp_examined!(attempt, now)
+    caller_owned_transaction? = Repo.in_transaction?()
 
     case settle(request, attempt, now, opts) do
-      {:ok, :recovered} -> {increment(summary), failures}
-      {:ok, :noop} -> {summary, failures}
-      {:error, reason} -> {summary, [{attempt.id, reason} | failures]}
+      {:ok, :recovered} ->
+        emit_recovery_outcome(request, attempt, caller_owned_transaction?)
+        {increment(summary), failures}
+
+      {:ok, :noop} ->
+        {summary, failures}
+
+      {:error, reason} ->
+        {summary, [{attempt.id, reason} | failures]}
     end
   rescue
     # A settlement that raises is a candidate failure like a returned error: it
@@ -180,6 +188,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
     do: {Postgrex.Error, code}
 
   defp bounded_failure(exception), do: exception.__struct__
+
+  defp emit_recovery_outcome(_request, _attempt, true), do: :ok
+
+  defp emit_recovery_outcome(request, attempt, false) do
+    Streaming.emit_stream_outcome(
+      "interrupted",
+      bounded_transport(request.transport),
+      bounded_transport(attempt.transport)
+    )
+  end
+
+  defp bounded_transport(transport) when transport in ["http_sse", "websocket"], do: transport
+  defp bounded_transport(_transport), do: "unknown"
 
   # Durable scheduling progress shared with dead-execution recovery. The row is
   # stamped before settlement, so a failing settlement still moves it behind

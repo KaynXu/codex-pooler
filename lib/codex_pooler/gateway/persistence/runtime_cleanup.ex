@@ -51,9 +51,10 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   An unexpired lease protects its work unless a fresh observer can establish
   that the exact owner incarnation ended. Stale presence alone cannot do so:
   a live VM can lose database access while still streaming. Local live owners,
-  unreachable owners, and legacy owners with no incarnation retain the lease
-  guard. A reachable distributed successor can establish that its predecessor
-  incarnation no longer owns the node name.
+  owners with no later incarnation proof, and legacy owners with no incarnation
+  retain the lease guard. A later database heartbeat from a different
+  incarnation under the same non-anonymous node name proves the predecessor is
+  gone even when the cleanup role cannot reach either VM over BEAM distribution.
   """
   @spec active_runtime_request?(request_ref(), DateTime.t(), keyword()) :: boolean()
   def active_runtime_request?(%{id: request_id}, %DateTime{} = now, opts) do

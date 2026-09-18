@@ -99,8 +99,19 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
       {:ok, _} = InstancePresence.record_heartbeat()
 
-      assert {:ok, %{absent_instance_attempts_recovered: 1}} =
-               Accounting.recover_absent_instance_attempts(now)
+      capture_stream_outcomes(fn ->
+        assert {:ok, %{absent_instance_attempts_recovered: 1}} =
+                 Accounting.recover_absent_instance_attempts(now)
+
+        assert_receive {:stream_outcome,
+                        %{
+                          outcome: "interrupted",
+                          downstream_transport: "http_sse",
+                          upstream_transport: "http_sse"
+                        }}
+
+        assert_receive {:stream_outcome_transaction, false}
+      end)
     end
 
     test "an unreachable exact execution defers early recovery and retains the stale fallback" do
@@ -123,8 +134,12 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
       assert ExecutionIdentity.status(attempt) == :unknown
 
-      assert {:ok, %{absent_instance_attempts_recovered: 0}} =
-               Accounting.recover_absent_instance_attempts(now)
+      capture_stream_outcomes(fn ->
+        assert {:ok, %{absent_instance_attempts_recovered: 0}} =
+                 Accounting.recover_absent_instance_attempts(now)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
 
       assert Repo.reload!(request).status == "in_progress"
       assert Repo.reload!(attempt).status == "in_progress"
@@ -173,8 +188,19 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
       assert second.node_name == first.node_name
       assert second.boot_id != first.boot_id
 
-      assert {:ok, %{absent_instance_attempts_recovered: 1}} =
-               Accounting.recover_absent_instance_attempts(now)
+      capture_stream_outcomes(fn ->
+        assert {:ok, %{absent_instance_attempts_recovered: 1}} =
+                 Accounting.recover_absent_instance_attempts(now)
+
+        assert_receive {:stream_outcome,
+                        %{
+                          outcome: "interrupted",
+                          downstream_transport: "http_sse",
+                          upstream_transport: "http_sse"
+                        }}
+
+        assert_receive {:stream_outcome_transaction, false}
+      end)
 
       # The successor must not have refreshed the row that proves its
       # predecessor is gone.
@@ -212,8 +238,41 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
       # so its assignment must come out of the pass untouched.
       assert Repo.get!(PoolUpstreamAssignment, setup.assignment.id) == assignment_before
 
-      assert {:ok, %{absent_instance_attempts_recovered: 0}} =
-               Accounting.recover_absent_instance_attempts(now)
+      capture_stream_outcomes(fn ->
+        assert {:ok, %{absent_instance_attempts_recovered: 0}} =
+                 Accounting.recover_absent_instance_attempts(now)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+    end
+
+    test "a caller-owned rollback emits no absent-instance stream outcome" do
+      setup = accounting_setup()
+      now = now()
+      dispatched_at = DateTime.add(now, -10, :minute)
+      node_name = "codex_pooler@10.42.#{System.unique_integer([:positive])}.11"
+      first = Identity.new(node_name, unique_boot_id())
+      second = Identity.new(node_name, unique_boot_id())
+
+      %{request: request, attempt: attempt} = modern_orphan!(setup, first, dispatched_at)
+      {:ok, _} = InstancePresence.record_heartbeat(first, dispatched_at)
+      {:ok, _} = InstancePresence.record_heartbeat(second, now)
+      {:ok, _} = InstancePresence.record_heartbeat()
+
+      capture_stream_outcomes(fn ->
+        assert {:error, :caller_rollback} =
+                 Repo.transaction(fn ->
+                   assert {:ok, %{absent_instance_attempts_recovered: 1}} =
+                            Accounting.recover_absent_instance_attempts(now)
+
+                   Repo.rollback(:caller_rollback)
+                 end)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      assert Repo.reload!(request).status == "in_progress"
+      assert Repo.reload!(attempt).status == "in_progress"
     end
 
     # findings#207: an attempt that records its executor is never settled on
@@ -469,6 +528,28 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
   # `cleanup_unboxed_pool!/1` deletes the pool graph (attempts and ledger
   # entries included) in on_exit.
   describe "fairness across passes" do
+    test "a failed absent-instance settlement emits no stream outcome" do
+      graph = committed_graph!()
+      absent = committed_absent_owner!()
+      refresh_local_observer!()
+      now = now()
+      [failing] = committed_candidates!(graph, absent, DateTime.add(now, -180, :second), 1)
+      install_failing_settlement!([failing.attempt.id])
+      failing_id = failing.attempt.id
+
+      capture_stream_outcomes(fn ->
+        assert {:error,
+                {:absent_instance_candidates_failed,
+                 [{^failing_id, {Postgrex.Error, :raise_exception}}]},
+                %{absent_instance_attempts_recovered: 0}} = run_pass(now, 1)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      assert attempt_status(failing.attempt.id) == "in_progress"
+      assert run_unboxed(fn -> ledger_kinds(failing.request) end) == ["reservation"]
+    end
+
     test "a persistently failing oldest candidate does not starve later candidates across passes" do
       graph = committed_graph!()
       absent = committed_absent_owner!()
@@ -818,6 +899,30 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
     do: run_unboxed(fn -> Repo.get!(Attempt, attempt_id).status end)
 
   defp unique_correlation_id, do: "corr-absent-#{System.unique_integer([:positive])}"
+
+  defp capture_stream_outcomes(fun) do
+    handler_id = "absent-recovery-outcome-#{System.unique_integer([:positive, :monotonic])}"
+    parent = self()
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+          send(parent, {:stream_outcome_transaction, Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end
