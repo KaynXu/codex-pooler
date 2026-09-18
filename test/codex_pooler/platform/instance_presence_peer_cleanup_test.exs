@@ -23,7 +23,7 @@ defmodule CodexPooler.InstancePresencePeerCleanupTest do
     end
   end
 
-  test "peer state purge ends the peer's backends before deleting its rows" do
+  test "peer state purge proves the peer's backends ended before deleting its rows" do
     {:ok, calls} = Agent.start_link(fn -> [] end)
     on_exit(fn -> if Process.alive?(calls), do: Agent.stop(calls) end)
     record = fn step -> Agent.update(calls, &(&1 ++ [step])) end
@@ -43,7 +43,7 @@ defmodule CodexPooler.InstancePresencePeerCleanupTest do
                end
              )
 
-    assert Agent.get(calls, & &1) == [:terminate, :delete, :await]
+    assert Agent.get(calls, & &1) == [:terminate, :await, :delete]
   end
 
   test "peer state purge never deletes rows when the backends cannot be ended" do
@@ -55,6 +55,22 @@ defmodule CodexPooler.InstancePresencePeerCleanupTest do
         "boot-id",
         fn -> Agent.update(calls, &(&1 ++ [:delete])) end,
         terminate: fn _boot_id -> :error end
+      )
+    end
+
+    assert Agent.get(calls, & &1) == []
+  end
+
+  test "peer state purge never deletes rows while backend absence is unproven" do
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+    on_exit(fn -> if Process.alive?(calls), do: Agent.stop(calls) end)
+
+    assert_raise MatchError, fn ->
+      InstancePresencePeer.purge_peer_state!(
+        "boot-id",
+        fn -> Agent.update(calls, &(&1 ++ [:delete])) end,
+        terminate: fn _boot_id -> :ok end,
+        await: fn _boot_id, _budget -> :error end
       )
     end
 

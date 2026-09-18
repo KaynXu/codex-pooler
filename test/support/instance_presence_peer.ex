@@ -40,9 +40,11 @@ defmodule CodexPooler.InstancePresencePeer do
   The peer's own backends are ended first: a hard-killed VM's proof publisher
   can still hold a backend mid-statement on the very rows the cleanup deletes,
   and a cleanup that deleted first would block on that lock until its task
-  timeout (findings#207 row 207-40). The row deletion runs second, and the
-  absence of the peer's connections is asserted last. Callers pass only the
-  deletion; the order is this function's, not theirs.
+  timeout (findings#207 row 207-40). PostgreSQL's default zero-timeout
+  `pg_terminate_backend/1` returns after sending the termination signal, so the
+  absence of the peer's connections must be established second and the row
+  deletion runs only after that proof. Callers pass only the deletion; the
+  order is this function's, not theirs.
 
   `:terminate`, `:delete` and `:await` are injectable so the order itself can be
   observed without a real VM.
@@ -55,8 +57,8 @@ defmodule CodexPooler.InstancePresencePeer do
     await = Keyword.get(opts, :await, &assert_peer_connections_absent!/2)
 
     :ok = terminate.(boot_id)
-    _deleted = delete_rows.()
     :ok = await.(boot_id, budget)
+    _deleted = delete_rows.()
     :ok
   end
 
