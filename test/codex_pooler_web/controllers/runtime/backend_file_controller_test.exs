@@ -405,7 +405,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
            ) == 2
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
-    assert Enum.all?(requests, &is_nil(&1.idempotency_key))
+    refute :idempotency_key in Request.__schema__(:fields)
     assert Repo.aggregate(IdempotencyKey, :count) == 0
     refute inspect(requests) =~ idempotency_key
     refute inspect(requests) =~ "first body"
@@ -480,7 +480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
       )
 
     assert length(finalize_requests) == 2
-    assert Enum.all?(finalize_requests, &is_nil(&1.idempotency_key))
+    refute :idempotency_key in Request.__schema__(:fields)
     refute inspect(Enum.map(finalize_requests, & &1.request_metadata)) =~ idempotency_key
     refute inspect(Enum.map(finalize_requests, & &1.request_metadata)) =~ "finalize body"
   end

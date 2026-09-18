@@ -90,7 +90,6 @@ defmodule CodexPooler.Accounting.Metadata do
           status: status,
           usage_status: @usage_not_applicable,
           correlation_id: attr(attrs, :correlation_id) || Ecto.UUID.generate(),
-          idempotency_key: nil,
           client_ip: blank_to_nil(attr(attrs, :client_ip)),
           user_agent: blank_to_nil(attr(attrs, :user_agent)),
           request_metadata:
@@ -198,7 +197,6 @@ defmodule CodexPooler.Accounting.Metadata do
           status: status,
           usage_status: @usage_not_applicable,
           correlation_id: attr(attrs, :correlation_id) || Ecto.UUID.generate(),
-          idempotency_key: nil,
           client_ip: blank_to_nil(attr(attrs, :client_ip)),
           user_agent: blank_to_nil(attr(attrs, :user_agent)),
           request_metadata:

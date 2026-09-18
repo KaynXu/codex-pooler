@@ -3175,7 +3175,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
              })
 
     persisted = Repo.get!(Request, request.id)
-    assert is_nil(persisted.idempotency_key)
+    refute :idempotency_key in Request.__schema__(:fields)
     assert persisted.request_metadata["idempotency_key"] == "[REDACTED]"
     refute inspect(persisted) =~ raw_idempotency_key
 
@@ -3215,7 +3215,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
              })
 
     persisted = Repo.get!(Request, request.id)
-    assert is_nil(persisted.idempotency_key)
+    refute :idempotency_key in Request.__schema__(:fields)
     assert persisted.request_metadata["idempotency_key"] == "[REDACTED]"
     refute inspect(persisted) =~ raw_idempotency_key
 

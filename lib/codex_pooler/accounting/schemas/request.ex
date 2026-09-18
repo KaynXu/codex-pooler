@@ -16,7 +16,6 @@ defmodule CodexPooler.Accounting.Request do
     field :status, :string
     field :usage_status, :string
     field :correlation_id, :string
-    field :idempotency_key, :string
     field :client_ip, CodexPooler.Postgres.INET
     field :user_agent, :string
     field :request_metadata, :map

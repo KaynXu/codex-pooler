@@ -2124,11 +2124,10 @@ defmodule CodexPooler.Admin.StatsTest do
         request_metadata: %{
           "prompt" => raw_prompt,
           "authorization" => "Bearer #{raw_token}",
+          "idempotency_key" => raw_idempotency_key,
           "safe_request_id" => "req-safe"
         }
       })
-      |> Ecto.Changeset.change(%{idempotency_key: raw_idempotency_key})
-      |> Repo.update!()
 
     attempt = attempt_fixture(request, assignment)
 

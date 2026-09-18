@@ -78,7 +78,6 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
           model_id: model_id,
           admitted_at: timestamp,
           completed_at: timestamp,
-          idempotency_key: nil,
           correlation_id: "observatory-plan-#{fixture_ref}-#{index}"
         })
 
