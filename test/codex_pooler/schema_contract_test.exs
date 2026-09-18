@@ -200,13 +200,26 @@ defmodule CodexPooler.SchemaContractTest do
           "openai_status_incidents_retention_idx",
           "openai_status_incidents_active_idx",
           "openai_status_dismissals_operator_incident_revision_uq",
-          "openai_status_dismissals_operator_idx"
+          "openai_status_dismissals_operator_idx",
+          "ledger_entries_api_key_known_settlement_occurred_idx",
+          "attempts_open_started_idx"
         ] do
       assert Map.has_key?(indexes, name)
     end
 
     refute Map.has_key?(indexes, "memberships_single_instance_owner_active_uq")
     refute Map.has_key?(indexes, "requests_api_key_idempotency_uq")
+
+    assert indexes["ledger_entries_api_key_known_settlement_occurred_idx"] ==
+             "CREATE INDEX ledger_entries_api_key_known_settlement_occurred_idx ON " <>
+               "public.ledger_entries USING btree (api_key_id, occurred_at) " <>
+               "WHERE ((entry_kind = 'settlement'::text) AND " <>
+               "(usage_status = 'usage_known'::text))"
+
+    assert indexes["attempts_open_started_idx"] ==
+             "CREATE INDEX attempts_open_started_idx ON public.attempts USING btree " <>
+               "(started_at, id) WHERE (status = ANY (ARRAY['queued'::text, " <>
+               "'in_progress'::text]))"
 
     assert indexes["users_email_active_uq"] =~ "lower(email)"
     assert indexes["users_email_active_uq"] =~ "WHERE (deleted_at IS NULL)"
