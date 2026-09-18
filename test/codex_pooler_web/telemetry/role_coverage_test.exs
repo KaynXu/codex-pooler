@@ -408,11 +408,10 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       end
     end
 
-    # Prometheus uses RE2. The local PCRE engine accepts constructs RE2 rejects,
-    # so validating only with Regex.compile/1 lets a dashboard query a series that
-    # Prometheus cannot parse. This deliberately accepts a conservative shared
-    # subset: advanced group prefixes, backreferences, possessive quantifiers and
-    # engine-specific escape families fail closed before the local engine runs.
+    # Prometheus uses RE2, whose accepted syntax and match semantics differ from
+    # both local engines. This deliberately accepts a conservative shared subset:
+    # advanced group prefixes, backreferences, possessive quantifiers, engine-specific
+    # escape families and POSIX character classes fail closed before local matching.
     defp re2_compatible?(pattern) do
       not re2_unsupported?(pattern) and
         not oversized_repetition?(pattern) and
@@ -431,29 +430,42 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       end)
     end
 
-    defp re2_unsupported?(pattern), do: re2_unsupported_scan?(pattern)
+    defp re2_unsupported?(pattern), do: re2_unsupported_scan?(pattern, false)
 
-    defp re2_unsupported_scan?(<<>>), do: false
-    defp re2_unsupported_scan?(<<"(?", _rest::binary>>), do: true
-    defp re2_unsupported_scan?(<<"(*", _rest::binary>>), do: true
-    defp re2_unsupported_scan?(<<"[[:", _rest::binary>>), do: true
+    defp re2_unsupported_scan?(<<>>, _in_character_class), do: false
+    defp re2_unsupported_scan?(<<"\\">>, _in_character_class), do: true
 
-    defp re2_unsupported_scan?(<<quantifier, "+", _rest::binary>>)
+    defp re2_unsupported_scan?(<<"\\", digit, _rest::binary>>, _in_character_class)
+         when digit in ?1..?9,
+         do: true
+
+    defp re2_unsupported_scan?(<<"\\", escape, rest::binary>>, in_character_class)
+         when escape in ?A..?Z or escape in ?a..?z do
+      if escape in ~c"AbBdDsSwWafnrtvx",
+        do: re2_unsupported_scan?(rest, in_character_class),
+        else: true
+    end
+
+    defp re2_unsupported_scan?(<<"\\", _escaped::utf8, rest::binary>>, in_character_class),
+      do: re2_unsupported_scan?(rest, in_character_class)
+
+    defp re2_unsupported_scan?(<<"[", rest::binary>>, false),
+      do: re2_unsupported_scan?(rest, true)
+
+    defp re2_unsupported_scan?(<<"[:", _rest::binary>>, true), do: true
+
+    defp re2_unsupported_scan?(<<"]", rest::binary>>, true),
+      do: re2_unsupported_scan?(rest, false)
+
+    defp re2_unsupported_scan?(<<"(?", _rest::binary>>, false), do: true
+    defp re2_unsupported_scan?(<<"(*", _rest::binary>>, false), do: true
+
+    defp re2_unsupported_scan?(<<quantifier, "+", _rest::binary>>, false)
          when quantifier in ~c"*+?}",
          do: true
 
-    defp re2_unsupported_scan?(<<"\\">>), do: true
-    defp re2_unsupported_scan?(<<"\\", digit, _rest::binary>>) when digit in ?1..?9, do: true
-
-    defp re2_unsupported_scan?(<<"\\", escape, rest::binary>>)
-         when escape in ?A..?Z or escape in ?a..?z do
-      if escape in ~c"AbBdDsSwWafnrtvx", do: re2_unsupported_scan?(rest), else: true
-    end
-
-    defp re2_unsupported_scan?(<<"\\", _escaped::utf8, rest::binary>>),
-      do: re2_unsupported_scan?(rest)
-
-    defp re2_unsupported_scan?(<<_char::utf8, rest::binary>>), do: re2_unsupported_scan?(rest)
+    defp re2_unsupported_scan?(<<_char::utf8, rest::binary>>, in_character_class),
+      do: re2_unsupported_scan?(rest, in_character_class)
 
     defp tokens(expr), do: tokens(expr, [])
 
@@ -1300,6 +1312,13 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
                series
              )
 
+      for pattern <- ["[a[:alpha:]_]+", "[^[:digit:]]+"] do
+        invalid = ~s|sum(rate(#{series}{via="in_process", via!~"#{pattern}"}[5m]))|
+        assert PromQL.occurrences(invalid, series) == :invalid
+        refute series_pinned?(invalid, series)
+        assert series_pins_anywhere?(invalid, series)
+      end
+
       # A `via` written as a grouping label or as a string argument is not a
       # matcher on the series either.
       refute series_pinned?(~s|sum by (via) (rate(#{series}[5m]))|, series)
@@ -1435,14 +1454,17 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert PromQL.charted_series(~s|sum(rate({__name__=~"["}[5m]))|, candidates) == candidates
       refute series_pinned?(~s|sum(rate({__name__=~"["}[5m]))|, series)
 
-      # PCRE accepts lookahead and backreferences, but Prometheus's RE2 does not.
-      # They must fail closed before either local engine evaluates the selector.
+      # Unsupported patterns fail closed before either local engine evaluates the
+      # selector. The POSIX-class forms are valid RE2, but Python does not implement
+      # their semantics, so the shared conservative subset rejects them too.
       for pattern <- [
             "(?=codex_pooler_.*)codex_pooler_.*",
             ~S|(codex_pooler_.*)\1|,
             "codex_pooler_.{1001}",
             ~S|codex_pooler_\u0061|,
-            "codex_pooler_[[:alpha:]_]+"
+            "codex_pooler_[[:alpha:]_]+",
+            "codex_pooler_[a[:alpha:]_]+",
+            "codex_pooler_[^[:digit:]]+"
           ] do
         encoded = String.replace(pattern, "\\", "\\\\")
         invalid = ~s|sum(rate({__name__=~"#{encoded}", via="in_process"}[5m]))|
