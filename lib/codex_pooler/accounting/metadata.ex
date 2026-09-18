@@ -346,6 +346,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "native_client_retry_observation" ->
         sanitize_native_client_retry_observation(value)
 
+      normalized == "native_http_resume_progress" ->
+        sanitize_native_http_resume_progress(value)
+
       normalized == "transport_failure" ->
         sanitize_transport_failure_map(value)
 
@@ -483,6 +486,23 @@ defmodule CodexPooler.Accounting.Metadata do
         sanitized
     end)
   end
+
+  defp sanitize_native_http_resume_progress(
+         %{
+           "version" => 1,
+           "output_item_done_count" => count,
+           "digest" => digest
+         } = value
+       )
+       when map_size(value) == 3 and is_integer(count) and count in 0..65_535 and
+              is_binary(digest) and byte_size(digest) == 43 do
+    case Base.url_decode64(digest, padding: false) do
+      {:ok, decoded} when byte_size(decoded) == 32 -> value
+      _invalid -> %{}
+    end
+  end
+
+  defp sanitize_native_http_resume_progress(_value), do: %{}
 
   defp sanitize_compaction_projection_map(value) do
     value

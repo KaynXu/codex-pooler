@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   @moduledoc false
 
+  alias CodexPooler.Accounting.ClientRetry
+
   # The duplicate-turn fence was structurally websocket-only (findings#212): a
   # native Codex turn sent over `POST /backend-api/codex/responses` reserved
   # under a freshly generated UUID, so a resend of the same turn never met
@@ -107,7 +109,13 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
           | :prewarm
           | :memory
 
-  @type request_claim :: %{required(:key) => String.t(), required(:arm) => claim_arm()}
+  @type request_claim :: %{
+          required(:key) => String.t(),
+          required(:arm) => claim_arm(),
+          required(:native_client_retry_witness) => ClientRetry.OriginalWitness.t() | nil,
+          required(:input_count) => non_neg_integer() | nil,
+          required(:semantic_turn_key) => <<_::256>>
+        }
 
   # Kinds that are about a turn rather than one of its model requests, and that
   # the released client sends at most once for a given turn. They are fenced in
@@ -157,7 +165,14 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
          {:ok, identity} <-
            WebsocketTurnIdentity.resolve(canonical_payload(metadata), session_id),
          {:ok, claim} <- claim_for(identity, request_options, payload) do
-      {:ok, claim}
+      {:ok,
+       claim
+       |> Map.put(
+         :native_client_retry_witness,
+         native_client_retry_witness(identity, payload, request_options, claim.arm)
+       )
+       |> Map.put(:input_count, input_count(payload, claim.arm))
+       |> Map.put(:semantic_turn_key, identity.semantic_turn_key)}
     else
       _fail_open -> :none
     end
@@ -232,6 +247,34 @@ defmodule CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity do
   end
 
   defp claim(key, arm), do: {:ok, %{key: key, arm: arm}}
+
+  defp native_client_retry_witness(
+         identity,
+         %{"input" => input},
+         request_options,
+         :post_compaction_resume
+       )
+       when is_list(input) do
+    with {:ok, digest} <-
+           WebsocketTurnIdentity.http_resume_input_digest(identity.semantic_turn_key, input),
+         {:ok, witness} <-
+           ClientRetry.original_witness(
+             digest,
+             request_options.runtime.api_key_runtime_epoch
+           ) do
+      witness
+    else
+      _unavailable -> nil
+    end
+  end
+
+  defp native_client_retry_witness(_identity, _payload, _request_options, _arm), do: nil
+
+  defp input_count(%{"input" => input}, :post_compaction_resume) when is_list(input),
+    do: length(input)
+
+  defp input_count(_payload, _arm), do: nil
+
   defp kind_claim_arm("prewarm"), do: :prewarm
   defp kind_claim_arm("memory"), do: :memory
 

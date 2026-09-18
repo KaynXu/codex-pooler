@@ -123,6 +123,18 @@ defmodule CodexPooler.Accounting.ClientRetry do
           }
   end
 
+  defmodule NativeHttpProgress do
+    @moduledoc false
+    @enforce_keys [:version, :count, :digest]
+    defstruct version: 1, count: 0, digest: nil
+
+    @type t :: %__MODULE__{
+            version: 1,
+            count: non_neg_integer(),
+            digest: <<_::256>>
+          }
+  end
+
   @type observation_metadata :: %{
           required(String.t()) => boolean() | non_neg_integer() | String.t() | nil
         }
@@ -605,6 +617,91 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   @spec new_observation() :: Observation.t()
   def new_observation, do: %Observation{}
+
+  @spec new_native_http_progress() :: NativeHttpProgress.t() | nil
+  def new_native_http_progress do
+    case native_http_progress_digest(<<0::256>>, :initial) do
+      {:ok, digest} -> %NativeHttpProgress{version: 1, count: 0, digest: digest}
+      {:error, _reason} -> nil
+    end
+  end
+
+  @spec observe_native_http_output_item(NativeHttpProgress.t() | nil, term()) ::
+          NativeHttpProgress.t() | nil
+  def observe_native_http_output_item(%NativeHttpProgress{} = progress, %{} = item) do
+    case native_http_progress_digest(progress.digest, item) do
+      {:ok, digest} -> %{progress | count: progress.count + 1, digest: digest}
+      {:error, _reason} -> nil
+    end
+  end
+
+  def observe_native_http_output_item(_progress, _item), do: nil
+
+  @spec native_http_progress_metadata(NativeHttpProgress.t() | nil) :: map()
+  def native_http_progress_metadata(%NativeHttpProgress{version: 1, count: count, digest: digest})
+      when is_integer(count) and count >= 0 and is_binary(digest) and byte_size(digest) == 32 do
+    %{
+      "version" => 1,
+      "output_item_done_count" => count,
+      "digest" => Base.url_encode64(digest, padding: false)
+    }
+  end
+
+  def native_http_progress_metadata(_progress), do: %{}
+
+  @spec native_http_progress_matches?(map() | term(), [term()]) :: boolean()
+  def native_http_progress_matches?(
+        %{
+          "version" => 1,
+          "output_item_done_count" => expected_count,
+          "digest" => encoded_digest
+        },
+        items
+      )
+      when is_integer(expected_count) and expected_count >= 0 and is_binary(encoded_digest) and
+             is_list(items) do
+    with true <- length(items) == expected_count,
+         {:ok, expected_digest} when byte_size(expected_digest) == 32 <-
+           Base.url_decode64(encoded_digest, padding: false),
+         %NativeHttpProgress{} = progress <- new_native_http_progress(),
+         %NativeHttpProgress{} = observed <- observe_native_http_items(progress, items) do
+      secure_compare(observed.digest, expected_digest)
+    else
+      _invalid -> false
+    end
+  end
+
+  def native_http_progress_matches?(_metadata, _items), do: false
+
+  defp observe_native_http_items(progress, items) do
+    Enum.reduce_while(items, progress, fn item, acc ->
+      case observe_native_http_output_item(acc, item) do
+        %NativeHttpProgress{} = next -> {:cont, next}
+        nil -> {:halt, nil}
+      end
+    end)
+  end
+
+  defp native_http_progress_digest(previous_digest, item)
+       when is_binary(previous_digest) and byte_size(previous_digest) == 32 do
+    AppSecretCrypto.hmac_digest(
+      :erlang.term_to_binary(
+        {"codex_pooler.native_http_progress", 1, previous_digest,
+         normalize_native_http_progress_item(item)},
+        [:deterministic]
+      )
+    )
+  end
+
+  # Codex stamps completed response items with local turn/create metadata before
+  # rebuilding a retry prompt, and clears that metadata again for some provider
+  # paths. It is not provider output and cannot decide whether the retry history
+  # contains the item the Pooler delivered. Every substantive field remains in
+  # the HMAC projection.
+  defp normalize_native_http_progress_item(%{} = item),
+    do: Map.delete(item, "internal_chat_message_metadata_passthrough")
+
+  defp normalize_native_http_progress_item(item), do: item
 
   @spec observe_frame(Observation.t(), term(), DateTime.t()) :: Observation.t()
   def observe_frame(%Observation{} = observation, decoded, %DateTime{} = observed_at) do

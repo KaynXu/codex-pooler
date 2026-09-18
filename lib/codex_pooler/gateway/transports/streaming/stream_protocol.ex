@@ -230,6 +230,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec decode_sse_data(term()) :: map()
   defdelegate decode_sse_data(data), to: SSEParser
 
+  @spec stream_block_event(binary()) :: {String.t() | nil, map()}
+  defdelegate stream_block_event(block), to: SSEParser
+
   @spec valid_json?(term()) :: boolean()
   defdelegate valid_json?(body), to: SSEParser
 end

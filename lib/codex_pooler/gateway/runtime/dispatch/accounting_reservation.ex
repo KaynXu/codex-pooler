@@ -168,7 +168,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
       runtime_revocation_epoch: request_options.runtime.api_key_runtime_epoch,
-      native_client_retry_witness: request_options.native_client_retry_witness,
+      native_client_retry_witness: native_http_retry_witness(native_http_claim, request_options),
+      native_http_input_count: native_http_input_count(native_http_claim),
+      native_http_semantic_turn_key: native_http_semantic_turn_key(native_http_claim),
       api_key_policy: request_options.routing.api_key_policy,
       codex_session: Map.get(request_options.continuity, :codex_session),
       anchor_present?: not is_nil(Map.get(request_options.continuity, :previous_response_id)),
@@ -378,10 +380,39 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
   defp compaction_bridge_metadata(%PayloadContext{}), do: %{}
 
-  defp native_http_claim_metadata({:ok, %{arm: arm}}),
-    do: %{"native_http_claim_arm" => Atom.to_string(arm)}
+  defp native_http_claim_metadata({:ok, %{arm: arm, input_count: input_count}}) do
+    %{"native_http_claim_arm" => Atom.to_string(arm)}
+    |> maybe_put_native_http_input_count(input_count)
+  end
 
   defp native_http_claim_metadata(:none), do: %{}
+
+  defp native_http_retry_witness(
+         {:ok,
+          %{
+            native_client_retry_witness:
+              %CodexPooler.Accounting.ClientRetry.OriginalWitness{} = witness
+          }},
+         _request_options
+       ),
+       do: witness
+
+  defp native_http_retry_witness(_native_http_claim, request_options),
+    do: request_options.native_client_retry_witness
+
+  defp native_http_input_count({:ok, %{input_count: input_count}}), do: input_count
+  defp native_http_input_count(:none), do: nil
+
+  defp native_http_semantic_turn_key({:ok, %{semantic_turn_key: semantic_turn_key}}),
+    do: semantic_turn_key
+
+  defp native_http_semantic_turn_key(:none), do: nil
+
+  defp maybe_put_native_http_input_count(metadata, input_count)
+       when is_integer(input_count) and input_count >= 0,
+       do: Map.put(metadata, "native_http_input_count", input_count)
+
+  defp maybe_put_native_http_input_count(metadata, _input_count), do: metadata
 
   defp request_class(
          _endpoint,

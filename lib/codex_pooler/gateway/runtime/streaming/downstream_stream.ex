@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @moduledoc false
 
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
@@ -246,6 +247,46 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   def public_openai_responses_stream_metadata(_state), do: %{}
 
+  @spec native_http_progress_metadata(state()) :: map()
+  def native_http_progress_metadata(%{native_http_progress: progress}) do
+    case ClientRetry.native_http_progress_metadata(progress) do
+      %{"output_item_done_count" => count} = metadata when count > 0 ->
+        %{"native_http_resume_progress" => metadata}
+
+      _empty ->
+        %{}
+    end
+  end
+
+  def native_http_progress_metadata(_state), do: %{}
+
+  @spec enable_native_http_progress(state()) :: state()
+  def enable_native_http_progress(state) when is_map(state),
+    do: Map.put(state, :native_http_progress, ClientRetry.new_native_http_progress())
+
+  @spec commit_native_http_progress(state()) :: state()
+  def commit_native_http_progress(
+        %{
+          native_http_progress: progress,
+          native_http_pending_output_items: pending
+        } = state
+      )
+      when is_list(pending) do
+    progress =
+      Enum.reduce_while(pending, progress, fn item, progress ->
+        case ClientRetry.observe_native_http_output_item(progress, item) do
+          %ClientRetry.NativeHttpProgress{} = next -> {:cont, next}
+          nil -> {:halt, nil}
+        end
+      end)
+
+    state
+    |> Map.put(:native_http_progress, progress)
+    |> Map.delete(:native_http_pending_output_items)
+  end
+
+  def commit_native_http_progress(state), do: state
+
   @spec bridge_commitment_metadata(state()) :: map()
   def bridge_commitment_metadata(%{bridge_committed?: value}) when is_boolean(value),
     do: %{"bridge_committed" => value}
@@ -319,6 +360,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       state =
         state
         |> Map.put(:codex_responses_sse_block_state, sse_block_state)
+        |> stage_native_http_progress(blocks)
         |> track_native_completion(blocks)
 
       {data, state}
@@ -348,6 +390,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       state =
         state
         |> Map.put(:codex_responses_sse_block_state, sse_block_state)
+        |> stage_native_http_progress(blocks)
         |> track_native_completion(blocks)
 
       {data, state}
@@ -368,6 +411,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       end
     end)
   end
+
+  defp stage_native_http_progress(%{native_http_progress: _progress} = state, blocks) do
+    pending =
+      Enum.flat_map(blocks, fn block ->
+        case StreamProtocol.stream_block_event(block) do
+          {"response.output_item.done", %{"item" => %{} = item}} -> [item]
+          _other -> []
+        end
+      end)
+
+    if pending == [] do
+      state
+    else
+      Map.update(state, :native_http_pending_output_items, pending, &(&1 ++ pending))
+    end
+  end
+
+  defp stage_native_http_progress(state, _blocks), do: state
 
   defp normalize_codex_responses_sse_block(block, opts, %{target: target})
        when target != :websocket do

@@ -164,6 +164,42 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
     end
   end
 
+  describe "native HTTP resume progress" do
+    test "matches delivered output while ignoring only Codex-local passthrough metadata" do
+      delivered = %{
+        "type" => "message",
+        "id" => "msg_progress",
+        "role" => "assistant",
+        "content" => [%{"type" => "output_text", "text" => "done"}]
+      }
+
+      progress =
+        ClientRetry.new_native_http_progress()
+        |> ClientRetry.observe_native_http_output_item(delivered)
+
+      metadata = ClientRetry.native_http_progress_metadata(progress)
+
+      retry_item =
+        Map.put(delivered, "internal_chat_message_metadata_passthrough", %{
+          "turn_id" => "turn_progress",
+          "create_time" => 1_789_000_000.25,
+          "content_item_kinds" => ["user.text"]
+        })
+
+      assert ClientRetry.native_http_progress_matches?(metadata, [retry_item])
+
+      altered = %{
+        retry_item
+        | "content" => [%{"type" => "output_text", "text" => "altered"}]
+      }
+
+      refute ClientRetry.native_http_progress_matches?(metadata, [altered])
+      refute ClientRetry.native_http_progress_matches?(metadata, [])
+      refute ClientRetry.native_http_progress_matches?(metadata, [retry_item, retry_item])
+      refute ClientRetry.native_http_progress_matches?(%{}, [retry_item])
+    end
+  end
+
   describe "stream cut predecessor predicates" do
     test "the lifecycle-only cut accepts its exact shape and rejects every single-field mutation" do
       {turn, request, attempt} = lifecycle_cut_rows()

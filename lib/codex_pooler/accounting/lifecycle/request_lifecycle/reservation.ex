@@ -273,6 +273,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       endpoint: context.endpoint,
       codex_session_id: session.id,
       native_client_retry_witness: attr(opts, :native_client_retry_witness),
+      native_http_input_count: attr(opts, :native_http_input_count),
+      native_http_semantic_turn_key: attr(opts, :native_http_semantic_turn_key),
+      payload: context.payload,
       anchor_present?: attr(opts, :anchor_present?) == true
     }
 
@@ -721,7 +724,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           api_key: api_key,
           model: model,
           endpoint: endpoint,
-          opts: opts
+          opts: opts,
+          payload: payload
         })
 
       policy =
@@ -903,25 +907,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         context.pricing
       )
 
-    attrs = %{
-      pool_id: context.pool.id,
-      api_key_id: context.api_key.id,
-      model_id: context.model.id,
-      requested_model: context.requested_model,
-      endpoint: context.endpoint,
-      transport: context.transport,
-      status: "in_progress",
-      usage_status: @usage_pending,
-      correlation_id: context.correlation_id,
-      client_ip: blank_to_nil(attr(context.opts, :client_ip)),
-      user_agent: blank_to_nil(attr(context.opts, :user_agent)),
-      request_metadata: request_metadata,
-      reasoning_effort: settings_snapshot.reasoning_effort,
-      requested_service_tier: settings_snapshot.requested_service_tier,
-      actual_service_tier: settings_snapshot.actual_service_tier,
-      service_tier: settings_snapshot.service_tier,
-      admitted_at: context.timestamp
-    }
+    attrs =
+      %{
+        pool_id: context.pool.id,
+        api_key_id: context.api_key.id,
+        model_id: context.model.id,
+        requested_model: context.requested_model,
+        endpoint: context.endpoint,
+        transport: context.transport,
+        status: "in_progress",
+        usage_status: @usage_pending,
+        correlation_id: context.correlation_id,
+        client_ip: blank_to_nil(attr(context.opts, :client_ip)),
+        user_agent: blank_to_nil(attr(context.opts, :user_agent)),
+        request_metadata: request_metadata,
+        reasoning_effort: settings_snapshot.reasoning_effort,
+        requested_service_tier: settings_snapshot.requested_service_tier,
+        actual_service_tier: settings_snapshot.actual_service_tier,
+        service_tier: settings_snapshot.service_tier,
+        admitted_at: context.timestamp
+      }
+      |> Map.merge(ClientRetry.request_attrs(attr(context.opts, :native_client_retry_witness)))
 
     request =
       case attr(context.opts, :turn_claim) do

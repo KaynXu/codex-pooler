@@ -28,6 +28,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -38,6 +39,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   @turn_id "turn_212_native_http"
   @session_header "session-id"
   @metadata_header "x-codex-turn-metadata"
+
+  defmodule ClosingAdapter do
+    @moduledoc false
+
+    def chunk(%{closed?: true}, _data), do: {:error, :closed}
+
+    def chunk(%{adapter: adapter, payload: payload} = state, data) do
+      {:ok, body, payload} = adapter.chunk(payload, data)
+      closed? = body == state.close_after
+      {:ok, body, %{state | payload: payload, closed?: closed?}}
+    end
+  end
 
   for carrier <- [:header, :body] do
     test "an identical native HTTP resend is refused and buys no second upstream dispatch (#{carrier})",
@@ -122,6 +135,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     contract = CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn
 
     assert contract.executable_fields == [
+             :advanced_http_resume,
              :claim_by_request_kind,
              :known_gaps,
              :payload_independent_claims,
@@ -142,6 +156,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
            |> Map.keys()
            |> Enum.reject(&(&1 in [:executable_fields, :documentary_fields]))
            |> Enum.sort() == Enum.sort(contract.executable_fields ++ contract.documentary_fields)
+  end
+
+  test "the compatibility matrix pins the delivered-output resume successor" do
+    contract = CompatibilityMatrix.by_slug!(:duplicate_turn_fence).duplicate_turn
+
+    assert contract.advanced_http_resume == %{
+             predecessor_transport: "http_sse",
+             predecessor_error: "client_disconnected",
+             predecessor_claim_arm: "post_compaction_resume",
+             successor_prefix: "codex-request-retry:",
+             requires_input_prefix_match: true,
+             requires_delivered_output_receipt_match: true,
+             identical_retry_refused: true
+           }
   end
 
   test "the compatibility matrix claim shapes are the ones this route produces", %{conn: conn} do
@@ -968,6 +996,214 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     assert FakeUpstream.count(upstream) == dispatched
     assert pool_accounting_counts(setup) == before
+  end
+
+  test "a post-compaction retry advanced by delivered output is served once", %{conn: conn} do
+    delivered_item = Map.put(trailing_item(:assistant), "id", "msg_resume_progress")
+
+    second_delivered_item = %{
+      "type" => "reasoning",
+      "id" => "rs_resume_progress",
+      "summary" => [%{"type" => "summary_text", "text" => "continued"}],
+      "encrypted_content" => "synthetic-encrypted-content"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.json_response(%{"id" => "resp_resume_progress_open"}),
+          FakeUpstream.sse_stream(
+            [
+              {"response.output_item.done",
+               %{"type" => "response.output_item.done", "item" => delivered_item}},
+              {"response.output_text.delta",
+               %{"type" => "response.output_text.delta", "delta" => "not delivered"}}
+            ],
+            done: false
+          ),
+          FakeUpstream.sse_stream(
+            [
+              {"response.output_item.done",
+               %{
+                 "type" => "response.output_item.done",
+                 "item" => second_delivered_item
+               }},
+              {"response.reasoning_text.delta",
+               %{"type" => "response.reasoning_text.delta", "delta" => "not delivered"}}
+            ],
+            done: false
+          ),
+          stream_success_sse()
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session = session_id()
+
+    assert json_response(post_turn(conn, setup, session, @turn_id, where: :body), 200)
+
+    resume_input = compacted_history()
+
+    payload =
+      setup
+      |> turn_payload(input: resume_input, stream: true)
+      |> put_body_document(turn_metadata(@turn_id))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    codex_session = pool_session!(setup, session)
+
+    request_options =
+      %{
+        codex_session: codex_session,
+        upstream_endpoint: "/backend-api/codex/responses",
+        transport: "http_sse"
+      }
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+
+    assert {:ok, %{stream: stream}} =
+             Gateway.execute(auth, "/backend-api/codex/responses", payload, request_options)
+
+    delivered_event =
+      "event: response.output_item.done\ndata: " <>
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.output_item.done",
+          "item" => delivered_item
+        }) <> "\n\n"
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    {adapter, adapter_payload} = stream_conn.adapter
+
+    closing_state = %{
+      adapter: adapter,
+      payload: adapter_payload,
+      close_after: delivered_event,
+      closed?: false
+    }
+
+    assert {:ok, _closed_conn} =
+             stream.(%{stream_conn | adapter: {ClosingAdapter, closing_state}})
+
+    retry_item =
+      Map.put(delivered_item, "internal_chat_message_metadata_passthrough", %{
+        "turn_id" => @turn_id,
+        "create_time" => 1_789_000_000.25,
+        "content_item_kinds" => ["user.text"]
+      })
+
+    advanced_input = resume_input ++ [retry_item]
+
+    altered_item = %{
+      retry_item
+      | "content" => [%{"type" => "output_text", "text" => "altered"}]
+    }
+
+    before_refusals = pool_accounting_counts(setup)
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 input: resume_input ++ [trailing_item(:user)],
+                 stream: true
+               ),
+               409
+             )
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 input: resume_input ++ [altered_item],
+                 stream: true
+               ),
+               409
+             )
+
+    assert pool_accounting_counts(setup) == before_refusals
+
+    assert {:ok, %{stream: second_stream}} =
+             Gateway.execute(
+               auth,
+               "/backend-api/codex/responses",
+               put_body_document(
+                 turn_payload(setup, input: advanced_input, stream: true),
+                 turn_metadata(@turn_id)
+               ),
+               request_options
+             )
+
+    second_delivered_event =
+      "event: response.output_item.done\ndata: " <>
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.output_item.done",
+          "item" => second_delivered_item
+        }) <> "\n\n"
+
+    second_closing_state = %{closing_state | close_after: second_delivered_event}
+
+    assert {:ok, _closed_conn} =
+             second_stream.(%{stream_conn | adapter: {ClosingAdapter, second_closing_state}})
+
+    second_retry_item =
+      Map.put(second_delivered_item, "internal_chat_message_metadata_passthrough", %{
+        "turn_id" => @turn_id,
+        "create_time" => 1_789_000_001.25
+      })
+
+    completed_input = advanced_input ++ [second_retry_item]
+
+    assert response(
+             post_turn(conn, setup, session, @turn_id,
+               where: :body,
+               input: completed_input,
+               stream: true
+             ),
+             200
+           ) =~ "response.completed"
+
+    assert %{"error" => %{"code" => "duplicate_turn"}} =
+             json_response(
+               post_turn(conn, setup, session, @turn_id,
+                 where: :body,
+                 input: completed_input,
+                 stream: true
+               ),
+               409
+             )
+
+    assert FakeUpstream.count(upstream) == 4
+
+    assert [open, first_resume, second_resume, completed_resume] = pool_requests(setup)
+    assert open.request_metadata["native_http_claim_arm"] == "opening"
+    assert first_resume.request_metadata["native_http_claim_arm"] == "post_compaction_resume"
+    assert second_resume.request_metadata["native_http_claim_arm"] == "post_compaction_resume"
+    assert completed_resume.request_metadata["native_http_claim_arm"] == "post_compaction_resume"
+    assert first_resume.status == "failed"
+    assert first_resume.last_error_code == "client_disconnected"
+    assert second_resume.status == "failed"
+    assert second_resume.last_error_code == "client_disconnected"
+    assert get_in(first_resume.request_metadata, ["client_resend"]) == nil
+
+    assert %{
+             "version" => 1,
+             "output_item_done_count" => 1,
+             "digest" => progress_digest
+           } =
+             Repo.one!(from(a in Attempt, where: a.request_id == ^first_resume.id)).response_metadata[
+               "native_http_resume_progress"
+             ]
+
+    assert is_binary(progress_digest) and byte_size(progress_digest) == 43
+    assert first_resume.correlation_id != second_resume.correlation_id
+    assert second_resume.correlation_id != completed_resume.correlation_id
+    assert String.starts_with?(first_resume.correlation_id, "codex-resume:")
+    assert String.starts_with?(second_resume.correlation_id, "codex-request-retry:")
+    assert String.starts_with?(completed_resume.correlation_id, "codex-request-retry:")
   end
 
   test "a resume is anchored only by the latest compaction pivot", %{conn: conn} do

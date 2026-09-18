@@ -95,7 +95,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       try do
         result =
           StreamRelay.run(
-            stream_relay_state(conn, context.request_options, response),
+            stream_relay_state(conn, context, response),
             response,
             response_context
             |> stream_relay_handlers(response, :http_conn, callbacks)
@@ -125,7 +125,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       response_context = %ResponseContext{context: context, response: response}
 
       StreamRelay.run(
-        stream_relay_state(:websocket, context.request_options, response),
+        stream_relay_state(:websocket, context, response),
         response,
         stream_relay_handlers(response_context, response, {:websocket, writer}, callbacks)
       )
@@ -281,7 +281,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp visible_websocket_data?(data), do: is_binary(data) and data != ""
 
-  defp stream_relay_state(:websocket = target, %RequestOptions{} = opts, response) do
+  defp stream_relay_state(
+         :websocket = target,
+         %SelectedCandidateContext{request_options: %RequestOptions{} = opts},
+         response
+       ) do
     target
     |> base_stream_relay_state(opts, response)
     |> put_first_event_state(StreamAttempt.first_event_state())
@@ -290,13 +294,29 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> Map.put(:websocket_sse_block_state, StreamProtocol.new_sse_block_state())
   end
 
-  defp stream_relay_state(target, %RequestOptions{} = opts, response) do
+  defp stream_relay_state(
+         target,
+         %SelectedCandidateContext{
+           request_options: %RequestOptions{} = opts,
+           reserved: %{request: request}
+         },
+         response
+       ) do
     target
     |> base_stream_relay_state(opts, response)
+    |> maybe_enable_native_http_progress(request)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())
   end
+
+  defp maybe_enable_native_http_progress(
+         state,
+         %{request_metadata: %{"native_http_claim_arm" => "post_compaction_resume"}}
+       ),
+       do: DownstreamStream.enable_native_http_progress(state)
+
+  defp maybe_enable_native_http_progress(state, _request), do: state
 
   defp base_stream_relay_state(target, %RequestOptions{} = opts, response) do
     DownstreamStream.initial_state(target, opts, stream_source(response))
@@ -707,10 +727,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
       commits_withheld_preamble?(downstream_data) ->
         {preamble, conn} = take_withheld_preamble(conn)
-        write_downstream_chunk_preserving_state(conn, preamble <> downstream_data)
+        write_normalized_chunk_and_commit_progress(conn, preamble <> downstream_data)
 
       true ->
-        write_downstream_chunk_preserving_state(conn, downstream_data)
+        write_normalized_chunk_and_commit_progress(conn, downstream_data)
+    end
+  end
+
+  defp write_normalized_chunk_and_commit_progress(state, data) do
+    case write_downstream_chunk_preserving_state(state, data) do
+      {:ok, state} -> {:ok, DownstreamStream.commit_native_http_progress(state)}
+      {:error, reason, state} -> {:error, reason, state}
     end
   end
 

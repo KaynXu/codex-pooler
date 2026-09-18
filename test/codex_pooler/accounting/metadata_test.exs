@@ -74,6 +74,36 @@ defmodule CodexPooler.Accounting.MetadataTest do
       end
     end
 
+    test "native HTTP resume progress keeps only a bounded HMAC receipt" do
+      digest = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      progress = %{
+        "version" => 1,
+        "output_item_done_count" => 2,
+        "digest" => digest
+      }
+
+      assert Accounting.sanitize_metadata(%{"native_http_resume_progress" => progress}) == %{
+               "native_http_resume_progress" => progress
+             }
+
+      assert Accounting.sanitize_metadata(%{
+               "native_http_resume_progress" => Map.put(progress, "raw_item", "private")
+             }) == %{"native_http_resume_progress" => %{}}
+
+      for invalid <- [
+            Map.put(progress, "version", 2),
+            Map.put(progress, "output_item_done_count", -1),
+            Map.put(progress, "output_item_done_count", 65_536),
+            Map.put(progress, "digest", "invalid"),
+            Map.delete(progress, "digest")
+          ] do
+        assert Accounting.sanitize_metadata(%{"native_http_resume_progress" => invalid}) == %{
+                 "native_http_resume_progress" => %{}
+               }
+      end
+    end
+
     test "rejects invalid usage observation envelopes without retaining arbitrary content" do
       valid = %{
         "version" => 1,

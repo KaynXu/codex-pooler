@@ -411,7 +411,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   @spec merge_stream_state_metadata(map(), term()) :: map()
   def merge_stream_state_metadata(metadata, state) when is_map(metadata) do
-    Map.merge(metadata, public_openai_responses_stream_metadata(state))
+    metadata
+    |> Map.merge(public_openai_responses_stream_metadata(state))
+    |> Map.merge(DownstreamStream.native_http_progress_metadata(state))
   end
 
   def merge_stream_state_metadata(metadata, _state), do: metadata

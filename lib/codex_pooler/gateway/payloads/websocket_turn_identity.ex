@@ -31,6 +31,7 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     @resume_claim_prefix
   ]
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
+  @http_resume_input_domain "native_http_resume_input_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
     "ws_request_header_traceparent",
@@ -206,6 +207,29 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   def replay_claim_digest(_semantic_turn_key, _payload),
     do: invalid_replay_claim("semantic_turn_key")
 
+  @spec http_resume_input_digest(<<_::256>>, [term()]) ::
+          {:ok, <<_::256>>} | {:error, Error.reason()}
+  def http_resume_input_digest(semantic_turn_key, input)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_list(input) do
+    with {:ok, key} <- replay_claim_hmac_key() do
+      normalized_input = Enum.map(input, &normalize_http_resume_input_item/1)
+
+      {:ok,
+       :crypto.mac(
+         :hmac,
+         :sha256,
+         key,
+         :erlang.term_to_binary(
+           {@http_resume_input_domain, semantic_turn_key, normalized_input},
+           [:deterministic]
+         )
+       )}
+    end
+  end
+
+  def http_resume_input_digest(_semantic_turn_key, _input),
+    do: invalid_replay_claim("input")
+
   @spec raw_turn_id(map()) :: {:ok, String.t()} | :missing | {:error, Error.reason()}
   defp raw_turn_id(payload) do
     case Map.fetch(payload, "client_metadata") do
@@ -322,6 +346,11 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     |> Map.drop([@turn_param, @request_param])
     |> normalize_replay_client_metadata()
   end
+
+  defp normalize_http_resume_input_item(%{} = item),
+    do: Map.delete(item, "internal_chat_message_metadata_passthrough")
+
+  defp normalize_http_resume_input_item(item), do: item
 
   defp normalize_replay_client_metadata(%{"client_metadata" => metadata} = payload)
        when is_map(metadata) do
