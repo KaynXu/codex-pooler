@@ -17,7 +17,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
   @recovery_source "absent_instance_recovery"
   @recovery_message "attempt recovered after its owning instance stopped reporting"
 
-  @type summary :: %{required(:absent_instance_attempts_recovered) => non_neg_integer()}
+  @type summary :: %{
+          required(:absent_instance_attempts_recovered) => non_neg_integer(),
+          optional(:after_commit_markers) => [map()]
+        }
   @type failure :: {Ecto.UUID.t(), term()}
 
   @spec recovery_code() :: String.t()
@@ -76,12 +79,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
     presence_now = InstancePresence.database_now()
     cutoff = InstancePresence.absent_cutoff(presence_now, opts)
     limit = Keyword.get(opts, :limit, 100)
+    caller_owned_transaction? = Repo.in_transaction?()
 
     if InstancePresence.observer_fresh?(presence_now, opts) do
-      {summary, failures} =
+      {summary, failures, markers} =
         now
         |> absent_instance_attempts(cutoff, limit, opts)
-        |> Enum.reduce({initial_summary(), []}, &recover(&1, &2, now, opts))
+        |> Enum.reduce(
+          {initial_summary(), [], []},
+          &recover(&1, &2, now, opts, caller_owned_transaction?)
+        )
+
+      summary = put_after_commit_markers(summary, markers)
 
       if failures == [],
         do: {:ok, summary},
@@ -156,29 +165,40 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
       where: is_nil(release.id) and is_nil(replay.id)
   end
 
-  defp recover({request, attempt}, {summary, failures}, now, opts) do
+  defp recover(
+         {request, attempt},
+         {summary, failures, markers},
+         now,
+         opts,
+         caller_owned_transaction?
+       ) do
     stamp_examined!(attempt, now)
-    caller_owned_transaction? = Repo.in_transaction?()
 
     case settle(request, attempt, now, opts) do
       {:ok, :recovered} ->
-        emit_recovery_outcome(request, attempt, caller_owned_transaction?)
-        {increment(summary), failures}
+        marker = recovery_outcome_marker(request, attempt)
+
+        if caller_owned_transaction? do
+          {increment(summary), failures, [marker | markers]}
+        else
+          emit_recovery_outcome(marker)
+          {increment(summary), failures, markers}
+        end
 
       {:ok, :noop} ->
-        {summary, failures}
+        {summary, failures, markers}
 
       {:error, reason} ->
-        {summary, [{attempt.id, reason} | failures]}
+        {summary, [{attempt.id, reason} | failures], markers}
     end
   rescue
     # A settlement that raises is a candidate failure like a returned error: it
     # is reported with the attempt it belongs to and the pass moves on. Nothing
     # is swallowed; the cleanup job logs the collected failures as a failed step.
-    exception -> {summary, [{attempt.id, bounded_failure(exception)} | failures]}
+    exception -> {summary, [{attempt.id, bounded_failure(exception)} | failures], markers}
   catch
     :exit, _reason ->
-      {summary, [{attempt.id, :absent_instance_recovery_unavailable} | failures]}
+      {summary, [{attempt.id, :absent_instance_recovery_unavailable} | failures], markers}
   end
 
   # A PostgreSQL error keeps its fixed-vocabulary SQLSTATE class beside the
@@ -189,13 +209,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle.AbsentInstanceRecovery do
 
   defp bounded_failure(exception), do: exception.__struct__
 
-  defp emit_recovery_outcome(_request, _attempt, true), do: :ok
+  defp put_after_commit_markers(summary, []), do: summary
 
-  defp emit_recovery_outcome(request, attempt, false) do
+  defp put_after_commit_markers(summary, markers),
+    do: Map.put(summary, :after_commit_markers, Enum.reverse(markers))
+
+  defp recovery_outcome_marker(request, attempt) do
+    %{
+      kind: :stream_outcome,
+      outcome: "interrupted",
+      downstream_transport: bounded_transport(request.transport),
+      upstream_transport: bounded_transport(attempt.transport)
+    }
+  end
+
+  defp emit_recovery_outcome(marker) do
     Streaming.emit_stream_outcome(
-      "interrupted",
-      bounded_transport(request.transport),
-      bounded_transport(attempt.transport)
+      marker.outcome,
+      marker.downstream_transport,
+      marker.upstream_transport
     )
   end
 

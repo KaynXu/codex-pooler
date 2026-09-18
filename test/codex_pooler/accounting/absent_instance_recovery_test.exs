@@ -9,6 +9,7 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Platform.{InstanceHeartbeat, InstancePresence}
@@ -262,7 +263,11 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
       capture_stream_outcomes(fn ->
         assert {:error, :caller_rollback} =
                  Repo.transaction(fn ->
-                   assert {:ok, %{absent_instance_attempts_recovered: 1}} =
+                   assert {:ok,
+                           %{
+                             absent_instance_attempts_recovered: 1,
+                             after_commit_markers: [_marker]
+                           }} =
                             Accounting.recover_absent_instance_attempts(now)
 
                    Repo.rollback(:caller_rollback)
@@ -273,6 +278,50 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
       assert Repo.reload!(request).status == "in_progress"
       assert Repo.reload!(attempt).status == "in_progress"
+    end
+
+    test "a caller-owned commit returns one absent-instance marker for post-commit emission" do
+      graph = committed_graph!()
+      absent = committed_absent_owner!()
+      refresh_local_observer!()
+      now = now()
+      [candidate] = committed_candidates!(graph, absent, DateTime.add(now, -180, :second), 1)
+
+      assert {:ok,
+              {:ok,
+               %{
+                 absent_instance_attempts_recovered: 1,
+                 after_commit_markers: [marker]
+               }}} =
+               run_unboxed(fn ->
+                 Repo.transaction(fn -> Accounting.recover_absent_instance_attempts(now) end)
+               end)
+
+      assert marker == %{
+               kind: :stream_outcome,
+               outcome: "interrupted",
+               downstream_transport: "http_sse",
+               upstream_transport: "http_sse"
+             }
+
+      capture_stream_outcomes(fn ->
+        refute_received {:stream_outcome, _metadata}
+        assert Interruption.emit_committed_deferred_outcomes([marker]) == :ok
+
+        assert_receive {:stream_outcome,
+                        %{
+                          outcome: "interrupted",
+                          downstream_transport: "http_sse",
+                          upstream_transport: "http_sse"
+                        }}
+
+        assert_receive {:stream_outcome_transaction, false}
+      end)
+
+      assert attempt_status(candidate.attempt.id) == "failed"
+
+      assert run_unboxed(fn -> ledger_kinds(candidate.request) end) ==
+               ["release", "reservation", "settlement"]
     end
 
     # findings#207: an attempt that records its executor is never settled on
