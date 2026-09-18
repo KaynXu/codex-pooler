@@ -436,6 +436,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     defp re2_unsupported_scan?(<<>>), do: false
     defp re2_unsupported_scan?(<<"(?", _rest::binary>>), do: true
     defp re2_unsupported_scan?(<<"(*", _rest::binary>>), do: true
+    defp re2_unsupported_scan?(<<"[[:", _rest::binary>>), do: true
 
     defp re2_unsupported_scan?(<<quantifier, "+", _rest::binary>>)
          when quantifier in ~c"*+?}",
@@ -1440,7 +1441,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
             "(?=codex_pooler_.*)codex_pooler_.*",
             ~S|(codex_pooler_.*)\1|,
             "codex_pooler_.{1001}",
-            ~S|codex_pooler_\u0061|
+            ~S|codex_pooler_\u0061|,
+            "codex_pooler_[[:alpha:]_]+"
           ] do
         encoded = String.replace(pattern, "\\", "\\\\")
         invalid = ~s|sum(rate({__name__=~"#{encoded}", via="in_process"}[5m]))|
