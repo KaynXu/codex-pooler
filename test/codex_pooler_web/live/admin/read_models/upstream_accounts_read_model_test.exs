@@ -1127,6 +1127,41 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     assert Map.get(filtered_queries, "routing_circuit_states", 0) == 0
   end
 
+  test "owner fleet view keeps unassigned accounts while a Pool filter excludes them", %{
+    scope: scope
+  } do
+    pool = pool_fixture(%{name: "Assigned Pool"})
+    %{identity: assigned} = upstream_assignment_fixture(pool, %{account_label: "Assigned"})
+    unassigned = active_upstream_identity_fixture(%{account_label: "Unassigned"})
+
+    accounts = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+
+    assert Enum.map(accounts, & &1.identity.id) == [assigned.id, unassigned.id]
+    assert Enum.find(accounts, &(&1.identity.id == unassigned.id)).assignments == []
+
+    assert [%{identity: %{id: assigned_id}}] =
+             UpstreamAccountsReadModel.list_visible_accounts(
+               scope,
+               [pool],
+               %{"pool_id" => pool.id}
+             )
+
+    assert assigned_id == assigned.id
+  end
+
+  test "unassigned account detail disables assignment-dependent actions", %{scope: scope} do
+    identity = active_upstream_identity_fixture(%{account_label: "Detached account"})
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+    assert cockpit.assignments.empty?
+
+    reason = "Assign this account to a Pool before using account actions."
+
+    for action <- [:rename, :pause, :reactivate, :refresh_token, :delete] do
+      assert %{available?: false, reason: ^reason} = Map.fetch!(cockpit.actions, action)
+    end
+  end
+
   test "size-one account load issues one authorized circuit query with constant reads", %{
     scope: scope
   } do
@@ -1196,8 +1231,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
             parameter_probes
           )
 
-        assert length(accounts) == size
-        assert MapSet.new(accounts, & &1.identity.id) == expected_identity_ids
+        assigned_accounts = Enum.reject(accounts, &(&1.assignments == []))
+
+        assert length(assigned_accounts) == size
+        assert MapSet.new(assigned_accounts, & &1.identity.id) == expected_identity_ids
         assert source_count(query_events, "pool_upstream_assignments") == 1
         assert source_count(query_events, "models") == 1
         assert source_count(query_events, "ledger_entries") == 2

@@ -323,7 +323,7 @@ defmodule CodexPooler.UpstreamsTest do
                ])
     end
 
-    test "lists only upstream identities assigned through visible active pools" do
+    test "owners list identities in visible active pools plus globally unassigned identities" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
       scope = Scope.for_user(owner, ["instance_owner"])
       visible_pool = pool_fixture(%{status: "active"})
@@ -355,7 +355,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert visible_identity.id in visible_identity_ids
       refute disabled_pool_identity.id in visible_identity_ids
       refute deleted_identity.id in visible_identity_ids
-      refute deleted_assignment_identity.id in visible_identity_ids
+      assert deleted_assignment_identity.id in visible_identity_ids
     end
 
     test "enforces one assignment per pool identity and returns active eligible routing data" do
