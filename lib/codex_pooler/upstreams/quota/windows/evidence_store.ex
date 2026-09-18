@@ -2440,6 +2440,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           runtime_weekly_restart_corroborated?(evidence, existing, timestamp) ->
         lower_snapshot_decision(evidence, existing, timestamp)
 
+      bounded_safe_primary_zero_refresh?(evidence, existing, timestamp) ->
+        :same_cycle
+
       account_quota_identity?(evidence) ->
         :existing
 
@@ -2450,6 +2453,46 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         compare_confirmed_snapshot(evidence, existing, timestamp)
     end
   end
+
+  # Provider usage can correct an idle primary window's reset by a few minutes
+  # while continuing to report zero percent and no absolute capacity. Keeping
+  # the older values is correct, but freezing their observation time is not:
+  # after the freshness TTL routing rejects an account the provider just
+  # reaffirmed. Refresh only the same permitted zero window and keep its
+  # canonical reset pinned; a real later cycle still takes the normal forward
+  # reset path once the current reset expires.
+  defp bounded_safe_primary_zero_refresh?(
+         %Evidence{
+           source: "codex_usage_api",
+           quota_scope: "account",
+           window_kind: "primary",
+           used_percent: %Decimal{} = incoming_percent,
+           reset_at: %DateTime{} = incoming_reset,
+           observed_at: %DateTime{} = incoming_observed,
+           metadata: metadata
+         } = evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           quota_scope: "account",
+           window_kind: "primary",
+           used_percent: %Decimal{} = existing_percent,
+           reset_at: %DateTime{} = existing_reset,
+           observed_at: %DateTime{} = existing_observed
+         } = existing,
+         timestamp
+       ) do
+    reset_shift = DateTime.diff(incoming_reset, existing_reset, :second)
+
+    same_evidence_identity?(evidence, existing) and zero_percent?(incoming_percent) and
+      zero_percent?(existing_percent) and provider_status_safe?(metadata) and
+      newer_observation?(incoming_observed, existing_observed) and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      not Evidence.expired?(existing, timestamp) and
+      reset_shift > @account_snapshot_reset_tolerance_seconds and
+      reset_shift <= @usage_reset_forward_tolerance_seconds
+  end
+
+  defp bounded_safe_primary_zero_refresh?(_evidence, _existing, _timestamp), do: false
 
   defp explicit_zero_capacity_upgrade?(
          %Evidence{
