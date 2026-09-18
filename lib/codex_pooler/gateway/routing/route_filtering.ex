@@ -59,7 +59,13 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
            |> CandidateEligibility.FilterInput.put_request_options(request_options),
          route_state = RouteState.put_candidates(route_state, candidates),
          {:ok, candidates} <-
-           CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state) do
+           CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state),
+         {:ok, candidates} <-
+           CandidateEligibility.prefer_reasoning_effort_candidates(
+             filter_input.model,
+             request_options,
+             candidates
+           ) do
       {:ok, candidates, request_options, RouteState.put_candidates(route_state, candidates)}
     end
   end

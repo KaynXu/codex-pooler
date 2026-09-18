@@ -340,7 +340,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   own catalog stops at `xhigh` is a backend 400 for a level this Pool
   advertises, while a sibling assignment would have served it (findings#221).
 
-  Preference, not admission, in the shape of `maybe_filter_compact/2`: when no
+  Preference, not admission: hard continuation pinning and quota/circuit
+  eligibility first determine the effective candidate set. When no remaining
   assignment advertises the effort the Pool never promised it, so the upstream
   refusal is the honest answer and every candidate is kept. Narrowing to an
   empty set there would turn that 400 into a 503 `no_compatible_backend`.

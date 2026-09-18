@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       prime_routing_quota!: 1,
       prime_weekly_exhausted_quota!: 1,
       put_model_source_assignments!: 2,
+      seed_preferring_assignment: 2,
       start_upstream: 1,
       strict_text_format_payload: 1
     ]
@@ -2618,7 +2619,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     end
   end
 
-  test "an explicit reasoning effort routes to the assignment whose own catalog advertises it" do
+  test "Gateway.execute routes an explicit reasoning effort to the assignment that advertises it" do
     # Translated Responses traffic starts from every valid canonical assignment,
     # so both catalogs are candidates and the Pool-wide union is the only thing
     # that admitted `max`. Sending the turn to the sibling whose own catalog
@@ -2626,12 +2627,30 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     # (findings#221). Backend catalog-driven turns are narrower only by
     # accident: `supported_reasoning_levels` sits in the canonical partition
     # digest, so divergent catalogs are already in different partitions there.
-    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    advertising_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_reasoning_advertiser",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_reasoning_fallback",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(advertising_upstream)
 
     sibling =
       gateway_upstream(
         setup.pool,
-        start_upstream(FakeUpstream.json_response(%{"data" => []})),
+        fallback_upstream,
         "upstream-token-reasoning-sibling",
         compact?: false
       )
@@ -2652,6 +2671,143 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       "reasoning" => %{"effort" => "max"}
     }
 
+    request_id =
+      seed_preferring_assignment(
+        [setup.assignment.id, sibling.assignment.id],
+        sibling.assignment.id
+      )
+
+    options =
+      RequestOptions.build(%{request_id: request_id}, @endpoint_path, payload)
+      |> RequestOptions.mark_openai_compatibility_origin("/v1/responses", @endpoint_path)
+
+    assert {:ok, response} = Gateway.execute(auth, @endpoint_path, payload, options)
+    assert response.status == 200
+    assert %{"id" => "resp_reasoning_advertiser"} = CodexPooler.JSON.decode!(response.raw_body)
+    assert FakeUpstream.count(advertising_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+  end
+
+  test "a hard-pinned continuation keeps its assignment ahead of reasoning preference" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    pinned =
+      gateway_upstream(
+        setup.pool,
+        start_upstream(FakeUpstream.json_response(%{"data" => []})),
+        "upstream-token-reasoning-pinned",
+        compact?: false
+      )
+
+    prime_routing_quota!(pinned.identity)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!([setup.assignment, pinned.assignment])
+      |> put_assignment_reasoning_levels!(setup.assignment.id, ~w(low medium high xhigh max))
+      |> put_assignment_reasoning_levels!(pinned.assignment.id, ~w(low medium high xhigh))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    session =
+      %CodexSession{
+        pool_id: setup.pool.id,
+        api_key_id: auth.api_key.id,
+        session_key: "reasoning-pin-#{System.unique_integer([:positive])}",
+        pool_upstream_assignment_id: pinned.assignment.id,
+        status: "active",
+        created_at: now,
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("continue on the pinned assignment"),
+      "previous_response_id" => "resp_reasoning_pin_anchor_0001",
+      "reasoning" => %{"effort" => "max"}
+    }
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.mark_openai_compatibility_origin("/v1/responses", @endpoint_path)
+      |> RequestOptions.put_continuity(
+        codex_session: session,
+        previous_response_id: payload["previous_response_id"]
+      )
+
+    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+    assert candidate_ids(prepared.candidates) == [pinned.assignment.id]
+  end
+
+  test "Gateway.execute applies reasoning preference after quota eligibility" do
+    exhausted_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_exhausted_advertiser_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    healthy_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_reasoning_healthy_fallback",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(exhausted_upstream, quota?: false)
+
+    fallback =
+      gateway_upstream(
+        setup.pool,
+        healthy_upstream,
+        "upstream-token-reasoning-healthy-fallback",
+        compact?: false
+      )
+
+    prime_weekly_exhausted_quota!(setup.identity)
+    prime_routing_quota!(fallback.identity)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!([setup.assignment, fallback.assignment])
+      |> put_assignment_reasoning_levels!(setup.assignment.id, ~w(low medium high xhigh max))
+      |> put_assignment_reasoning_capability_only!(fallback.assignment.id)
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("route after quota eligibility"),
+      "reasoning" => %{"effort" => "max"}
+    }
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload,
+                 requested_model: model.exposed_model_id,
+                 effective_model: model.exposed_model_id,
+                 openai_source_endpoint: "/v1/responses",
+                 openai_translated_endpoint: @endpoint_path
+               ),
+               model
+             )
+
+    assert Enum.sort(candidate_ids(prepared.candidates)) ==
+             Enum.sort([setup.assignment.id, fallback.assignment.id])
+
     options =
       request_options(auth, payload,
         requested_model: model.exposed_model_id,
@@ -2660,8 +2816,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         openai_translated_endpoint: @endpoint_path
       )
 
-    assert {:ok, prepared} = PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
-    assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+    assert {:ok, response} = Gateway.execute(auth, @endpoint_path, payload, options)
+    assert response.status == 200
+
+    assert %{"id" => "resp_reasoning_healthy_fallback"} =
+             CodexPooler.JSON.decode!(response.raw_body)
+
+    assert FakeUpstream.count(exhausted_upstream) == 0
+    assert FakeUpstream.count(healthy_upstream) == 1
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id == fallback.assignment.id
   end
 
   test "an effort no assignment advertises leaves the refusal to the upstream" do
@@ -2720,6 +2885,27 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
           model.metadata,
           ["source_assignment_models", assignment_id],
           Map.put(source, "supported_reasoning_levels", levels)
+        )
+    })
+    |> Repo.update!()
+  end
+
+  defp put_assignment_reasoning_capability_only!(model, assignment_id) do
+    source_models = Map.fetch!(model.metadata, "source_assignment_models")
+
+    source =
+      source_models
+      |> Map.fetch!(assignment_id)
+      |> Map.delete("supported_reasoning_levels")
+      |> Map.update("capabilities", %{"reasoning" => true}, &Map.put(&1, "reasoning", true))
+
+    model
+    |> Ecto.Changeset.change(%{
+      metadata:
+        put_in(
+          model.metadata,
+          ["source_assignment_models", assignment_id],
+          source
         )
     })
     |> Repo.update!()
