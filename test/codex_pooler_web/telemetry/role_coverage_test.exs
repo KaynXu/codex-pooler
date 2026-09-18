@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   alias CodexPooler.Telemetry.RelayRuntime
   alias CodexPoolerWeb.Telemetry
   alias CodexPoolerWeb.Telemetry.RoleCoverage
+  alias Elixir.Telemetry.Metrics.Distribution, as: DistributionMetric
 
   @dashboard Path.expand(
                "../../../docs-site/public/operators/monitoring/codex-pooler-runtime-triage.json",
@@ -318,21 +319,21 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     @doc """
     Whether `matchers` selects exactly `label` = `value`, with nothing contradicting it.
 
-    `=~` on a literal is the same selection: PromQL anchors a matcher regex, so
-    `via=~"in_process"` picks the same series `via="in_process"` does. It is
-    compared literally, so an equivalent spelling such as `via=~"^in_process$"`
-    reads as not selecting it — the safe direction, since the consequence is a
-    guard failure rather than a family silently escaping one. A second matcher on
-    the same label that contradicts the first (`{via="in_process", via="job_relay"}`,
-    or a negation of the same value) selects nothing, so it is not a pin either.
+    `=~` on the literal is the same selection: PromQL anchors a matcher regex, so
+    `via=~"in_process"` picks the same series `via="in_process"` does. An equivalent
+    spelling such as `via=~"^in_process$"` reads as not selecting it — the safe
+    direction, since the consequence is a guard failure rather than a family
+    silently escaping one. Every matcher on the label must accept the value, so a
+    regex negation that matches it contradicts the pin just like exact inequality.
     """
     @spec selects?([matcher()], String.t(), String.t()) :: boolean()
     def selects?(matchers, label, value) do
       on_label = for {name, operator, matched} <- matchers, name == label, do: {operator, matched}
-      positive = for {operator, matched} <- on_label, operator in ~w(= =~), do: matched
-      negative = for {operator, matched} <- on_label, operator in ~w(!= !~), do: matched
+      positive = Enum.filter(on_label, fn {operator, _matched} -> operator in ~w(= =~) end)
 
-      positive != [] and Enum.all?(positive, &(&1 == value)) and value not in negative
+      positive != [] and
+        Enum.all?(positive, &exact_positive?(&1, value)) and
+        Enum.all?(on_label, &accepts?(&1, value))
     end
 
     defp scan([], _series, acc), do: Enum.reverse(acc)
@@ -367,31 +368,35 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
     defp matchers([:lbrace | _rest], _acc), do: :invalid
     defp matchers([:rbrace | rest], acc), do: {Enum.reverse(acc), rest}
 
-    defp matchers([{:ident, name}, {:op, operator}, {:string, value} | rest], acc),
-      do: matchers(rest, [{name, operator, value} | acc])
-
-    defp matchers([_token | rest], acc), do: matchers(rest, acc)
-
-    # Whether a selector reaches `series` through `__name__`. With no positive
-    # `__name__` matcher the selection is not bounded by name at all — `{job="x"}`
-    # selects every metric that job exports, this family included — so it counts
-    # unless a negative matcher excludes exactly this one.
-    defp names?(matchers, series) do
-      on_name = for {"__name__", operator, value} <- matchers, do: {operator, value}
-      positive = for {operator, value} <- on_name, operator in ~w(= =~), do: {operator, value}
-
-      case positive do
-        [] -> not Enum.any?(on_name, &excludes?(&1, series))
-        _ -> Enum.any?(positive, &matches?(&1, series))
+    defp matchers([{:ident, name}, {:op, operator}, {:string, value} | rest], acc) do
+      if operator in ~w(=~ !~) and not re2_compatible?(value) do
+        :invalid
+      else
+        matchers(rest, [{name, operator, value} | acc])
       end
     end
 
-    defp matches?({"=", value}, series), do: value == series
-    defp matches?({"=~", pattern}, series), do: anchored?(pattern, series)
+    defp matchers([_token | rest], acc), do: matchers(rest, acc)
 
-    defp excludes?({"!=", value}, series), do: value == series
-    defp excludes?({"!~", pattern}, series), do: anchored?(pattern, series)
-    defp excludes?(_matcher, _series), do: false
+    # Whether a selector reaches `series` through `__name__`. With no `__name__`
+    # matcher the selection is not bounded by name at all — `{job="x"}` selects
+    # every metric that job exports, this family included. Otherwise every matcher
+    # must accept the candidate, because PromQL combines them by conjunction.
+    defp names?(matchers, series) do
+      on_name = for {"__name__", operator, value} <- matchers, do: {operator, value}
+
+      on_name == [] or Enum.all?(on_name, &accepts?(&1, series))
+    end
+
+    defp exact_positive?({"=", matched}, value), do: matched == value
+
+    defp exact_positive?({"=~", pattern}, value),
+      do: pattern == value and anchored?(pattern, value)
+
+    defp accepts?({"=", matched}, value), do: matched == value
+    defp accepts?({"!=", matched}, value), do: matched != value
+    defp accepts?({"=~", pattern}, value), do: anchored?(pattern, value)
+    defp accepts?({"!~", pattern}, value), do: not anchored?(pattern, value)
 
     # Prometheus anchors a label-matcher regex at both ends. A pattern that will
     # not compile is invalid PromQL, and assuming it reaches the family keeps a
@@ -402,6 +407,52 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
         {:error, _reason} -> true
       end
     end
+
+    # Prometheus uses RE2. The local PCRE engine accepts constructs RE2 rejects,
+    # so validating only with Regex.compile/1 lets a dashboard query a series that
+    # Prometheus cannot parse. This deliberately accepts a conservative shared
+    # subset: advanced group prefixes, backreferences, possessive quantifiers and
+    # engine-specific escape families fail closed before the local engine runs.
+    defp re2_compatible?(pattern) do
+      not re2_unsupported?(pattern) and
+        not oversized_repetition?(pattern) and
+        match?({:ok, _regex}, Regex.compile("\\A(?:" <> pattern <> ")\\z"))
+    end
+
+    defp oversized_repetition?(pattern) do
+      ~r/\{(\d+)(?:,(\d*))?\}/
+      |> Regex.scan(pattern, capture: :all_but_first)
+      |> Enum.any?(fn captures ->
+        [lower | rest] = captures
+        upper = List.first(rest)
+
+        String.to_integer(lower) > 1_000 or
+          (upper not in [nil, ""] and String.to_integer(upper) > 1_000)
+      end)
+    end
+
+    defp re2_unsupported?(pattern), do: re2_unsupported_scan?(pattern)
+
+    defp re2_unsupported_scan?(<<>>), do: false
+    defp re2_unsupported_scan?(<<"(?", _rest::binary>>), do: true
+    defp re2_unsupported_scan?(<<"(*", _rest::binary>>), do: true
+
+    defp re2_unsupported_scan?(<<quantifier, "+", _rest::binary>>)
+         when quantifier in ~c"*+?}",
+         do: true
+
+    defp re2_unsupported_scan?(<<"\\">>), do: true
+    defp re2_unsupported_scan?(<<"\\", digit, _rest::binary>>) when digit in ?1..?9, do: true
+
+    defp re2_unsupported_scan?(<<"\\", escape, rest::binary>>)
+         when escape in ?A..?Z or escape in ?a..?z do
+      if escape in ~c"AbBdDsSwWafnrtvx", do: re2_unsupported_scan?(rest), else: true
+    end
+
+    defp re2_unsupported_scan?(<<"\\", _escaped::utf8, rest::binary>>),
+      do: re2_unsupported_scan?(rest)
+
+    defp re2_unsupported_scan?(<<_char::utf8, rest::binary>>), do: re2_unsupported_scan?(rest)
 
     defp tokens(expr), do: tokens(expr, [])
 
@@ -1054,6 +1105,23 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
              "#{inspect(undeclared)} is relayed but undeclared in RoleCoverage"
     end
 
+    test "declared dashboard series follow the real metric type" do
+      by_series = declared_series_by_event()
+
+      assert Map.has_key?(by_series, "codex_pooler_saved_reset_convergence_count")
+      refute Map.has_key?(by_series, "codex_pooler_saved_reset_convergence_count_bucket")
+
+      assert Map.has_key?(
+               by_series,
+               "codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket"
+             )
+
+      refute Map.has_key?(
+               by_series,
+               "codex_pooler_saved_reset_convergence_applied_to_canonical_seconds"
+             )
+    end
+
     test "every operator dashboard panel charting one says so in its description" do
       by_series = declared_series_by_event()
       panels = dashboard_panels()
@@ -1221,6 +1289,16 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       refute series_pinned?(~s|sum(rate(#{series}{via!="in_process"}[5m]))|, series)
       refute series_pinned?(~s|sum(rate(#{series}{via="job_relay"}[5m]))|, series)
 
+      refute series_pinned?(
+               ~s|sum(rate(#{series}{via="in_process", via!~"in_.*"}[5m]))|,
+               series
+             )
+
+      assert series_pinned?(
+               ~s|sum(rate(#{series}{via="in_process", via!~"job_.*"}[5m]))|,
+               series
+             )
+
       # A `via` written as a grouping label or as a string argument is not a
       # matcher on the series either.
       refute series_pinned?(~s|sum by (via) (rate(#{series}[5m]))|, series)
@@ -1355,6 +1433,22 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       # the rule rather than escaping it.
       assert PromQL.charted_series(~s|sum(rate({__name__=~"["}[5m]))|, candidates) == candidates
       refute series_pinned?(~s|sum(rate({__name__=~"["}[5m]))|, series)
+
+      # PCRE accepts lookahead and backreferences, but Prometheus's RE2 does not.
+      # They must fail closed before either local engine evaluates the selector.
+      for pattern <- [
+            "(?=codex_pooler_.*)codex_pooler_.*",
+            ~S|(codex_pooler_.*)\1|,
+            "codex_pooler_.{1001}",
+            ~S|codex_pooler_\u0061|
+          ] do
+        encoded = String.replace(pattern, "\\", "\\\\")
+        invalid = ~s|sum(rate({__name__=~"#{encoded}", via="in_process"}[5m]))|
+        assert PromQL.occurrences(invalid, series) == :invalid
+        assert PromQL.charted_series(invalid, candidates) == candidates
+        refute series_pinned?(invalid, series)
+        assert series_pins_anywhere?(invalid, series)
+      end
     end
 
     test "a panel nested two rows deep is still a panel this guard reads" do
@@ -1482,10 +1576,21 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   defp declared_series_by_event do
     for metric <- Telemetry.prometheus_metrics(),
         RoleCoverage.declared?(metric.event_name),
-        base = Enum.map_join(metric.name, "_", &Atom.to_string/1),
-        name <- [base | Enum.map(@distribution_suffixes, &(base <> &1))],
+        name <- exported_metric_series(metric),
         reduce: %{} do
       acc -> Map.update(acc, name, [metric.event_name], &Enum.uniq([metric.event_name | &1]))
+    end
+  end
+
+  defp exported_metric_series(metric) do
+    base = Enum.map_join(metric.name, "_", &Atom.to_string/1)
+
+    case metric do
+      %DistributionMetric{} ->
+        Enum.map(@distribution_suffixes, &(base <> &1))
+
+      _metric ->
+        [base]
     end
   end
 

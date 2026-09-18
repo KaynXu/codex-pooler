@@ -47,13 +47,31 @@ defmodule CodexPoolerWeb.Telemetry.OperatorDashboardTest do
     assert duplicates == []
   end
 
+  test "exported series follow the real metric type" do
+    exported = exported_series()
+
+    assert MapSet.member?(exported, "codex_pooler_quota_cycle_decision_count")
+    refute MapSet.member?(exported, "codex_pooler_quota_cycle_decision_count_bucket")
+    refute MapSet.member?(exported, "codex_pooler_repo_query_total_time_seconds")
+    assert MapSet.member?(exported, "codex_pooler_repo_query_total_time_seconds_bucket")
+  end
+
   defp exported_series do
     CodexPoolerWeb.Telemetry.prometheus_metrics()
-    |> Enum.flat_map(fn metric ->
-      base = Enum.map_join(metric.name, "_", &Atom.to_string/1)
-      [base | Enum.map(@distribution_suffixes, &(base <> &1))]
-    end)
+    |> Enum.flat_map(&exported_metric_series/1)
     |> MapSet.new()
+  end
+
+  defp exported_metric_series(metric) do
+    base = Enum.map_join(metric.name, "_", &Atom.to_string/1)
+
+    case metric do
+      %Telemetry.Metrics.Distribution{} ->
+        Enum.map(@distribution_suffixes, &(base <> &1))
+
+      _metric ->
+        [base]
+    end
   end
 
   defp referenced_series do
