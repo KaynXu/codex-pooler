@@ -28,6 +28,42 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   @barrier_timeout 5_000
   @observer_deadline_ms 5_000
 
+  test "completed work skips affinity after its API key is deleted without aborting finalization" do
+    fixture = committed_routing_fixture!()
+
+    run_unboxed(fn -> Repo.delete!(Repo.get!(APIKey, fixture.api_key.id)) end)
+
+    assert {:ok, :finalized} =
+             run_unboxed(fn ->
+               Repo.transaction(fn ->
+                 assert :ok =
+                          BridgeRing.record_success(
+                            fixture.plan,
+                            fixture.assignment,
+                            fixture.identity
+                          )
+
+                 assert %{rows: [[1]]} = SQL.query!(Repo, "SELECT 1", [])
+                 :finalized
+               end)
+             end)
+
+    assert pool_rows(BridgeAffinity, fixture) == []
+  end
+
+  test "affinity finalization waits for concurrent key deletion and leaves no hint" do
+    fixture = committed_routing_fixture!()
+
+    %{fencing: fencing, routing: routing} =
+      run_schedule(fixture, :key_delete, fn ->
+        BridgeRing.record_success(fixture.plan, fixture.assignment, fixture.identity)
+      end)
+
+    assert fencing == :ok
+    assert routing == :ok
+    assert pool_rows(BridgeAffinity, fixture) == []
+  end
+
   test "record_success takes the canonical identity lock before touching the assignment" do
     fixture = committed_routing_fixture!()
 
@@ -349,6 +385,23 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   # sequenced explicitly so the second lock is requested only after the routing
   # writer is observed waiting. :assignment_first simulates a not-yet-audited
   # writer holding the pair in the inverted order.
+  defp fencing_transaction(fixture, :key_delete, parent, release_ref) do
+    {:ok, :ok} =
+      Repo.transaction(fn ->
+        %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+        Repo.delete!(Repo.get!(APIKey, fixture.api_key.id))
+        send(parent, {:fencing_first_lock_held, release_ref, backend_pid})
+
+        receive do
+          {:fencing_release, ^release_ref} -> :ok
+        after
+          @actor_timeout -> raise "key deletion release timed out"
+        end
+      end)
+
+    :ok
+  end
+
   defp fencing_transaction(fixture, order, parent, release_ref) do
     identity_id = Ecto.UUID.dump!(fixture.identity.id)
 
@@ -461,7 +514,11 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   # enclosing `after` can run; ExUnit's own teardown runs regardless of how the test died.
   defp committed_routing_fixture! do
     fixture = build_committed_routing_fixture!()
-    register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture) end)
+
+    owners =
+      run_unboxed(fn -> CodexPooler.PoolerFixtures.api_key_creator_ids([fixture.pool.id]) end)
+
+    register_unboxed_cleanup!(fn -> delete_committed_fixture!(fixture, owners) end)
     fixture
   end
 
@@ -491,12 +548,12 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     end)
   end
 
-  defp delete_committed_fixture!(fixture) do
+  defp delete_committed_fixture!(fixture, owners) do
     for schema <- [BridgeAffinity, BridgeDemotion, RoutingCircuitState] do
       Repo.delete_all(from row in schema, where: row.pool_id == ^fixture.pool.id)
     end
 
-    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
+    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id], owners)
 
     Repo.delete_all(
       from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,

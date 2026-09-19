@@ -58,6 +58,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   end
 
   describe "continuity response aliases" do
+    test "completed websocket continuity returns unavailable after key deletion cascades its session" do
+      %{auth: auth, session: session} = owner_session_fixture()
+      Repo.delete!(auth.api_key)
+      assert Repo.get(CodexSession, session.id) == nil
+
+      assert {:error, :owner_unavailable} =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"id" => "resp_deleted_key_completion"},
+                 owner_request_options([])
+               )
+
+      assert response_aliases_for_session(session.id) == []
+    end
+
     test "current HTTP owner starts one turn and registers one alias with equal renewed deadlines" do
       %{auth: auth, session: session} = owner_session_fixture()
       request = request_fixture(auth, %{status: "in_progress", completed_at: nil})

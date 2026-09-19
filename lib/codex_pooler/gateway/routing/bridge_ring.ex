@@ -174,12 +174,20 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
     if affinity.enabled? and affinity.key_hash do
       locked_side_effect(:affinity_upsert, assignment, identity, fn ->
-        upsert_affinity!(plan, assignment, identity, now)
+        upsert_existing_key_affinity(plan, assignment, identity, now)
       end)
     end
 
     resolve_demotions!(plan, assignment, now)
     :ok
+  end
+
+  defp upsert_existing_key_affinity(plan, assignment, identity, now) do
+    # The admitted turn may outlive deletion of its key. Hold the reader lock
+    # through the insert, or skip the obsolete hint when deletion already won.
+    if Access.lock_api_key_for_read(plan_affinity_scope(plan, :api_key_id)) do
+      upsert_affinity!(plan, assignment, identity, now)
+    end
   end
 
   @spec record_failure(

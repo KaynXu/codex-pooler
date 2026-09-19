@@ -275,8 +275,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp lock_continuity_owner!(%CodexSession{id: session_id}, %RequestOptions{}) do
-    session = codex_session_for_update!(session_id)
-    {session, nil, now()}
+    case codex_session_for_update(session_id) do
+      %CodexSession{} = session -> {session, nil, now()}
+      nil -> Repo.rollback(:owner_unavailable)
+    end
   end
 
   defp renew_continuity_owner!(
@@ -432,11 +434,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defdelegate replace_unavailable_owner_lease(session_ref, opts),
     to: OwnerLease,
     as: :replace_unavailable
-
-  @spec codex_session_for_update!(Ecto.UUID.t()) :: CodexSession.t()
-  defp codex_session_for_update!(session_id) do
-    Repo.one!(codex_session_for_update_query(session_id))
-  end
 
   defp codex_session_for_update(session_id) do
     Repo.one(codex_session_for_update_query(session_id))
