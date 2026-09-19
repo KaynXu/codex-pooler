@@ -176,6 +176,80 @@ defmodule CodexPooler.Upstreams.Quota.Windows.UsageCoherenceStoreTest do
     assert DateTime.compare(retained.last_sync_at, t0) == :eq
   end
 
+  test "permitted idle primary with a full-window sliding reset stays fresh beyond five minutes" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:second)
+    reset_at = DateTime.add(t0, 300, :minute)
+
+    assert {:ok, first} =
+             record!(identity, "codex_usage_api", "0", reset_at, t0, safe_status(), 300)
+
+    for minute <- 1..20 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, current} =
+               record!(
+                 identity,
+                 "codex_usage_api",
+                 "0",
+                 DateTime.add(observed_at, 300, :minute),
+                 observed_at,
+                 safe_status(),
+                 300
+               )
+
+      assert current.id == first.id
+      assert DateTime.compare(current.observed_at, observed_at) == :eq
+      assert DateTime.compare(current.last_sync_at, observed_at) == :eq
+      assert DateTime.compare(current.reset_at, reset_at) == :eq
+      assert %{eligible?: true} = Routing.eligibility_from_windows([current], at: observed_at)
+    end
+  end
+
+  test "large reset drift without full-window timing cannot refresh a zero primary" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:second)
+    reset_at = DateTime.add(t0, 300, :minute)
+    assert {:ok, _} = record!(identity, "codex_usage_api", "0", reset_at, t0, safe_status(), 300)
+    t1 = DateTime.add(t0, 6, :minute)
+
+    assert {:ok, retained} =
+             record!(
+               identity,
+               "codex_usage_api",
+               "0",
+               DateTime.add(reset_at, 12, :minute),
+               t1,
+               safe_status(),
+               300
+             )
+
+    assert DateTime.compare(retained.observed_at, t0) == :eq
+    assert DateTime.compare(retained.reset_at, reset_at) == :eq
+  end
+
+  test "full-window idle timing cannot erase positive primary consumption" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:second)
+    reset_at = DateTime.add(t0, 300, :minute)
+    assert {:ok, _} = record!(identity, "codex_usage_api", "22", reset_at, t0, safe_status(), 300)
+    t1 = DateTime.add(t0, 6, :minute)
+
+    assert {:ok, retained} =
+             record!(
+               identity,
+               "codex_usage_api",
+               "0",
+               DateTime.add(t1, 300, :minute),
+               t1,
+               safe_status(),
+               300
+             )
+
+    assert Decimal.equal?(retained.used_percent, 22)
+    assert DateTime.compare(retained.reset_at, reset_at) == :eq
+  end
+
   defp record!(identity, source, used_percent, reset_at, observed_at, metadata),
     do: record!(identity, source, used_percent, reset_at, observed_at, metadata, 300)
 

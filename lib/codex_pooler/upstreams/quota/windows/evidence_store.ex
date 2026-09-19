@@ -2488,11 +2488,32 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       newer_observation?(incoming_observed, existing_observed) and
       Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
       not Evidence.expired?(existing, timestamp) and
-      reset_shift > @account_snapshot_reset_tolerance_seconds and
-      reset_shift <= @usage_reset_forward_tolerance_seconds
+      safe_primary_zero_reset_shift?(evidence, reset_shift)
   end
 
   defp bounded_safe_primary_zero_refresh?(_evidence, _existing, _timestamp), do: false
+
+  defp safe_primary_zero_reset_shift?(evidence, reset_shift) do
+    reset_shift > @account_snapshot_reset_tolerance_seconds and
+      (reset_shift <= @usage_reset_forward_tolerance_seconds or
+         full_window_idle_primary?(evidence))
+  end
+
+  # An unused 5h window may roll with every provider observation. Its reset
+  # stays one full window ahead of that observation, even after cumulative
+  # drift exceeds the small correction bound. Keep the canonical reset pinned
+  # while refreshing only the explicitly permitted zero-over-zero evidence.
+  defp full_window_idle_primary?(%Evidence{
+         window_minutes: 300,
+         reset_at: %DateTime{} = reset_at,
+         observed_at: %DateTime{} = observed_at,
+         metadata: %{"reset_after_seconds" => 18_000}
+       }) do
+    abs(DateTime.diff(reset_at, observed_at, :second) - 18_000) <=
+      @account_snapshot_reset_tolerance_seconds
+  end
+
+  defp full_window_idle_primary?(_evidence), do: false
 
   defp explicit_zero_capacity_upgrade?(
          %Evidence{
