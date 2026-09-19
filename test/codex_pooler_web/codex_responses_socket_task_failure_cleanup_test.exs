@@ -128,7 +128,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTaskFailureCleanupTest do
   end
 
   defp cleanup_fixture(fixture) do
-    registry = start_supervised!({ActivityRegistry, name: {:global, {__MODULE__, make_ref()}}})
+    registry = start_supervised!({ActivityRegistry, name: nil})
     parent = self()
 
     task =

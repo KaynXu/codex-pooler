@@ -2121,40 +2121,42 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline)
   end
 
-  # A waiter blocked on a row names its relation; one blocked on the key-wide
-  # reservation mutex names no relation at all, because an advisory lock has
-  # none.
-  defp blocked_lock_target!(query) do
-    case Regex.run(~r/FROM "(\w+)"/, query) do
-      [_match, relation] -> relation
-      nil -> advisory_lock_target!(query)
-    end
-  end
-
-  defp advisory_lock_target!(query) do
-    if query =~ "pg_advisory_xact_lock",
-      do: "api_key_reservation_window",
-      else: flunk("blocked renewal statement did not name a relation")
-  end
-
   defp do_observe_renewal_lock_wait!(waiter_backend_pid, blocker_backend_pid, deadline) do
     rows =
       Sandbox.unboxed_run(Repo, fn ->
         SQL.query!(
           Repo,
           """
-          SELECT query FROM pg_stat_activity
-          WHERE pid = $1 AND wait_event_type = 'Lock' AND $2 = ANY(pg_blocking_pids(pid))
+          SELECT COALESCE(
+            (
+              SELECT c.relname
+              FROM pg_locks AS l
+              JOIN pg_class AS c ON c.oid = l.relation
+              WHERE l.pid = a.pid AND (l.locktype = 'tuple' OR NOT l.granted)
+              ORDER BY l.granted
+              LIMIT 1
+            ),
+            (
+              SELECT 'api_key_reservation_window'
+              FROM pg_locks AS l
+              WHERE l.pid = a.pid AND l.locktype = 'advisory' AND NOT l.granted
+                AND l.classid = hashtext('api_key_reservation_window')
+              LIMIT 1
+            )
+          )
+          FROM pg_stat_activity AS a
+          WHERE a.pid = $1 AND a.wait_event_type = 'Lock'
+            AND $2 = ANY(pg_blocking_pids(a.pid))
           """,
           [waiter_backend_pid, blocker_backend_pid]
         ).rows
       end)
 
     case rows do
-      [[query]] ->
-        blocked_lock_target!(query)
+      [[relation]] when is_binary(relation) ->
+        relation
 
-      [] ->
+      _not_observed ->
         if System.monotonic_time(:millisecond) >= deadline do
           flunk("bounded renewal was not observed waiting on the blocker's row lock")
         else
