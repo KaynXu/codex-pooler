@@ -18,6 +18,34 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   @pool_slug "openai-v1-smoke"
   @account_id "openai-v1-smoke"
 
+  test "final release removes leased traffic before assignment cascades and preserves other traffic",
+       context do
+    other = api_key_fixture(pool_fixture(%{slug: @pool_slug}))
+    retained = request_fixture(other)
+    retained_ledger = ledger_entry_fixture(retained)
+    assert {:ok, _} = OpenAIV1Fixture.acquire(context.options)
+    setup = context.receipt_path |> File.read!() |> CodexPooler.JSON.decode!()
+    pool = Repo.get!(Pool, setup["pool_id"])
+    key = Repo.get!(APIKey, setup["created"]["api_key_id"])
+    assignment = Repo.get!(PoolUpstreamAssignment, setup["created"]["assignment_id"])
+    model = Repo.get_by!(Model, pool_id: pool.id, exposed_model_id: "gpt-5.5")
+    request = request_fixture(%{pool: pool, api_key: key}, %{model_id: model.id})
+    attempt = attempt_fixture(request, assignment)
+
+    ledger =
+      ledger_entry_fixture(request, %{
+        attempt_id: attempt.id,
+        pool_upstream_assignment_id: assignment.id
+      })
+
+    assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
+    refute Repo.get(CodexPooler.Accounting.Request, request.id)
+    refute Repo.get(CodexPooler.Accounting.Attempt, attempt.id)
+    refute Repo.get(CodexPooler.Accounting.LedgerEntry, ledger.id)
+    assert Repo.get(CodexPooler.Accounting.Request, retained.id)
+    assert Repo.get(CodexPooler.Accounting.LedgerEntry, retained_ledger.id)
+  end
+
   setup do
     _owner = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     root = Path.join(System.tmp_dir!(), "cxp-openai-v1-fixture-#{random_hex(8)}")

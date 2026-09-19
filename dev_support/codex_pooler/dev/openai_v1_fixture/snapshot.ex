@@ -4,6 +4,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Snapshot do
   import Ecto.Query
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.Request
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.OpenAIV1Fixture.SnapshotReader
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
@@ -136,6 +137,18 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Snapshot do
   end
 
   defp delete_pool_children(snapshot, pool_id) when is_binary(pool_id) do
+    leased_keys =
+      from key in APIKey,
+        where: key.pool_id == ^pool_id and key.id not in ^row_ids(snapshot.api_keys),
+        select: key.id
+
+    # Delete the whole request graph before assignment deletion cascades to attempts
+    # still referenced by immutable ledger entries. Captured keys keep their history.
+    Repo.delete_all(
+      from request in Request,
+        where: request.pool_id == ^pool_id and request.api_key_id in subquery(leased_keys)
+    )
+
     Repo.delete_all(
       from key in APIKey,
         where: key.pool_id == ^pool_id and key.id not in ^row_ids(snapshot.api_keys)
