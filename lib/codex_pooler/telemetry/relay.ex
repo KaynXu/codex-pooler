@@ -187,6 +187,14 @@ defmodule CodexPooler.Telemetry.Relay do
     )
   end
 
+  @spec cleanup() :: :more | :done
+  def cleanup do
+    {expired, _} = expire_counted()
+    {pruned, _} = prune()
+    :ok = prune_heartbeats()
+    if expired == @cleanup_batch_size or pruned == @cleanup_batch_size, do: :more, else: :done
+  end
+
   defp delete_bounded(age, claim_filter) do
     {:ok, result} =
       Repo.transaction(fn ->

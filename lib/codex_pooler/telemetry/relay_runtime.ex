@@ -10,6 +10,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
   # `capacity` slot 1 counts live series, slot 2 samples dropped because the
   # buffer was full, and slot 3 samples the storage layer will never accept.
   @rejected_slot 3
+  @flush_chunk_budget 100
 
   @events %{
     [:codex_pooler, :quota, :cycle, :decision] => "quota_cycle_decision",
@@ -104,12 +105,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     flush_ms = Keyword.get(opts, :flush_ms, 5_000)
     drain_ms = Keyword.get(opts, :drain_ms, 15_000)
 
-    cleanup_fun =
-      Keyword.get(opts, :cleanup_fun, fn ->
-        Relay.expire_counted()
-        Relay.prune()
-        Relay.prune_heartbeats()
-      end)
+    cleanup_fun = Keyword.get(opts, :cleanup_fun, &Relay.cleanup/0)
 
     cleanup_interval_ms = Keyword.get(opts, :cleanup_interval_ms, 60_000)
 
@@ -444,8 +440,13 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
   @impl true
   def handle_info(:cleanup, state) do
-    state.cleanup_fun.()
-    Process.send_after(self(), :cleanup, state.cleanup_interval_ms)
+    result = state.cleanup_fun.()
+    # Each pass performs bounded queries, then returns to the mailbox so
+    # quiesce and draining are serviced even while retention catches up.
+    delay =
+      if result == :more, do: min(10, state.cleanup_interval_ms), else: state.cleanup_interval_ms
+
+    Process.send_after(self(), :cleanup, delay)
     {:noreply, state}
   rescue
     error ->
@@ -491,19 +492,16 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
           "telemetry relay refused unstorable samples=#{rejected - state.rejected_reported}"
         )
 
-        safe_loss(state, "rejected_sample", rejected)
+        case safe_loss(state, "rejected_sample", rejected) do
+          :ok -> %{state | overflow_reported: dropped, rejected_reported: rejected}
+          {:error, :unavailable} -> %{state | overflow_reported: dropped}
+        end
+      else
+        %{state | overflow_reported: dropped}
       end
     rescue
-      _ -> :ok
+      _ -> state
     end
-
-    {_table, capacity, _max} = state.capture
-
-    %{
-      state
-      | overflow_reported: :atomics.get(capacity, 2),
-        rejected_reported: :atomics.get(capacity, @rejected_slot)
-    }
   end
 
   defp drain(state) do
@@ -568,9 +566,12 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
       {:error, _} ->
         Logger.warning("telemetry relay loss persistence unavailable samples=#{count}")
+        {:error, :unavailable}
     end
   rescue
-    _ -> Logger.warning("telemetry relay loss persistence unavailable samples=#{count}")
+    _ ->
+      Logger.warning("telemetry relay loss persistence unavailable samples=#{count}")
+      {:error, :unavailable}
   end
 
   defp emit_health do
@@ -614,23 +615,35 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     Process.delete({__MODULE__, :flush_deadline})
   end
 
-  defp flush_snapshot(state, {event, labels, values} = key, count) do
-    deadline = Process.get({__MODULE__, :flush_deadline})
+  defp flush_snapshot(state, key, count),
+    do: flush_chunks(state, key, count, @flush_chunk_budget)
 
-    result =
-      if is_integer(deadline) and System.monotonic_time(:millisecond) >= deadline,
-        do: {:error, :shutdown_deadline},
-        else: state.insert_fun.(event, labels, count, values, state.owner)
-
+  defp flush_chunks(state, _key, 0, _budget) do
     {_table, capacity, _max} = state.capture
+    :atomics.sub(capacity, 1, 1)
+  end
 
-    case result do
-      {:ok, _} -> :atomics.sub(capacity, 1, 1)
+  defp flush_chunks(state, key, count, 0),
+    do: accumulate(state.capture, key, count, true)
+
+  defp flush_chunks(state, key, count, budget) do
+    chunk = min(count, RelayEvent.max_count())
+
+    case insert_chunk(state, key, chunk) do
+      {:ok, _} -> flush_chunks(state, key, count - chunk, budget - 1)
       {:error, reason} -> settle_failed_flush(state, key, count, reason)
       _ -> accumulate(state.capture, key, count, true)
     end
+  end
+
+  defp insert_chunk(state, {event, labels, values}, count) do
+    deadline = Process.get({__MODULE__, :flush_deadline})
+
+    if is_integer(deadline) and System.monotonic_time(:millisecond) >= deadline,
+      do: {:error, :shutdown_deadline},
+      else: state.insert_fun.(event, labels, count, values, state.owner)
   rescue
-    error -> settle_failed_flush(state, key, count, error)
+    error -> {:error, error}
   end
 
   # A refusal no retry can fix leaves the buffer and is counted; anything else
