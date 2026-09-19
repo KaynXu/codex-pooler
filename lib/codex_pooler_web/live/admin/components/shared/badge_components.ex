@@ -57,6 +57,16 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
     }
   }
 
+  @consumer_plan_tones %{
+    "go" => :go,
+    "plus" => :plus,
+    "chatgpt plus" => :plus,
+    "pro" => :pro,
+    "chatgpt pro" => :pro,
+    "prolite" => :prolite,
+    "pro lite" => :prolite
+  }
+
   def status_chip_class(status) when is_atom(status),
     do: status |> Atom.to_string() |> status_chip_class()
 
@@ -233,12 +243,11 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
       normalized in ["free", "free plan"] ->
         :free
 
-      normalized in ["go", "pro", "plus", "prolite", "pro lite", "chatgpt pro", "chatgpt plus"] ->
-        :pro
+      Map.has_key?(@consumer_plan_tones, normalized) ->
+        Map.fetch!(@consumer_plan_tones, normalized)
 
       normalized in [
         "team",
-        "business",
         "chatgpt team",
         "self-serve-business-prolite",
         "self_serve_business_prolite",
@@ -247,14 +256,14 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
       ] ->
         :team
 
+      normalized == "business" ->
+        :business
+
+      normalized in ["edu", "edu-plus", "edu-pro", "edu_plus", "edu_pro", "education"] ->
+        :edu
+
       normalized in [
         "enterprise",
-        "edu",
-        "edu-plus",
-        "edu-pro",
-        "edu_plus",
-        "edu_pro",
-        "education",
         "ent26",
         "hc",
         "enterprise-cbp-automation",
@@ -274,10 +283,9 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
 
   defp plan_tone(_plan_label), do: :unknown
 
-  defp plan_badge_class_for_tone(:free), do: chip_class(:success)
-  defp plan_badge_class_for_tone(:pro), do: chip_class(:primary)
-  defp plan_badge_class_for_tone(:team), do: chip_class(:info)
-  defp plan_badge_class_for_tone(:enterprise), do: chip_class(:warning)
+  defp plan_badge_class_for_tone(tone)
+       when tone in [:free, :go, :plus, :pro, :prolite, :team, :business, :enterprise, :edu],
+       do: "admin-plan-badge admin-plan-badge--#{tone}"
 
   defp plan_badge_class_for_tone({:generated, key}),
     do: key |> generated_chip_tone() |> chip_class()

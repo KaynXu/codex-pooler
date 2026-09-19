@@ -159,6 +159,16 @@ Contents:
 
 ## Overview
 
+### Selected satin plan badge
+
+On upstream account cards only, the existing `admin-token-burn-active` recent-usage signal also enables a clipped static-width highlight sweep on the plan badge. Cadence is fixed at3.2seconds, independent of burn level and quota meter speed. Idle cards and badges outside account cards do not animate. The pseudo-element cannot intercept pointer events; reduced-motion removes the sweep entirely while retaining the satin material. This indicates the existing recent five-minute token-burn activity, not a new in-flight-request detector.
+
+Plan badges use the approved B satin material through `admin-plan-badge` in `assets/css/app.css`: a static 165-degree highlight, 999px capsule radius, 24px minimum height, 11px medium-bold text and subtle inset/outer shadow. Component consumers retain their existing compact sizing overrides. Palette hue/saturation tokens are Free 220/10%, Go 190/70%, Plus 245/65%, Pro 42/80%, Pro Lite 32/48%, Team 213/72%, Business 163/48%, Enterprise 300/22%, Edu 275/62%. Light text/border lightness is24/69%; gradient stops96/80/89%. Dark text is82%, border39% with saturation scaled0.65; gradient lightness31/19/25% with saturation35/38/32%. The user accepted the proposed dark treatment provisionally for in-context review. This is an explicit badge-only exception to the flat-first rule; no animation or changes to status chips. Unknown plans retain the previous fallback. Plan labels reflect provider evidence and never infer5x/20x.
+
+### Development plan badge proposals
+
+The `plan-badges` component-showcase state compares three CSS-only treatments inside the real account card: enamel (solid tint), satin (static restrained metallic highlight), and split (plan plus compact multiplier segment). This is a scoped material exception for badges only: existing shell, density, fonts, cards, spacing and controls remain the operator-bench contract. Pro uses gold; Go uses cyan, Free neutral, Plus indigo, Team blue, Business teal, Enterprise plum, Edu violet. Light and dark pairs use readable foregrounds and visible borders; each badge stays compact at 24px high with no animation. Pro 5x/20x labels are explicitly hypothetical layout examples, never inferred provider entitlements. Proposal styles apply only below `.plan-badge-review`; production badges do not opt in. Full cards stack on mobile; no horizontal page overflow, no decorative card shadows, no imagery or background effects.
+
 **Creative North Star: "The Operator Bench."** Codex Pooler is a compact
 operations surface for trusted users who inspect routing, upstream capacity,
 API keys, request history, quota evidence, and maintenance state without ever
@@ -1048,21 +1058,26 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
 - **API:** attrs `id`, `label`, `family`, `placeholder` (default
   "Plan unknown"), `class`, global rest. Labels are canonicalized
   ("chatgpt plus" → "ChatGPT Plus"); when a family is present and differs it
-  renders as "Label (Family)". Always renders as a [Chips](#chips-status-count-metadata-severity-protocol-redacted) pill chip.
+  renders as "Label (Family)". Known plans use the selected satin capsule; unknown values retain the [Chips](#chips-status-count-metadata-severity-protocol-redacted) fallback.
 - **Tone map:**
 
 | Tone | Plans | Chip |
 | --- | --- | --- |
-| free | Free | success chip |
-| pro | Pro, Plus, ChatGPT Pro/Plus | primary chip |
-| team | Team, Business, ChatGPT Team | info chip |
-| enterprise | Enterprise, Edu, Education | warning chip |
+| free | Free | neutral satin |
+| go | Go | cyan satin |
+| plus | Plus, ChatGPT Plus | indigo satin |
+| pro | Pro, ChatGPT Pro | gold satin |
+| prolite | Pro Lite | bronze satin |
+| team | Team, ChatGPT Team, self-serve business variants | blue satin |
+| business | Business | teal satin |
+| enterprise | Enterprise variants | plum satin |
+| edu | Edu, Education variants | violet satin |
 | generated | any other non-empty label | phash2-stable tone chip |
 | unknown | blank | neutral chip |
 
 Used on upstream card headers, the upstream cockpit header, request-log rows
 (with `!`-override micro sizing), and the pool wizard's identity options —
-verified live as the orange "Pro" / green "Free" pills.
+verified in the local runtime with gold Pro, neutral Free and separate plan hues.
 
 ```heex
 <AdminBadges.plan_badge id={"#{@dom}-plan-label"} label={@account.plan_label} aria-label={"Account plan: #{@account.plan_label}"} />

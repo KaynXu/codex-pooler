@@ -10,10 +10,11 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     ComponentShowcaseCatalog,
     ComponentShowcaseData,
     ComponentShowcaseDialogs,
+    ComponentShowcasePlanBadges,
     ComponentShowcaseStats
   }
 
-  @review_states ~w(catalog dialogs flash oauth-browser-dialog policy-dialog request-drawer)
+  @review_states ~w(catalog dialogs flash oauth-browser-dialog policy-dialog request-drawer plan-badges)
 
   @oauth_browser_authorization_url "https://auth.example.com/oauth/authorize?client_id=dev-component-showcase&response_type=code&state=synthetic-review-state"
 
@@ -343,8 +344,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           />
         </div>
 
+        <ComponentShowcasePlanBadges.gallery :if={@review_state == "plan-badges"} theme={@theme} />
         <ComponentShowcase.component_showcase
-          :if={@review_state not in ["oauth-browser-dialog", "dialogs"]}
+          :if={@review_state not in ["oauth-browser-dialog", "dialogs", "plan-badges"]}
           theme={@theme}
           paused={@paused}
           review_state={@review_state}

@@ -10,6 +10,32 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
   @states ~w(loading empty stale error)
   @oauth_browser_authorization_url "https://auth.example.com/oauth/authorize?client_id=dev-component-showcase&response_type=code&state=synthetic-review-state"
 
+  test "plan badge directions render real cards and theme navigation" do
+    for theme <- ~w(light dark) do
+      {:ok, view, _html} =
+        live_isolated(build_conn(), ComponentShowcaseLive,
+          session: %{"theme" => theme, "review_state" => "plan-badges"}
+        )
+
+      for direction <- ~w(enamel satin split) do
+        assert has_element?(
+                 view,
+                 "#plan-direction-#{direction} [data-role='upstream-account-card']"
+               )
+
+        for family <- ~w(free go plus pro prolite team business enterprise edu) do
+          assert has_element?(
+                   view,
+                   "#plan-direction-#{direction} .plan-proposal-badge[data-family='#{family}']"
+                 )
+        end
+      end
+
+      assert has_element?(view, "a[href='/dev/component-showcase/dark?state=plan-badges']")
+      assert render(view) =~ "hypothetical layout examples"
+    end
+  end
+
   @tag :saved_reset_redemption_cause
   test "isolated showcase renders real primitives and required states in both themes" do
     for theme <- ~w(light dark) do
