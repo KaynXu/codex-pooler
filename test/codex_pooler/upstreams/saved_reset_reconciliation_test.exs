@@ -777,6 +777,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   test "visible then zero then the same expiration restores the original first seen from the ledger" do
     expiration = "2026-08-20T00:40:11.968726Z"
     granted_at = "2026-07-20T00:00:00Z"
+    # Retention is relative to this provider observation, not the date the
+    # suite runs: after expiry plus 30 days, pruning this history is correct.
+    observed_at = ~U[2026-07-24 10:00:00.123456Z]
 
     {:ok, fake} =
       FakeUpstream.start_link(saved_reset_mode(1, reset_credit_rows(expiration, granted_at)))
@@ -790,7 +793,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
       })
 
     assert {:ok, visible_identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment)
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
+               observed_at: observed_at
+             )
 
     visible_identity = Repo.reload!(visible_identity)
 
@@ -802,6 +807,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              }
            ] = visible_identity.metadata["saved_resets"]["available_expirations"]
 
+    assert original_first_seen == DateTime.to_iso8601(observed_at)
+
     assert {:ok, ^original_first_seen} =
              FirstSeenLedger.lookup(visible_identity.saved_reset_first_seen_ledger, expiration)
 
@@ -811,7 +818,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     FakeUpstream.set_mode(fake, saved_reset_mode(0))
 
     assert {:ok, zero_identity} =
-             PoolReconciliation.refresh_quota_from_usage(visible_identity, assignment)
+             PoolReconciliation.refresh_quota_from_usage(visible_identity, assignment,
+               observed_at: DateTime.add(observed_at, 1, :second)
+             )
 
     zero_identity = Repo.reload!(zero_identity)
     assert zero_identity.metadata["saved_resets"]["available_expirations"] == []
@@ -822,7 +831,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     FakeUpstream.set_mode(fake, saved_reset_mode(1, reset_credit_rows(expiration, granted_at)))
 
     assert {:ok, reappeared_identity} =
-             PoolReconciliation.refresh_quota_from_usage(zero_identity, assignment)
+             PoolReconciliation.refresh_quota_from_usage(zero_identity, assignment,
+               observed_at: DateTime.add(observed_at, 2, :second)
+             )
 
     reappeared_identity = Repo.reload!(reappeared_identity)
 
@@ -840,6 +851,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     original_expiration = "2026-08-20T00:40:11.968726Z"
     new_expiration = "2026-08-21T00:40:11.968726Z"
     original_first_seen = "2026-07-22T10:00:00.123456Z"
+    observed_at = ~U[2026-07-24 10:00:00.123456Z]
 
     ledger =
       ledger_with_entry(original_expiration, original_first_seen)
@@ -866,7 +878,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
       |> Repo.update!()
 
     assert {:ok, updated_identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment)
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
+               observed_at: observed_at
+             )
 
     updated_identity = Repo.reload!(updated_identity)
 
@@ -883,6 +897,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              )
 
     assert new_first_seen != original_first_seen
+    assert new_first_seen == DateTime.to_iso8601(observed_at)
 
     assert [%{"expires_at" => ^new_expiration, "first_seen_at" => ^new_first_seen}] =
              updated_identity.metadata["saved_resets"]["available_expirations"]
@@ -891,6 +906,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   test "an empty ledger is lazy seeded from locked current metadata before authoritative zero" do
     expiration = "2026-08-20T00:40:11.968726Z"
     original_first_seen = "2026-07-22T10:00:00.123456Z"
+    observed_at = ~U[2026-07-24 10:00:00.123456Z]
 
     {:ok, fake} = FakeUpstream.start_link(saved_reset_mode(0))
 
@@ -908,7 +924,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert identity.saved_reset_first_seen_ledger == FirstSeenLedger.empty()
 
     assert {:ok, updated_identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment)
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
+               observed_at: observed_at
+             )
 
     updated_identity = Repo.reload!(updated_identity)
     assert updated_identity.metadata["saved_resets"]["available_expirations"] == []
@@ -1243,6 +1261,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   test "malformed version one ledger and current rows do not prevent lazy seeding valid history" do
     expiration = "2026-08-20T00:40:11.968726Z"
     original_first_seen = "2026-07-22T10:00:00.123456Z"
+    observed_at = ~U[2026-07-24 10:00:00.123456Z]
     malformed_expiration = "not-an-expiration"
 
     malformed_ledger = %{
@@ -1274,7 +1293,9 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
       |> Repo.update!()
 
     assert {:ok, updated_identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment)
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
+               observed_at: observed_at
+             )
 
     updated_identity = Repo.reload!(updated_identity)
 
