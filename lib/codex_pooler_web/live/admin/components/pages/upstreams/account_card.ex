@@ -78,11 +78,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     >
       <header
         data-role="upstream-account-card-header"
-        class="flex flex-col items-stretch justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3 sm:flex-row sm:items-center"
+        class="flex items-center justify-between gap-2 border-b border-base-300 bg-base-200/35 px-4 py-3"
       >
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
-            <h3 class="min-w-0 text-base font-semibold leading-5 text-base-content">
+            <h3 class="min-w-0 max-w-full text-base font-semibold leading-5 text-base-content">
               <.link
                 id={"upstream-account-#{@account.identity.id}-mail"}
                 navigate={~p"/admin/upstreams/#{@account.identity.id}"}
@@ -107,7 +107,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <p
             id={"upstream-account-#{@account.identity.id}-auth-expiration"}
             data-role="upstream-auth-expiration"
-            class="text-xs leading-4 text-base-content/55 sm:truncate"
+            class="truncate text-xs leading-4 text-base-content/55"
             title={@auth_expiration.title}
           >
             {@auth_expiration.label}
@@ -115,7 +115,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
         </div>
         <div
           id={"upstream-account-#{@account.identity.id}-header-actions"}
-          class="flex shrink-0 items-center gap-2 self-end sm:self-center"
+          class="flex shrink-0 items-center gap-2 self-center"
         >
           <SavedResetMeter.saved_reset_count_badge
             id={"upstream-account-#{@account.identity.id}-saved-reset-count"}
