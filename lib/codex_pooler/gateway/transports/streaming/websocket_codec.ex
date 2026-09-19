@@ -1044,11 +1044,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp replay_request_kind?(
          %{"client_metadata" => %{@canonical_metadata_key => metadata}},
-         %RequestOptions{} = options
+         %RequestOptions{}
        ) do
     case canonical_metadata_map(metadata) do
       %{"request_kind" => kind} when kind in ["turn", "compaction"] ->
-        not valid_final_compaction_admission?(options)
+        true
 
       _other ->
         false
@@ -1075,14 +1075,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
        do: true
 
   defp projected_native_compaction_retry?(_endpoint, %RequestOptions{}), do: false
-
-  defp valid_final_compaction_admission?(%RequestOptions{
-         native_compaction_admission:
-           %RequestOptions.NativeCompactionAdmission{capability: %{phase: :final}} = admission
-       }),
-       do: RequestOptions.NativeCompactionAdmission.valid?(admission)
-
-  defp valid_final_compaction_admission?(%RequestOptions{}), do: false
 
   defp namespace_restoring_writer(
          push_frame,

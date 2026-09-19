@@ -909,6 +909,28 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       replay_claim_digest: context.replay_claim_digest
     }
 
+    if final_native_compaction_admission?(context.request_options) do
+      replay_intent_result(:fresh, authorization_binding, nil)
+    else
+      classify_replay_preflight(
+        preflight,
+        locked_session,
+        authorization,
+        model,
+        context,
+        authorization_binding
+      )
+    end
+  end
+
+  defp classify_replay_preflight(
+         preflight,
+         locked_session,
+         authorization,
+         model,
+         context,
+         authorization_binding
+       ) do
     case Accounting.replay_preflight_snapshot(preflight) do
       :none ->
         classify_client_retry_intent(
@@ -945,6 +967,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         reject_replay_intent(context, locked_session, reason)
     end
   end
+
+  defp final_native_compaction_admission?(%RequestOptions{
+         native_compaction_admission:
+           %RequestOptions.NativeCompactionAdmission{capability: %{phase: :final}} = admission
+       }),
+       do: RequestOptions.NativeCompactionAdmission.valid?(admission)
+
+  defp final_native_compaction_admission?(%RequestOptions{}), do: false
 
   defp classify_native_compaction_lifecycle_conflict(
          session,

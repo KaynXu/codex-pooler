@@ -237,7 +237,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       end
     end
 
-    test "final compaction item bypasses retry preflight on an owner websocket" do
+    test "final compaction item stays replay-suspendable on an owner websocket" do
       turn_metadata =
         CodexPooler.JSON.encode!(%{
           "turn_id" => Ecto.UUID.generate(),
@@ -286,7 +286,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
           }
       }
 
-      refute WebsocketCodec.replay_eligible?(prepared)
+      assert WebsocketCodec.replay_eligible?(prepared)
     end
 
     test "rejects malformed native input and tools before sealing" do
