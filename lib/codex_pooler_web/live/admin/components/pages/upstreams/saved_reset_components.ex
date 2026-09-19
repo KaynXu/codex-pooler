@@ -179,10 +179,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           />
           <span class="grid min-w-0 gap-0.5">
             <span class="text-[13px] font-semibold leading-tight text-base-content">
-              Weekly quota blocked
+              Long-window quota blocked
             </span>
             <span class="text-[11px] leading-4 text-base-content/55">
-              Request traffic can recover weekly exhaustion. Expiration rescue runs only through scheduled account checks.
+              Request traffic can recover weekly or monthly account quota. Expiration rescue runs only through scheduled account checks.
             </span>
           </span>
         </label>
@@ -228,7 +228,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                   "input input-xs mx-0.5 inline-block w-14 border-base-300 bg-base-100 px-1.5 text-center text-[11px] font-semibold tabular-nums",
                   @threshold_errors != [] && "input-error"
                 ]}
-              />% of the weekly quota window.
+              />% of the weekly or monthly account quota window.
             </span>
             <span
               :for={message <- @threshold_errors}
@@ -253,7 +253,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             readonly={!@policy_enabled?}
           />
           <p class="text-xs leading-5 text-base-content/65">
-            Do not spend a saved reset when the weekly quota will reset naturally within this many minutes.
+            Do not spend a saved reset when the weekly or monthly account quota will reset naturally within this many minutes.
           </p>
         </div>
         <div class="grid gap-1">

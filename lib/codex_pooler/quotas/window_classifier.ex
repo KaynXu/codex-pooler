@@ -56,6 +56,10 @@ defmodule CodexPooler.Quotas.WindowClassifier do
   @spec monthly_primary?(raw_window()) :: boolean()
   def monthly_primary?(window), do: classify(window) == :monthly_primary
 
+  @spec saved_reset_window?(raw_window()) :: boolean()
+  def saved_reset_window?(window),
+    do: classify(window) in [:weekly_secondary, :monthly_primary]
+
   @spec unknown_account_primary?(raw_window()) :: boolean()
   def unknown_account_primary?(window), do: classify(window) == :unknown_account_primary
 

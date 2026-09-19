@@ -56,7 +56,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
       assert has_element?(
                view,
                "#showcase-saved-reset-request-cause",
-               "Last automatic redemption · Request · weekly exhausted"
+               "Last automatic redemption · Request · long-window quota exhausted"
              )
 
       assert has_element?(

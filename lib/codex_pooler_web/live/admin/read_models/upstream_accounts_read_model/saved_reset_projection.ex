@@ -79,7 +79,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
          "trigger_kind" => "gateway_auto",
          "trigger_detail" => "exhausted"
        }),
-       do: %{label: "Request · weekly exhausted"}
+       do: %{label: "Request · long-window quota exhausted"}
 
   defp last_auto_redemption_cause(%{
          "trigger_kind" => "gateway_auto",
@@ -91,7 +91,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
          "trigger_kind" => "scheduled_expiry_rescue",
          "trigger_detail" => "exhausted"
        }),
-       do: %{label: "Scheduled · weekly exhausted"}
+       do: %{label: "Scheduled · long-window quota exhausted"}
 
   defp last_auto_redemption_cause(%{
          "trigger_kind" => "scheduled_expiry_rescue",

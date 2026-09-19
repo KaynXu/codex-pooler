@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection do
   @moduledoc false
 
+  alias CodexPooler.Quotas.WindowClassifier
+
   alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, Windows, WindowSelector}
   alias CodexPooler.Upstreams.Quota.Windows.{CycleConfirmation, EvidenceStore}
 
@@ -142,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
 
   defp fallback_challenge(effective_windows, snapshot_at) do
     effective_windows
-    |> Enum.filter(&weekly_account_window?/1)
+    |> Enum.filter(&reset_account_window?/1)
     |> Enum.max_by(&window_sort_key/1, fn -> nil end)
     |> case do
       %AccountQuotaWindow{} = window ->
@@ -213,9 +215,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
 
   defp account_window?(_window), do: false
 
-  defp weekly_account_window?(%AccountQuotaWindow{} = window) do
-    bounded_account_window?(window) and window.window_kind == "secondary" and
-      window.window_minutes == 10_080
+  defp reset_account_window?(%AccountQuotaWindow{} = window) do
+    bounded_account_window?(window) and WindowClassifier.saved_reset_window?(window)
   end
 
   defp logical_key(%AccountQuotaWindow{} = window), do: WindowSelector.logical_key(window)

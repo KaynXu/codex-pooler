@@ -2557,7 +2557,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#saved-reset-last-auto-redemption-cause",
-             "Last automatic redemption · Request · weekly exhausted"
+             "Last automatic redemption · Request · long-window quota exhausted"
            )
 
     refute render(view) =~ "saved-reset-dialog-auto-sensitive-sentinel"

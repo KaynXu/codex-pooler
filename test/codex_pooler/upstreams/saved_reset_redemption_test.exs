@@ -3893,6 +3893,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    @tag :monthly_saved_reset
+    test "monthly scheduled last-call rescue consumes through the shared pipeline" do
+      %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
+        scheduled_expiry_fixture(
+          quota_overrides: %{
+            window_kind: "primary",
+            window_minutes: 43_200,
+            reset_at: DateTime.add(DateTime.utc_now(), 20, :day)
+          }
+        )
+
+      assert AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
+
+      assert {:ok, %{applied?: true}} =
+               SavedResetRedemption.redeem_scheduled_expiry(assignment, identity.id,
+                 started_at: as_of
+               )
+
+      assert provider_consume_count(fake) == 1
+    end
+
     test "eligible scheduled rescue consumes once through the shared redemption pipeline" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture()
@@ -3930,6 +3951,31 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              }
 
       refute Map.has_key?(redemption, "probe")
+    end
+
+    @tag :monthly_saved_reset
+    test "monthly expiry rescue rejects an independent exhausted five-hour window" do
+      %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
+        scheduled_expiry_fixture(
+          quota_overrides: %{window_kind: "primary", window_minutes: 43_200}
+        )
+
+      attrs =
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("100"),
+          window_kind: "primary",
+          window_minutes: 300,
+          source: "codex_response_headers"
+        )
+
+      assert {:ok, [_]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+      refute AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
+
+      assert {:ok, %{applied?: false}} =
+               SavedResetRedemption.redeem_scheduled_expiry(assignment, identity.id,
+                 started_at: as_of
+               )
+
+      assert provider_consume_count(fake) == 0
     end
 
     test "persists scheduled fields in the consuming claim before provider I/O" do
@@ -5381,6 +5427,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end)
 
       gateway_assignment_id = List.last(fixture.assignment_ids)
+
+      # The corroborated evidence above is newer than fixture creation. Both
+      # claimants must sample a clock after that committed observation.
+      fixture = %{fixture | as_of: DateTime.utc_now() |> DateTime.truncate(:microsecond)}
 
       {scheduled_result, gateway_result, scheduled_backend_pid, gateway_backend_pid} =
         run_automatic_claim_race!(
@@ -7301,6 +7351,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp scheduled_burn_window(as_of, used_percent, reset_in_seconds) do
     %AccountQuotaWindow{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
       used_percent: Decimal.new(used_percent),
       reset_at: DateTime.add(as_of, reset_in_seconds, :second)
     }
