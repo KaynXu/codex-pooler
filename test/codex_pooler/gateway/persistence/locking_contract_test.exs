@@ -217,19 +217,18 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
     end
 
     @tag :locking_contract_pin
-    test "L04 missing session still raises during continuity registration" do
+    test "L04 missing session returns owner unavailable during continuity registration" do
       missing_session = %CodexSession{id: Ecto.UUID.generate()}
       alias_count = Repo.aggregate(BridgeSessionAlias, :count)
       lease_count = Repo.aggregate(BridgeOwnerLease, :count)
 
-      assert_raise Ecto.NoResultsError, fn ->
-        SessionContinuity.register_codex_session_continuity(
-          missing_session,
-          %{},
-          %{"id" => "response-placeholder"},
-          request_options([])
-        )
-      end
+      assert {:error, :owner_unavailable} =
+               SessionContinuity.register_codex_session_continuity(
+                 missing_session,
+                 %{},
+                 %{"id" => "response-placeholder"},
+                 request_options([])
+               )
 
       assert Repo.aggregate(BridgeSessionAlias, :count) == alias_count
       assert Repo.aggregate(BridgeOwnerLease, :count) == lease_count
