@@ -738,7 +738,7 @@ border-base-300 bg-base-200/35 px-4 py-3`):
   `!px-2 !py-0.5 !text-[10px]` micro override + `max-w-48 truncate`),
   auth-expiration line (`data-role="upstream-auth-expiration"`, `text-xs
   text-base-content/55`, full timestamp in `title`).
-- Header actions cluster: saved-reset count badge ([Saved-reset badge and meter](#saved-reset-badge-and-meter)), plan badge ([Plan badge](#plan-badge--all-tones)) or
+- Header actions cluster: plan badge ([Plan badge](#plan-badge--all-tones)) or
   `diagnostic_popover` when the plan is unreported, and the actions dropdown
   ([Dropdown action menu](#dropdown-action-menu)).
 

@@ -117,13 +117,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           id={"upstream-account-#{@account.identity.id}-header-actions"}
           class="flex shrink-0 items-center gap-2 self-center"
         >
-          <SavedResetMeter.saved_reset_count_badge
-            id={"upstream-account-#{@account.identity.id}-saved-reset-count"}
-            identity_id={@account.identity.id}
-            disabled={@account.identity.status == "deleted"}
-            saved_resets={@saved_resets}
-            saved_reset_policy={@saved_reset_policy}
-          />
           <.upstream_plan_indicator account={@account} account_index={@account_index} />
           <.upstream_account_actions account={@account} />
         </div>
@@ -720,7 +713,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
         <li>
           <AdminComponents.dropdown_action_item
             id={"saved-reset-policy-upstream-account-#{@account.identity.id}"}
-            icon="hero-battery-100"
+            icon="hero-building-library-micro"
             label="Saved resets"
             phx-click="open_saved_reset_policy"
             phx-value-id={@account.identity.id}

@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
       phx-value-id={@identity_id}
       disabled={@disabled}
     >
-      <.icon name="hero-battery-100" class={@badge_icon_class} />
+      <.icon name="hero-building-library-micro" class={@badge_icon_class} />
       <span>{@saved_resets.available_count}</span>
     </button>
     """
@@ -238,11 +238,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   end
 
   defp saved_reset_count_badge_icon_class(%{enabled?: true}) do
-    "size-3 shrink-0 text-current"
+    "size-3.5 shrink-0 [mask-size:contain] text-current"
   end
 
   defp saved_reset_count_badge_icon_class(_policy) do
-    "size-3 shrink-0 text-(--color-reset-bank)"
+    "size-3.5 shrink-0 [mask-size:contain] text-(--color-reset-bank)"
   end
 
   defp saved_reset_count_badge_aria_label(saved_resets),
