@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
 
   @context_bytes 80
   @encoded_context_bytes @context_bytes * 6 + 2
+  @string_boundary ~r/[\x00-\x1f"\\\x80-\xff]/
 
   @type frame :: %{
           kind: :object | :array,
@@ -59,7 +60,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
   def feed(state, ""), do: state
   def feed(%{error: error} = state, _data) when error != nil, do: state
 
-  def feed(state, <<byte, rest::binary>> = data) do
+  def feed(%{lexer: :string, capture: nil, projection: nil} = state, data) do
+    if key_phase?(state) do
+      feed_byte(state, data)
+    else
+      # Only plain ASCII can be skipped: escapes, controls and every UTF-8
+      # byte still pass through the incremental validating lexer.
+      case Regex.run(@string_boundary, data, return: :index) do
+        nil -> state
+        [{0, _length}] -> feed_byte(state, data)
+        [{offset, _length}] -> feed(state, binary_part(data, offset, byte_size(data) - offset))
+      end
+    end
+  end
+
+  def feed(state, data), do: feed_byte(state, data)
+
+  defp feed_byte(state, <<byte, rest::binary>> = data) do
     case UsageJsonToken.step(state.lexer, byte) do
       :error -> fail(state, :malformed)
       {:again, token} -> state |> Map.put(:lexer, :idle) |> advance(token) |> feed(data)

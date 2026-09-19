@@ -5,6 +5,22 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
 
   @moduletag :sse_parser_incremental
 
+  test "large event framing scans spans within a bounded reduction budget" do
+    block = "event: response.output_item.done\ndata: " <> String.duplicate("A", 1_048_576)
+
+    for newline <- ["\n", "\r", "\r\n"] do
+      stream = String.replace(block, "\n", newline) <> newline <> newline
+      parse = fn -> StreamProtocol.complete_sse_blocks(stream, bounded?: true) end
+      parse.()
+      {:reductions, before_count} = Process.info(self(), :reductions)
+      result = parse.()
+      {:reductions, after_count} = Process.info(self(), :reductions)
+
+      assert result == {[block], ""}
+      assert after_count - before_count < 500_000
+    end
+  end
+
   # Reference copy of the pre-incremental implementation (single-pass CRLF
   # replace, full rescan per call). The incremental three-arity form must be
   # observationally identical for every stream without a bare CR adjacent to a
