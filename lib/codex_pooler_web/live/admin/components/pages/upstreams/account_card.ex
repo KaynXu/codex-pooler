@@ -377,7 +377,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             </span>
           </AdminComponents.card_fact_label>
           <AdminComponents.card_fact_value
-            tone_class={footer_panel_value_tone(@panel_view == :pools)}
+            tone_class={
+              if @account.assignments == [],
+                do: "text-warning",
+                else: footer_panel_value_tone(@panel_view == :pools)
+            }
             class="pointer-events-none relative z-30 transition-colors"
           >
             {assignment_count_label(@account.assignments)}

@@ -24,6 +24,15 @@ defmodule CodexPoolerWeb.Admin.UnassignedUpstreamsLiveTest do
     {:ok, list_view, _html} = live(conn, ~p"/admin/upstreams")
     assert has_element?(list_view, "#upstream-account-#{identity.id}", "Detached account")
 
+    pool_count = "#upstream-account-#{identity.id} [data-role='upstream-pool-count-cell']"
+    assert has_element?(list_view, "#{pool_count} .text-warning", "No Pools")
+
+    list_view
+    |> element("#upstream-account-#{identity.id}-pools-panel-trigger")
+    |> render_click()
+
+    assert has_element?(list_view, "#{pool_count} .text-warning", "No Pools")
+
     assert has_element?(
              list_view,
              "#upstream-account-actions-menu-#{identity.id}[title='#{reason}']"
@@ -60,6 +69,12 @@ defmodule CodexPoolerWeb.Admin.UnassignedUpstreamsLiveTest do
       live(conn, ~p"/admin/upstreams?pool_id=#{visible_pool.id}")
 
     assert has_element?(owner_view, "#upstream-account-#{visible_identity.id}")
+
+    refute has_element?(
+             owner_view,
+             "#upstream-account-#{visible_identity.id} [data-role='upstream-pool-count-cell'] .text-warning"
+           )
+
     refute has_element?(owner_view, "#upstream-account-#{hidden_identity.id}")
     refute has_element?(owner_view, "#upstream-account-#{unassigned_identity.id}")
 
