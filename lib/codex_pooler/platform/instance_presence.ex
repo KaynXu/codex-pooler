@@ -56,9 +56,13 @@ defmodule CodexPooler.Platform.InstancePresence do
   @spec local_identity() :: Identity.t()
   def local_identity, do: Identity.local()
 
-  @spec record_heartbeat(Identity.t(), DateTime.t()) :: {:ok, Instance.t()} | {:error, term()}
-  def record_heartbeat(identity \\ local_identity(), now \\ database_now())
+  @spec record_heartbeat(Identity.t()) :: {:ok, Instance.t()} | {:error, term()}
+  def record_heartbeat(identity \\ local_identity()) do
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [], timeout: 1_000)
+    record_heartbeat(identity, now)
+  end
 
+  @spec record_heartbeat(Identity.t(), DateTime.t()) :: {:ok, Instance.t()} | {:error, term()}
   def record_heartbeat(%Identity{} = identity, %DateTime{} = now) do
     now = DateTime.truncate(now, :microsecond)
 
@@ -72,7 +76,9 @@ defmodule CodexPooler.Platform.InstancePresence do
         updated_at: now
       },
       on_conflict: [set: [last_seen_at: now, updated_at: now]],
-      conflict_target: :instance_id
+      conflict_target: :instance_id,
+      timeout: 1_000,
+      deadline: System.monotonic_time(:millisecond) + 1_000
     )
   end
 

@@ -5,6 +5,20 @@ description: Collect Prometheus metrics, use Grafana dashboards, and investigate
 
 Codex Pooler exposes Prometheus metrics at `/metrics`. Metrics auth is managed from `/admin/system`; when bearer protection is configured, Prometheus must use the matching Kubernetes Secret reference rather than placing the credential in Helm values. `/metrics` is not protected by the runtime firewall.
 
+## Websocket control-path failures
+
+`codex_pooler_gateway_websocket_control_failure_count` counts observed callback failures by `phase` (`init`, `serve`, `terminate`) and bounded `reason`. These failures can happen before request reservation, so an empty request-error table does not rule them out. `cleanup_deferred` means supervised cleanup exceeded the socket's 100 ms wait and continues separately; database and peer-call failures are reported as `database_error` and `process_exit`.
+
+The runtime triage dashboard includes **Websocket Control Path Failure Rate**. Alert on a nonzero five-minute increase, sustained for one minute:
+
+```promql
+sum by (namespace, phase, reason) (
+  increase(codex_pooler_gateway_websocket_control_failure_count[5m])
+) > 0
+```
+
+Correlate alerts with database checkout pressure and owner-cleanup logs. This counter records server-side failures; it does not measure TCP resets or prove that a close frame reached the client.
+
 ## Metrics exposure states
 
 The endpoint has exactly three states:

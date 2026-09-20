@@ -197,6 +197,14 @@ defmodule CodexPoolerWeb.Telemetry do
         description:
           "Shared unclaimed relay rows, including expired backlog. Read once per web observer; use max across replicas, never sum."
       ),
+      counter("codex_pooler.gateway.websocket_control.failure.count",
+        event_name: [:codex_pooler, :gateway, :websocket_control, :failure],
+        measurement: :count,
+        tags: [:phase, :reason],
+        tag_values: &websocket_control_tag_values/1,
+        description:
+          "Websocket control-path failures and deferred cleanup on serving nodes, including failures before request reservation. This measures observed callback failures, not inferred TCP resets."
+      ),
       last_value("codex_pooler.telemetry_relay.backlog.samples",
         event_name: [:codex_pooler, :telemetry_relay, :health],
         measurement: :backlog_samples,
@@ -837,6 +845,18 @@ defmodule CodexPoolerWeb.Telemetry do
     do: admin_stats_enum_value(value, @request_logs_reload_scopes)
 
   @spec stream_finalization_tag_values(map()) :: stream_finalization_tags()
+  defp websocket_control_tag_values(metadata) do
+    %{
+      phase:
+        if(metadata[:phase] in [:init, :serve, :terminate], do: metadata[:phase], else: :unknown),
+      reason:
+        if(metadata[:reason] in [:database_error, :exception, :process_exit, :cleanup_deferred],
+          do: metadata[:reason],
+          else: :unknown
+        )
+    }
+  end
+
   defp stream_finalization_tag_values(metadata) do
     %{
       usage_status: admin_stats_enum_value(metadata[:usage_status], @stream_usage_statuses),

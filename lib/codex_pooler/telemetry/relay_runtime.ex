@@ -543,6 +543,8 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     state.heartbeat_fun.(state.owner)
   rescue
     _ -> {:error, :unavailable}
+  catch
+    :exit, _reason -> {:error, :unavailable}
   end
 
   defp safe_consumer_heartbeat(state, quiesced) do
@@ -556,6 +558,10 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
         "telemetry relay consumer heartbeat failed reason=#{inspect(error.__struct__)}"
       )
 
+      :ok
+  catch
+    :exit, _reason ->
+      Logger.warning("telemetry relay consumer heartbeat failed reason=process_exit")
       :ok
   end
 

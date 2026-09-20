@@ -8,6 +8,7 @@
 // the foundation SDK.
 
 export const PANELS = [
+  { type: "timeseries", title: "Websocket Control Path Failure Rate", description: "Observed websocket callback failures and deferred cleanup, including initialization before request reservation. These are server observations, not proof of a TCP reset or a delivered close frame. Investigate any sustained database_error or process_exit increase; cleanup_deferred means supervised cleanup outlived the socket's close budget.", unit: "ops", w: 12, h: 8, queries: [{ expr: "sum by (phase, reason) (rate(codex_pooler_gateway_websocket_control_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))", legend: "{{phase}} {{reason}}" }] },
 
   // ── Triage Signals ──
   { row: "Triage Signals" },

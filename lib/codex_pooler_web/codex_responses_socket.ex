@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
   alias CodexPoolerWeb.WebsocketConnectionLogger
+  alias CodexPoolerWeb.WebsocketControlPath
   alias CodexPoolerWeb.WebsocketResponseTaskFailureDiagnostics
 
   require Logger
@@ -50,6 +51,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def init(state) do
+    case WebsocketControlPath.run(:init, fn -> initialize_socket(state) end) do
+      {:ok, result} -> result
+      {:error, _reason} -> {:stop, :normal, {1011, "websocket initialization unavailable"}, state}
+    end
+  end
+
+  defp initialize_socket(state) do
     started_at = System.monotonic_time(:millisecond)
 
     case Websocket.prepare_websocket_session(state.auth, state.opts) do
@@ -79,7 +87,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
-  def handle_in({_payload, [opcode: opcode]} = frame, state) when opcode in [:text, :binary] do
+  def handle_in(frame, state) do
+    case WebsocketControlPath.run(:serve, fn -> handle_socket_frame(frame, state) end) do
+      {:ok, result} -> result
+      {:error, _reason} -> {:stop, :normal, {1011, "websocket control unavailable"}, state}
+    end
+  end
+
+  defp handle_socket_frame({_payload, [opcode: opcode]} = frame, state)
+       when opcode in [:text, :binary] do
     if socket_revoked?(state) do
       {:ok, state}
     else
@@ -113,20 +129,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
-  def handle_info(
-        {InstanceSettingsCache, {:applied, applied_version}},
-        state
-      )
-      when is_integer(applied_version) do
+  def handle_info(message, state) do
+    case WebsocketControlPath.run(:serve, fn -> handle_socket_info(message, state) end) do
+      {:ok, result} -> result
+      {:error, _reason} -> {:stop, :normal, {1011, "websocket control unavailable"}, state}
+    end
+  end
+
+  defp handle_socket_info(
+         {InstanceSettingsCache, {:applied, applied_version}},
+         state
+       )
+       when is_integer(applied_version) do
     handle_firewall_applied(applied_version, state)
   end
 
-  def handle_info(
-        {Events,
-         %Events.Event{pool_id: pool_id, topics: topics, reason: reason, payload: payload}},
-        state
-      )
-      when is_list(topics) and is_map(payload) do
+  defp handle_socket_info(
+         {Events,
+          %Events.Event{pool_id: pool_id, topics: topics, reason: reason, payload: payload}},
+         state
+       )
+       when is_list(topics) and is_map(payload) do
     if "pools" in topics and Map.get(state, :api_key_pool_id) == pool_id do
       reason
       |> handle_pool_event(payload, state)
@@ -138,11 +161,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   # A superseded token belongs to a check an edited expiry already replaced,
   # so it falls through to the catch-all below.
-  def handle_info(
-        {:api_key_expiry_check, token},
-        %{api_key_expiry_check: %{token: token}} = state
-      )
-      when is_reference(token) do
+  defp handle_socket_info(
+         {:api_key_expiry_check, token},
+         %{api_key_expiry_check: %{token: token}} = state
+       )
+       when is_reference(token) do
     state
     |> Map.put(:api_key_expiry_check, nil)
     |> reread_api_key_authorization()
@@ -150,11 +173,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   # A superseded token belongs to a retry that a later reread already settled.
-  def handle_info(
-        {:api_key_reread_retry, token},
-        %{api_key_reread_retry: %{token: token}} = state
-      )
-      when is_reference(token) do
+  defp handle_socket_info(
+         {:api_key_reread_retry, token},
+         %{api_key_reread_retry: %{token: token}} = state
+       )
+       when is_reference(token) do
     state
     |> reread_api_key_authorization()
     |> close_if_revoked_idle()
@@ -163,8 +186,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # Chunks are attributed to their producing turn by pid. A chunk from a task the
   # socket no longer tracks belongs to a turn that already settled, so it is
   # dropped rather than injected into whatever turn is running now.
-  def handle_info({:codex_response_chunk, task_pid, data}, state)
-      when is_pid(task_pid) and is_binary(data) do
+  defp handle_socket_info({:codex_response_chunk, task_pid, data}, state)
+       when is_pid(task_pid) and is_binary(data) do
     _trace =
       NativeCompactionTrace.emit_full(:downstream_websocket_frame_sent, %{
         direction: :pooler_to_downstream,
@@ -194,61 +217,64 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  def handle_info({:websocket_owner_runtime_recovered, _, _, _} = message, state) do
+  defp handle_socket_info({:websocket_owner_runtime_recovered, _, _, _} = message, state) do
     case Adapter.accept_recovered_runtime(message, state) do
       {:ok, state} -> {:ok, reset_owner_turn_output(state)}
       :drop -> {:ok, state}
     end
   end
 
-  def handle_info(
-        {:websocket_owner_handoff_ready, _correlation_id, _epoch, _owner_turn_id, _downstream_pid,
-         _control_ref} = message,
-        state
-      ) do
+  defp handle_socket_info(
+         {:websocket_owner_handoff_ready, _correlation_id, _epoch, _owner_turn_id,
+          _downstream_pid, _control_ref} = message,
+         state
+       ) do
     handle_owner_handoff_message(message, state)
   end
 
-  def handle_info(
-        {:websocket_owner_handoff_failed, _correlation_id, _epoch, _owner_turn_id,
-         _downstream_pid, _control_ref, _reason} = message,
-        state
-      ) do
+  defp handle_socket_info(
+         {:websocket_owner_handoff_failed, _correlation_id, _epoch, _owner_turn_id,
+          _downstream_pid, _control_ref, _reason} = message,
+         state
+       ) do
     handle_owner_handoff_message(message, state)
   end
 
-  def handle_info(
-        {:websocket_owner_cleanup_witness, _correlation, _epoch, _task, _witness} = message,
-        state
-      ) do
+  defp handle_socket_info(
+         {:websocket_owner_cleanup_witness, _correlation, _epoch, _task, _witness} = message,
+         state
+       ) do
     {:ok, DownstreamSession.accept_cleanup_witness(message, state)}
   end
 
-  def handle_info(
-        {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message,
-        state
-      ) do
+  defp handle_socket_info(
+         {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message,
+         state
+       ) do
     message
     |> handle_owner_frame(state)
     |> close_if_revoked_idle()
   end
 
-  def handle_info(
-        {:websocket_owner_output_commit_probe, _correlation_id, _epoch, _owner_turn_id,
-         _active_turn_ref, _owner_pid, _probe_ref} = message,
-        state
-      ) do
+  defp handle_socket_info(
+         {:websocket_owner_output_commit_probe, _correlation_id, _epoch, _owner_turn_id,
+          _active_turn_ref, _owner_pid, _probe_ref} = message,
+         state
+       ) do
     handle_output_commit_probe(message, state)
   end
 
-  def handle_info({:websocket_owner_frame, _correlation_id, _epoch, _payload} = message, state) do
+  defp handle_socket_info(
+         {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message,
+         state
+       ) do
     message
     |> handle_owner_frame(state)
     |> close_if_revoked_idle()
   end
 
-  def handle_info({:websocket_response_activity, pid, token}, state)
-      when is_pid(pid) and is_reference(token) do
+  defp handle_socket_info({:websocket_response_activity, pid, token}, state)
+       when is_pid(pid) and is_reference(token) do
     _trace =
       NativeCompactionTrace.emit(:response_task_started, %{
         pid_role: :response_task,
@@ -264,11 +290,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:ok, state}
   end
 
-  def handle_info({:direct_request_cleanup, pid, ref, receipt}, state) do
+  defp handle_socket_info({:direct_request_cleanup, pid, ref, receipt}, state) do
     {:ok, accept_direct_cleanup(state, pid, ref, receipt)}
   end
 
-  def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
+  defp handle_socket_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
     _trace =
       NativeCompactionTrace.emit(:finalization_finished, %{
         pid_role: :response_task,
@@ -294,28 +320,34 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     close_if_revoked_idle(result)
   end
 
-  def handle_info({:websocket_response_delivery_complete, pid, token}, state)
-      when is_pid(pid) and is_reference(token) do
+  defp handle_socket_info({:websocket_response_delivery_complete, pid, token}, state)
+       when is_pid(pid) and is_reference(token) do
     state = complete_response_task_delivery(state, pid, token)
     close_if_revoked_idle({:ok, state})
   end
 
-  def handle_info(
-        {:websocket_response_activity_cancelled, pid, token, ack_pid, :owner_drained},
-        state
-      )
-      when is_pid(pid) and is_reference(token) and is_pid(ack_pid) do
+  defp handle_socket_info(
+         {:websocket_response_activity_cancelled, pid, token, ack_pid, :owner_drained},
+         state
+       )
+       when is_pid(pid) and is_reference(token) and is_pid(ack_pid) do
     handle_cancelled_response_activity(state, pid, token, ack_pid)
     |> close_if_revoked_idle()
   end
 
-  def handle_info({:websocket_response_activity_cancelled, pid, token, :owner_drained}, state)
-      when is_pid(pid) and is_reference(token) do
+  defp handle_socket_info(
+         {:websocket_response_activity_cancelled, pid, token, :owner_drained},
+         state
+       )
+       when is_pid(pid) and is_reference(token) do
     handle_cancelled_response_activity(state, pid, token, pid)
     |> close_if_revoked_idle()
   end
 
-  def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
+  defp handle_socket_info(
+         {:DOWN, ref, :process, pid, reason},
+         %{websocket_owner_monitor: ref} = state
+       ) do
     outcome = owner_monitor_handoff_outcome(reason)
 
     state =
@@ -335,7 +367,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+  defp handle_socket_info({:DOWN, ref, :process, pid, _reason}, state) do
     result =
       cond do
         active_public_task_monitor?(state, pid, ref) and public_turn_aborted?(state) ->
@@ -363,7 +395,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     close_if_revoked_idle(result)
   end
 
-  def handle_info(_message, state), do: {:ok, state}
+  defp handle_socket_info(_message, state), do: {:ok, state}
 
   defp handle_response_done(pid, result, state) do
     case api_key_revocation_disposition(result) do
@@ -433,6 +465,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def terminate(reason, state) do
+    _result = WebsocketControlPath.run(:terminate, fn -> terminate_socket(reason, state) end)
+    :ok
+  end
+
+  defp terminate_socket(reason, state) do
     _trace =
       NativeCompactionTrace.emit(:cleanup_finished, %{pid_role: :socket, outcome: :finished})
 
@@ -450,7 +487,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     # replacement runtime from any unprocessed notification first.
     state = absorb_recovered_owner_runtime(state)
 
-    cleanup_websocket_session(reason, state)
+    WebsocketControlPath.cleanup(fn -> cleanup_websocket_session(reason, state) end)
 
     cancel_abandoned_response_tasks(state, remaining_tasks)
 
@@ -561,7 +598,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp detach_recovered_owner_runtime(state, reason, message) do
     case Adapter.accept_recovered_runtime(message, state) do
       {:ok, state} ->
-        _cleanup = Adapter.cleanup_owner_session(state, reason)
+        _cleanup =
+          WebsocketControlPath.cleanup(fn -> Adapter.cleanup_owner_session(state, reason) end)
+
         state
 
       :drop ->

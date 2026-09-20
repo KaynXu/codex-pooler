@@ -68,7 +68,9 @@ defmodule CodexPooler.Telemetry.Relay do
   def consumer_heartbeat(owner, quiesced \\ false) do
     Repo.query!(
       "INSERT INTO telemetry_relay_consumers(owner,heartbeat_at,quiesced) VALUES ($1,clock_timestamp(),$2) ON CONFLICT(owner) DO UPDATE SET heartbeat_at=EXCLUDED.heartbeat_at,quiesced=EXCLUDED.quiesced",
-      [owner, quiesced]
+      [owner, quiesced],
+      timeout: 1_000,
+      deadline: System.monotonic_time(:millisecond) + 1_000
     )
 
     :ok
@@ -111,7 +113,9 @@ defmodule CodexPooler.Telemetry.Relay do
   def refresh_heartbeat(owner) when is_binary(owner) do
     case Repo.query(
            "INSERT INTO telemetry_relay_heartbeats (owner, heartbeat_at) VALUES ($1, NOW()) ON CONFLICT (owner) DO UPDATE SET heartbeat_at = EXCLUDED.heartbeat_at",
-           [owner]
+           [owner],
+           timeout: 1_000,
+           deadline: System.monotonic_time(:millisecond) + 1_000
          ) do
       {:ok, _} -> :ok
       {:error, error} -> {:error, error}

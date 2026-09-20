@@ -305,7 +305,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
 
     try do
       logs =
-        capture_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, remote_state) end)
+        capture_log(fn -> terminate_and_await_cleanup(remote_state) end)
 
       assert logs =~ "websocket owner detach failed"
       assert logs =~ "owner_unavailable"
@@ -394,7 +394,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
       assert is_nil(remote_state.opts.runtime.interrupt_reason)
 
       logs =
-        capture_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, remote_state) end)
+        capture_log(fn -> terminate_and_await_cleanup(remote_state) end)
 
       assert logs =~ "websocket owner detach failed"
       assert logs =~ "owner_unavailable"
@@ -526,7 +526,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
 
     try do
       logs =
-        capture_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, remote_state) end)
+        capture_log(fn -> terminate_and_await_cleanup(remote_state) end)
 
       refute logs =~ "websocket owner detach failed"
       refute logs =~ "owner_unavailable"
@@ -609,7 +609,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
 
     try do
       logs =
-        capture_log(fn -> assert :ok = CodexResponsesSocket.terminate(:closed, remote_state) end)
+        capture_log(fn -> terminate_and_await_cleanup(remote_state) end)
 
       refute logs =~ "websocket owner detach failed"
       refute logs =~ "owner_unavailable"
@@ -679,5 +679,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
     }
     |> Map.merge(Map.new(extra_opts))
     |> RequestOptions.for_websocket()
+  end
+
+  defp terminate_and_await_cleanup(state) do
+    parent = self()
+    id = make_ref()
+
+    :telemetry.attach(
+      id,
+      [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+      fn _, _, metadata, _ ->
+        if metadata.caller == parent, do: send(parent, {:cleanup_finished, id})
+      end,
+      nil
+    )
+
+    try do
+      assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      assert_receive {:cleanup_finished, ^id}, 15_000
+    after
+      :telemetry.detach(id)
+    end
   end
 end
