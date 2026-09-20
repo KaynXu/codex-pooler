@@ -922,6 +922,8 @@ change the MCP `url` to `https://codex-pooler.example.com/mcp`.
 <details>
 <summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
 
+![Codex Pooler Pi integration](.github/assets/codex-pooler-pi.png)
+
 Pi works best through a custom provider that uses Codex Pooler's narrow
 OpenAI-compatible `/v1` Responses surface. Put custom providers and models in
 `~/.pi/agent/models.json`; put global defaults in `~/.pi/agent/settings.json`;
@@ -1055,6 +1057,8 @@ operator MCP token.
 
 <details>
 <summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>~/.omp/agent/models.yml</code> and <code>config.yml</code></summary>
+
+![Codex Pooler OMP integration](.github/assets/codex-pooler-omp.png)
 
 Oh My Pi (OMP) is a Pi fork, but it should be treated as a separate Codex
 Pooler harness: it has its own package, `omp` binary, YAML config, and model
@@ -1233,6 +1237,8 @@ operator token separate from the Pool API key used for `/v1`.
 <details>
 <summary><img src=".github/assets/cursor-favicon.png" alt="Cursor logo" width="16" height="16"> Cursor <code>Settings → Models → API Keys</code></summary>
 
+![Codex Pooler Cursor integration](.github/assets/codex-pooler-cursor.png)
+
 Connect Cursor through **OpenAI API Key** and **Override OpenAI Base URL**,
 with both switches enabled. Use your Pool API key, a public HTTPS base URL
 such as `https://codex-pooler.example.com/v1`, and an explicit model such as
@@ -1249,6 +1255,8 @@ for prerequisites, model selection, and connection checks.
 
 <details>
 <summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
+
+![Codex Pooler Kilo Code integration](.github/assets/codex-pooler-kilo.png)
 
 Kilo Code should use a named OpenAI-compatible provider whose base URL ends at
 Codex Pooler's `/v1` surface. Kilo Code appends `/chat/completions` itself, so do
@@ -1469,6 +1477,8 @@ Pooler admin URL. Codex Pooler model use does not require MCP.
 <details>
 <summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
 
+![Codex Pooler Aider integration](.github/assets/codex-pooler-aider.png)
+
 Aider uses the OpenAI-compatible route with the `openai/` model prefix. Put the
 stable route settings in `.aider.conf.yml`; Aider loads this file from your home
 directory, then the git repo root, then the current directory, with later files
@@ -1566,6 +1576,8 @@ For deployed instances, change `openai-api-base` to
 
 <details>
 <summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+
+![Codex Pooler Continue integration](.github/assets/codex-pooler-continue.png)
 
 Continue can use Codex Pooler as an OpenAI-compatible provider by setting
 `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue
@@ -1693,6 +1705,8 @@ the operator metadata endpoint.
 <details>
 <summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
 
+![Codex Pooler Cline integration](.github/assets/codex-pooler-cline.png)
+
 Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and
 stores it as `openai-compatible`. Configure it with the Pool API key, the Codex
 Pooler `/v1` base URL, and the model id that your assigned Pool can serve.
@@ -1756,6 +1770,8 @@ Use a Pool API key for `/v1` model requests and an operator MCP token for
 
 <details>
 <summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+
+![Codex Pooler Goose integration](.github/assets/codex-pooler-goose.png)
 
 Configure Goose's OpenAI provider for Codex Pooler's OpenAI-compatible
 chat-completions path. Keep the Pool API key in `OPENAI_API_KEY` or Goose's
@@ -1831,6 +1847,8 @@ for `/mcp`. Do not reuse the Pool API key for MCP.
 <details>
 <summary><img src=".github/assets/windmill-favicon.png" alt="Windmill logo" width="16" height="16"> Windmill AI <code>customai</code> workspace provider</summary>
 
+![Codex Pooler Windmill AI integration](.github/assets/codex-pooler-windmill.png)
+
 Windmill AI can use Codex Pooler through Windmill's `customai` provider. Point
 the resource at Codex Pooler's OpenAI-compatible `/v1` surface, store the Pool
 API key as a Windmill secret variable, and make the workspace AI settings use
@@ -1893,6 +1911,8 @@ completion style requests.
 
 <details>
 <summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
+
+![Codex Pooler OpenHands integration](.github/assets/codex-pooler-openhands.png)
 
 OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1`
 surface. Keep the Pool API key in the environment, set the OpenHands base URL to

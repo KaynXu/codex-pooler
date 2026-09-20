@@ -845,6 +845,8 @@ mcp_servers:
 <details>
 <summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
 
+![Codex Pooler Pi integration](.github/assets/codex-pooler-pi.png)
+
 Pi 通过一个使用 Codex Pooler 窄 OpenAI 兼容 `/v1` Responses 接口的自定义
 provider 工作得最好。把自定义 providers 和 models 放在
 `~/.pi/agent/models.json`；把全局默认值放在 `~/.pi/agent/settings.json`；用
@@ -972,6 +974,8 @@ Pi 不带内置 MCP 支持。Codex Pooler 模型使用不需要 MCP；如果需�
 
 <details>
 <summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>~/.omp/agent/models.yml</code> and <code>config.yml</code></summary>
+
+![Codex Pooler OMP integration](.github/assets/codex-pooler-omp.png)
 
 Oh My Pi (OMP) 是 Pi fork，但应作为独立的 Codex Pooler 客户端处理：它有自己
 的 package、`omp` 二进制文件、YAML 配置和模型角色默认值。通过 Bun 安装
@@ -1139,6 +1143,8 @@ Pooler 可选的运营者 MCP 端点，请把 `/mcp` 运营者令牌与用于 `/
 <details>
 <summary><img src=".github/assets/cursor-favicon.png" alt="Cursor logo" width="16" height="16"> Cursor <code>Settings → Models → API Keys</code></summary>
 
+![Codex Pooler Cursor integration](.github/assets/codex-pooler-cursor.png)
+
 在 Cursor 中启用 **OpenAI API Key** 和 **Override OpenAI Base URL** 两个开关。
 使用 Pool API key、公开可访问的 HTTPS base URL（例如
 `https://codex-pooler.example.com/v1`），并在新聊天中明确选择
@@ -1154,6 +1160,8 @@ Cursor BYOK 需要有效的 **Pro 或更高订阅**。请求会经过 Cursor 的
 
 <details>
 <summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
+
+![Codex Pooler Kilo Code integration](.github/assets/codex-pooler-kilo.png)
 
 Kilo Code 应使用一个具名 OpenAI 兼容 provider，其 base URL 结束于 Codex Pooler
 的 `/v1` 接口。Kilo Code 会自己追加 `/chat/completions`，所以不要在
@@ -1363,6 +1371,8 @@ Mode 隐藏；在 Custom Models 下选择 Codex Pooler 模型。
 <details>
 <summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
 
+![Codex Pooler Aider integration](.github/assets/codex-pooler-aider.png)
+
 Aider 使用带 `openai/` 模型前缀的 OpenAI 兼容路由。把稳定路由设置放在
 `.aider.conf.yml`；Aider 会从你的 home directory、git repo root、
 当前目录依次加载该文件，后加载的文件优先。
@@ -1458,6 +1468,8 @@ Aider 能通过配置好的模型路径进行编辑。
 
 <details>
 <summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+
+![Codex Pooler Continue integration](.github/assets/codex-pooler-continue.png)
 
 Continue 可以通过设置 `provider: openai`、把 `apiBase` 指向 `/v1`、并把 Pool
 API 密钥作为 Continue secret，来把 Codex Pooler 用作 OpenAI 兼容 provider。
@@ -1581,6 +1593,8 @@ Pool API 密钥用于认证模型请求。MCP 令牌只认证运营者元数据�
 <details>
 <summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
 
+![Codex Pooler Cline integration](.github/assets/codex-pooler-cline.png)
+
 Cline CLI 接受 `openai` 作为 OpenAI 兼容 provider 的简写，并把它保存为
 `openai-compatible`。用 Pool API 密钥、Codex Pooler `/v1` base URL，以及你分配到
 的 Pool 能服务的模型 id 配置它。
@@ -1640,6 +1654,8 @@ Cline MCP Servers 面板打开自己的 MCP 设置 JSON；在那里使用同样�
 
 <details>
 <summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+
+![Codex Pooler Goose integration](.github/assets/codex-pooler-goose.png)
 
 为 Codex Pooler 的 OpenAI 兼容 chat-completions 路径配置 Goose 的 OpenAI
 provider。把 Pool API 密钥放在 `OPENAI_API_KEY` 或 Goose 的密钥存储中。
@@ -1711,6 +1727,8 @@ API 密钥复用给 MCP。
 <details>
 <summary><img src=".github/assets/windmill-favicon.png" alt="Windmill logo" width="16" height="16"> Windmill AI <code>customai</code> workspace provider</summary>
 
+![Codex Pooler Windmill AI integration](.github/assets/codex-pooler-windmill.png)
+
 Windmill AI 可以通过 Windmill 的 `customai` provider 使用 Codex Pooler。把
 resource 指向 Codex Pooler 的 OpenAI 兼容 `/v1` 接口，把 Pool API 密钥保存为
 Windmill 密钥变量，并让工作区 AI 设置使用该 resource 进行 chat 和元数据生成。
@@ -1772,6 +1790,8 @@ script/flow/app 生成、修复、摘要、元数据生成，以及使用 chat c
 
 <details>
 <summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
+
+![Codex Pooler OpenHands integration](.github/assets/codex-pooler-openhands.png)
 
 OpenHands CLI 可以通过窄 OpenAI 兼容 `/v1` 接口使用 Codex Pooler。把 Pool API
 密钥放在环境变量中，把 OpenHands base URL 设为 `/v1`，并使用 OpenHands 期望的
