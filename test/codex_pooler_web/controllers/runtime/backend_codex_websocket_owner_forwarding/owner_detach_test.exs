@@ -429,10 +429,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
         }
       })
 
-    try do
-      %{request: request, attempt: attempt, turn: turn, state: state} =
-        active_socket_turn_fixture(setup, upstream, state)
+    %{request: request, attempt: attempt, turn: turn, state: state} =
+      active_socket_turn_fixture(setup, upstream, state)
 
+    try do
       suspend_cleanup_task!(state)
 
       assert {:ok, %{request: failed_request, attempt: failed_attempt}} =
@@ -468,6 +468,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDetac
         error_code: "client_disconnected"
       })
     after
+      stop_parked_response_tasks!(state)
       CodexResponsesSocket.terminate(:closed, state)
     end
   end
