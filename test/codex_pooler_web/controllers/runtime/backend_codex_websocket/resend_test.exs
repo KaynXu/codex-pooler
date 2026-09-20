@@ -8,7 +8,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   import CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, ClientRetry, Request}
+  alias CodexPooler.Accounting
+
+  alias CodexPooler.Accounting.{
+    Attempt,
+    ClientRetry,
+    LedgerEntry,
+    Request,
+    RequestClientRetryLink
+  }
+
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, CodexTurn, RoutingCircuitState}
@@ -1071,6 +1080,226 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
                select: link.successor_request_id
              )
            ) == resend.id
+  end
+
+  for mode <- ["full", "lite"] do
+    @tag :successor_active_cap
+    test "#{mode} visible-output retry successor preserves capacity denial and succeeds after release" do
+      CodexPooler.TestAppEnv.restore_on_exit(:websocket_owner_forwarding_enabled)
+      on_exit(&stop_registered_websocket_owner_sessions/0)
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+      frames = [
+        %{"type" => "response.created", "response" => %{"id" => "resp_cap_predecessor"}},
+        %{"type" => "response.reasoning_summary_text.delta", "delta" => "synthetic reasoning"},
+        %{"type" => "response.output_text.delta", "delta" => "synthetic output"},
+        %{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_cap_predecessor",
+            "status" => "failed",
+            "error" => %{"code" => "server_error", "message" => "synthetic failure"}
+          }
+        }
+      ]
+
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence([
+            strict_native_request_any_connection(
+              FakeUpstream.websocket_text_frames(Enum.map(frames, &CodexPooler.JSON.encode!/1))
+            ),
+            strict_native_request_any_connection(
+              completed_response_frames("resp_cap_successor", 3, 1)
+            )
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      scope = model_serving_scope()
+      set_model_serving_mode!(scope, setup, unquote(mode))
+
+      assert {:ok, _} =
+               Access.update_api_key_with_policy(scope, setup.api_key, %{max_active_requests: 1})
+
+      assert {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      assert :ok = Events.subscribe_pool(setup.pool)
+
+      server =
+        start_supervised!(
+          {Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+
+      on_exit(fn ->
+        refute Process.alive?(server)
+        assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000)
+
+        CodexPooler.TestDiagnostics.puts(
+          inspect(%{scenario: :successor_cap_cleanup, listener_stopped: true, port_closed: true})
+        )
+      end)
+
+      {conn, websocket, ref} = public_websocket_connect!(port, setup, Ecto.UUID.generate())
+      payload = stream_cut_payload(setup, native_text_input("synthetic fixture"), "active-cap")
+
+      try do
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+        {conn, websocket, types, terminal} =
+          receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+        assert terminal["type"] == "response.failed"
+        assert "response.reasoning_summary_text.delta" in types
+        assert "response.output_text.delta" in types
+
+        assert_receive {Events,
+                        %{
+                          reason: "request_finalized",
+                          payload: %{"request_id" => predecessor_id, "status" => "failed"}
+                        }},
+                       15_000
+
+        turn = await_turn_completed!(predecessor_id)
+        refute is_nil(turn.first_visible_output_at)
+
+        assert {:ok, holder} =
+                 Accounting.reserve(auth, setup.model, %{
+                   "model" => setup.model.exposed_model_id
+                 })
+
+        counts = successor_counts(setup)
+
+        {conn, websocket} =
+          Enum.reduce(1..2, {conn, websocket}, fn _, {conn, websocket} ->
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+            {conn, websocket, _, denied} =
+              receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+            assert %{
+                     "type" => "error",
+                     "status" => 429,
+                     "error" => %{
+                       "code" => "api_key_concurrency_limit_exceeded",
+                       "type" => "rate_limit_error"
+                     }
+                   } = denied
+
+            assert successor_counts(setup) == counts
+            assert FakeUpstream.count(upstream) == 1
+            {conn, websocket}
+          end)
+
+        changed_payload =
+          payload
+          |> CodexPooler.JSON.decode!()
+          |> Map.put("input", native_text_input("changed synthetic fixture"))
+          |> CodexPooler.JSON.encode!()
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, changed_payload)
+
+        {conn, websocket, _, ineligible} =
+          receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+        assert %{"status" => 409, "error" => %{"code" => "duplicate_turn"}} = ineligible
+        assert successor_counts(setup) == counts
+        assert FakeUpstream.count(upstream) == 1
+
+        assert {:ok, _} = Accounting.finalize_reservation_failure(holder.request)
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+        {conn, websocket, _, completed} =
+          receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+        assert completed["type"] == "response.completed"
+
+        assert_receive {Events,
+                        %{
+                          reason: "request_finalized",
+                          payload: %{"request_id" => successor_id, "status" => "succeeded"}
+                        }},
+                       15_000
+
+        await_turn_completed!(successor_id)
+
+        assert Repo.get_by!(RequestClientRetryLink,
+                 predecessor_request_id: predecessor_id
+               ).successor_request_id == successor_id
+
+        assert successor_counts(setup) == %{requests: 3, links: 1, reservations: 3, attempts: 2}
+
+        assert Accounting.LedgerReads.outstanding_reservation_count(setup.api_key.id) ==
+                 0
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+        {_conn, _websocket, _, duplicate} =
+          receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+        assert %{"status" => 409, "error" => %{"code" => "duplicate_turn"}} = duplicate
+        assert successor_counts(setup) == %{requests: 3, links: 1, reservations: 3, attempts: 2}
+        assert FakeUpstream.count(upstream) == 2
+        assert :ok = FakeUpstream.verify!(upstream)
+
+        CodexPooler.TestDiagnostics.puts(
+          inspect(%{
+            scenario: :visible_output_successor_cap,
+            mode: unquote(mode),
+            denials: [429, 429],
+            denied_rows_unchanged: true,
+            changed_payload: 409,
+            released_successor: 1,
+            duplicate_after_success: 409,
+            active: 0
+          })
+        )
+      after
+        assert {:ok, closed} = Mint.HTTP.close(conn)
+        refute Mint.HTTP.open?(closed)
+
+        CodexPooler.TestDiagnostics.puts(
+          inspect(%{scenario: :successor_cap_cleanup, client_socket_closed: true})
+        )
+      end
+    end
+  end
+
+  defp successor_counts(setup) do
+    %{
+      requests:
+        Repo.aggregate(
+          from(r in Request, where: r.pool_id == ^setup.pool.id and r.status != "rejected"),
+          :count
+        ),
+      attempts:
+        Repo.aggregate(
+          from(a in Attempt,
+            join: r in Request,
+            on: r.id == a.request_id,
+            where: r.pool_id == ^setup.pool.id
+          ),
+          :count
+        ),
+      reservations:
+        Repo.aggregate(
+          from(e in LedgerEntry,
+            where: e.api_key_id == ^setup.api_key.id and e.entry_kind == "reservation"
+          ),
+          :count
+        ),
+      links:
+        Repo.aggregate(
+          from(l in RequestClientRetryLink,
+            join: r in Request,
+            on: r.id == l.predecessor_request_id,
+            where: r.pool_id == ^setup.pool.id
+          ),
+          :count
+        )
+    }
   end
 
   @tag :provider_terminal_resend

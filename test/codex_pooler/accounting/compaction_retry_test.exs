@@ -955,7 +955,8 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
 
   defp predecessor!(error, age) do
     setup = accounting_setup(%{price_version: Ecto.UUID.generate()})
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    # Retry age is checked against PostgreSQL time; an age-zero fixture must use that clock too.
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()")
     completed_at = DateTime.add(now, -age, :second)
     digest = :crypto.strong_rand_bytes(32)
     semantic = :crypto.strong_rand_bytes(32)

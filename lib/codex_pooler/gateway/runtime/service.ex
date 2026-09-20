@@ -1918,6 +1918,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:ok, claim} ->
           {:ok, Map.from_struct(claim)}
 
+        {:error, %{code: :api_key_concurrency_limit_exceeded}} = denial ->
+          denial
+
         {:error, reason} ->
           log_duplicate_turn(request_options, reason,
             stage: "client_retry_claim",
@@ -1971,6 +1974,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     case Accounting.claim_compaction_retry_successor(auth, model, payload, retry_attrs) do
       {:ok, claim} ->
         {:ok, Map.from_struct(claim)}
+
+      {:error, %{code: :api_key_concurrency_limit_exceeded}} = denial ->
+        denial
 
       {:error, reason} ->
         log_duplicate_turn(request_options, reason, stage: "compaction_retry_claim")
