@@ -48,13 +48,29 @@ defmodule CodexPooler.Access.APIKeys.Policy do
            normalize_reasoning_policy(attrs),
          {:ok, enforced_service_tier} <- normalize_enforced_service_tier(attrs) do
       {:ok,
-       %{
-         allowed_model_identifiers: allowed_model_identifiers,
-         enforced_model_identifier: enforced_model_identifier,
-         enforced_reasoning_effort: enforced_reasoning_effort,
-         maximum_reasoning_effort: maximum_reasoning_effort,
-         enforced_service_tier: enforced_service_tier
-       }}
+       Map.merge(
+         %{
+           allowed_model_identifiers: allowed_model_identifiers,
+           enforced_model_identifier: enforced_model_identifier,
+           enforced_reasoning_effort: enforced_reasoning_effort,
+           maximum_reasoning_effort: maximum_reasoning_effort,
+           enforced_service_tier: enforced_service_tier
+         },
+         optional_active_request_limit(attrs)
+       )}
+    end
+  end
+
+  defp optional_active_request_limit(attrs) do
+    cond do
+      Map.has_key?(attrs, :max_active_requests) ->
+        Map.take(attrs, [:max_active_requests])
+
+      Map.has_key?(attrs, "max_active_requests") ->
+        %{max_active_requests: attrs["max_active_requests"]}
+
+      true ->
+        %{}
     end
   end
 
@@ -114,6 +130,8 @@ defmodule CodexPooler.Access.APIKeys.Policy do
        %{
          api_key_id: input(source, [:id, "id", :api_key_id, "api_key_id"]),
          status: status,
+         max_active_requests:
+           Map.get(source, :max_active_requests, Map.get(source, "max_active_requests")),
          allowed_model_identifiers: allowed_model_identifiers,
          enforced_model_identifier: enforced_model_identifier,
          enforced_reasoning_effort: enforced_reasoning_effort,

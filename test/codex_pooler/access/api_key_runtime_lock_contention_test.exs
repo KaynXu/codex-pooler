@@ -204,6 +204,80 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
     end
   end
 
+  test "cap updates wait for runtime readers and later authorization reloads a stale key", %{
+    fixture: fixture
+  } do
+    try do
+      holder = hold_reader_lock!(fixture)
+      parent = self()
+      ref = make_ref()
+      key_id = fixture.api_key.id
+      :ok = CodexPooler.Events.subscribe_pool(fixture.api_key.pool_id)
+
+      task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            send(parent, {:cap_update_started, ref, backend_pid!()})
+
+            Access.update_api_key_with_policy(fixture.scope, fixture.api_key, %{
+              max_active_requests: 2,
+              status: "active"
+            })
+          end)
+        end)
+
+      track_participant(%{task: task, ref: ref})
+      assert_receive {:cap_update_started, ^ref, backend}, @detection_budget_ms
+      assert await_waiting_on!(backend, holder.backend) == "api_keys"
+
+      CodexPooler.TestDiagnostics.puts(
+        "active_request_cap writer_backend=#{backend} reader_backend=#{holder.backend} blocked_relation=api_keys"
+      )
+
+      assert release!(holder) == {:ok, :released}
+      assert {:ok, _} = Task.await(task, @detection_budget_ms)
+
+      assert_receive {CodexPooler.Events,
+                      %{reason: "api_key_updated", payload: %{"api_key_id" => ^key_id}}},
+                     @detection_budget_ms
+
+      assert Map.get(committed_api_key(fixture), :max_active_requests) == 2
+
+      for authorize <- [
+            &Access.authorize_api_key_runtime_turn/2,
+            &Access.authorize_api_key_runtime_turn_for_read/2
+          ] do
+        {_backend, result} = run_without_lock_wait(fn -> authorize.(fixture.api_key, 0) end)
+        assert {:ok, %{api_key: reloaded}} = result
+        assert Map.get(reloaded, :max_active_requests) == 2
+      end
+
+      CodexPooler.TestDiagnostics.puts(
+        "active_request_cap committed=2 stale_struct=nil reloaded_reservation=2 reloaded_reader=2"
+      )
+
+      assert {:ok, _} =
+               CodexPooler.UnboxedFixture.run_unboxed(fn ->
+                 Access.update_api_key(fixture.scope, fixture.api_key, %{
+                   max_active_requests: 3,
+                   status: "active"
+                 })
+               end)
+
+      assert_receive {CodexPooler.Events,
+                      %{reason: "api_key_updated", payload: %{"api_key_id" => ^key_id}}},
+                     @detection_budget_ms
+
+      assert committed_api_key(fixture).max_active_requests == 3
+
+      CodexPooler.TestDiagnostics.puts(
+        "active_request_cap policy_update_notification=true ordinary_update_notification=true unchanged_status=active"
+      )
+    after
+      shutdown_participants()
+    end
+  end
+
   defp hold_reservation_lock!(fixture) do
     parent = self()
     ref = make_ref()

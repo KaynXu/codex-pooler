@@ -148,6 +148,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
       :display_name,
       :status,
       :dashboard_access,
+      :max_active_requests,
       :expires_at,
       :allowed_model_identifiers,
       :metadata
@@ -207,10 +208,20 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
 
   defp api_key_update_notification(attrs, transition, previous_api_key, updated_api_key) do
     cond do
-      transition.effective_disabling_transition? -> :effective_disabling_transition
-      RuntimeAuthorization.reread_required?(previous_api_key, updated_api_key) -> :ordinary_update
-      status_submitted?(attrs) -> :status_without_disable
-      true -> :ordinary_update
+      transition.effective_disabling_transition? ->
+        :effective_disabling_transition
+
+      previous_api_key.max_active_requests != updated_api_key.max_active_requests ->
+        :ordinary_update
+
+      RuntimeAuthorization.reread_required?(previous_api_key, updated_api_key) ->
+        :ordinary_update
+
+      status_submitted?(attrs) ->
+        :status_without_disable
+
+      true ->
+        :ordinary_update
     end
   end
 
