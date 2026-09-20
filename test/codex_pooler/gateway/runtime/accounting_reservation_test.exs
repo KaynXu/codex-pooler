@@ -1026,7 +1026,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     assert {:error, %{code: :api_key_runtime_epoch_stale, disabling_epoch: 0} = error} =
              Service.execute(auth, @endpoint, payload, opts)
 
-    refute Map.has_key?(error, :status)
+    assert error.status == 401
     refute Map.has_key?(error, :param)
     assert_runtime_counts(%{requests: 0, attempts: 0, ledger: 0, turns: 0, sessions: 0})
     assert FakeUpstream.count(upstream) == 0

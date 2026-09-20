@@ -139,6 +139,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
            ] =
              Repo.all(Request)
 
+    assert request.response_status_code == 401
     assert request.api_key_id == setup.api_key.id
     assert Repo.aggregate(Attempt, :count) == 0
     assert Repo.aggregate(LedgerEntry, :count) == 0
@@ -180,10 +181,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"error" => %{"code" => ^code}} = json_response(conn, 401)
     assert [%Request{status: "rejected", last_error_code: ^code} = request] = Repo.all(Request)
+    assert request.response_status_code == 401
     assert request.api_key_id == setup.api_key.id
     assert Repo.aggregate(Attempt, :count) == 0
     assert Repo.aggregate(LedgerEntry, :count) == 0
     assert FakeUpstream.count(upstream) == 0
+  end
+
+  for {status, code} <- [{"paused", "api_key_paused"}, {"revoked", "api_key_revoked"}] do
+    @tag :native_sse_disabled
+    test "native SSE #{status} refusal after authentication" do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+      setup = gateway_setup(upstream)
+
+      assert_sse_race(setup, upstream, unquote(code), fn setup ->
+        setup.api_key
+        |> Ecto.Changeset.change(status: unquote(status))
+        |> Repo.update!()
+      end)
+    end
   end
 
   @tag :native_sse_expired
@@ -302,6 +318,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert request.status == "rejected"
     assert request.last_error_code == "api_key_missing"
+    assert request.response_status_code == 401
     assert request.api_key_id == nil
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
     assert Repo.aggregate(from(l in LedgerEntry, where: l.pool_id == ^setup.pool.id), :count) == 0

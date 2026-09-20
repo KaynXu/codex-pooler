@@ -4,7 +4,6 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
   import Ecto.Query
 
   alias CodexPooler.Access.APIKey
-  alias CodexPooler.Access.APIKeys.Errors
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
 
@@ -27,19 +26,19 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
           required(:effective_disabling_transition?) => boolean()
         }
   @type disposition ::
-          Errors.access_error()
-          | %{
-              required(:code) =>
-                :api_key_paused
-                | :api_key_revoked
-                | :api_key_inactive
-                | :api_key_runtime_epoch_stale
-                | :api_key_expired
-                | :api_key_missing
-                | :pool_inactive,
-              required(:message) => String.t(),
-              required(:disabling_epoch) => epoch()
-            }
+          %{
+            required(:code) =>
+              :api_key_paused
+              | :api_key_revoked
+              | :api_key_inactive
+              | :api_key_runtime_epoch_stale
+              | :api_key_expired
+              | :api_key_missing
+              | :pool_inactive,
+            required(:message) => String.t(),
+            required(:status) => 401,
+            optional(:disabling_epoch) => epoch()
+          }
 
   # Locking a key for a runtime turn comes in three modes, and a transaction
   # takes one mode per key.
@@ -288,51 +287,54 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
 
   defp disabled_disposition(%APIKey{status: @paused_status} = api_key) do
     {:error,
-     Errors.access_error(:api_key_paused, "api key is paused")
+     runtime_error(:api_key_paused, "api key is paused")
      |> Map.put(:disabling_epoch, api_key.runtime_revocation_epoch)}
   end
 
   defp disabled_disposition(%APIKey{status: @revoked_status} = api_key) do
     {:error,
-     Errors.access_error(:api_key_revoked, "api key is revoked")
+     runtime_error(:api_key_revoked, "api key is revoked")
      |> Map.put(:disabling_epoch, api_key.runtime_revocation_epoch)}
   end
 
   defp disabled_disposition(%APIKey{} = api_key) do
     {:error,
-     Errors.access_error(:api_key_inactive, "api key is inactive")
+     runtime_error(:api_key_inactive, "api key is inactive")
      |> Map.put(:disabling_epoch, api_key.runtime_revocation_epoch)}
   end
 
   defp expired_disposition(%APIKey{} = api_key) do
     {:error,
-     Errors.access_error(:api_key_expired, "api key is expired")
+     runtime_error(:api_key_expired, "api key is expired")
      |> Map.put(:disabling_epoch, api_key.runtime_revocation_epoch)}
   end
 
   defp pool_inactive_disposition(%APIKey{} = api_key) do
     {:error,
-     Errors.access_error(:pool_inactive, "pool is not active")
+     runtime_error(:pool_inactive, "pool is not active")
      |> Map.put(:disabling_epoch, api_key.runtime_revocation_epoch)}
   end
 
   defp stale_epoch_disposition(epoch) do
     {:error,
-     Errors.access_error(:api_key_runtime_epoch_stale, "api key runtime authorization is stale")
+     runtime_error(:api_key_runtime_epoch_stale, "api key runtime authorization is stale")
      |> Map.put(:disabling_epoch, epoch)}
   end
 
   defp missing_disposition,
-    do: {:error, Errors.access_error(:api_key_missing, "api key is required")}
+    do: {:error, runtime_error(:api_key_missing, "api key is required")}
 
   defp missing_disposition(captured_epoch)
        when is_integer(captured_epoch) and captured_epoch >= 0 do
     {:error,
-     Errors.access_error(:api_key_missing, "api key is required")
+     runtime_error(:api_key_missing, "api key is required")
      |> Map.put(:disabling_epoch, captured_epoch)}
   end
 
   defp missing_disposition(_captured_epoch), do: missing_disposition()
+
+  # Accounting and the wire renderer must use the same lifecycle denial status.
+  defp runtime_error(code, message), do: %{status: 401, code: code, message: message}
 
   defp api_key_id(%APIKey{id: id}), do: id
   defp api_key_id(id) when is_binary(id), do: id
