@@ -21,6 +21,37 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
 
   import CodexPooler.AccountingTestSupport
 
+  test "compact successor preserves capacity denial until a different reservation releases" do
+    {setup, _predecessor, opts} = local_failure_predecessor!(:task_exception)
+    update!(setup.api_key, max_active_requests: 1)
+
+    assert {:ok, occupied} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id},
+               %{
+                 correlation_id: Ecto.UUID.generate()
+               }
+             )
+
+    before = row_counts()
+
+    assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+             Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+
+    assert row_counts() == before
+
+    assert {:ok, _} =
+             Accounting.finalize_reservation_failure(
+               occupied.request,
+               %{last_error_code: "dispatch_unavailable"}
+             )
+
+    assert {:ok, _} =
+             Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+  end
+
   for failure <- [:dead_execution, :task_exception] do
     test "claims exactly one compact successor after verified #{failure}" do
       {setup, predecessor, opts} = local_failure_predecessor!(unquote(failure))
@@ -477,6 +508,7 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
 
   test "reclaims the same unattempted successor and fences the previous downstream cleanup" do
     {setup, _predecessor, opts} = predecessor!("client_disconnected", 0)
+    update!(setup.api_key, max_active_requests: 1)
     opts = live_owner!(setup, opts)
     first_opts = forwarding_opts(opts, 1)
 

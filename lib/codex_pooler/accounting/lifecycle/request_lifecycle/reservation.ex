@@ -444,8 +444,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
             )
 
           case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
-            :ok -> :ok
-            {:error, _reason} -> Repo.rollback(:authorization_changed)
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              Repo.rollback(reason)
           end
 
           context = %{
@@ -592,6 +595,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp changed_cleanup_owner?(_old_owner, _new_owner, _opts), do: false
 
   defp normalize_retry_claim_error(%Ecto.Changeset{}), do: :successor_claimed
+
+  defp normalize_retry_claim_error(%{code: :api_key_concurrency_limit_exceeded} = reason),
+    do: reason
+
   defp normalize_retry_claim_error(reason) when is_map(reason), do: :authorization_changed
   defp normalize_retry_claim_error(reason), do: reason
 

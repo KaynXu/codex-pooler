@@ -182,6 +182,10 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     fixture = committed_replay_fixture!()
     expired_fixture = committed_replay_fixture!()
 
+    Sandbox.unboxed_run(Repo, fn ->
+      fixture.api_key |> Ecto.Changeset.change(max_active_requests: 1) |> Repo.update!()
+    end)
+
     assert {:active_generation_zero, active} =
              Sandbox.unboxed_run(Repo, fn ->
                RequestReplay.preflight_snapshot(fixture.preflight)

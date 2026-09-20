@@ -4,6 +4,7 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   import Ecto.Query
 
   alias CodexPooler.Access.APIKeyPolicyBinding
+  alias CodexPooler.Accounting.LedgerReads
   alias CodexPooler.Accounting.Metadata
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Catalog.Model
@@ -22,9 +23,31 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
 
   @spec enforce_reservation_limits(term(), struct() | nil, map(), DateTime.t()) ::
           :ok | {:error, Metadata.accounting_error()}
-  def enforce_reservation_limits(_api_key, nil, _estimate, _timestamp), do: :ok
-
   def enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+    with :ok <- enforce_active_request_limit(api_key) do
+      enforce_policy_limits(api_key, policy, estimate, timestamp)
+    end
+  end
+
+  # Caller holds the per-key reservation advisory mutex through insertion.
+  # The cap is independent of the effective model binding and token windows.
+  defp enforce_active_request_limit(%{max_active_requests: nil}), do: :ok
+
+  defp enforce_active_request_limit(api_key) do
+    if LedgerReads.outstanding_reservation_count(api_key.id) >= api_key.max_active_requests do
+      {:error,
+       Metadata.accounting_error(
+         :api_key_concurrency_limit_exceeded,
+         "api key active request limit reached; retry shortly"
+       )}
+    else
+      :ok
+    end
+  end
+
+  defp enforce_policy_limits(_api_key, nil, _estimate, _timestamp), do: :ok
+
+  defp enforce_policy_limits(api_key, policy, estimate, timestamp) do
     case enforce_request_token_limits(policy, estimate) do
       :ok -> enforce_window_reservation_limits(api_key, policy, estimate, timestamp)
       {:error, _reason} = error -> error

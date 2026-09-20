@@ -6,6 +6,25 @@ defmodule CodexPooler.Accounting.LedgerReads do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Repo
 
+  @spec outstanding_reservation_count(Ecto.UUID.t()) :: non_neg_integer()
+  def outstanding_reservation_count(api_key_id) do
+    terminal =
+      from entry in LedgerEntry,
+        where:
+          entry.request_id == parent_as(:reservation).request_id and
+            entry.entry_kind in ["release", "settlement"],
+        select: 1
+
+    Repo.one!(
+      from entry in LedgerEntry,
+        as: :reservation,
+        where:
+          entry.api_key_id == ^api_key_id and entry.entry_kind == "reservation" and
+            entry.amount_status == "recorded" and not exists(subquery(terminal)),
+        select: count(entry.request_id, :distinct)
+    )
+  end
+
   @spec latest_success_by_assignment_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => DateTime.t() | nil
         }

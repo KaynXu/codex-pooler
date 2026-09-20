@@ -24,6 +24,48 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
 
   @detection_budget 15_000
 
+  test "retry successor preserves concurrency denial and admits after committed release" do
+    fixture = Sandbox.unboxed_run(Repo, fn -> committed_fixture() end)
+    register_unboxed_cleanup!(fn -> cleanup_fixture(fixture) end)
+
+    Sandbox.unboxed_run(Repo, fn ->
+      fixture.auth.api_key
+      |> Ecto.Changeset.change(max_active_requests: 1)
+      |> Repo.update!()
+
+      assert {:ok, occupied} =
+               Accounting.reserve(fixture.auth, fixture.model, fixture.payload, %{
+                 correlation_id: Ecto.UUID.generate()
+               })
+
+      assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+               Accounting.claim_client_retry_successor(
+                 fixture.auth,
+                 fixture.model,
+                 fixture.payload,
+                 fixture.opts
+               )
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 0
+
+      assert {:ok, _} =
+               Accounting.finalize_reservation_failure(
+                 occupied.request,
+                 %{last_error_code: "dispatch_unavailable"}
+               )
+
+      assert {:ok, %ClientRetry.SuccessorClaim{}} =
+               Accounting.claim_client_retry_successor(
+                 fixture.auth,
+                 fixture.model,
+                 fixture.payload,
+                 fixture.opts
+               )
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+    end)
+  end
+
   test "committed retry cleanup removes its identity and pricing without touching another fixture" do
     Sandbox.unboxed_run(Repo, fn ->
       fixture = committed_fixture()
@@ -323,11 +365,11 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
         schedule
       end
 
-    # Twenty-two statements per claim, the twenty-second being the key-wide
-    # reservation mutex `pg_advisory_xact_lock/2` that the reservation mode
-    # takes before it reads the key row.
-    assert Enum.map(schedules, & &1.total) == [352, 352, 352]
-    assert Enum.map(schedules, & &1.per_operation) == [22, 22, 22]
+    # Twenty-one statements per claim: one combined token-window snapshot
+    # replaced two window reads, retaining the advisory mutex before the key
+    # reader lock. Nil active caps add no count query: 16 claims * 21 = 336.
+    assert Enum.map(schedules, & &1.total) == [336, 336, 336]
+    assert Enum.map(schedules, & &1.per_operation) == [21, 21, 21]
     assert Enum.map(schedules, & &1.operation_sources) |> Enum.uniq() |> length() == 1
   end
 

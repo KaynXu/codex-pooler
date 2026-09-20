@@ -18,6 +18,7 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Access.{APIKey, APIKeyDashboardSession}
+  alias CodexPooler.Accounting.ReservationPolicy
   alias CodexPooler.Accounts.Scope
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -100,6 +101,31 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
       assert %APIKeyDashboardSession{api_key_id: api_key_id} = session
       assert api_key_id == fixture.api_key.id
       assert release!(holder) == {:ok, :released}
+    after
+      shutdown_participants()
+    end
+  end
+
+  test "enabled active-count reservation permits readers while a key writer waits", %{
+    fixture: fixture
+  } do
+    Sandbox.unboxed_run(Repo, fn ->
+      assert {:ok, _} =
+               Access.update_api_key(fixture.scope, fixture.api_key, %{max_active_requests: 1})
+    end)
+
+    try do
+      holder = hold_reservation_lock!(fixture)
+
+      {backend, key} =
+        run_without_lock_wait(fn -> Access.lock_api_key_for_read(fixture.api_key.id) end)
+
+      refute backend == holder.backend
+      assert key.max_active_requests == 1
+      revocation = start_revocation!(fixture)
+      assert await_waiting_on!(revocation.backend, holder.backend) == "api_keys"
+      assert release!(holder) == {:ok, :released}
+      assert {:ok, %{status: "revoked"}} = Task.await(revocation.task, @detection_budget_ms)
     after
       shutdown_participants()
     end
@@ -304,10 +330,18 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
       set_no_wait_lock_timeout!()
       send(parent, {:reservation_started, ref, backend_pid!()})
 
-      send(
-        parent,
-        {:reservation_holding, ref, Access.authorize_api_key_runtime_turn(api_key_id, 0)}
-      )
+      authorization = Access.authorize_api_key_runtime_turn(api_key_id, 0)
+      {:ok, %{api_key: api_key}} = authorization
+
+      :ok =
+        ReservationPolicy.enforce_reservation_limits(
+          api_key,
+          nil,
+          %{},
+          DateTime.utc_now()
+        )
+
+      send(parent, {:reservation_holding, ref, authorization})
 
       receive do
         {:release_participant, ^ref} -> :released
