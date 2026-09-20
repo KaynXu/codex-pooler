@@ -52,6 +52,32 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert %{allowed: false, limit_reached: true} = UsageResponses.codex_rate_limit(limit, nil)
   end
 
+  test "model replacement limits do not become a global self-usage token limit" do
+    model = %{
+      binding_scope: "model",
+      model_identifier: "sample-model",
+      max_requests_per_minute: nil,
+      max_tokens_per_day: 1_000,
+      max_tokens_per_week: 2_000
+    }
+
+    as_of = ~U[2026-09-20 12:00:00.000000Z]
+    assert UsageResponses.self_usage_limits([model], 0, 512, 512, as_of) == []
+
+    default = %{
+      model
+      | binding_scope: "default",
+        model_identifier: nil,
+        max_tokens_per_day: 4_000
+    }
+
+    limits = UsageResponses.self_usage_limits([default, model], 0, 512, 512, as_of)
+    assert Enum.all?(limits, &is_nil(&1.model_filter))
+
+    assert Enum.filter(limits, &(&1.limit_window == "daily"))
+           |> Enum.all?(&(&1.max_value == 4_000 and &1.remaining_value == 3_488))
+  end
+
   test "additional usage keeps explicit denial even below the percentage limit" do
     now = DateTime.utc_now()
 

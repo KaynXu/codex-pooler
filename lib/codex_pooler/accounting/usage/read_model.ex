@@ -26,14 +26,19 @@ defmodule CodexPooler.Accounting.UsageReadModel do
     if is_binary(pool_id) and is_binary(api_key_id) do
       rolling = rolling_api_key_summary(pool_id, api_key_id, as_of)
       cost_summary = rolling_api_key_cost_summary(pool_id, api_key_id, as_of)
-      daily = daily_api_key_summary(pool_id, api_key_id, as_of)
 
       window_usages =
-        LedgerEntries.window_usages(api_key_id,
-          weekly: DateTime.add(as_of, -7, :day),
-          minute: DateTime.add(as_of, -60, :second)
+        LedgerEntries.window_usages(
+          api_key_id,
+          [
+            daily: DateTime.new!(DateTime.to_date(as_of), ~T[00:00:00], "Etc/UTC"),
+            weekly: DateTime.add(as_of, -7, :day),
+            minute: DateTime.add(as_of, -60, :second)
+          ],
+          as_of
         )
 
+      daily = window_usages.daily
       weekly = window_usages.weekly
       minute = window_usages.minute
 
@@ -48,6 +53,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
          request_count: rolling.request_count,
          total_tokens: rolling.total_tokens,
          cached_input_tokens: rolling.cached_input_tokens,
+         budget_usage: UsageResponses.budget_usage(window_usages),
          total_cost_usd:
            if(cost_summary.priced_settlement_count > 0,
              do: decimal_micros_to_usd(cost_summary.priced_settled_cost_micros),
@@ -59,7 +65,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
            UsageResponses.self_usage_limits(
              bindings,
              minute.effective_request_count,
-             daily.total_tokens,
+             daily.effective_total_tokens,
              weekly.effective_total_tokens,
              as_of
            )
@@ -86,6 +92,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   def build_v1_usage_for_api_key(pool_or_id, api_key_or_id, opts \\ []) do
     pool_id = id_for(pool_or_id)
     as_of = Keyword.get(opts, :as_of, now())
+    opts = Keyword.put(opts, :as_of, as_of)
 
     with {:ok, usage} <- build_api_key_self_usage(pool_or_id, api_key_or_id, opts) do
       {:ok,
@@ -93,6 +100,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
          request_count: usage.request_count,
          total_tokens: usage.total_tokens,
          cached_input_tokens: usage.cached_input_tokens,
+         budget_usage: usage.budget_usage,
          total_cost_usd: v1_total_cost_usd(usage),
          total_cost_status: usage.total_cost_status,
          limits: Enum.map(usage.limits, &normalize_v1_limit/1),
@@ -146,17 +154,6 @@ defmodule CodexPooler.Accounting.UsageReadModel do
         where:
           r.pool_id == ^pool_id and r.api_key_id == ^api_key_id and r.dimension_kind == "api_key" and
             r.rollup_date >= ^start_date and r.rollup_date <= ^end_date
-    )
-  end
-
-  defp daily_api_key_summary(pool_id, api_key_id, as_of) do
-    date = DateTime.to_date(as_of)
-
-    summarize_rollups(
-      from r in DailyRollup,
-        where:
-          r.pool_id == ^pool_id and r.api_key_id == ^api_key_id and r.dimension_kind == "api_key" and
-            r.rollup_date == ^date
     )
   end
 

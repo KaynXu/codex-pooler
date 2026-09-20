@@ -3,9 +3,35 @@ defmodule CodexPooler.Accounting.UsageResponses do
   Codex-compatible usage-limit response shaping for accounting reads.
   """
 
+  alias CodexPooler.Accounting.RequestLifecycle.WindowUsage
   alias CodexPooler.Quotas.AdditionalMeterIdentity
   alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
+
+  @type budget_window :: %{
+          known_total_tokens: non_neg_integer(),
+          provisional_total_tokens: non_neg_integer(),
+          pending_total_tokens: non_neg_integer(),
+          effective_total_tokens: non_neg_integer(),
+          admission_count: non_neg_integer()
+        }
+
+  @spec budget_usage(%{atom() => WindowUsage.window_usage()}) ::
+          %{daily: budget_window(), weekly: budget_window()}
+  def budget_usage(windows) do
+    Map.new([:daily, :weekly], fn name ->
+      window = Map.fetch!(windows, name)
+
+      {name,
+       %{
+         known_total_tokens: window.known_total_tokens,
+         provisional_total_tokens: window.provisional_total_tokens,
+         pending_total_tokens: window.pending_total_tokens,
+         effective_total_tokens: window.effective_total_tokens,
+         admission_count: window.effective_request_count
+       }}
+    end)
+  end
 
   @spec self_usage_limits([map()], integer(), integer(), integer(), DateTime.t()) :: [map()]
   def self_usage_limits(bindings, minute_requests, daily_tokens, weekly_tokens, as_of) do

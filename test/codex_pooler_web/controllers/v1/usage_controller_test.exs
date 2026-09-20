@@ -10,12 +10,215 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     only: [monthly_only_account_primary_quota_window_attrs: 1]
 
   alias CodexPooler.Access.APIKeyPolicyBinding
-  alias CodexPooler.Accounting.{DailyRollup, Request}
+  alias CodexPooler.Accounting.{DailyRollup, LedgerEntry, Request}
   alias CodexPooler.Accounting.UsageReadModel.UpstreamUsage
   alias CodexPooler.AccountingBoundaryTrace
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Usage
   alias CodexPooler.Repo
+
+  test "literal HTTP self usage reports pressure and measured correction without replacing upstream quota" do
+    setup = CodexPooler.AccountingTestSupport.accounting_setup()
+    as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    payload = %{"model" => setup.model.exposed_model_id}
+
+    assert {:ok, _pending} =
+             CodexPooler.Accounting.reserve(setup.auth, setup.model, payload, %{
+               now: DateTime.add(as_of, -8, :day)
+             })
+
+    assert {:ok, known} =
+             CodexPooler.Accounting.reserve(setup.auth, setup.model, payload, %{now: as_of})
+
+    assert {:ok, known_attempt} =
+             CodexPooler.Accounting.create_attempt(known.request, setup.assignment)
+
+    assert {:ok, _known} =
+             CodexPooler.Accounting.finalize_success(known.request, known_attempt, %{
+               status: "usage_known",
+               input_tokens: 100,
+               output_tokens: 0,
+               total_tokens: 100,
+               recorded_at: as_of
+             })
+
+    assert {:ok, unknown} =
+             CodexPooler.Accounting.reserve(setup.auth, setup.model, payload, %{now: as_of})
+
+    assert {:ok, unknown_attempt} =
+             CodexPooler.Accounting.create_attempt(unknown.request, setup.assignment)
+
+    assert {:ok, failed} =
+             CodexPooler.Accounting.finalize_failure(unknown.request, unknown_attempt, %{
+               last_error_code: "owner_drained",
+               usage: %{status: "usage_unknown", recorded_at: as_of}
+             })
+
+    other = active_api_key_fixture(setup.pool)
+    ledger_entry_fixture(request_fixture(other), %{total_tokens: 8_888, occurred_at: as_of})
+
+    upsert_default_policy_binding!(setup.api_key.id, as_of, %{
+      max_tokens_per_day: 2_000,
+      max_tokens_per_week: 4_000
+    })
+
+    directory = Path.join(System.tmp_dir!(), "usage-curl-#{Ecto.UUID.generate()}")
+    on_exit(fn -> File.rm_rf!(directory) end)
+    File.mkdir_p!(directory)
+    File.chmod!(directory, 0o700)
+    config = Path.join(directory, "curl.conf")
+    File.write!(config, "header = \"authorization: #{setup.authorization}\"\n")
+    File.chmod!(config, 0o600)
+
+    server =
+      start_supervised!(
+        {Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+
+    on_exit(fn ->
+      refute Process.alive?(server)
+
+      assert {:error, :econnrefused} =
+               :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+
+      CodexPooler.TestDiagnostics.puts("usage_http_cleanup listener_alive=false port_open=false")
+    end)
+
+    before_usage = curl_usage!(port, config, "/v1/usage", "before_correction")
+
+    expected = %{
+      "known_total_tokens" => 100,
+      "provisional_total_tokens" => 512,
+      "pending_total_tokens" => 512,
+      "effective_total_tokens" => 1_124,
+      "admission_count" => 2
+    }
+
+    assert before_usage["budget_usage"] == %{"daily" => expected, "weekly" => expected}
+    assert before_usage["total_tokens"] == 100
+    assert before_usage["total_cost_usd"] == 0.001
+
+    assert usage_ledger_rows(setup, "before_correction") == [
+             {"release", "usage_known", "recorded", 512},
+             {"release", "usage_unknown", "recorded", 512},
+             {"reservation", "usage_pending", "recorded", 512},
+             {"reservation", "usage_pending", "recorded", 512},
+             {"reservation", "usage_pending", "recorded", 512},
+             {"settlement", "usage_known", "recorded", 100},
+             {"settlement", "usage_unknown", "recorded", 512}
+           ]
+
+    assert Enum.any?(
+             before_usage["limits"],
+             &(&1["limit_window"] == "daily" and &1["remaining_value"] == 876)
+           )
+
+    assert Enum.any?(
+             before_usage["limits"],
+             &(&1["limit_window"] == "weekly" and &1["remaining_value"] == 2_876)
+           )
+
+    local = curl_usage!(port, config, "/api/codex/usage", "local_quota")
+    assert local["plan_type"] == "api_key"
+    assert local["credits"]["balance"] == "876"
+    refute Map.has_key?(local, "budget_usage")
+
+    insert_usage_windows!(setup.identity, [
+      primary_usage_window(as_of, active_limit: 100, credits: 80)
+    ])
+
+    upstream_before = curl_usage!(port, config, "/api/codex/usage", "upstream_before")
+    assert upstream_before["plan_type"] != "api_key"
+    assert upstream_before["rate_limit"]["primary_window"]["used_percent"] == 20
+    refute Map.has_key?(upstream_before, "budget_usage")
+
+    assert {:ok, _} =
+             CodexPooler.Accounting.finalize_success(failed.request, failed.attempt, %{
+               status: "usage_known",
+               input_tokens: 10,
+               output_tokens: 20,
+               total_tokens: 30,
+               recorded_at: DateTime.add(as_of, 60)
+             })
+
+    after_usage = curl_usage!(port, config, "/v1/usage", "after_correction")
+    assert after_usage["total_tokens"] == 130
+    assert after_usage["total_cost_usd"] == 0.0015
+
+    assert usage_ledger_rows(setup, "after_correction") == [
+             {"release", "usage_known", "recorded", 512},
+             {"release", "usage_unknown", "recorded", 512},
+             {"reservation", "usage_pending", "recorded", 512},
+             {"reservation", "usage_pending", "recorded", 512},
+             {"reservation", "usage_pending", "recorded", 512},
+             {"settlement", "usage_known", "recorded", 30},
+             {"settlement", "usage_known", "recorded", 100},
+             {"settlement", "usage_unknown", "voided", 512}
+           ]
+
+    expected = %{
+      expected
+      | "known_total_tokens" => 130,
+        "provisional_total_tokens" => 0,
+        "effective_total_tokens" => 642
+    }
+
+    assert after_usage["budget_usage"] == %{"daily" => expected, "weekly" => expected}
+
+    assert Enum.any?(
+             after_usage["limits"],
+             &(&1["limit_window"] == "daily" and &1["remaining_value"] == 1_358)
+           )
+
+    upstream_after = curl_usage!(port, config, "/api/codex/usage", "upstream_after")
+    assert upstream_after["plan_type"] == upstream_before["plan_type"]
+    assert upstream_after["rate_limit"]["primary_window"]["used_percent"] == 20
+    assert Map.keys(upstream_after) == Map.keys(upstream_before)
+    refute Map.has_key?(upstream_after, "budget_usage")
+    File.rm_rf!(directory)
+    refute File.exists?(directory)
+    CodexPooler.TestDiagnostics.puts("usage_http_cleanup runtime_credentials_absent=true")
+  end
+
+  defp curl_usage!(port, config, path, phase) do
+    {response, exit_code} =
+      System.cmd(
+        "curl",
+        [
+          "-i",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "10",
+          "--config",
+          config,
+          "http://127.0.0.1:#{port}#{path}"
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert exit_code == 0
+    assert [headers, body] = String.split(response, "\r\n\r\n", parts: 2)
+    assert headers =~ "200 OK"
+    assert headers =~ "application/json"
+    CodexPooler.TestDiagnostics.puts("usage_http #{phase} #{path}\n#{headers}\n#{body}")
+    CodexPooler.JSON.decode!(body)
+  end
+
+  defp usage_ledger_rows(setup, phase) do
+    rows =
+      Repo.all(
+        from e in LedgerEntry,
+          where: e.api_key_id == ^setup.api_key.id,
+          select: {e.entry_kind, e.usage_status, e.amount_status, e.total_tokens}
+      )
+      |> Enum.sort()
+
+    CodexPooler.TestDiagnostics.puts("usage_ledger #{phase} #{inspect(rows)}")
+    rows
+  end
 
   test "GET /v1/usage returns zeroed scoped usage with sanitized metadata logging", %{conn: conn} do
     setup = active_api_key_fixture()
@@ -220,8 +423,8 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "limit_type" => "credits",
                "limit_window" => "daily",
                "max_value" => 1000,
-               "current_value" => 77,
-               "remaining_value" => 923,
+               "current_value" => 1000,
+               "remaining_value" => 0,
                "model_filter" => nil,
                "source" => "api_key_compatibility"
              },
@@ -229,8 +432,8 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "limit_type" => "total_tokens",
                "limit_window" => "daily",
                "max_value" => 1000,
-               "current_value" => 77,
-               "remaining_value" => 923,
+               "current_value" => 1000,
+               "remaining_value" => 0,
                "model_filter" => nil,
                "source" => "api_key_limit"
              },
@@ -238,8 +441,8 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "limit_type" => "request_count",
                "limit_window" => "minute",
                "max_value" => 60,
-               "current_value" => 2,
-               "remaining_value" => 58,
+               "current_value" => 0,
+               "remaining_value" => 60,
                "model_filter" => nil,
                "source" => "api_key_limit"
              }
