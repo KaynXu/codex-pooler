@@ -3,7 +3,8 @@
 <p align="center">
   <strong>面向团队、Agent 和个人的完整自托管 Codex 网关。支持：</strong><br>
   <br>
-  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode"><img src=".github/assets/opencode-favicon.png" alt="OpenCode" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode-v2/" title="OpenCode v2"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode v1"><img src=".github/assets/opencode-favicon.png" alt="OpenCode v1" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
@@ -143,7 +144,69 @@ Optional operator MCP URL:   http://localhost:4000/mcp
 `https://codex-pooler.example.com`。
 
 <details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2 logo" width="16" height="16"> OpenCode v2 <code>~/.config/opencode/opencode.jsonc</code></summary>
+
+OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本地工具执行
+和同一会话恢复。在 OpenCode 服务进程的环境中设置
+`CODEX_POOLER_API_KEY`，然后合并以下配置：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "codex-pooler/gpt-5.6-terra",
+  "agents": { "title": { "model": "codex-pooler/gpt-5.6-luna" } },
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "buffer": 41420
+  },
+  "providers": {
+    "codex-pooler": {
+      "package": "@opencode/ai/providers/openai/responses",
+      "settings": {
+        "baseURL": "http://localhost:4000/v1",
+        "apiKey": "{env:CODEX_POOLER_API_KEY}",
+        "transport": "http",
+        "compaction": { "type": "summary" }
+      },
+      "models": {
+        "gpt-5.6-luna": {
+          "modelID": "gpt-5.6-luna",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+        },
+        "gpt-5.6-terra": {
+          "modelID": "gpt-5.6-terra",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        }
+      }
+    }
+  }
+}
+```
+
+使用你的部署 `/v1` 地址，并只配置 Pool 可用的模型。以上上下文数值是长上下文
+profile 的示例：将每个模型实际的 `/v1/models.context_length` 填入
+`limit.context` 和 `limit.input`。[v2 指南](https://docs.codex-pooler.com/clients/opencode-v2/)
+包含 Sol/Astra、上下文计算、压缩方式、协议和图片限制。
+
+此配置使用 HTTP SSE 和本地摘要 checkpoint。可通过 provider settings 选择
+Websocket 传输和原生 provider checkpoint；两种压缩模式的配置见 v2 指南。本地工具及图片输入不代表
+已启用图片生成工具。使用
+`opencode run --standalone --model codex-pooler/gpt-5.6-terra` 启动独立客户端
+会话；普通启动会使用共享后台服务。
+
+V2 使用 `providers`、`modelID`、`settings` 和 `capabilities`；旧版模型的
+`reasoning`/`attachment` 布尔字段以及压缩的 `prune`/`tail_turns` 会被忽略并
+产生警告。V1 插件（包括 v1 OMO 集成）需要单独迁移。V1 安装请继续使用下方配置。
+
+</details>
+
+<details>
+<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode v1 <code>~/.config/opencode/opencode.jsonc</code></summary>
 
 ![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
 

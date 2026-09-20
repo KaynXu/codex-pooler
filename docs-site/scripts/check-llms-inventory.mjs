@@ -24,6 +24,7 @@ const expectedInventory = {
     "/clients/goose/",
     "/clients/kilo-code/",
     "/clients/opencode/",
+    "/clients/opencode-v2/",
     "/clients/openclaw/",
     "/clients/openhands/",
     "/clients/omp/",

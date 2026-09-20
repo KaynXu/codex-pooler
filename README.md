@@ -3,7 +3,8 @@
 <p align="center">
   <strong>The full featured self-hosted Codex gateway, for teams, agents and you. Works with:</strong><br>
   <br>
-  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode"><img src=".github/assets/opencode-favicon.png" alt="OpenCode" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode-v2/" title="OpenCode v2"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode v1"><img src=".github/assets/opencode-favicon.png" alt="OpenCode v1" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
@@ -154,7 +155,72 @@ For a deployed instance, replace `http://localhost:4000` with your deployed host
 for example `https://codex-pooler.example.com`.
 
 <details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2 logo" width="16" height="16"> OpenCode v2 <code>~/.config/opencode/opencode.jsonc</code></summary>
+
+OpenCode v2 supports Codex Pooler through the native Responses provider, including
+local tool execution and same-session resume. Set
+`CODEX_POOLER_API_KEY` in the environment of the OpenCode server, then merge:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "codex-pooler/gpt-5.6-terra",
+  "agents": { "title": { "model": "codex-pooler/gpt-5.6-luna" } },
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "buffer": 41420
+  },
+  "providers": {
+    "codex-pooler": {
+      "package": "@opencode/ai/providers/openai/responses",
+      "settings": {
+        "baseURL": "http://localhost:4000/v1",
+        "apiKey": "{env:CODEX_POOLER_API_KEY}",
+        "transport": "http",
+        "compaction": { "type": "summary" }
+      },
+      "models": {
+        "gpt-5.6-luna": {
+          "modelID": "gpt-5.6-luna",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+        },
+        "gpt-5.6-terra": {
+          "modelID": "gpt-5.6-terra",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        }
+      }
+    }
+  }
+}
+```
+
+Use your deployed `/v1` URL and only models assigned to your Pool. The context
+values are long-profile examples: copy each model's actual
+`/v1/models.context_length` into `limit.context` and `limit.input`. The
+[v2 guide](https://docs.codex-pooler.com/clients/opencode-v2/) includes Sol/Astra,
+context calculations, compaction choices, protocols and image limits.
+
+This configuration uses HTTP SSE and local summary checkpoints. Websocket
+transport and native provider checkpoints are available through provider
+settings; see the v2 guide for both compaction modes. Local tools
+and image input do not imply an enabled image-generation tool. Use
+`opencode run --standalone --model codex-pooler/gpt-5.6-terra` for an isolated
+client session; normal startup uses a shared background service.
+
+V2 uses `providers`, `modelID`, `settings` and `capabilities`; legacy model
+`reasoning`/`attachment` booleans and compaction `prune`/`tail_turns` are ignored
+with warnings. V1 plugins, including v1 OMO integrations, need their own v2
+migration. Keep the v1 configuration below for v1 installations.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode v1 <code>~/.config/opencode/opencode.jsonc</code></summary>
 
 ![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
 
