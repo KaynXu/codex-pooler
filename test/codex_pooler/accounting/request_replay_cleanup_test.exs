@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
   import CodexPooler.RequestReplayFixtures
 
-  alias CodexPooler.Accounting.{RequestReplay, RequestReplayEntitlement}
+  alias CodexPooler.Accounting.{LedgerReads, RequestReplay, RequestReplayEntitlement}
   alias CodexPooler.Gateway.Transports.Streaming.{RuntimeAdmissionProof, StreamProtocol}
   alias CodexPooler.Gateway.Transports.Websocket.{NativeReplayAdmission, WebsocketOwnerSession}
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -27,6 +27,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
     end
 
     last = replay_fixture(reservation?: true)
+    assert LedgerReads.outstanding_reservation_count(last.api_key.id) == 1
 
     insert_entitlement!(last, %{
       armed_at: DateTime.add(due_at, -29, :second),
@@ -46,6 +47,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
     assert Repo.reload!(last.request).last_error_code == "websocket_replay_expired"
     assert terminal_ledger_count(last.request.id, "settlement") == 1
+    assert LedgerReads.outstanding_reservation_count(last.api_key.id) == 0
 
     assert Repo.aggregate(
              from(row in RequestReplayEntitlement,
@@ -75,6 +77,9 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
   test "revoked or expired committed replay cannot start and compensates exactly once" do
     for cause <- [:revoked, :expired] do
       fixture = replay_fixture(reservation?: true)
+
+      assert LedgerReads.outstanding_reservation_count(fixture.api_key.id) == 1
+
       assert {:ok, armed} = RequestReplay.arm(arm_input(fixture))
 
       assert {:ok, consumed} =
@@ -98,6 +103,8 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
       assert terminal_ledger_count(fixture.request.id, "settlement") == 1
       assert terminal_ledger_count(fixture.request.id, "release") == 1
+
+      assert LedgerReads.outstanding_reservation_count(fixture.api_key.id) == 0
     end
   end
 

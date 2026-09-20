@@ -83,6 +83,16 @@ defmodule CodexPooler.Gateway.Denials do
   def log_gateway(context, turn_claim \\ nil)
 
   def log_gateway(
+        %Context{reason: %{code: :api_key_concurrency_limit_exceeded}} = context,
+        turn_claim
+      ) do
+    log_gateway(
+      %{context | reason: policy_denial_error(:api_key_concurrency_limit_exceeded)},
+      turn_claim
+    )
+  end
+
+  def log_gateway(
         %Context{
           auth: auth,
           model: model,
@@ -111,6 +121,7 @@ defmodule CodexPooler.Gateway.Denials do
           %{"gateway_denial" => gateway_metadata(reason_code, message, reason)},
           turn_claim
         )
+        |> fresh_unclaimed_concurrency_correlation(turn_claim, reason)
         |> maybe_put_turn_claim(turn_claim)
         |> update_in([:request_metadata], fn metadata ->
           metadata
@@ -129,6 +140,17 @@ defmodule CodexPooler.Gateway.Denials do
 
   defp maybe_put_turn_claim(attrs, nil), do: attrs
   defp maybe_put_turn_claim(attrs, request), do: Map.put(attrs, :turn_claim, request)
+
+  # An unreserved retry is a new rejection, not a durable execution claim.
+  # A websocket's handshake request id is shared by all its response.create frames.
+  defp fresh_unclaimed_concurrency_correlation(
+         attrs,
+         nil,
+         %{pooler_policy: true, code: "api_key_concurrency_limit_exceeded"}
+       ),
+       do: Map.put(attrs, :correlation_id, Ecto.UUID.generate())
+
+  defp fresh_unclaimed_concurrency_correlation(attrs, _turn_claim, _reason), do: attrs
 
   @spec enforced_model_metadata(RequestOptions.t()) :: String.t() | nil
   def enforced_model_metadata(%RequestOptions{
@@ -244,12 +266,17 @@ defmodule CodexPooler.Gateway.Denials do
   # status for one condition (findings#221).
   defp policy_status(:api_key_missing), do: 401
   defp policy_status(:api_key_disabled), do: 401
+  defp policy_status(:api_key_concurrency_limit_exceeded), do: 429
   defp policy_status(_reason), do: 403
 
   defp policy_message(:api_key_missing), do: "api key is required"
   defp policy_message(:api_key_disabled), do: "api key is disabled"
   defp policy_message(:api_key_policy_malformed), do: "api key policy is invalid"
   defp policy_message(:model_not_allowed), do: "api key is not allowed to use this model"
+
+  defp policy_message(:api_key_concurrency_limit_exceeded),
+    do: "api key active request limit reached; retry shortly"
+
   defp policy_message(_reason), do: "api key policy denied this request"
 
   defp error(status, code, message, param),

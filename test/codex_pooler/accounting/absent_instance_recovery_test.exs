@@ -77,6 +77,7 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
     test "a stale observer cannot recover a stale legacy owner" do
       setup = accounting_setup()
+      setup.api_key |> Ecto.Changeset.change(max_active_requests: 1) |> Repo.update!()
       now = now()
       stale = DateTime.add(now, -180, :second)
       owner = Identity.new("sample-owner@remote", Ecto.UUID.generate())
@@ -100,6 +101,11 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
       {:ok, _} = InstancePresence.record_heartbeat()
 
+      assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+               Accounting.reserve(setup.auth, setup.model, %{
+                 "model" => setup.model.exposed_model_id
+               })
+
       capture_stream_outcomes(fn ->
         assert {:ok, %{absent_instance_attempts_recovered: 1}} =
                  Accounting.recover_absent_instance_attempts(now)
@@ -113,6 +119,11 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
         assert_receive {:stream_outcome_transaction, false}
       end)
+
+      assert {:ok, _} =
+               Accounting.reserve(setup.auth, setup.model, %{
+                 "model" => setup.model.exposed_model_id
+               })
     end
 
     test "an unreachable exact execution defers early recovery and retains the stale fallback" do
@@ -486,6 +497,7 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
     test "an instance that never published presence is left to the six-hour sweep" do
       setup = accounting_setup()
+      setup.api_key |> Ecto.Changeset.change(max_active_requests: 1) |> Repo.update!()
       now = now()
 
       # A VM that minted its incarnation and never got a heartbeat written: a
@@ -502,12 +514,22 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
       assert Repo.get!(Request, request.id).status == "in_progress"
 
+      assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+               Accounting.reserve(setup.auth, setup.model, %{
+                 "model" => setup.model.exposed_model_id
+               })
+
       assert {:ok, %{stale_reservations_settled: 1}} = Accounting.recover_stale_reservations(now)
 
       assert %Request{status: "failed", last_error_code: "stale_reservation_recovered"} =
                Repo.get!(Request, request.id)
 
       assert Repo.reload!(attempt).status == "failed"
+
+      assert {:ok, _} =
+               Accounting.reserve(setup.auth, setup.model, %{
+                 "model" => setup.model.exposed_model_id
+               })
     end
 
     test "an attempt written before incarnations existed is out of reach and stays with the sweep" do

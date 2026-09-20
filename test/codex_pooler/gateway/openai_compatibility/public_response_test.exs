@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
     # sets by construction, never on the wire code (findings#221).
     test "Pooler-authored policy denials are not redacted, the same codes without the marker are" do
       for code <- PublicResponse.unredacted_policy_denial_codes(),
-          status <- [401, 403] do
+          status <- [401, 403, 429] do
         refute PublicResponse.redacted_gateway_error?(%{
                  status: status,
                  code: code,

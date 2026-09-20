@@ -16,6 +16,50 @@ defmodule CodexPooler.Gateway.DenialsTest do
 
   @endpoint_path "/backend-api/codex/responses"
 
+  test "trusted concurrency denials replace domain prose and give each unclaimed retry its own row" do
+    fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(fake)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id}
+
+    opts =
+      RequestOptions.build(
+        %{transport: "websocket", request_id: Ecto.UUID.generate()},
+        @endpoint_path,
+        payload
+      )
+
+    context = %Denials.Context{
+      auth: auth,
+      model: setup.model,
+      payload: payload,
+      endpoint: @endpoint_path,
+      opts: opts,
+      reason: %{code: :api_key_concurrency_limit_exceeded, message: "untrusted domain detail"}
+    }
+
+    for _ <- 1..2 do
+      assert {:error,
+              %{
+                status: 429,
+                pooler_policy: true,
+                code: "api_key_concurrency_limit_exceeded",
+                message: "api key active request limit reached; retry shortly"
+              }} = Denials.log_gateway(context)
+    end
+
+    assert [first, second] = Repo.all(Request)
+    refute first.correlation_id == second.correlation_id
+
+    assert Enum.all?(
+             [first, second],
+             &(&1.status == "rejected" and &1.response_status_code == 429)
+           )
+
+    assert Repo.all(Attempt) == []
+    assert FakeUpstream.count(fake) == 0
+  end
+
   test "gateway denial persists only allowlisted reasoning policy metadata" do
     fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(fake)

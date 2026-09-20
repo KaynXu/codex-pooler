@@ -337,6 +337,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
 
   test "exact death never recovers a superseded attempt or a generation-one attempt" do
     setup = accounting_setup()
+    setup.api_key |> Ecto.Changeset.change(max_active_requests: 1) |> Repo.update!()
     {request, first} = reserve_attempt(setup)
     {:ok, latest} = Accounting.create_attempt(request, setup.assignment)
     :ok = ExecutionIdentity.complete()
@@ -359,6 +360,12 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
              )
 
     assert Repo.reload!(request).status == "in_progress"
+
+    assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+             Accounting.reserve(setup.auth, setup.model, %{
+               "model" => setup.model.exposed_model_id
+             })
+
     latest = replay |> Ecto.Changeset.change(replay_generation: 0) |> Repo.update!()
 
     assert {:ok, :recovered} =
@@ -367,11 +374,17 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
                latest,
                DateTime.utc_now()
              )
+
+    assert {:ok, _} =
+             Accounting.reserve(setup.auth, setup.model, %{
+               "model" => setup.model.exposed_model_id
+             })
   end
 
   for transport <- ["http_sse", "websocket"] do
     test "#{transport} failed finalization is recovered after its task exits while the session lives" do
       setup = accounting_setup()
+      setup.api_key |> Ecto.Changeset.change(max_active_requests: 1) |> Repo.update!()
       parent = self()
       now = DateTime.utc_now()
       {:ok, _} = InstancePresence.record_heartbeat(InstancePresence.local_identity(), now)
@@ -409,6 +422,12 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
 
       monitor = Process.monitor(pid)
       assert_receive {:admitted, request, attempt}, 15_000
+
+      assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+               Accounting.reserve(setup.auth, setup.model, %{
+                 "model" => setup.model.exposed_model_id
+               })
+
       owner = InstancePresence.local_identity()
 
       session =
@@ -481,6 +500,11 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
       assert Enum.sort(
                Enum.map(Accounting.list_ledger_entries_for_request(request.id), & &1.entry_kind)
              ) == ["release", "reservation", "settlement"]
+
+      assert {:ok, _} =
+               Accounting.reserve(setup.auth, setup.model, %{
+                 "model" => setup.model.exposed_model_id
+               })
     end
   end
 end

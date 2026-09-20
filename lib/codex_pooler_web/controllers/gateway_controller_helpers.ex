@@ -309,6 +309,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     }
 
     conn
+    |> put_policy_retry_header(error)
     |> put_gateway_headers(Contracts.recovery_response_headers(error))
     |> put_status(status)
     |> json(body)
@@ -321,6 +322,16 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   defp do_send_error(conn, %{code: code, message: message}) do
     send_error(conn, %{status: 401, code: code, message: message})
   end
+
+  # Minimum backoff advice; it does not promise that a slot will be available.
+  defp put_policy_retry_header(conn, %{
+         pooler_policy: true,
+         status: 429,
+         code: "api_key_concurrency_limit_exceeded"
+       }),
+       do: put_resp_header(conn, "retry-after", "1")
+
+  defp put_policy_retry_header(conn, _error), do: conn
 
   defp forwarded_headers(conn) do
     provider_session_header_names = TransportEnvelope.provider_session_header_names()
