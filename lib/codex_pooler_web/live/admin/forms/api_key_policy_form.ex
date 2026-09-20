@@ -16,7 +16,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @type selector_state :: map()
   @type selector_attrs :: %{String.t() => term()}
   @type form_error ::
-          {:expires_at | :dashboard_access, {String.t(), keyword()}}
+          {:expires_at | :dashboard_access | :max_active_requests, {String.t(), keyword()}}
 
   @limit_fields ~w(
     max_requests_per_minute
@@ -44,6 +44,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "pool_id" => api_key.pool_id,
       "status" => api_key.status,
       "dashboard_access" => api_key.dashboard_access,
+      "max_active_requests" => api_key.max_active_requests || "",
       "expires_at" => datetime_local_value(api_key.expires_at),
       "model_mode" => model_mode(api_key.allowed_model_identifiers),
       "allowed_model_identifiers" => api_key.allowed_model_identifiers || [],
@@ -76,7 +77,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   @spec input_errors(params()) :: [form_error()]
   def input_errors(params) do
-    expiry_errors(params) ++ dashboard_access_errors(params)
+    expiry_errors(params) ++ dashboard_access_errors(params) ++ active_request_errors(params)
   end
 
   @spec normalize_params(params(), [Pool.t()]) :: params()
@@ -91,6 +92,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       end
     end)
     |> normalize_list_param("allowed_model_identifiers")
+    |> Map.update!("max_active_requests", &active_request_input/1)
   end
 
   @spec merge_params(params() | nil, params() | nil) :: params()
@@ -107,6 +109,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       pool_id: pool_id,
       status: blank_to_nil(params["status"]) || "active",
       dashboard_access: dashboard_access_value(params["dashboard_access"]),
+      max_active_requests: blank_to_nil(params["max_active_requests"]),
       expires_at: expires_at_value(params["expires_at"]),
       model_mode: params["model_mode"],
       allowed_model_identifiers: policy_model_identifiers(params),
@@ -128,6 +131,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     []
     |> maybe_add_error(blank_to_nil(params["display_name"]) == nil, "Display name is required")
     |> maybe_add_error(blank_to_nil(params["pool_id"]) == nil, "Pool is required")
+    |> maybe_add_error(
+      active_request_errors(params) != [],
+      "Active request limit must be a positive whole number"
+    )
     |> maybe_add_error(
       invalid_dashboard_access?(params["dashboard_access"]),
       "Observatory access must be enabled or disabled"
@@ -298,6 +305,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "pool_id" => "",
       "status" => "active",
       "dashboard_access" => false,
+      "max_active_requests" => "",
       "expires_at" => "",
       "model_mode" => "all_models",
       "allowed_model_identifiers" => [],
@@ -465,9 +473,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       end)
       |> Enum.reject(fn {_label, value} -> is_nil(value) end)
 
+    key_wide =
+      {"Active requests across all models",
+       normalized_limit_value(form[:max_active_requests].value) || "Disabled"}
+
+    model = blank_to_nil(form[:model_policy_model_identifier].value)
+    model_rows = if model, do: [{"Model override", model}], else: []
+
     case values do
-      [] -> [{"Limits", "No caps configured"}]
-      rows -> rows
+      [] -> [key_wide | model_rows] ++ [{"Token and rate limits", "No caps configured"}]
+      rows -> [key_wide | model_rows] ++ rows
     end
   end
 
@@ -579,6 +594,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       :error -> nil
     end
   end
+
+  defp active_request_errors(params) do
+    case blank_to_nil(params["max_active_requests"]) do
+      nil ->
+        []
+
+      value ->
+        case parse_integer(value) do
+          {:ok, count} when count > 0 and count <= 2_147_483_647 -> []
+          _invalid -> [max_active_requests: {"must be a positive whole number", []}]
+        end
+    end
+  end
+
+  defp active_request_input(value) when is_binary(value) or is_integer(value) or is_nil(value),
+    do: value
+
+  defp active_request_input(_value), do: "invalid"
 
   defp invalid_dashboard_access?(value), do: parse_dashboard_access(value) == :error
 

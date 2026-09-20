@@ -1363,6 +1363,8 @@ control.
 
 ### Dialog shell (every admin modal)
 
+The API-key Limits panel uses a compact tonal key-wide control band, a bordered default-policy group, and a subordinate single-model group separated by a hairline. Both policy groups share a three-column grid from `sm`, one column below it, `gap-3`, and standard inputs with fieldset outer margin/padding removed; input height and label typography remain unchanged. The active-request cap stays separate from model policy fields. Configured overrides and validation remain visible. A compact known/provisional/pending/effective budget breakdown explains reservations without changing measured burn. The existing policy dialog body owns scrolling and the footer remains reachable.
+
 - **Presentation:** `<dialog class="modal modal-bottom overflow-x-hidden sm:modal-middle">`.
   Below `sm` the dialog is a **bottom sheet** — edge to edge, anchored to the
   bottom, top corners rounded and bottom corners square, capped at

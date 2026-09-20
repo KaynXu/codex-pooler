@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
        api_key_wizard_step: "basics",
        api_key_model_selector_state: ApiKeysReadModel.empty_model_selector_state(),
        api_key_review_errors: [],
+       api_key_budget_usage: nil,
        creating_api_key: false,
        editing_api_key: nil,
        deleting_api_key: nil,
@@ -104,6 +105,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
        creating_api_key: true,
        editing_api_key: nil,
        created_secret: nil,
+       api_key_budget_usage: nil,
        api_key_wizard_step: "basics"
      )
      |> assign_api_key_wizard_state(params)}
@@ -123,6 +125,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
          |> assign(
            creating_api_key: false,
            editing_api_key: api_key,
+           api_key_budget_usage: ApiKeysReadModel.budget_usage(api_key),
            created_secret: nil,
            api_key_wizard_step: "basics"
          )
@@ -356,6 +359,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
             <Limits.api_key_limits_step
               form={@api_key_form}
               limit_fields={@policy_limit_fields}
+              budget_usage={@api_key_budget_usage}
             />
           </:limits>
           <:review>

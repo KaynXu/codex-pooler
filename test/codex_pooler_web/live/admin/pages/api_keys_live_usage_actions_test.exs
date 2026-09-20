@@ -2,12 +2,60 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import CodexPooler.PoolerFixtures
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.Rollups
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
   setup :register_and_log_in_user
+
+  test "limits explain known, provisional and pending budget without changing measured burn", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "budget-components", name: "Budget components"})
+
+    {:ok, %{api_key: key}} = Access.create_api_key(scope, pool, %{display_name: "Budget key"})
+    fixture = %{pool: pool, api_key: key}
+    known = request_fixture(fixture)
+    settlement = ledger_entry_fixture(known, %{total_tokens: 123})
+    Rollups.accumulate!(known, settlement)
+    pending = request_fixture(fixture, %{status: "in_progress", completed_at: nil})
+
+    ledger_entry_fixture(pending, %{
+      entry_kind: "reservation",
+      usage_status: "usage_unknown",
+      total_tokens: 512
+    })
+
+    unknown = request_fixture(fixture, %{usage_status: "usage_unknown"})
+
+    ledger_entry_fixture(unknown, %{
+      usage_status: "usage_unknown",
+      total_tokens: 2048,
+      details: %{"estimated_from_reserve" => true}
+    })
+
+    {:ok, before_usage} = Accounting.build_api_key_self_usage(pool, key)
+    {:ok, view, _} = live(conn, ~p"/admin/api-keys")
+    view |> element("#edit-api-key-#{key.id}") |> render_click()
+    select_api_key_section(view, :limits)
+
+    for window <- ["daily", "weekly"] do
+      assert has_element?(view, "#api-key-budget-#{window}-known", "123")
+      assert has_element?(view, "#api-key-budget-#{window}-provisional", "2,048")
+      assert has_element?(view, "#api-key-budget-#{window}-pending", "512")
+      assert has_element?(view, "#api-key-budget-#{window}-effective", "2,683")
+    end
+
+    {:ok, after_usage} = Accounting.build_api_key_self_usage(pool, key)
+    assert after_usage.total_tokens == before_usage.total_tokens
+    assert after_usage.total_tokens == 123
+  end
 
   test "edit review shows Pool name and normalized policy limits without usage", %{
     conn: conn,

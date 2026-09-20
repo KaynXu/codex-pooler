@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting
   alias CodexPooler.Catalog
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
@@ -102,6 +103,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     do: Enum.find(pools, &(&1.id == pool_id))
 
   def selected_pool(_pools, _pool_id), do: nil
+
+  @spec budget_usage(APIKey.t()) :: map() | nil
+  def budget_usage(%APIKey{} = api_key) do
+    case Accounting.build_api_key_self_usage(api_key.pool_id, api_key.id,
+           as_of: DateTime.utc_now()
+         ) do
+      {:ok, usage} -> usage.budget_usage
+      {:error, _reason} -> nil
+    end
+  end
 
   @spec filter_values(Pool.t() | nil) :: filters()
   def filter_values(pool), do: filter_values(pool, nil)
