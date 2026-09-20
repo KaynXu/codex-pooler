@@ -355,6 +355,151 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     end
   end
 
+  test "remote owner moves a quota rejected full-history turn and retains the shared session" do
+    ensure_test_distribution_started!()
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+
+    terminal = fn id ->
+      FakeUpstream.websocket_text_frames([
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => id,
+            "status" => "completed",
+            "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+          }
+        })
+      ])
+    end
+
+    native = fn respond ->
+      FakeUpstream.expect_request(
+        method: "WEBSOCKET",
+        websocket_connection_ordinal: 1,
+        json: [valid: true, forbidden: ["previous_response_id"]],
+        respond: respond
+      )
+    end
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          native.(terminal.("resp_peer_quota_anchor")),
+          native.(
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.failed",
+                "response" => %{
+                  "status" => "failed",
+                  "error" => %{"code" => "usage_limit_reached"}
+                }
+              })
+            ])
+          )
+        ])
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          native.(terminal.("resp_peer_quota_recovered")),
+          native.(terminal.("resp_peer_quota_next"))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-peer-quota",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+    assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = start_bridge_peer!(:current, setup.identity, repo: :real)
+    # The default peer fixture recognizes one identity only. Account failover
+    # must exercise the real shared-database lookup for both assignments.
+    {CodexPooler.Upstreams, upstream_beam, upstream_file} =
+      :code.get_object_code(CodexPooler.Upstreams)
+
+    :erpc.call(remote_node, :code, :purge, [CodexPooler.Upstreams])
+    assert true = :erpc.call(remote_node, :code, :delete, [CodexPooler.Upstreams])
+
+    assert {:module, CodexPooler.Upstreams} =
+             :erpc.call(remote_node, :code, :load_binary, [
+               CodexPooler.Upstreams,
+               upstream_file,
+               upstream_beam
+             ])
+
+    header = "native-peer-quota-#{System.unique_integer([:positive])}"
+    {session, owner_pid} = start_remote_bridge_owner!(auth, header, remote_node, :real)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-peer-quota", "peer-quota",
+        session_header: header,
+        session_header_source: "x-session-id"
+      )
+
+    owner_lease = active_owner_lease(session.id)
+
+    try do
+      state =
+        Enum.reduce(1..3, state, fn turn, state ->
+          if turn == 2,
+            do:
+              put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+
+          payload = websocket_payload(setup, "synthetic peer quota turn #{turn}")
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
+          assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(frame)
+          assert {:ok, state} = receive_owner_socket_complete(state)
+
+          assert_receive {CodexPooler.Events,
+                          %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                         5_000
+
+          state
+        end)
+
+      assert state.codex_session.id == session.id
+      assert active_owner_lease(session.id).lease_token == owner_lease.lease_token
+      assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
+
+      assert Repo.get!(CodexSession, session.id).pool_upstream_assignment_id ==
+               fallback.assignment.id
+
+      assert FakeUpstream.count(upstream) == 2
+      assert FakeUpstream.count(fallback_upstream) == 2
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert FakeUpstream.http_request_count(fallback_upstream) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+      assert :ok = FakeUpstream.verify!(fallback_upstream)
+      assert [anchor, recovered, next] = request_logs(setup.pool.id)
+      assert Enum.all?([anchor, recovered, next], &(&1.status == "succeeded"))
+      assert recovered.retry_count == 1
+
+      assert [failed, succeeded] =
+               Repo.all(
+                 from(a in Attempt,
+                   where: a.request_id == ^recovered.id,
+                   order_by: [asc: a.attempt_number]
+                 )
+               )
+
+      assert failed.status == "retryable_failed"
+      assert failed.pool_upstream_assignment_id == setup.assignment.id
+      assert succeeded.pool_upstream_assignment_id == fallback.assignment.id
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   test "native proxy turn replaces the attach timeout with the full request budget" do
     terminal =
       CodexPooler.JSON.encode!(%{

@@ -407,7 +407,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.put("stream_failure_stage", "first_event")
     |> Map.put("stream_terminal_type", failure.event_type)
     |> Map.put("stream_error_code", failure.code)
+    |> maybe_put_quota_rejection_proof(failure)
   end
+
+  defp maybe_put_quota_rejection_proof(metadata, %{quota_rejection_before_output?: true}),
+    do: Map.put(metadata, "quota_rejection_before_output", true)
+
+  defp maybe_put_quota_rejection_proof(metadata, _failure), do: metadata
 
   @spec merge_stream_state_metadata(map(), term()) :: map()
   def merge_stream_state_metadata(metadata, state) when is_map(metadata) do

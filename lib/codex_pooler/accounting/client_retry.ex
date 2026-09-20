@@ -1146,6 +1146,9 @@ defmodule CodexPooler.Accounting.ClientRetry do
       verified_provider_terminal_failure?(turn, request, attempt) ->
         :ok
 
+      verified_quota_rejection?(turn, request, attempt) and latest_attempt?(attempt) ->
+        :ok
+
       verified_lifecycle_cut?(turn, request, attempt) ->
         :ok
 
@@ -1319,6 +1322,53 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: ErrorCodes.retryable_first_event_code?(code)
 
   defp verified_provider_terminal_failure?(_turn, _request, _attempt), do: false
+
+  @doc false
+  @spec verified_quota_rejection?(term(), term(), term()) :: boolean()
+  # Only the native receive classifier writes the marker after proving no
+  # provider output and absent or zero usage. A quota code alone is insufficient.
+  def verified_quota_rejection?(
+        %CodexTurn{
+          request_id: request_id,
+          status: "failed",
+          error_code: code,
+          final_attempt_id: attempt_id,
+          transport_kind: "websocket",
+          first_visible_output_at: nil,
+          completed_at: %DateTime{}
+        },
+        %Request{
+          id: request_id,
+          status: "failed",
+          last_error_code: code,
+          transport: "websocket",
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          id: attempt_id,
+          request_id: request_id,
+          status: "failed",
+          network_error_code: code,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{"quota_rejection_before_output" => true}
+        }
+      )
+      when is_binary(request_id) and is_binary(attempt_id) and
+             code in ["usage_limit_reached", "usage_limit_exceeded"],
+      do: true
+
+  def verified_quota_rejection?(_turn, _request, _attempt), do: false
+
+  defp latest_attempt?(%Attempt{} = attempt) do
+    not Repo.exists?(
+      from newer in Attempt,
+        where:
+          newer.request_id == ^attempt.request_id and
+            newer.attempt_number > ^attempt.attempt_number
+    )
+  end
 
   defp verified_claim_only_drain?(%Request{
          status: "failed",

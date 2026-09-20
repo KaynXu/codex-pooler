@@ -25,6 +25,253 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
   # observes, never a scenario timeout.
   @connection_shutdown_timeout_ms 15_000
 
+  for progress <- [
+        :visible_output,
+        :token_usage,
+        :scalar_usage,
+        :string_usage,
+        :list_usage,
+        :inconsistent_usage,
+        :mixed_usage
+      ] do
+    @tag progress: progress
+    test "quota denial after #{progress} does not move accounts", %{progress: progress} do
+      terminal = %{
+        "type" => "response.failed",
+        "response" => %{"status" => "failed", "error" => %{"code" => "usage_limit_reached"}}
+      }
+
+      frames =
+        case progress do
+          :visible_output ->
+            [
+              %{"type" => "response.output_text.delta", "delta" => "synthetic visible output"},
+              terminal
+            ]
+
+          :token_usage ->
+            [
+              put_in(terminal, ["response", "usage"], %{
+                "input_tokens" => 1,
+                "output_tokens" => 1,
+                "total_tokens" => 2
+              })
+            ]
+
+          :mixed_usage ->
+            [
+              terminal
+              |> put_in(["response", "usage"], %{
+                "input_tokens" => 1,
+                "output_tokens" => 1,
+                "total_tokens" => 2
+              })
+              |> Map.put("usage", %{
+                "input_tokens" => 0,
+                "output_tokens" => 0,
+                "total_tokens" => 0
+              })
+            ]
+
+          malformed ->
+            usage =
+              case malformed do
+                :scalar_usage ->
+                  4
+
+                :string_usage ->
+                  "invalid"
+
+                :list_usage ->
+                  []
+
+                :inconsistent_usage ->
+                  %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 0}
+              end
+
+            [put_in(terminal, ["response", "usage"], usage)]
+        end
+
+      upstream =
+        start_upstream(
+          FakeUpstream.websocket_text_frames(Enum.map(frames, &CodexPooler.JSON.encode!/1))
+        )
+
+      fallback_upstream =
+        start_upstream(completed_response_frames("resp_quota_must_not_replay", 3, 1))
+
+      setup = gateway_setup(upstream)
+
+      fallback =
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-quota-control",
+          compact?: false
+        )
+
+      prime_routing_quota!(fallback.identity)
+      model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+
+      request_id =
+        seed_preferring_assignment(
+          [setup.assignment.id, fallback.assignment.id],
+          setup.assignment.id
+        )
+
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 CodexPooler.JSON.encode!(%{
+                   "type" => "response.create",
+                   "model" => model.exposed_model_id,
+                   "input" => native_text_input("synthetic quota negative control"),
+                   "stream" => true,
+                   "generate" => true
+                 }),
+                 %{request_id: request_id},
+                 fn frame -> send(self(), {:quota_control_frame, frame}) end
+               )
+
+      assert FakeUpstream.count(upstream) == 1
+      assert FakeUpstream.count(fallback_upstream) == 0
+      assert [attempt] = Repo.all(from(a in Attempt))
+      assert attempt.status == "failed"
+      refute attempt.response_metadata["quota_rejection_before_output"]
+    end
+  end
+
+  test "established native websocket moves a quota-rejected full-history turn to another account" do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      stop_registered_websocket_owner_sessions()
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+    end)
+
+    # provenance: observed 2026-09-20 native pre-visible quota refusal; identities and content synthetic
+    rejection =
+      FakeUpstream.websocket_text_frames([
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.failed",
+          "headers" => %{
+            "x-codex-primary-used-percent" => "100",
+            "x-codex-primary-window-minutes" => "10080"
+          },
+          "response" => %{"status" => "failed", "error" => %{"code" => "usage_limit_reached"}}
+        })
+      ])
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, completed_response_frames("resp_quota_anchor", 3, 1)),
+          strict_native_request(1, rejection)
+        ])
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          strict_native_request(1, completed_response_frames("resp_quota_fallback", 3, 1)),
+          strict_native_request(1, completed_response_frames("resp_quota_next", 3, 1))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-quota-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    {_server, port} = start_public_endpoint_with_server!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, Ecto.UUID.generate())
+
+    {conn, _websocket} =
+      Enum.reduce(1..3, {conn, websocket}, fn turn, {conn, websocket} ->
+        if turn == 2 do
+          put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+        end
+
+        payload =
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" =>
+              [
+                %{
+                  "type" => "reasoning",
+                  "encrypted_content" => "synthetic-reasoning",
+                  "content" => nil,
+                  "summary" => []
+                }
+              ] ++
+                native_text_input("synthetic full-history turn #{turn}"),
+            "stream" => true,
+            "generate" => true
+          })
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+
+        {conn, websocket, _types, terminal} =
+          receive_public_websocket_until_terminal(conn, websocket, ref, [])
+
+        assert %{"type" => "response.completed"} = terminal
+
+        assert_receive {Events,
+                        %{
+                          reason: "request_finalized",
+                          payload: %{"request_id" => request_id, "status" => "succeeded"}
+                        }},
+                       5_000
+
+        await_turn_completed!(request_id)
+        {conn, websocket}
+      end)
+
+    Mint.HTTP.close(conn)
+    assert FakeUpstream.count(upstream) == 2
+    assert FakeUpstream.count(fallback_upstream) == 2
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert :ok = FakeUpstream.verify!(fallback_upstream)
+
+    assert [anchor, recovered, next] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^setup.pool.id,
+                 order_by: [asc: r.admitted_at]
+               )
+             )
+
+    assert Enum.all?(
+             [anchor, recovered, next],
+             &(&1.status == "succeeded" and &1.transport == "websocket")
+           )
+
+    assert recovered.retry_count == 1
+
+    assert [failed, succeeded] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^recovered.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert failed.pool_upstream_assignment_id == setup.assignment.id
+    assert failed.status == "retryable_failed"
+    assert failed.response_metadata["quota_rejection_before_output"] == true
+    assert succeeded.pool_upstream_assignment_id == fallback.assignment.id
+    assert succeeded.status == "succeeded"
+
+    assert Repo.one!(from(a in Attempt, where: a.request_id == ^next.id)).pool_upstream_assignment_id ==
+             fallback.assignment.id
+  end
+
   @tag :replay_race
   test "mid-stream upstream death after visible output authors exactly one error frame" do
     upstream =

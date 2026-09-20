@@ -840,7 +840,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     assert attempt.pool_upstream_assignment_id == sticky.assignment.id
   end
 
-  test "live upstream websocket continuity refreshes stale sticky quota before rejection" do
+  test "live upstream websocket opaque continuity refreshes stale sticky quota before rejection" do
     reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
 
     exhausted_quota_response = %{
@@ -898,7 +898,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
                  CodexPooler.JSON.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" => native_text_input("live upstream websocket quota rejection"),
+                   "input" => [%{"type" => "item_reference", "id" => "msg_opaque_quota_anchor"}],
                    "stream" => true,
                    "generate" => true
                  }),
@@ -1154,101 +1154,113 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     assert attempt.pool_upstream_assignment_id == fallback.assignment.id
   end
 
-  test "soft local websocket session alias can avoid an exhausted continuity backend before dispatch" do
-    sticky_upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_ws_exhausted_sticky_should_not_run",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-        })
-      )
+  for continuity <- [:alias, :live_websocket] do
+    @tag continuity: continuity
+    test "portable full history avoids exhausted continuity before dispatch with #{continuity}",
+         %{continuity: continuity} do
+      sticky_upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_exhausted_sticky_should_not_run",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
 
-    fallback_upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_ws_soft_alias_quota_fallback",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-        })
-      )
+      fallback_upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_soft_alias_quota_fallback",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
 
-    setup = gateway_setup(sticky_upstream, quota?: false)
+      setup = gateway_setup(sticky_upstream, quota?: false)
 
-    fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-soft-alias-fallback",
-        compact?: false
-      )
+      fallback =
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-soft-alias-fallback",
+          compact?: false
+        )
 
-    prime_exhausted_routing_quota!(setup.identity)
-    prime_routing_quota!(fallback.identity)
+      prime_exhausted_routing_quota!(setup.identity)
+      prime_routing_quota!(fallback.identity)
 
-    setup =
-      Map.put(
-        setup,
-        :model,
-        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
-      )
+      setup =
+        Map.put(
+          setup,
+          :model,
+          put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+        )
 
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    turn_state = "soft-ws-quota-#{System.unique_integer([:positive])}"
-    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: turn_state})
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      turn_state = "soft-ws-quota-#{System.unique_integer([:positive])}"
+      {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: turn_state})
 
-    session =
-      session
-      |> Ecto.Changeset.change(%{pool_upstream_assignment_id: setup.assignment.id})
-      |> Repo.update!()
+      session =
+        session
+        |> Ecto.Changeset.change(%{pool_upstream_assignment_id: setup.assignment.id})
+        |> Repo.update!()
 
-    assert :ok =
-             execute_websocket_response(
-               auth,
-               CodexPooler.JSON.encode!(%{
-                 "type" => "response.create",
-                 "model" => setup.model.exposed_model_id,
-                 "input" => native_text_input("soft local alias may fall back before dispatch"),
-                 "stream" => true,
-                 "generate" => true
-               }),
-               %{
-                 request_id: "ws-soft-alias-quota-fallback",
-                 accepted_turn_state: turn_state
-               },
-               fn frame -> send(self(), {:websocket_frame, frame}) end
-             )
+      upstream_session =
+        if continuity == :live_websocket,
+          do: start_supervised!(UpstreamWebsocketSession),
+          else: nil
 
-    assert_received {:websocket_frame, frame}
-    assert %{"id" => "resp_ws_soft_alias_quota_fallback"} = CodexPooler.JSON.decode!(frame)
+      parent = self()
 
-    assert FakeUpstream.count(sticky_upstream) == 0
-    assert FakeUpstream.count(fallback_upstream) == 1
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 CodexPooler.JSON.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => native_text_input("soft local alias may fall back before dispatch"),
+                   "stream" => true,
+                   "generate" => true
+                 }),
+                 %{
+                   request_id: "ws-soft-alias-quota-fallback",
+                   accepted_turn_state: turn_state,
+                   upstream_websocket_session: upstream_session
+                 },
+                 fn frame -> send(parent, {:websocket_frame, frame}) end
+               )
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.transport == "websocket"
-    assert request.status == "succeeded"
-    assert request.request_metadata["codex_session_id"] == session.id
+      assert_received {:websocket_frame, frame}
+      assert %{"id" => "resp_ws_soft_alias_quota_fallback"} = CodexPooler.JSON.decode!(frame)
 
-    assert get_in(request.request_metadata, ["routing", "selected_bridge_candidate_id"]) ==
-             fallback.assignment.id
+      assert FakeUpstream.count(sticky_upstream) == 0
+      assert FakeUpstream.count(fallback_upstream) == 1
 
-    assert [attempt] = Repo.all(from(a in Attempt))
-    assert attempt.pool_upstream_assignment_id == fallback.assignment.id
-    refute attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+      assert request.request_metadata["codex_session_id"] == session.id
 
-    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
-    assert turn.request_id == request.id
-    assert turn.status == "succeeded"
+      assert get_in(request.request_metadata, ["routing", "selected_bridge_candidate_id"]) ==
+               fallback.assignment.id
 
-    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
-    refute metadata_text =~ "soft local alias may fall back before dispatch"
-    refute metadata_text =~ "resp_ws_soft_alias_quota_fallback"
-    refute metadata_text =~ setup.authorization
-    refute metadata_text =~ setup.raw_key
-    refute metadata_text =~ "Bearer "
-    refute metadata_text =~ "upstream-token"
+      assert [attempt] = Repo.all(from(a in Attempt))
+      assert attempt.pool_upstream_assignment_id == fallback.assignment.id
+      refute attempt.pool_upstream_assignment_id == setup.assignment.id
+
+      assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+      assert turn.request_id == request.id
+      assert turn.status == "succeeded"
+
+      metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+      refute metadata_text =~ "soft local alias may fall back before dispatch"
+      refute metadata_text =~ "resp_ws_soft_alias_quota_fallback"
+      refute metadata_text =~ setup.authorization
+      refute metadata_text =~ setup.raw_key
+      refute metadata_text =~ "Bearer "
+      refute metadata_text =~ "upstream-token"
+    end
   end
 
   @tag :hard_pinned_quota_recovery
-  test "live upstream websocket session keeps exhausted continuity backend hard pinned" do
+  test "live upstream websocket opaque input keeps exhausted continuity backend hard pinned" do
     sticky_upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -1301,7 +1313,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
                CodexPooler.JSON.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => native_text_input("live websocket state must not fall back"),
+                 "input" => [%{"type" => "item_reference", "id" => "msg_opaque_quota_anchor"}],
                  "stream" => true,
                  "generate" => true
                }),

@@ -2093,6 +2093,15 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     websocket_turn: %{
+      quota_recovery: %{
+        transport: "same_downstream_websocket",
+        retry_codes: ["usage_limit_reached", "usage_limit_exceeded"],
+        retry_boundary: "before_output_with_absent_or_zero_usage",
+        portable_history: "unanchored_input_including_encrypted_reasoning",
+        retained_fences: ["previous_response_id", "file_affinity", "item_reference", "compaction"],
+        denial_evidence: "explicit_error_source_over_percentage_only_permission",
+        accounting: "one_request_with_failed_then_successful_attempts_and_one_settlement"
+      },
       headers: %{"x-codex-turn-state" => "fixture-upgrade-turn-state"},
       response_create_client_metadata: %{"x-codex-turn-state" => "fixture-frame-turn-state"},
       turn_state_precedence: "response.create.client_metadata_over_upgrade_header",

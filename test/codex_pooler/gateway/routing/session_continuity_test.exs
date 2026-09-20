@@ -393,7 +393,43 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       assert other_candidate == setup.other_candidate
     end
 
-    test "hard-pins accepted turn state backed by a live upstream websocket session" do
+    test "portable full history keeps live direct and forwarded websocket assignments soft" do
+      setup = active_pinned_assignment_setup()
+      session = codex_session_fixture(setup, setup.pinned.assignment)
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      for transport <- [
+            [upstream_websocket_session: self()],
+            [
+              websocket_owner_forwarding_enabled?: true,
+              websocket_owner_session: session,
+              websocket_owner_lease_token: "lease-token",
+              websocket_owner_downstream: %{pid: self(), correlation_id: "safe-correlation"}
+            ]
+          ] do
+        opts =
+          session
+          |> streaming_request_options_with_session()
+          |> RequestOptions.put_transport(transport)
+          |> RequestOptions.for_payload("/backend-api/codex/responses", %{
+            "input" => [%{"role" => "user", "content" => "synthetic complete history"}]
+          })
+
+        assert {:ok, [candidate]} =
+                 SessionContinuity.filter_codex_session_assignment(
+                   [setup.other_candidate],
+                   opts,
+                   model
+                 )
+
+        assert candidate == setup.other_candidate
+        assert is_nil(SessionContinuity.hard_pin_metadata(opts, model))
+      end
+    end
+
+    test "hard-pins opaque input backed by a live upstream websocket session" do
       setup = active_pinned_assignment_setup()
       session = codex_session_fixture(setup, setup.pinned.assignment)
 
@@ -402,6 +438,9 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
         |> streaming_request_options_with_session()
         |> RequestOptions.put_continuity(accepted_turn_state: "turn_live_websocket")
         |> RequestOptions.put_transport(upstream_websocket_session: self())
+        |> RequestOptions.for_payload("/backend-api/codex/responses", %{
+          "input" => [%{"type" => "item_reference", "id" => "msg_opaque_anchor"}]
+        })
 
       model =
         model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
@@ -418,7 +457,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       )
     end
 
-    test "hard-pins accepted turn state backed by upstream websocket owner forwarding" do
+    test "hard-pins opaque input backed by upstream websocket owner forwarding" do
       setup = active_pinned_assignment_setup()
       session = codex_session_fixture(setup, setup.pinned.assignment)
 
@@ -432,6 +471,9 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
           websocket_owner_lease_token: "lease-token",
           websocket_owner_downstream: %{pid: self(), correlation_id: "safe-correlation"}
         )
+        |> RequestOptions.for_payload("/backend-api/codex/responses", %{
+          "input" => [%{"type" => "item_reference", "id" => "msg_opaque_anchor"}]
+        })
 
       model =
         model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])

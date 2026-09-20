@@ -594,7 +594,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     assert attempt.retryable == false
   end
 
-  test "live direct websocket keeps an accepted assignment model miss on its established lane" do
+  test "live direct websocket keeps an anchored assignment model miss on its established lane" do
     # Strict finite scenario: the anchor and the model-miss turn both ride the
     # established first physical connection; a sibling dispatch or a retry
     # would be an unexpected extra request and fail the fixture.
@@ -672,6 +672,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
                     "type" => "response.create",
                     "model" => setup.model.exposed_model_id,
                     "input" => native_text_input("synthetic live direct model miss"),
+                    "previous_response_id" => "resp_live_direct_anchor",
                     "stream" => true,
                     "generate" => true
                   }), [opcode: :text]},

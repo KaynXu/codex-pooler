@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Metadata}
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
@@ -48,6 +49,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     context = prepared_context.context
 
     case dispatch_websocket_request_with_owner_recovery(prepared_context, dispatch_request) do
+      {:error, %{reason: {:quota_exhausted_first_event, failure}} = response} ->
+        handle_quota_exhausted_first_event(context, dispatch_request, response, failure)
+
       {:error, %{reason: {:assignment_model_unavailable_first_event, failure}} = response} ->
         handle_assignment_model_unavailable_first_event(
           context,
@@ -59,6 +63,28 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
 
       result ->
         handle_dispatch_result(result, prepared_context, dispatch_request, callbacks, started)
+    end
+  end
+
+  defp handle_quota_exhausted_first_event(context, dispatch_request, response, failure) do
+    SideEffects.observe_websocket_response(context, response)
+
+    if context.allow_retry? and first_event_retry_policy(context) == :same_assignment and
+         context.request_options.payload_context.portable_full_history? do
+      response_context = retryable_websocket_response_context(context, response)
+
+      case Finalization.record_retryable_first_event_stream_failure(
+             Map.get(response, :body, ""),
+             failure,
+             response_context,
+             record_health?: false
+           ) do
+        {:stale_generation, finalized} -> {:ok, finalized}
+        {:ok, _recorded_failure} -> {:retry, :upstream_quota_exhausted}
+        {:error, _reason} = error -> error
+      end
+    else
+      finalize_retryable_first_websocket_event(context, dispatch_request, response, failure)
     end
   end
 
@@ -673,10 +699,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
        when is_function(writer, 1) do
     request_id
     |> WebsocketCodec.stream_messages(Map.get(upstream_response, :body, ""))
-    |> Enum.each(writer)
+    |> Enum.each(&writer.(sanitize_retry_terminal(&1)))
   end
 
   defp deliver_retry_exhausted_websocket_failure(_dispatch_request, _upstream_response), do: :ok
+
+  defp sanitize_retry_terminal(frame) do
+    with {:ok, event} <- CodexPooler.JSON.decode(frame),
+         {:changed, sanitized} <- NativeCodexResponseControl.sanitize_websocket_event(event) do
+      CodexPooler.JSON.encode!(sanitized)
+    else
+      _unchanged -> frame
+    end
+  end
 
   @spec dispatch_websocket_request_with_owner_recovery(PreparedContext.t(), DispatchRequest.t()) ::
           {:ok, map()} | {:error, map()}

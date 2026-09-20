@@ -401,14 +401,23 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
           String.t() | nil
         ) ::
           {:ok, [Quota.AccountQuotaWindow.t()]} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  @spec upsert_quota_windows_from_codex_headers(
+          identity_ref(),
+          term(),
+          DateTime.t(),
+          String.t() | nil,
+          String.t() | nil
+        ) ::
+          {:ok, [Quota.AccountQuotaWindow.t()]} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   def upsert_quota_windows_from_codex_headers(
         identity_or_id,
         headers,
         synced_at \\ now(),
-        dispatched_model \\ nil
+        dispatched_model \\ nil,
+        denial_code \\ nil
       ) do
     with [_ | _] = windows <-
-           quota_windows_from_codex_headers(headers, synced_at, dispatched_model),
+           Quota.Evidence.codex_header_windows(headers, synced_at, dispatched_model, denial_code),
          %UpstreamIdentity{} = identity <- normalize_identity(identity_or_id) do
       guarded_upsert_quota_windows(identity, windows, delete_missing?: false)
     else
@@ -472,10 +481,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   defp present_string(value) when is_binary(value) do
     value = String.trim(value)
     if value == "", do: nil, else: value
-  end
-
-  defp quota_windows_from_codex_headers(headers, synced_at, dispatched_model) do
-    Quota.Evidence.codex_header_windows(headers, synced_at, dispatched_model)
   end
 
   defp quota_windows_from_codex_rate_limit_event(event, synced_at) do

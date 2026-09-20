@@ -654,115 +654,153 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
     end
   end
 
-  test "live owner-forwarded websocket keeps an accepted model miss on its established lane" do
-    pinned_upstream =
-      start_upstream(
-        # Strict finite scenario: the pinned lane receives the anchor and the
-        # model-miss turn only; the accepted miss is not retried anywhere.
-        # provenance: synthetic_adversarial
-        FakeUpstream.strict_sequence([
-          FakeUpstream.expect_request(
-            method: "WEBSOCKET",
-            websocket_connection_ordinal: 1,
-            json: [valid: true, equals: %{"type" => "response.create"}],
-            respond:
-              FakeUpstream.websocket_text_frames([
-                CodexPooler.JSON.encode!(%{
-                  "id" => "resp_owner_live_anchor",
-                  "object" => "response",
-                  "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
-                })
-              ])
-          ),
-          FakeUpstream.expect_request(
-            method: "WEBSOCKET",
-            json: [valid: true, equals: %{"type" => "response.create"}],
-            respond:
-              FakeUpstream.websocket_text_frames([
-                CodexPooler.JSON.encode!(%{
-                  "type" => "response.failed",
-                  "response" => %{
-                    "id" => "resp_owner_live_model_miss",
-                    "error" => %{"code" => "model_not_found", "param" => "model"}
-                  }
-                })
-              ])
-          )
-        ])
-      )
+  for anchored? <- [false, true] do
+    @tag anchored?: anchored?
+    test "live owner model miss preserves only opaque pins anchored=#{anchored?}", %{
+      anchored?: anchored?
+    } do
+      pinned_upstream =
+        start_upstream(
+          # Strict finite scenario: the pinned lane receives the anchor and the
+          # model-miss turn only; the accepted miss is not retried anywhere.
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "id" => "resp_owner_live_anchor",
+                    "object" => "response",
+                    "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+                  })
+                ])
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "type" => "response.failed",
+                    "response" => %{
+                      "id" => "resp_owner_live_model_miss",
+                      "error" => %{"code" => "model_not_found", "param" => "model"}
+                    }
+                  })
+                ])
+            )
+          ])
+        )
 
-    fallback_upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_owner_live_fallback_should_not_run",
-          "object" => "response"
-        })
-      )
+      fallback_upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_owner_live_fallback_should_not_run",
+            "object" => "response"
+          })
+        )
 
-    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    {:ok, state} = owner_socket(auth, "ws-owner-live-model-miss", "owner-live-model-miss")
+      {:ok, state} = owner_socket(auth, "ws-owner-live-model-miss", "owner-live-model-miss")
 
-    assert {:ok, state} =
-             CodexResponsesSocket.handle_in(
-               {websocket_payload(setup, "synthetic owner live anchor"), [opcode: :text]},
-               state
-             )
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {websocket_payload(setup, "synthetic owner live anchor"), [opcode: :text]},
+                 state
+               )
 
-    [anchor_task_pid] = MapSet.to_list(state.tasks)
-    assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
-    assert %{"id" => "resp_owner_live_anchor"} = CodexPooler.JSON.decode!(anchor_frame)
-    assert {:ok, state} = receive_owner_socket_complete(state)
-    assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, anchor_task_pid)
-    assert {:ok, state} = receive_socket_done(state)
-    assert MapSet.size(state.tasks) == 0
+      [anchor_task_pid] = MapSet.to_list(state.tasks)
+      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+      assert %{"id" => "resp_owner_live_anchor"} = CodexPooler.JSON.decode!(anchor_frame)
+      assert {:ok, state} = receive_owner_socket_complete(state)
+      assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, anchor_task_pid)
+      assert {:ok, state} = receive_socket_done(state)
+      assert MapSet.size(state.tasks) == 0
 
-    fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback",
-        compact?: false
-      )
+      fallback =
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback",
+          compact?: false
+        )
 
-    prime_routing_quota!(fallback.identity)
-    _model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      prime_routing_quota!(fallback.identity)
+      _model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
 
-    assert {:ok, state} =
-             CodexResponsesSocket.handle_in(
-               {websocket_payload(setup, "synthetic owner live model miss"), [opcode: :text]},
-               state
-             )
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {websocket_payload(
+                    setup,
+                    "synthetic owner live model miss",
+                    if(anchored?,
+                      do: %{
+                        "previous_response_id" => "resp_owner_live_anchor"
+                      },
+                      else: %{}
+                    )
+                  ), [opcode: :text]},
+                 state
+               )
 
-    [response_task_pid] = MapSet.to_list(state.tasks)
+      [response_task_pid] = MapSet.to_list(state.tasks)
 
-    assert_receive {:websocket_owner_output_commit_probe, _, _, ^response_task_pid, _, _, _} =
-                     output_commit_probe,
-                   @handoff_detection_timeout_ms
+      state =
+        if anchored? do
+          assert_receive {:websocket_owner_output_commit_probe, _, _, ^response_task_pid, _, _, _} =
+                           output_commit_probe,
+                         @handoff_detection_timeout_ms
 
-    assert {:ok, state} = CodexResponsesSocket.handle_info(output_commit_probe, state)
+          assert {:ok, state} = CodexResponsesSocket.handle_info(output_commit_probe, state)
 
-    assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
-    assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(failed_frame)
-    assert MapSet.size(state.tasks) == 1
-    assert {:ok, state} = acknowledge_response_task_delivery_if_pending(state, response_task_pid)
+          assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
+          assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(failed_frame)
+          state
+        else
+          assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
 
-    assert FakeUpstream.count(pinned_upstream) == 2
-    assert FakeUpstream.count(fallback_upstream) == 0
+          assert %{"id" => "resp_owner_live_fallback_should_not_run"} =
+                   CodexPooler.JSON.decode!(frame)
 
-    assert [anchor_request, failed_request] = request_logs(setup.pool.id)
-    assert anchor_request.status == "succeeded"
-    assert failed_request.status == "failed"
-    assert failed_request.retry_count == 0
+          assert {:ok, state} = receive_owner_socket_complete(state)
+          state
+        end
 
-    assert [failed_attempt] =
-             Repo.all(from(a in Attempt, where: a.request_id == ^failed_request.id))
+      assert MapSet.size(state.tasks) == 1
 
-    assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
-    assert failed_attempt.status == "failed"
-    assert failed_attempt.usage_status == "usage_unknown"
+      assert {:ok, state} =
+               acknowledge_response_task_delivery_if_pending(state, response_task_pid)
 
-    assert MapSet.size(state.tasks) == 0
-    assert :ok = FakeUpstream.verify!(pinned_upstream)
-    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      assert FakeUpstream.count(pinned_upstream) == 2
+      assert FakeUpstream.count(fallback_upstream) == if(anchored?, do: 0, else: 1)
+
+      assert [anchor_request, failed_request] = request_logs(setup.pool.id)
+      assert anchor_request.status == "succeeded"
+      assert failed_request.status == if(anchored?, do: "failed", else: "succeeded")
+      assert failed_request.retry_count == if(anchored?, do: 0, else: 1)
+
+      assert [failed_attempt | later] =
+               Repo.all(
+                 from(a in Attempt,
+                   where: a.request_id == ^failed_request.id,
+                   order_by: [asc: a.attempt_number]
+                 )
+               )
+
+      assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert failed_attempt.status == if(anchored?, do: "failed", else: "retryable_failed")
+
+      if not anchored?,
+        do: assert(Enum.map(later, & &1.pool_upstream_assignment_id) == [fallback.assignment.id])
+
+      assert failed_attempt.usage_status == "usage_unknown"
+
+      assert MapSet.size(state.tasks) == 0
+      assert :ok = FakeUpstream.verify!(pinned_upstream)
+      assert :ok = CodexResponsesSocket.terminate(:closed, state)
+    end
   end
 
   defp unpinned_remote_owner_state(state, remote_node, node_opts) do

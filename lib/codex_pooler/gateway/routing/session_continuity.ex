@@ -388,7 +388,9 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         {:hard, :file_affinity}
 
       assigned_codex_session?(request_options) and
-          live_upstream_websocket_continuity?(request_options) ->
+        live_upstream_websocket_continuity?(request_options) and
+          (not request_options.payload_context.portable_full_history? or
+             RequestOptions.connection_bound_compaction?(request_options)) ->
         {:hard, :live_upstream_websocket}
 
       true ->

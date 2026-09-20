@@ -69,6 +69,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   @type predecessor_shape ::
           :provider_terminal
+          | :quota_rejection
           | :task_exception
           | :lifecycle_cut
           | :partial_reasoning_cut
@@ -166,9 +167,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
   defp scope_for_predecessor(scope, nil), do: scope
 
-  # A turn claim does not bind payload bytes. Only exact durable execution
-  # recovery plus the original sealed payload witness permits this direct
-  # socket retry; payload-scoped continuation claims retain their own policy.
+  # A turn claim does not bind payload bytes. Exact durable execution recovery
+  # or a verified quota rejection before output still requires the original
+  # sealed payload witness; payload-scoped continuation claims retain their policy.
   defp validate_semantic_retry(request, %{semantic_claim?: true} = scope) do
     turn = lock_turn(request.id)
     attempt = lock_final_attempt(turn, request.id)
@@ -185,7 +186,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
                  l.predecessor_request_id == ^request.id or l.successor_request_id == ^request.id
            ),
          true <- not is_nil(turn) and turn.codex_session_id == Map.get(scope, :codex_session_id),
-         true <- ClientRetry.verified_dead_execution?(turn, request, attempt) do
+         true <-
+           ClientRetry.verified_dead_execution?(turn, request, attempt) or
+             ClientRetry.verified_quota_rejection?(turn, request, attempt) do
       :ok
     else
       _invalid -> {:error, :terminal_predecessor}
@@ -243,6 +246,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
   defp failure_family(@stream_error_code), do: :stream_cut
   defp failure_family("client_disconnected"), do: :client_disconnect
 
+  defp failure_family(code) when code in ["usage_limit_reached", "usage_limit_exceeded"],
+    do: :quota_rejection
+
   defp failure_family(code) when is_binary(code) do
     if ErrorCodes.retryable_first_event_code?(code), do: :provider_terminal
   end
@@ -259,6 +265,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
 
     if ClientRetry.verified_dead_execution?(turn, request, attempt),
       do: {:ok, :task_exception},
+      else: {:error, :terminal_predecessor}
+  end
+
+  defp predecessor_shape(%Request{} = request, :quota_rejection, _scope) do
+    turn = lock_turn(request.id)
+    attempt = lock_final_attempt(turn, request.id)
+
+    if ClientRetry.verified_quota_rejection?(turn, request, attempt),
+      do: {:ok, :quota_rejection},
       else: {:error, :terminal_predecessor}
   end
 

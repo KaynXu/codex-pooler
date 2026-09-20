@@ -269,7 +269,14 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec for_payload(t(), String.t(), map()) :: t()
   def for_payload(%__MODULE__{} = options, endpoint, payload) when is_map(payload) do
-    %{options | request_metadata: request_metadata(options, endpoint, payload)}
+    %{
+      options
+      | request_metadata: request_metadata(options, endpoint, payload),
+        payload_context: %{
+          options.payload_context
+          | portable_full_history?: portable_full_history?(payload)
+        }
+    }
   end
 
   @spec retarget(t(), String.t(), map()) :: t()
@@ -277,6 +284,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     %{
       options
       | request_metadata: request_metadata(options, endpoint, payload),
+        payload_context: %{
+          options.payload_context
+          | portable_full_history?: portable_full_history?(payload)
+        },
         transport: retargeted_transport(options.transport, endpoint, payload),
         routing: Routing.update(options.routing, prompt_cache_key: nil)
     }
@@ -1008,7 +1019,27 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp payload_context(opts, payload) do
     PayloadContext.build(opts, CompactionTrigger.compaction_input_mode(payload))
+    |> Map.put(:portable_full_history?, portable_full_history?(payload))
   end
+
+  defp portable_full_history?(%{"input" => input} = payload) do
+    CompactionTrigger.compaction_input_mode(payload) == :full_history and
+      (is_binary(input) or is_list(input)) and not upstream_bound_input?(input)
+  end
+
+  defp portable_full_history?(_payload), do: false
+
+  defp upstream_bound_input?(%{} = item) do
+    Map.get(item, "type") in ["item_reference", "compaction", "compaction_trigger"] or
+      Map.has_key?(item, "file_id") or
+      (Map.has_key?(item, "encrypted_content") and Map.get(item, "type") != "reasoning") or
+      Enum.any?(Map.values(item), &upstream_bound_input?/1)
+  end
+
+  defp upstream_bound_input?(items) when is_list(items),
+    do: Enum.any?(items, &upstream_bound_input?/1)
+
+  defp upstream_bound_input?(_value), do: false
 
   defp usage_authentication(opts) do
     %UsageAuthentication{

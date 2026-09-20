@@ -2003,14 +2003,60 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          %{} = decoded,
          %ReceiveState{downstream_output_started?: false} = receive_state
        ) do
-    decoded
-    |> StreamProtocol.event_summary()
-    |> retryable_pre_visible_terminal_event(receive_state)
+    retryable_pre_visible_terminal_event(
+      StreamProtocol.event_summary(decoded),
+      receive_state,
+      decoded
+    )
   end
 
   defp retryable_first_text_frame(_raw_text, %ReceiveState{}), do: :error
 
-  defp retryable_pre_visible_terminal_event(event, receive_state) do
+  defp retryable_pre_visible_terminal_event(event, receive_state, decoded) do
+    case quota_exhausted_first_event(event, decoded) do
+      {:ok, failure} -> {:ok, {:quota_exhausted_first_event, failure}}
+      :error -> retryable_auth_first_event(event, receive_state)
+    end
+  end
+
+  defp quota_exhausted_first_event(event, decoded) do
+    with {:ok, %{code: code} = failure} <- StreamProtocol.terminal_failure_event(event),
+         true <- code in ["usage_limit_reached", "usage_limit_exceeded"],
+         true <- valid_quota_usage_shape?(decoded) do
+      {:ok, Map.put(failure, :quota_rejection_before_output?, true)}
+    else
+      _other -> :error
+    end
+  end
+
+  defp valid_quota_usage_shape?(%{} = decoded) do
+    valid_quota_usage_field?(decoded) and
+      case Map.get(decoded, "response") do
+        %{} = response -> valid_quota_usage_field?(response)
+        _absent -> true
+      end
+  end
+
+  defp valid_quota_usage_field?(envelope) do
+    case Map.fetch(envelope, "usage") do
+      :error ->
+        true
+
+      {:ok, nil} ->
+        true
+
+      {:ok, %{} = usage} ->
+        match?(
+          %{status: "usage_known", total_tokens: 0},
+          ResponseUsage.from_stream_event(%{"usage" => usage})
+        )
+
+      _malformed ->
+        false
+    end
+  end
+
+  defp retryable_auth_first_event(event, receive_state) do
     case StreamProtocol.auth_refresh_first_terminal_failure(event) do
       {:ok, failure} -> {:ok, {:auth_refresh_first_event, failure}}
       :error -> retryable_assignment_model_unavailable_event(event, receive_state)

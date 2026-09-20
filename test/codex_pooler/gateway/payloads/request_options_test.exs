@@ -18,6 +18,45 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.RouteClass
 
   @assignment_id "00000000-0000-0000-0000-000000000001"
+
+  test "portable history classification follows the current payload and preserves opaque fences" do
+    endpoint = "/backend-api/codex/responses"
+    base = RequestOptions.build(%{}, endpoint, %{})
+
+    history = [
+      %{
+        "type" => "reasoning",
+        "encrypted_content" => "synthetic-encrypted-reasoning",
+        "summary" => []
+      },
+      %{
+        "type" => "function_call",
+        "call_id" => "call_example",
+        "name" => "example",
+        "arguments" => "{}"
+      },
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_example",
+        "output" => "synthetic result"
+      }
+    ]
+
+    options = RequestOptions.for_payload(base, endpoint, %{"input" => history})
+    assert options.payload_context.portable_full_history?
+
+    for payload <- [
+          %{"input" => history, "previous_response_id" => "resp_opaque_anchor"},
+          %{"input" => [%{"type" => "item_reference", "id" => "msg_opaque"}]},
+          %{"input" => [%{"type" => "compaction", "encrypted_content" => "synthetic"}]},
+          %{"input" => [%{"type" => "input_file", "file_id" => "file_opaque"}]}
+        ] do
+      refute RequestOptions.for_payload(options, endpoint, payload).payload_context.portable_full_history?
+
+      refute RequestOptions.retarget(options, endpoint, payload).payload_context.portable_full_history?
+    end
+  end
+
   @identity_id "00000000-0000-0000-0000-000000000002"
   @effective_model "gpt-5.4"
   @reset_probe_route_class "proxy_http"

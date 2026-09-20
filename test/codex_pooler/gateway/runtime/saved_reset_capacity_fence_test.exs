@@ -22,7 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.SavedResetCapacityFenceTest do
 
   @endpoint "/backend-api/codex/responses"
 
-  test "pre-dispatch continuity narrowing retains sibling capacity for the threshold fence" do
+  test "opaque pre-dispatch continuity narrowing retains sibling capacity for the threshold fence" do
     {:ok, upstream} =
       FakeUpstream.start_link(
         {:path_json,
@@ -56,13 +56,7 @@ defmodule CodexPooler.Gateway.Runtime.SavedResetCapacityFenceTest do
 
     payload = %{
       "model" => model.exposed_model_id,
-      "input" => [
-        %{
-          "type" => "message",
-          "role" => "user",
-          "content" => [%{"type" => "input_text", "text" => "capacity fence fixture"}]
-        }
-      ]
+      "input" => [%{"type" => "item_reference", "id" => "msg_capacity_fence_fixture"}]
     }
 
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
