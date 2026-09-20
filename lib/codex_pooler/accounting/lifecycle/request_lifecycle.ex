@@ -1301,15 +1301,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
        ),
        do: usage
 
-  defp fill_unknown_usage_from_reservation(usage, reservation, timestamp) do
+  defp fill_unknown_usage_from_reservation(usage, reservation, _timestamp) do
     %{
       usage
       | input_tokens: reservation.input_tokens || 0,
         cached_input_tokens: reservation.cached_input_tokens || 0,
         output_tokens: reservation.output_tokens || 0,
         reasoning_tokens: reservation.reasoning_tokens || 0,
-        total_tokens: reservation.total_tokens || 0,
-        recorded_at: timestamp
+        total_tokens: reservation.total_tokens || 0
     }
   end
 

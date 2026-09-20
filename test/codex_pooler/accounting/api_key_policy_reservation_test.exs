@@ -202,7 +202,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
       assert Decimal.equal?(rollup.settled_cost_micros, Decimal.new(130))
     end
 
-    test "usage_unknown final usage keeps counts but consumes zero local tokens and cost" do
+    test "usage_unknown final usage retains provisional pressure without known usage or cost" do
       setup = accounting_setup()
       as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -250,7 +250,10 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
         |> Map.fetch!(:weekly)
 
       assert window_usage.effective_request_count == 1
-      assert window_usage.effective_total_tokens == 0
+      assert window_usage.effective_total_tokens == reserved.reservation.total_tokens
+      assert window_usage.provisional_total_tokens == reserved.reservation.total_tokens
+      assert window_usage.known_total_tokens == 0
+      assert window_usage.pending_total_tokens == 0
       assert Decimal.equal?(window_usage.effective_cost_micros, Decimal.new(0))
     end
 
@@ -366,7 +369,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
           )
         end)
 
-      ledger_usage_queries = table_commands(queries, "ledger_entries", "SELECT")
+      ledger_usage_queries = window_queries(queries)
 
       assert ledger_usage_queries == []
     end
@@ -390,7 +393,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
           )
         end)
 
-      ledger_usage_queries = table_commands(queries, "ledger_entries", "SELECT")
+      ledger_usage_queries = window_queries(queries)
 
       assert length(ledger_usage_queries) == 1
     end
@@ -429,11 +432,11 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
           )
         end)
 
-      bucket_usage_queries = table_commands(queries, "api_key_usage_buckets", "SELECT")
+      bucket_usage_queries = window_queries(queries)
 
       ledger_usage_queries =
         queries
-        |> table_commands("ledger_entries", "SELECT")
+        |> window_queries()
         |> Enum.filter(&String.contains?(&1.query, "api_key_usage_buckets"))
 
       assert bucket_usage_queries != []
@@ -689,7 +692,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
         handler_id,
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
-          if metadata[:repo] == Repo do
+          if metadata[:repo] == Repo and self() == parent do
             send(
               parent,
               {handler_id, metadata[:source], command_name(metadata[:query]), metadata[:query]}
@@ -720,6 +723,12 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
 
   defp table_commands(queries, source, command) do
     Enum.filter(queries, &(&1.source == source and &1.command == command))
+  end
+
+  defp window_queries(queries) do
+    Enum.filter(queries, fn query ->
+      query.command == "WITH" and String.contains?(query.query, "api_key_usage_buckets")
+    end)
   end
 
   defp command_count(queries, source, command),

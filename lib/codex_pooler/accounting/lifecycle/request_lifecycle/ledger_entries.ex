@@ -120,6 +120,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
 
     attrs
     |> Map.put(:correction_of_entry_id, existing.id)
+    |> Map.put(:occurred_at, existing.occurred_at)
     |> Map.put(
       :source_event_id,
       reconciled_settlement_source_event_id(Map.fetch!(attrs, :request_id))
@@ -132,6 +133,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
             usage_window() => window_usage()
           }
   defdelegate window_usages(api_key_id, windows), to: WindowUsage
+
+  @spec window_usages(Ecto.UUID.t(), WindowUsage.windows(), DateTime.t()) ::
+          %{usage_window() => window_usage()}
+  defdelegate window_usages(api_key_id, windows, as_of), to: WindowUsage
 
   @spec reservation_attrs(
           Request.t(),
