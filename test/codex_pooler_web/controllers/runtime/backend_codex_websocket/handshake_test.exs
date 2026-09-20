@@ -70,6 +70,102 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
     assert json_response(conn, 400)["error"]["code"] == "websocket_upgrade_required"
   end
 
+  for mode <- ["full", "lite"] do
+    @tag :ephemeral_fork_cache
+    test "ephemeral fork websocket preserves shared cache and separate windows in #{mode}" do
+      # Synthetic wire contract from openai/codex#44862, not a released-client probe.
+      upstream =
+        start_upstream(
+          FakeUpstream.sse_stream([
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+               }
+             }}
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+      set_model_serving_mode!(model_serving_scope(), setup, unquote(mode))
+      assert :ok = Events.subscribe_pool(setup.pool)
+      port = start_public_endpoint!()
+
+      for thread <- ["synthetic-parent", "synthetic-fork", "synthetic-parent"] do
+        {conn, websocket, ref, _headers} =
+          public_websocket_connect_with_request_headers!(
+            port,
+            setup,
+            "",
+            "/backend-api/codex/responses",
+            [
+              {"session-id", "synthetic-parent"},
+              {"thread-id", thread},
+              {"x-codex-window-id", thread <> ":0"}
+            ]
+          )
+
+        try do
+          payload =
+            CodexPooler.JSON.encode!(%{
+              "type" => "response.create",
+              "model" => setup.model.exposed_model_id,
+              "prompt_cache_key" => "synthetic-parent",
+              "input" => native_text_input("synthetic fork contract"),
+              "stream" => true,
+              "client_metadata" => %{
+                "x-codex-turn-metadata" =>
+                  CodexPooler.JSON.encode!(%{
+                    "session_id" => thread,
+                    "turn_id" => Ecto.UUID.generate(),
+                    "request_kind" => "turn"
+                  })
+              }
+            })
+
+          {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+          {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+          assert CodexPooler.JSON.decode!(frame)["type"] == "response.completed"
+
+          assert_receive {Events,
+                          %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                         @connection_shutdown_timeout_ms
+        after
+          Mint.HTTP.close(conn)
+        end
+      end
+
+      assert [parent, fork, resumed] =
+               Repo.all(
+                 from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at)
+               )
+
+      parent_session = parent.request_metadata["codex_session_id"]
+      assert is_binary(parent_session)
+      assert is_binary(fork.request_metadata["codex_session_id"])
+      refute fork.request_metadata["codex_session_id"] == parent_session
+      assert resumed.request_metadata["codex_session_id"] == parent_session
+
+      captured = FakeUpstream.requests(upstream)
+      assert length(captured) == 3
+
+      for {request, thread} <-
+            Enum.zip(captured, ["synthetic-parent", "synthetic-fork", "synthetic-parent"]) do
+        assert request.method == "WEBSOCKET"
+        assert Map.new(request.headers)["session-id"] == "synthetic-parent"
+        assert Map.new(request.headers)["thread-id"] == thread
+        assert request.json["prompt_cache_key"] == "synthetic-parent"
+
+        assert get_in(request.json, [
+                 "client_metadata",
+                 "ws_request_header_x_openai_internal_codex_responses_lite"
+               ]) ==
+                 if(unquote(mode) == "lite", do: "true", else: nil)
+      end
+    end
+  end
+
   test "direct websocket handshake derives residency from the selected encrypted access token" do
     upstream =
       start_upstream(

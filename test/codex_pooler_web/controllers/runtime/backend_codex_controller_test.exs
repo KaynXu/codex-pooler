@@ -74,6 +74,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
   @supported_compression_model "gpt-4o"
   @reasoning_denial_message "reasoning effort is not available for this API key"
@@ -5551,6 +5552,96 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["session-id"] == "session-id-lower-priority-fixture"
     refute Map.has_key?(captured_headers, "x-session-id")
     refute Map.has_key?(captured_headers, "x-session-affinity")
+  end
+
+  for mode <- ["full", "lite"], window_header? <- [true, false] do
+    @tag :ephemeral_fork_cache
+    test "ephemeral fork HTTP cache identity in #{mode}, window header #{window_header?}" do
+      # Synthetic wire contract from openai/codex#44862, not a released-client probe.
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "object" => "response",
+            "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+      scope = BackendCodexWebsocketSupport.model_serving_scope()
+
+      BackendCodexWebsocketSupport.set_model_serving_mode!(
+        scope,
+        setup,
+        unquote(mode)
+      )
+
+      for thread <- ["synthetic-parent", "synthetic-fork", "synthetic-parent"] do
+        conn =
+          build_conn()
+          |> auth(setup)
+          |> put_req_header("session-id", "synthetic-parent")
+          |> put_req_header("thread-id", thread)
+
+        conn =
+          if unquote(window_header?),
+            do: put_req_header(conn, "x-codex-window-id", thread <> ":0"),
+            else: conn
+
+        conn =
+          post(conn, "/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "prompt_cache_key" => "synthetic-parent",
+            "input" => native_text_input("synthetic fork contract"),
+            "client_metadata" => %{
+              "x-codex-turn-metadata" =>
+                CodexPooler.JSON.encode!(%{
+                  "session_id" => thread,
+                  "turn_id" => Ecto.UUID.generate(),
+                  "request_kind" => "turn"
+                })
+            }
+          })
+
+        assert json_response(conn, 200)["object"] == "response"
+      end
+
+      assert [parent, fork, resumed] =
+               Repo.all(
+                 from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at)
+               )
+
+      parent_session = parent.request_metadata["codex_session_id"]
+      fork_session = fork.request_metadata["codex_session_id"]
+      assert is_binary(parent_session)
+      assert is_binary(fork_session)
+      assert resumed.request_metadata["codex_session_id"] == parent_session
+
+      if unquote(window_header?) do
+        refute fork_session == parent_session
+
+        assert Repo.aggregate(from(s in CodexSession, where: s.pool_id == ^setup.pool.id), :count) ==
+                 2
+      else
+        # Existing fallback uses session-id, not thread-id or body session metadata.
+        assert fork_session == parent_session
+
+        assert Repo.aggregate(from(s in CodexSession, where: s.pool_id == ^setup.pool.id), :count) ==
+                 1
+      end
+
+      captured = FakeUpstream.requests(upstream)
+      assert length(captured) == 3
+
+      for {request, thread} <-
+            Enum.zip(captured, ["synthetic-parent", "synthetic-fork", "synthetic-parent"]) do
+        assert Map.new(request.headers)["session-id"] == "synthetic-parent"
+        assert Map.new(request.headers)["thread-id"] == thread
+        assert request.json["prompt_cache_key"] == "synthetic-parent"
+
+        assert Map.new(request.headers)["x-openai-internal-codex-responses-lite"] ==
+                 if(unquote(mode) == "lite", do: "true", else: nil)
+      end
+    end
   end
 
   test "backend control-plane proxy routes are absent before auth, parsing, or upstream dispatch",
