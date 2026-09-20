@@ -38,6 +38,10 @@
   <a href="#configuration">Configuration</a>
   ·
   <a href="#deployment">Deployment</a>
+  ·
+  <a href="https://x.com/icoretech_inc">X</a>
+  ·
+  <a href="https://reddit.com/r/CodexPooler">Reddit</a>
 </p>
 
 <p align="center">

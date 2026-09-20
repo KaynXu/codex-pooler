@@ -38,6 +38,10 @@
   <a href="#configuration">配置</a>
   ·
   <a href="#deployment">部署</a>
+  ·
+  <a href="https://x.com/icoretech_inc">X</a>
+  ·
+  <a href="https://reddit.com/r/CodexPooler">Reddit</a>
 </p>
 
 <p align="center">
