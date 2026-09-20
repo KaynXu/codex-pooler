@@ -127,8 +127,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
     end
   end
 
-  defp scan(%{phase: :ignore} = state, <<_byte, rest::binary>>),
-    do: scan(%{state | cr?: false}, rest)
+  defp scan(%{phase: phase, line_prefix: prefix} = state, data)
+       when phase == :ignore or (phase == :event and byte_size(prefix) == 80) do
+    case :binary.match(data, ["\r", "\n"]) do
+      :nomatch ->
+        %{state | cr?: false}
+
+      {offset, _length} ->
+        <<_ignored::binary-size(^offset), rest::binary>> = data
+        scan(%{state | cr?: false}, rest)
+    end
+  end
 
   defp scan(state, <<byte, rest::binary>>) do
     prefix =
