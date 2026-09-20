@@ -2097,14 +2097,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
 
         assert Enum.map(frames, & &1["type"]) == [
+                 "response.created",
                  "response.output_item.done",
                  "response.completed"
                ]
 
-        assert Enum.map(frames, & &1["sequence_number"]) == [0, 1]
+        assert Enum.map(frames, & &1["sequence_number"]) == [0, 1, 2]
         assert Enum.all?(frames, &(&1["stream_id"] == stream_id))
 
-        done_item = get_in(List.first(frames), ["item"])
+        assert get_in(List.first(frames), ["response", "status"]) == "in_progress"
+
+        assert get_in(List.first(frames), ["response", "id"]) ==
+                 get_in(List.last(frames), ["response", "id"])
+
+        done_item = get_in(Enum.at(frames, 1), ["item"])
         completed_item = get_in(List.last(frames), ["response", "output", Access.at(0)])
 
         assert done_item == completed_item
@@ -2295,7 +2301,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   test "owner-forwarded websocket completes local compact work and starts the queued ordinary turn" do
     enable_owner_forwarding!()
 
-    # Local compact work is plain HTTP; the queued ordinary turn then rides
+    # Local compact work collects HTTP SSE; the queued ordinary turn then rides
     # the owner's websocket.
     upstream =
       start_upstream(
@@ -2305,7 +2311,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
             path: "/backend-api/codex/responses",
             json: [valid: true, required: ["input"]],
             respond:
-              FakeUpstream.json_response(%{
+              FakeUpstream.compaction_stream(%{
                 "id" => "resp_local_compact",
                 "output" => [
                   %{
@@ -2348,6 +2354,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
 
       assert Enum.map(compact_frames, & &1["type"]) == [
+               "response.created",
                "response.output_item.done",
                "response.completed"
              ]
@@ -2374,7 +2381,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "output" => [
             %{"type" => "compaction"},
             %{"type" => "compaction_summary", "encrypted_content" => encrypted_later}
@@ -2408,8 +2415,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                  # findings#184: a 502 upstream compaction failure is server class.
                  "type" => "server_error",
                  "code" => "invalid_compaction_response",
-                 "message" =>
-                   "upstream compact response did not include encrypted compaction content",
+                 "message" => "upstream compact stream was invalid",
                  "param" => nil
                }
              }

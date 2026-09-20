@@ -46,7 +46,15 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   def compaction_input_mode(%{}), do: :full_history
 
   @spec compaction_result_transport(payload()) :: compaction_result_transport()
-  def compaction_result_transport(%{"client_metadata" => %{} = metadata}) do
+  def compaction_result_transport(%{"input" => input} = payload) when is_list(input) do
+    if Enum.any?(input, &match?(%{"type" => "compaction_trigger"}, &1)),
+      do: :sse,
+      else: declared_result_transport(payload)
+  end
+
+  def compaction_result_transport(payload), do: declared_result_transport(payload)
+
+  defp declared_result_transport(%{"client_metadata" => %{} = metadata}) do
     case metadata["x-codex-turn-metadata"] do
       %{"compaction" => %{"implementation" => "responses_compaction_v2"}} ->
         :sse
@@ -62,10 +70,10 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     end
   end
 
-  def compaction_result_transport(%{}), do: :buffered
+  defp declared_result_transport(%{}), do: :buffered
 
   @spec v2_streaming?(payload()) :: boolean()
-  def v2_streaming?(payload), do: compaction_result_transport(payload) == :sse
+  def v2_streaming?(payload), do: declared_result_transport(payload) == :sse
 
   @type result_mode :: :sse | :public_sse | :response | :websocket | :native_websocket
 
@@ -496,12 +504,18 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   end
 
   defp adapted_result(result, decoded, item, :websocket) do
+    response = public_response(decoded, item)
+
     %{
       status: 200,
       headers: json_headers(result),
       websocket_messages: [
-        %{"type" => "response.output_item.done", "item" => item},
-        %{"type" => "response.completed", "response" => public_response(decoded, item)}
+        %{
+          "type" => "response.created",
+          "response" => %{response | "status" => "in_progress", "output" => []}
+        },
+        %{"type" => "response.output_item.done", "output_index" => 0, "item" => item},
+        %{"type" => "response.completed", "response" => response}
       ]
     }
   end

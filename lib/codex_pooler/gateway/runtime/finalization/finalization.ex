@@ -601,19 +601,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        ) do
     marker = public_input_file_upstream_404?(status, request_options, payload)
 
-    if native_compaction_websocket?(request_options) do
-      {:error, native_compaction_rejection(status, error_code, rejection_error)}
-    else
-      project_failure_result(
-        status,
-        headers,
-        body,
-        request_options,
-        error_code,
-        opts,
-        marker,
-        relayable_rejection_error(status, rejection_error)
-      )
+    cond do
+      native_compaction_websocket?(request_options) ->
+        {:error, native_compaction_rejection(status, error_code, rejection_error)}
+
+      CompactionTrigger.streaming_result?(request_options) ->
+        full_failure_result(
+          status,
+          headers,
+          relayable_rejection_error(status, rejection_error),
+          Keyword.get(opts, :validation_rejection),
+          marker
+        )
+
+      true ->
+        project_failure_result(
+          status,
+          headers,
+          body,
+          request_options,
+          error_code,
+          opts,
+          marker,
+          relayable_rejection_error(status, rejection_error)
+        )
     end
   end
 

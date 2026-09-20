@@ -307,6 +307,34 @@ defmodule CodexPooler.FakeUpstream do
   def json_response_with_headers(payload, headers, status \\ 200),
     do: {:json_headers, status, payload, headers}
 
+  @spec compaction_stream(map(), [{String.t(), String.t()}]) :: mode()
+  def compaction_stream(payload, headers \\ []) do
+    items =
+      List.wrap(Map.get(payload, "output")) ++
+        Enum.map(
+          List.wrap(Map.get(payload, "compaction_summary")),
+          &Map.put_new(&1, "type", "compaction_summary")
+        )
+
+    events =
+      Enum.map(
+        items,
+        &{"response.output_item.done", %{"type" => "response.output_item.done", "item" => &1}}
+      )
+
+    sse_stream(
+      events ++
+        [
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => Map.put_new(payload, "status", "completed")
+           }}
+        ],
+      headers: headers
+    )
+  end
+
   def raw_response(body, opts \\ []) when is_binary(body) and is_list(opts) do
     {:raw_body, Keyword.get(opts, :status, 200), body, Keyword.get(opts, :headers, [])}
   end

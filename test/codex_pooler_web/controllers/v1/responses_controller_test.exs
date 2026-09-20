@@ -2964,7 +2964,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response(%{
+          FakeUpstream.compaction_stream(%{
             "id" => response_id,
             "object" => "response.compaction",
             "output" => [
@@ -3051,7 +3051,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/codex/responses"
-      refute Map.has_key?(captured.json, "stream")
+      assert captured.json["stream"] == true
       refute Map.has_key?(captured.json, "include")
       assert captured.json["store"] == false
       refute Map.has_key?(captured.json, "prompt_cache_options")
@@ -3106,7 +3106,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "id" => "resp_public_compaction_curl",
           "object" => "response.compaction",
           "output" => [
@@ -3146,7 +3146,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
-    refute Map.has_key?(captured.json, "stream")
+    assert captured.json["stream"] == true
     assert captured.json["store"] == false
     assert Enum.count(captured.json["input"], &(&1 == %{"type" => "compaction_trigger"})) == 1
     assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
@@ -3225,7 +3225,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response(%{
+          FakeUpstream.compaction_stream(%{
             "output" => [
               invalid_item,
               %{"type" => "compaction", "encrypted_content" => encrypted_later}
@@ -3251,8 +3251,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "error" => %{
                  "code" => "invalid_compaction_response",
-                 "message" =>
-                   "upstream compact response did not include encrypted compaction content",
+                 "message" => "upstream request failed",
                  "type" => "server_error"
                }
              } = json_response(response, 502)
@@ -3272,7 +3271,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert attempt.network_error_code == "invalid_compaction_response"
 
       assert attempt.response_metadata["compaction_invalid_reason"] ==
-               "missing_encrypted_content"
+               "invalid_compaction"
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,

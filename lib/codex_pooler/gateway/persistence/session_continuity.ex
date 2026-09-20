@@ -691,6 +691,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defp authenticated_owner_attach_blocked?(_auth, _opts, _session_key, _now), do: false
 
   defp authenticated_owner_attach_requires_existing?(%RequestOptions{
+         openai_compatibility: %{source_endpoint: "/v1/responses"},
+         continuity: %{authenticated_owner_attach: true, previous_response_id: nil}
+       }),
+       do: false
+
+  defp authenticated_owner_attach_requires_existing?(%RequestOptions{
          continuity: %{
            authenticated_owner_attach: true,
            accepted_turn_state: nil,

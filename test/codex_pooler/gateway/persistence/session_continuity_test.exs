@@ -58,6 +58,46 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   end
 
   describe "continuity response aliases" do
+    test "public websocket session headers create independent sessions without an HTTP warmup" do
+      auth = auth_fixture()
+
+      options = fn header ->
+        RequestOptions.for_websocket(%{authenticated_owner_attach: true, session_header: header})
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/responses",
+          "/backend-api/codex/responses"
+        )
+      end
+
+      assert {:ok, first} = Gateway.start_codex_session(auth, options.("public-session-one"))
+      assert {:ok, same} = Gateway.start_codex_session(auth, options.("public-session-one"))
+      assert {:ok, second} = Gateway.start_codex_session(auth, options.("public-session-two"))
+      assert first.id == same.id
+      refute first.id == second.id
+
+      %{api_key: other_key} =
+        active_api_key_fixture(auth.pool, %{created_by_user_id: auth.pool.created_by_user_id})
+
+      other_auth = %{auth | api_key: other_key}
+
+      assert {:error, :owner_unavailable} =
+               Gateway.start_codex_session(other_auth, options.("public-session-one"))
+
+      anchored =
+        options.("unknown-public-session")
+        |> RequestOptions.put_continuity(previous_response_id: "resp_unknown")
+
+      assert {:error, :owner_unavailable} = Gateway.start_codex_session(auth, anchored)
+
+      native =
+        RequestOptions.for_websocket(%{
+          authenticated_owner_attach: true,
+          session_header: "unknown-native-session"
+        })
+
+      assert {:error, :owner_unavailable} = Gateway.start_codex_session(auth, native)
+    end
+
     test "completed websocket continuity returns unavailable after key deletion cascades its session" do
       %{auth: auth, session: session} = owner_session_fixture()
       Repo.delete!(auth.api_key)

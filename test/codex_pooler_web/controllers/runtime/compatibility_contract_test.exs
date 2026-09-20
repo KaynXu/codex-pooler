@@ -2033,17 +2033,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert responses_chat.contract =~ "/backend-api/codex/responses"
       assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
-      assert responses_chat.contract =~ "semantic V2 SSE or buffered JSON"
+      assert responses_chat.contract =~ "streamed Responses compaction"
       assert responses_chat.contract =~ "compact accounting"
 
       assert responses_chat.contract =~
-               "classify result transport only from request-side nested compaction.implementation=responses_compaction_v2"
+               "classify streamed compaction from the request trigger independently of client declarations"
 
       assert responses_chat.contract =~ "ignoring unrelated additive metadata"
       assert responses_chat.contract =~ "never inspecting returned compaction items"
 
       assert responses_chat.contract =~
-               "set upstream stream true only for semantic V2 and omit it otherwise"
+               "set upstream stream true for Responses compaction triggers"
 
       assert responses_chat.contract =~ "direct compact aliases preserve their canonical legacy"
       assert responses_chat.contract =~ "while omitting store, stream, and the trigger"
@@ -2097,19 +2097,19 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  retained: ["final_compaction_trigger"],
                  strips: ["include", "prompt_cache_options"],
                  result_classification: %{
-                   source: "request_client_metadata.x-codex-turn-metadata",
-                   marker: "compaction.implementation=responses_compaction_v2",
+                   source: "request_input_compaction_trigger",
+                   marker: "terminal_compaction_trigger",
                    additive_metadata: "ignored",
                    returned_compaction_items: "not_inspected"
                  },
                  upstream_payload: %{
-                   mode: "semantic_v2_sse_or_buffered_responses_json",
+                   mode: "responses_sse",
                    terminal_trigger: "retained",
                    store: false,
-                   stream: "semantic_v2_true_otherwise_omitted"
+                   stream: true
                  },
                  response_adaptation: %{
-                   upstream: "semantic_v2_sse_or_buffered_responses_json",
+                   upstream: "responses_sse",
                    downstream: "backend_responses_sse",
                    output_events: ["response.output_item.done", "response.completed", "[DONE]"]
                  },
@@ -2158,8 +2158,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      }
                    },
                    result_transports: %{
-                     buffered: "responses_json",
-                     v2: "responses_sse_semantic_nested_implementation_with_additive_metadata"
+                     trigger: "responses_sse_independent_of_client_metadata"
                    },
                    turn_state: %{
                      source: "client_metadata.x-codex-turn-state_or_upgrade_header",
@@ -2280,19 +2279,23 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  valid_trigger: "exactly_one_final_after_visible_input",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                  retained: ["final_compaction_trigger"],
-                 strips: ["stream", "include", "prompt_cache_options"],
+                 strips: ["include", "prompt_cache_options"],
                  upstream_payload: %{
-                   mode: "buffered_responses_json",
+                   mode: "responses_sse",
                    terminal_trigger: "retained",
                    store: false,
-                   stream: "omitted"
+                   stream: true
                  },
                  response_adaptation: %{
-                   upstream: "buffered_responses_json",
+                   upstream: "responses_sse",
                    downstream: %{
                      http_json: ["response"],
                      http_sse: ["response.output_item.done", "response.completed", "[DONE]"],
-                     responses_websocket: ["response.output_item.done", "response.completed"]
+                     responses_websocket: [
+                       "response.created",
+                       "response.output_item.done",
+                       "response.completed"
+                     ]
                    }
                  },
                  public_compact_route_supported: false,
@@ -2486,7 +2489,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.result_classification.marker ==
-               "compaction.implementation=responses_compaction_v2"
+               "terminal_compaction_trigger"
 
       assert boundary.backend_compaction_trigger.result_classification.additive_metadata ==
                "ignored"

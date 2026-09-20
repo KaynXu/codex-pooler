@@ -162,9 +162,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                "code" => "context_length_exceeded",
                "type" => "invalid_request_error",
                "param" => "input",
-               "message" => ^provider_error_message
+               "message" => message
              }
            } = json_response(response, 400)
+
+    assert is_binary(message)
+    refute response.resp_body =~ provider_error_message
 
     refute response.resp_body =~ "compaction_trigger must be the final input item"
 
@@ -173,7 +176,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["input"] == [compaction_trigger()]
     assert captured.json["store"] == false
-    refute Map.has_key?(captured.json, "stream")
+    assert captured.json["stream"] == true
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -684,7 +687,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert attempt.status == "succeeded"
   end
 
-  test "backend compaction aliases keep legacy and invalid V2 metadata buffered", %{conn: conn} do
+  test "backend compaction aliases stream triggers without requiring a V2 declaration", %{
+    conn: conn
+  } do
     metadata_cases = [
       {"legacy_absent", nil},
       {"malformed", %{"x-codex-turn-metadata" => "{malformed"}},
@@ -706,7 +711,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response(%{
+          FakeUpstream.compaction_stream(%{
             "id" => "resp_synthetic_buffered_compaction",
             "object" => "response.compaction",
             "output" => [compact_item],
@@ -737,13 +742,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/codex/responses", "#{alias_name}:#{metadata_name}"
       assert captured.json["store"] == false, "#{alias_name}:#{metadata_name}"
-      refute Map.has_key?(captured.json, "stream"), "#{alias_name}:#{metadata_name}"
+      assert captured.json["stream"] == true, "#{alias_name}:#{metadata_name}"
       refute Map.has_key?(captured.json, "client_metadata"), "#{alias_name}:#{metadata_name}"
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
 
       assert get_in(request.request_metadata, ["compaction_bridge", "result_transport"]) ==
-               "buffered",
+               "sse",
              "#{alias_name}:#{metadata_name}"
     end
   end
@@ -882,7 +887,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "id" => "resp_compaction_v2_curl",
           "object" => "response.compaction",
           "output" => [output_item],
@@ -919,7 +924,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["input"] == visible_input(prompt_text) ++ [compaction_trigger()]
     assert List.last(captured.json["input"]) == compaction_trigger()
-    refute Map.has_key?(captured.json, "stream")
+    assert captured.json["stream"] == true
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -962,7 +967,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       )
 
     assert String.starts_with?(headers, "HTTP/1.1 400")
-    assert %{"error" => ^provider_error} = CodexPooler.JSON.decode!(response_body)
+
+    assert %{
+             "error" => %{
+               "code" => "context_length_exceeded",
+               "type" => "invalid_request_error",
+               "param" => "input"
+             }
+           } = CodexPooler.JSON.decode!(response_body)
+
+    refute response_body =~ provider_error_message
     refute response_body =~ "event:"
     refute response_body =~ "data: [DONE]"
 
@@ -970,7 +984,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert FakeUpstream.http_request_count(upstream) == 1
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["input"] == [compaction_trigger()]
-    refute Map.has_key?(captured.json, "stream")
+    assert captured.json["stream"] == true
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -1037,7 +1051,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
       upstream =
         start_upstream(
-          FakeUpstream.json_response(%{
+          FakeUpstream.compaction_stream(%{
             "id" => "resp_compact_policy",
             "object" => "response.compaction",
             "output" => [
@@ -1311,7 +1325,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.json_response_with_headers(
+        FakeUpstream.compaction_stream(
           %{
             "id" => "resp_compaction_bridge",
             "object" => "response.compaction",
@@ -1483,10 +1497,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                parallel_tool_calls
                reasoning
                service_tier
-               prompt_cache_key
-               text
-               store
-             ))
+                             prompt_cache_key
+                             text
+                             store
+                             stream
+                           ))
 
     assert Enum.map(captured.json["input"], & &1["type"]) == ["message", "compaction_trigger"]
     assert List.last(captured.json["input"]) == compaction_trigger()
@@ -1494,7 +1509,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute Map.has_key?(captured.json, "previous_response_id")
     refute Map.has_key?(captured.json, "conversation")
     refute Map.has_key?(captured.json, "tool_choice")
-    refute Map.has_key?(captured.json, "stream")
+    assert captured.json["stream"] == true
     refute Map.has_key?(captured.json, "include")
     refute Map.has_key?(captured.json, "client_metadata")
 
@@ -1832,7 +1847,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response(%{
+          FakeUpstream.compaction_stream(%{
             "id" => "resp_compact_prompt_cache_#{System.unique_integer([:positive])}",
             "object" => "response.compaction",
             "output" => [
@@ -1938,7 +1953,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   } do
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "id" => "resp_audio_compaction_bridge",
           "object" => "response.compaction",
           "output" => [
@@ -2032,7 +2047,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response_with_headers(
+          FakeUpstream.compaction_stream(
             compact_response,
             [{"x-codex-turn-state", response_turn_state}]
           )
@@ -2203,7 +2218,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response(%{
+          FakeUpstream.compaction_stream(%{
             "id" => "resp_optional_#{case_name}",
             "output" => [source_item]
           })
@@ -2239,7 +2254,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     end
   end
 
-  test "compaction selection keeps first valid output precedence over later output and fallback",
+  test "streamed compaction rejects malformed first items instead of selecting a later checkpoint",
        %{
          conn: conn
        } do
@@ -2256,7 +2271,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "id" => "resp_selection_precedence",
           "output" => [
             %{"type" => "compaction", "encrypted_content" => nil},
@@ -2286,39 +2301,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true
       })
 
-    assert terminal_compaction_item(response) == %{
-             "type" => "compaction",
-             "encrypted_content" => "encrypted-first-valid",
-             "id" => "cmp-first-valid",
-             "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-first-valid"}
-           }
+    assert %{"error" => %{"code" => "invalid_compaction_response"}} = json_response(response, 502)
 
     refute response.resp_body =~ "encrypted-later-valid"
     refute response.resp_body =~ "encrypted-top-level-fallback"
   end
 
-  test "compaction bridge keeps malformed JSON and missing encrypted content errors stable", %{
+  test "compaction bridge rejects malformed stream and missing encrypted content", %{
     conn: conn
   } do
     cases = [
       {FakeUpstream.malformed_json("{malformed-compact-json", 200),
        %{
-         "code" => "invalid_upstream_response",
-         "message" => "upstream response was not valid json",
+         "code" => "invalid_compaction_response",
+         "message" => "upstream compact stream was invalid",
          "param" => nil,
          "type" => "server_error"
-       }, nil},
-      {FakeUpstream.json_response(%{
+       }, "missing_terminal"},
+      {FakeUpstream.compaction_stream(%{
          "id" => "resp_missing_encrypted_content",
          "output" => [%{"type" => "compaction", "id" => "cmp-without-content"}],
          "compaction_summary" => %{"id" => "cmp-fallback-without-content"}
        }),
        %{
          "code" => "invalid_compaction_response",
-         "message" => "upstream compact response did not include encrypted compaction content",
+         "message" => "upstream compact stream was invalid",
          "param" => nil,
          "type" => "server_error"
-       }, nil}
+       }, "invalid_compaction"}
     ]
 
     for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],

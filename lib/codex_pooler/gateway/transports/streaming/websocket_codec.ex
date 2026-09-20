@@ -1295,12 +1295,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         downstream_payload = coerced.payload
 
         compact_payload =
-          CompactionTrigger.project_responses_payload(compact_payload, result_transport)
+          CompactionTrigger.project_responses_payload(
+            compact_payload,
+            if(CompactionTrigger.v2_streaming?(downstream_payload), do: :sse, else: :buffered)
+          )
 
         request_options =
           coerced.request_options
           |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
-          |> put_native_compaction_transport(result_transport)
+          |> put_native_compaction_transport(CompactionTrigger.v2_streaming?(downstream_payload))
           |> RequestOptions.put_payload_context(
             compaction_trigger_bridge?: true,
             compaction_result_transport: result_transport,
@@ -1342,8 +1345,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     )
   end
 
-  defp put_native_compaction_transport(%RequestOptions{} = request_options, result_transport) do
-    if result_transport == :sse do
+  defp put_native_compaction_transport(%RequestOptions{} = request_options, native_v2?) do
+    if native_v2? do
       RequestOptions.put_transport(request_options,
         transport: "websocket",
         upstream_endpoint: "/backend-api/codex/responses",
@@ -1399,7 +1402,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
           |> put_public_compaction_transport()
           |> RequestOptions.put_payload_context(
             compaction_trigger_bridge?: true,
-            compaction_result_transport: public_compaction_result_transport(coerced),
+            compaction_result_transport: :sse,
             compaction_result_mode: :public_websocket,
             compaction_projection_context:
               CompactionProjectionContext.new(downstream_payload, compact_payload)
@@ -1448,13 +1451,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp project_public_compaction_payload(_coerced, compact_payload), do: compact_payload
-
-  defp public_compaction_result_transport(%{
-         request_options: %RequestOptions{payload_context: %{compaction_input_mode: :incremental}}
-       }),
-       do: :sse
-
-  defp public_compaction_result_transport(_coerced), do: :buffered
 
   defp put_public_compaction_transport(
          %RequestOptions{payload_context: %{compaction_input_mode: :incremental}} =

@@ -245,7 +245,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
     }
 
     request_without_marker = %{
-      "input" => [returned_item, %{"type" => "compaction_trigger"}],
+      "input" => [returned_item],
       "client_metadata" => %{}
     }
 
@@ -358,8 +358,11 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
     {response, [done["item"] | response["output"]]}
   end
 
-  defp public_result(%{websocket_messages: [done, completed]}, :websocket) do
+  defp public_result(%{websocket_messages: [created, done, completed]}, :websocket) do
     response = completed["response"]
+    assert created["type"] == "response.created"
+    assert created["response"] == %{response | "status" => "in_progress", "output" => []}
+    assert done["output_index"] == 0
     {response, [done["item"] | response["output"]]}
   end
 

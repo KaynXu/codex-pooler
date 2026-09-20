@@ -63,19 +63,23 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                valid_trigger: "exactly_one_final_after_visible_input",
                malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                retained: ["final_compaction_trigger"],
-               strips: ["stream", "include", "prompt_cache_options"],
+               strips: ["include", "prompt_cache_options"],
                upstream_payload: %{
-                 mode: "buffered_responses_json",
+                 mode: "responses_sse",
                  terminal_trigger: "retained",
                  store: false,
-                 stream: "omitted"
+                 stream: true
                },
                response_adaptation: %{
-                 upstream: "buffered_responses_json",
+                 upstream: "responses_sse",
                  downstream: %{
                    http_json: ["response"],
                    http_sse: ["response.output_item.done", "response.completed", "[DONE]"],
-                   responses_websocket: ["response.output_item.done", "response.completed"]
+                   responses_websocket: [
+                     "response.created",
+                     "response.output_item.done",
+                     "response.completed"
+                   ]
                  }
                },
                public_compact_route_supported: false,
@@ -88,10 +92,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       boundary = fixture.compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.upstream_payload == %{
-               mode: "semantic_v2_sse_or_buffered_responses_json",
+               mode: "responses_sse",
                terminal_trigger: "retained",
                store: false,
-               stream: "semantic_v2_true_otherwise_omitted"
+               stream: true
              }
 
       assert boundary.backend_compaction_trigger.direct_compact_preservation.upstream_payload ==
@@ -127,8 +131,8 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.result_classification == %{
-               source: "request_client_metadata.x-codex-turn-metadata",
-               marker: "compaction.implementation=responses_compaction_v2",
+               source: "request_input_compaction_trigger",
+               marker: "terminal_compaction_trigger",
                additive_metadata: "ignored",
                returned_compaction_items: "not_inspected"
              }
@@ -1531,8 +1535,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         }
       },
       result_transports: %{
-        buffered: "responses_json",
-        v2: "responses_sse_semantic_nested_implementation_with_additive_metadata"
+        trigger: "responses_sse_independent_of_client_metadata"
       },
       turn_state: %{
         source: "client_metadata.x-codex-turn-state_or_upgrade_header",

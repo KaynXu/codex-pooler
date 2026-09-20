@@ -927,7 +927,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
         assert request.request_metadata["compaction_bridge"] == %{
                  "applied" => true,
-                 "result_transport" => Atom.to_string(transport)
+                 "result_transport" => "sse"
                }
 
         assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
@@ -2097,10 +2097,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
-  test "buffered native bridge forwards one validated frame turn state and adapts once after settlement" do
+  test "unmarked native bridge collects HTTP SSE and forwards one validated frame turn state" do
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "id" => "resp_native_buffered_compaction",
           "output" => [
             %{
@@ -2164,7 +2164,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
-  test "invalid buffered native compact bodies fail before success settlement" do
+  test "non-streamed native compact bodies fail before success settlement" do
     cases = [
       {FakeUpstream.malformed_json("{malformed-native-compact", 200),
        "upstream compact response was not valid JSON", "invalid_json"},
@@ -2182,7 +2182,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
        "missing_encrypted_content"}
     ]
 
-    for {mode, expected_message, expected_reason} <- cases do
+    for {mode, _legacy_message, _legacy_reason} <- cases do
       upstream = start_upstream(mode)
       setup = gateway_setup(upstream, compact?: true)
       {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -2198,7 +2198,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       assert error.status == 502
       assert error.code == "invalid_compaction_response"
-      assert error.message == expected_message
+      assert error.message == "upstream compact stream was invalid"
       refute_received {:unexpected_frame, _frame}
 
       assert [request] =
@@ -2213,7 +2213,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       assert attempt.status == "failed"
       assert attempt.network_error_code == "invalid_compaction_response"
-      assert attempt.response_metadata["compaction_invalid_reason"] == expected_reason
+      assert attempt.response_metadata["compaction_invalid_reason"] == "missing_terminal"
       refute attempt.retryable
 
       assert [turn] =
@@ -2778,7 +2778,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     upstream_mode =
       case transport do
         :buffered ->
-          FakeUpstream.json_response(response)
+          FakeUpstream.compaction_stream(response)
 
         :sse ->
           FakeUpstream.websocket_text_frames([
@@ -3004,7 +3004,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   end
 
   defp assert_compact_transport_payload(payload, :buffered) do
-    refute Map.has_key?(payload, "stream")
+    assert payload["stream"] == true
   end
 
   defp assert_compact_transport_payload(payload, :sse) do

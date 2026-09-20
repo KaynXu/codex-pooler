@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
+  alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -62,11 +63,35 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
           {:ok, map()} | {:error, map()}
   def collect(response, %SelectedCandidateContext{} = context, finalization_callbacks) do
     response_context = %ResponseContext{context: context, response: response}
-    state = new_state()
+
+    item_mode =
+      if context.request_options.openai_compatibility.source_endpoint == "/v1/responses",
+        do: :public,
+        else: :native
+
+    state = new_state(item_mode)
 
     case StreamRelay.run(state, response, handlers(response_context, finalization_callbacks)) do
-      {:ok, state} -> state |> finalize_sse_state() |> compact_result()
-      {:error, error} -> {:error, error}
+      {:ok, state} ->
+        case state |> finalize_sse_state() |> compact_result() do
+          {:ok, result} ->
+            headers = Metadata.response_headers(response, false, context.request_options)
+
+            {:ok,
+             %{
+               result
+               | headers: [
+                   {"content-type", "application/json"}
+                   | Enum.reject(headers, &(elem(&1, 0) == "content-type"))
+                 ]
+             }}
+
+          error ->
+            error
+        end
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 
@@ -122,7 +147,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     end
   end
 
-  defp new_state(item_mode \\ :native) do
+  defp new_state(item_mode) do
     %{
       collection: %{
         started_ms: System.monotonic_time(:millisecond),
