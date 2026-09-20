@@ -31,21 +31,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   @spec normalize_block(binary(), binary()) :: iodata()
   def normalize_block(block, separator \\ "\n\n") do
     {event_type, decoded} = SSEParser.stream_block_event(block)
-
-    if codex_responses_error_needs_canonical_response?(event_type, decoded) do
-      encode_codex_responses_error_sse(decoded)
-    else
-      [block, separator]
-    end
+    {wire, _changed} = normalize_decoded_block(block, separator, event_type, decoded, false)
+    wire
   end
 
   @spec normalize_private_native_misalignment_block(binary(), binary()) :: iodata()
   def normalize_private_native_misalignment_block(block, separator \\ "\n\n") do
     {event_type, decoded} = SSEParser.stream_block_event(block)
+    {wire, _changed} = normalize_decoded_block(block, separator, event_type, decoded, true)
+    wire
+  end
 
-    case private_native_misalignment(event_type, decoded) do
-      nil -> normalize_block(block, separator)
-      misalignment -> encode_private_native_misalignment_sse(decoded, misalignment)
+  @doc false
+  @spec normalize_decoded_block(binary(), binary(), String.t() | nil, map(), boolean()) ::
+          {iodata(), map() | nil}
+  def normalize_decoded_block(block, separator, event_type, decoded, private_details?) do
+    misalignment = if private_details?, do: private_native_misalignment(event_type, decoded)
+
+    cond do
+      not is_nil(misalignment) ->
+        event = private_native_misalignment_event(decoded, misalignment)
+        {encode_error_event_sse(event), event}
+
+      codex_responses_error_needs_canonical_response?(event_type, decoded) ->
+        event = canonical_codex_responses_error_event(decoded)
+        {encode_error_event_sse(event), event}
+
+      true ->
+        {[block, separator], nil}
     end
   end
 
@@ -203,15 +216,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     |> EventSummary.incomplete_failure?()
   end
 
-  defp encode_codex_responses_error_sse(decoded) do
-    [
-      "event: response.failed\n",
-      "data: ",
-      CodexPooler.JSON.encode!(canonical_codex_responses_error_event(decoded)),
-      "\n\n"
-    ]
-  end
-
   defp canonicalize_codex_responses_json_decoded_message(decoded, data) do
     cond do
       EventSummary.typeless_detail_error?(decoded) ->
@@ -304,15 +308,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
   defp private_native_misalignment(_event_type, _decoded), do: nil
 
-  defp encode_private_native_misalignment_sse(decoded, misalignment) do
+  defp private_native_misalignment_event(decoded, misalignment) do
     event = canonical_codex_responses_error_event(decoded)
     error = Map.put(event["response"]["error"], "misalignment", misalignment)
 
-    event =
-      event
-      |> Map.put("error", error)
-      |> put_in(["response", "error"], error)
+    event
+    |> Map.put("error", error)
+    |> put_in(["response", "error"], error)
+  end
 
+  defp encode_error_event_sse(event) do
     ["event: response.failed\n", "data: ", CodexPooler.JSON.encode!(event), "\n\n"]
   end
 

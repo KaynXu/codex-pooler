@@ -263,7 +263,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     request = context.reserved.request
 
     fn state, data ->
-      {data, state} =
+      {data, state, _delivery} =
         normalize_stream_data(response_context, state, data, &visible_websocket_data?/1)
 
       {messages, websocket_sse_block_state} =
@@ -605,10 +605,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
          %ResponseContext{context: %{payload: payload, request_options: opts}},
          state
        ) do
-    {data, state} =
-      DownstreamStream.flush_eof_data(DownstreamStream.endpoint(payload, opts), opts, state)
+    {data, state, delivery} =
+      DownstreamStream.flush_eof_delivery(DownstreamStream.endpoint(payload, opts), opts, state)
 
-    case write_normalized_stream_data_preserving_state(state, data) do
+    case write_normalized_stream_data_preserving_state(state, data, delivery) do
       {:ok, state} -> {:ok, state}
       {:error, reason, state} -> {:chunk_error, state, reason}
     end
@@ -709,23 +709,35 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp write_stream_data_preserving_state(%ResponseContext{} = response_context, conn, data) do
-    {downstream_data, conn} =
+    {downstream_data, conn, delivery} =
       normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_visible?/1)
 
-    write_normalized_stream_data_preserving_state(conn, downstream_data)
+    write_normalized_stream_data_preserving_state(conn, downstream_data, delivery)
   end
 
-  defp write_normalized_stream_data_preserving_state(conn, downstream_data) do
+  defp write_normalized_stream_data_preserving_state(conn, downstream_data, nil) do
     {preamble, downstream_data, _preamble_seen?} =
       StreamProtocol.partition_preamble_blocks(downstream_data)
 
+    write_normalized_stream_data_preserving_state(conn, downstream_data, %{
+      preamble: preamble,
+      data: downstream_data,
+      commits?: downstream_data != "" and commits_withheld_preamble?(downstream_data)
+    })
+  end
+
+  defp write_normalized_stream_data_preserving_state(conn, _data, %{
+         preamble: preamble,
+         data: downstream_data,
+         commits?: commits?
+       }) do
     conn = withhold_preamble(conn, preamble)
 
     cond do
       downstream_data == "" ->
         {:ok, conn}
 
-      commits_withheld_preamble?(downstream_data) ->
+      commits? ->
         {preamble, conn} = take_withheld_preamble(conn)
         write_normalized_chunk_and_commit_progress(conn, preamble <> downstream_data)
 
@@ -855,7 +867,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
     case maybe_mark_visible_output(state, reserved.request, context.attempt, data, visible_data?) do
       {:ok, state} ->
-        DownstreamStream.normalize_data(
+        DownstreamStream.normalize_delivery(
           data,
           DownstreamStream.endpoint(payload, opts),
           opts,
@@ -863,7 +875,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         )
 
       {:error, :stale_generation, state} ->
-        {"", state}
+        {"", state, nil}
     end
   end
 

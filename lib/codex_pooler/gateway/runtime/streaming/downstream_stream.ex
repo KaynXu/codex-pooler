@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
+  alias CodexPooler.Gateway.Runtime.Streaming.NativeSSEBlock
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
@@ -57,27 +58,45 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @spec normalize_data(iodata(), String.t() | nil, RequestOptions.t(), state()) ::
           {iodata(), state()}
   def normalize_data(data, endpoint, %RequestOptions{} = opts, state) do
+    {data, state, _delivery} = normalize_delivery(data, endpoint, opts, state)
+    {data, state}
+  end
+
+  @doc false
+  @spec normalize_delivery(iodata(), String.t() | nil, RequestOptions.t(), state()) ::
+          {iodata(), state(), NativeSSEBlock.delivery() | nil}
+  def normalize_delivery(data, endpoint, %RequestOptions{} = opts, state) do
     cond do
       public_openai_chat_stream?(opts) ->
-        normalize_public_openai_chat_stream_data(data, state)
+        {data, state} = normalize_public_openai_chat_stream_data(data, state)
+        {data, state, nil}
 
       public_openai_responses_stream?(opts) ->
-        normalize_public_openai_responses_stream_data(data, state)
+        {data, state} = normalize_public_openai_responses_stream_data(data, state)
+        {data, state, nil}
 
       codex_responses_stream_endpoint?(endpoint) ->
         normalize_codex_responses_stream_data(data, endpoint, opts, state)
 
       true ->
-        {normalize_endpoint_data(endpoint, data), state}
+        {normalize_endpoint_data(endpoint, data), state, nil}
     end
   end
 
   @spec flush_eof_data(String.t() | nil, RequestOptions.t(), state()) :: {iodata(), state()}
   def flush_eof_data(endpoint, %RequestOptions{} = opts, state) do
+    {data, state, _delivery} = flush_eof_delivery(endpoint, opts, state)
+    {data, state}
+  end
+
+  @doc false
+  @spec flush_eof_delivery(String.t() | nil, RequestOptions.t(), state()) ::
+          {iodata(), state(), NativeSSEBlock.delivery() | nil}
+  def flush_eof_delivery(endpoint, %RequestOptions{} = opts, state) do
     if codex_responses_stream_endpoint?(endpoint) do
       flush_codex_responses_sse_eof(opts, state)
     else
-      {"", state}
+      {"", state, nil}
     end
   end
 
@@ -330,7 +349,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
     if buffer == "" and not sse_block_state.skip_leading_lf? and
          not codex_responses_sse_chunk?(data) do
-      {data, state}
+      {data, state, nil}
     else
       previous_buffer = buffer
       buffered_size = byte_size(previous_buffer) + byte_size(data)
@@ -339,8 +358,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         StreamProtocol.complete_sse_blocks(sse_block_state, data, bounded?: true)
 
       buffer = sse_block_state.buffer
+      parsed = Enum.map(blocks, &NativeSSEBlock.parse/1)
 
-      data =
+      {data, delivery} =
         if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
           BufferTelemetry.record_oversized_incomplete(
             "codex_responses_sse",
@@ -350,24 +370,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
             endpoint: endpoint
           )
 
-          previous_buffer <> data
+          {previous_buffer <> data, nil}
         else
-          blocks
-          |> Enum.map(&normalize_codex_responses_sse_block(&1, opts, state))
-          |> IO.iodata_to_binary()
+          normalize_native_blocks(parsed, opts, state)
         end
 
       state =
         state
         |> Map.put(:codex_responses_sse_block_state, sse_block_state)
-        |> stage_native_http_progress(blocks)
-        |> track_native_completion(blocks)
+        |> stage_native_http_progress(parsed)
+        |> track_native_completion(parsed)
 
-      {data, state}
+      {data, state, delivery}
     end
   end
 
-  defp normalize_codex_responses_stream_data(data, _endpoint, _opts, state), do: {data, state}
+  defp normalize_codex_responses_stream_data(data, _endpoint, _opts, state),
+    do: {data, state, nil}
 
   # An upstream EOF can supply the only missing SSE blank line. The ordinary
   # incremental path retains that structurally complete final block while it
@@ -382,30 +401,28 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       StreamProtocol.complete_sse_blocks(sse_block_state, "\n\n", bounded?: true)
 
     if blocks != [] and String.trim(sse_block_state.buffer) == "" do
-      data =
-        blocks
-        |> Enum.map(&normalize_codex_responses_sse_block(&1, opts, state))
-        |> IO.iodata_to_binary()
+      parsed = Enum.map(blocks, &NativeSSEBlock.parse/1)
+      {data, delivery} = normalize_native_blocks(parsed, opts, state)
 
       state =
         state
         |> Map.put(:codex_responses_sse_block_state, sse_block_state)
-        |> stage_native_http_progress(blocks)
-        |> track_native_completion(blocks)
+        |> stage_native_http_progress(parsed)
+        |> track_native_completion(parsed)
 
-      {data, state}
+      {data, state, delivery}
     else
-      {"", state}
+      {"", state, nil}
     end
   end
 
-  defp flush_codex_responses_sse_eof(_opts, state), do: {"", state}
+  defp flush_codex_responses_sse_eof(_opts, state), do: {"", state, nil}
 
   defp track_native_completion(%{target: :websocket} = state, _blocks), do: state
 
   defp track_native_completion(state, blocks) do
     Enum.reduce(blocks, state, fn block, state ->
-      case StreamProtocol.terminal_outcome(block <> "\n\n") do
+      case NativeSSEBlock.outcome(block) do
         {:ok, %{kind: :completed}} -> Map.put(state, :native_terminal_outcome, :completed)
         _outcome -> state
       end
@@ -415,8 +432,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   defp stage_native_http_progress(%{native_http_progress: _progress} = state, blocks) do
     pending =
       Enum.flat_map(blocks, fn block ->
-        case StreamProtocol.stream_block_event(block) do
-          {"response.output_item.done", %{"item" => %{} = item}} -> [item]
+        case block do
+          %{event_type: "response.output_item.done", decoded: %{"item" => %{} = item}} -> [item]
           _other -> []
         end
       end)
@@ -430,17 +447,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp stage_native_http_progress(state, _blocks), do: state
 
-  defp normalize_codex_responses_sse_block(block, opts, %{target: target})
-       when target != :websocket do
-    if MisalignmentPolicyViolation.details_allowed?(opts) do
-      StreamProtocol.normalize_private_native_misalignment_sse_block(block)
-    else
-      StreamProtocol.normalize_codex_responses_sse_block(block)
-    end
+  defp normalize_native_blocks(blocks, opts, %{target: target}) do
+    private_details? = target != :websocket and MisalignmentPolicyViolation.details_allowed?(opts)
+    outputs = Enum.map(blocks, &NativeSSEBlock.normalize(&1, private_details?))
+    data = outputs |> Enum.map(&elem(&1, 0)) |> IO.iodata_to_binary()
+    delivery = if target != :websocket, do: NativeSSEBlock.delivery(outputs)
+    {data, delivery}
   end
-
-  defp normalize_codex_responses_sse_block(block, _opts, _state),
-    do: StreamProtocol.normalize_codex_responses_sse_block(block)
 
   defp normalize_endpoint_data("/backend-api/codex/responses", data) when is_binary(data) do
     StreamProtocol.normalize_codex_responses_sse_data(data)
