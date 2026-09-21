@@ -531,7 +531,13 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     case "$1 ${2:-}" in
       'compile --force') grep -qx 'db_exec' "$DEV_SERVER_EVENT_LOG"; event=compile ;;
       'ecto.create --quiet') grep -qx 'compile' "$DEV_SERVER_EVENT_LOG"; event=create ;;
-      'ecto.migrate ') grep -qx 'create' "$DEV_SERVER_EVENT_LOG"; event=migrate ;;
+      'run --no-start')
+        [ "$#" -eq 4 ]
+        [ "$3" = '-e' ]
+        [ "$4" = 'CodexPooler.Release.migrate()' ]
+        grep -qx 'create' "$DEV_SERVER_EVENT_LOG"
+        event=migrate
+        ;;
       'pricing.import_openai ') grep -qx 'migrate' "$DEV_SERVER_EVENT_LOG"; event=pricing ;;
       *) exit 2 ;;
     esac
