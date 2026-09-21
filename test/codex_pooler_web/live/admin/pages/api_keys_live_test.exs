@@ -377,14 +377,25 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     refute html =~ "Recorded usage"
   end
 
-  test "mount and policy flows never read ledger entries", %{conn: conn, scope: scope} do
+  test "edit loads one key-scoped budget snapshot while other policy flows skip ledger reads", %{
+    conn: conn,
+    scope: scope
+  } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "query-proof", name: "Query Proof Pool"})
 
-    {:ok, %{api_key: api_key}} =
+    {:ok, %{api_key: api_key, raw_key: raw_key}} =
       Access.create_api_key(scope, pool, %{
         display_name: "Query proof key",
         default_policy: %{max_tokens_per_week: 1_000}
       })
+
+    {:ok, %{api_key: other_key, raw_key: other_raw_key}} =
+      Access.create_api_key(scope, pool, %{display_name: "Other query proof key"})
+
+    for {key, tokens} <- [{api_key, 123}, {other_key, 987_654}] do
+      request = request_fixture(%{pool: pool, api_key: key})
+      ledger_entry_fixture(request, %{total_tokens: tokens})
+    end
 
     {{:ok, view, _html}, mount_queries} =
       capture_repo_queries(fn -> live(conn, ~p"/admin/api-keys") end)
@@ -392,11 +403,42 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert_no_ledger_reads(mount_queries)
 
     {_html, edit_queries} =
-      capture_repo_queries(view.pid, fn ->
-        view |> element("#edit-api-key-#{api_key.id}") |> render_click()
-      end)
+      capture_repo_queries(
+        fn ->
+          view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+        end,
+        &(&1 == view.pid),
+        page_reads_only?: false,
+        details?: true
+      )
 
-    assert_no_ledger_reads(edit_queries)
+    assert_budget_snapshot_queries(edit_queries, api_key, other_key)
+
+    # Discriminate missing, repeated and wrong-key snapshots using the actual
+    # captured statements, including raw SQL telemetry with no source label.
+    [pressure] = Enum.filter(edit_queries, &String.contains?(&1.query, "api_key_usage_buckets"))
+    [_, windows, as_of] = pressure.params
+    foreign_pressure = %{pressure | params: [Ecto.UUID.dump!(other_key.id), windows, as_of]}
+
+    for changed_queries <- [
+          List.delete(edit_queries, pressure),
+          [pressure | edit_queries],
+          Enum.map(edit_queries, &if(&1 == pressure, do: foreign_pressure, else: &1))
+        ] do
+      assert_raise ExUnit.AssertionError, fn ->
+        assert_budget_snapshot_queries(changed_queries, api_key, other_key)
+      end
+    end
+
+    view |> element("#api-key-tab-limits") |> render_click()
+
+    for window <- ["daily", "weekly"] do
+      assert has_element?(view, "#api-key-budget-#{window}-known", "123")
+      refute view |> element("#api-key-budget-#{window}-known") |> render() =~ "987,654"
+    end
+
+    refute render(view) =~ raw_key
+    refute render(view) =~ other_raw_key
 
     {_html, review_queries} =
       capture_repo_queries(view.pid, fn ->
@@ -626,6 +668,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   defp capture_repo_queries(fun, query_pid?, opts)
        when is_function(fun, 0) and is_function(query_pid?, 1) do
     page_reads_only? = Keyword.fetch!(opts, :page_reads_only?)
+    details? = Keyword.get(opts, :details?, false)
     test_pid = self()
     handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
 
@@ -638,7 +681,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
           if metadata[:repo] == Repo and query_pid?.(self()) do
-            send(test_pid, {handler_id, metadata[:source], page_reads_only?})
+            source = query_capture_data(metadata, details?)
+
+            send(test_pid, {handler_id, source, page_reads_only?})
           end
         end,
         nil
@@ -653,13 +698,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     end
   end
 
+  defp query_capture_data(metadata, true), do: Map.take(metadata, [:source, :query, :params])
+  defp query_capture_data(metadata, false), do: metadata[:source]
+
   defp drain_repo_query_sources(handler_id, sources) do
     receive do
       {^handler_id, source, true} when source in [nil, ""] ->
         drain_repo_query_sources(handler_id, sources)
 
       {^handler_id, source, _page_reads_only?} ->
-        drain_repo_query_sources(handler_id, [to_string(source) | sources])
+        source = if is_map(source), do: source, else: to_string(source)
+        drain_repo_query_sources(handler_id, [source | sources])
     after
       0 -> Enum.reverse(sources)
     end
@@ -667,5 +716,38 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
   defp assert_no_ledger_reads(sources) do
     refute Enum.any?(sources, &String.contains?(&1, "ledger_entries"))
+  end
+
+  defp assert_budget_snapshot_queries(queries, api_key, other_key) do
+    assert Enum.frequencies_by(queries, & &1.source) == %{
+             "api_keys" => 1,
+             "memberships" => 3,
+             "pools" => 1,
+             "api_key_policy_bindings" => 2,
+             "daily_rollups" => 1,
+             "ledger_entries" => 1,
+             nil => 1,
+             "sync_runs" => 3,
+             "models" => 1
+           }
+
+    [pressure] = Enum.filter(queries, &String.contains?(&1.query, "api_key_usage_buckets"))
+    assert pressure.query =~ "public.ledger_entries"
+    assert pressure.query =~ "api_key_id = $1::uuid"
+    assert [key_id, [daily, weekly, minute], as_of] = pressure.params
+    assert key_id == Ecto.UUID.dump!(api_key.id)
+    assert daily == DateTime.new!(DateTime.to_date(as_of), ~T[00:00:00], "Etc/UTC")
+    assert weekly == DateTime.add(as_of, -7, :day)
+    assert minute == DateTime.add(as_of, -60, :second)
+
+    for source <- ["daily_rollups", "ledger_entries"] do
+      [query] = Enum.filter(queries, &(&1.source == source))
+      assert [pool_id, ^key_id, _since, _until] = query.params
+      assert pool_id == Ecto.UUID.dump!(api_key.pool_id)
+      assert query.query =~ ~s("pool_id" = $1)
+      assert query.query =~ ~s("api_key_id" = $2)
+    end
+
+    refute Enum.any?(queries, &(Ecto.UUID.dump!(other_key.id) in List.flatten(&1.params)))
   end
 end
