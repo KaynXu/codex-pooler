@@ -896,6 +896,19 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
       reset_at = DateTime.add(now, 20, :day)
 
+      # Both receipts must advance the snapshot, regardless of the wall-clock second
+      # in which the fixture was created.
+      target.identity
+      |> Ecto.Changeset.change(
+        metadata:
+          put_in(
+            target.identity.metadata,
+            ["saved_resets", "observed_at"],
+            DateTime.to_iso8601(DateTime.add(now, -120, :second))
+          )
+      )
+      |> Repo.update!()
+
       for age <- [60, 0] do
         observed_at = DateTime.add(now, -age, :second)
 

@@ -21,6 +21,43 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
   @saved_reset_detail_max_bytes 1_048_576
 
+  for observed_at <- [
+        ~U[2026-07-24 10:00:00Z],
+        ~U[2026-07-24 10:00:00.123Z],
+        ~U[2026-07-24 10:00:00.123456Z]
+      ] do
+    test "saved-reset snapshots persist observations with precision #{elem(observed_at.microsecond, 1)}" do
+      observed_at = unquote(Macro.escape(observed_at))
+      {:ok, fake} = FakeUpstream.start_link(saved_reset_mode(2))
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool_fixture(), %{
+          metadata: %{
+            "usage_base_url" => FakeUpstream.url(fake),
+            "usage_path" => "/api/codex/usage",
+            "saved_resets" => %{
+              "available_count" => 1,
+              "observed_at" => DateTime.to_iso8601(DateTime.add(observed_at, -1, :second))
+            }
+          }
+        })
+
+      assert {:ok, updated_identity} =
+               PoolReconciliation.refresh_quota_from_usage(identity, assignment,
+                 observed_at: observed_at
+               )
+
+      persisted = Repo.reload!(updated_identity)
+      assert persisted.metadata["saved_resets"]["available_count"] == 2
+
+      assert persisted.metadata["saved_resets"]["observed_at"] ==
+               DateTime.to_iso8601(observed_at)
+
+      assert {_, 6} = persisted.updated_at.microsecond
+    end
+  end
+
   test "scheduled reconciliation self-heals an applied reblocked lifecycle from canonical evidence" do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     consumed_at = DateTime.add(now, -20, :hour)

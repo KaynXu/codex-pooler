@@ -764,10 +764,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       {:apply, _canonical_observed_at} ->
         snapshot = SavedResets.usage_snapshot(payload, observed_at, usage_url, identity)
         {snapshot, ledger_change} = compose_saved_reset_state(identity, snapshot, observed_at)
+        {microsecond, _precision} = observed_at.microsecond
 
         attrs = %{
           metadata: Map.put(identity.metadata || %{}, "saved_resets", snapshot),
-          updated_at: observed_at
+          updated_at: %{observed_at | microsecond: {microsecond, 6}}
         }
 
         attrs =
