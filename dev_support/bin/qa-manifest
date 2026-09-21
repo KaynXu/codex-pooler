@@ -1,0 +1,90 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use Digest::SHA ();
+use Errno qw(ENOENT);
+use Fcntl qw(S_ISREG S_ISLNK);
+use File::Spec ();
+
+sub fail { die "qa-manifest: $_[0]\n"; }
+
+sub field {
+  my ($value) = @_;
+  fail('invalid manifest field') if !length($value) || $value =~ /[\x00\t\r\n]/;
+  return $value;
+}
+
+sub digest {
+  my ($path) = @_;
+  open(my $file, '<:raw', $path) or fail('file open failed');
+  -f $file or fail('hash input is not a regular file');
+  my $sha = Digest::SHA->new(256);
+  eval { $sha->addfile($file); 1 } or fail('file hashing failed');
+  close($file) or fail('file close failed');
+  return $sha->hexdigest;
+}
+
+sub paths {
+  binmode(STDIN) or fail('input mode failed');
+  my $input = '';
+  while (1) {
+    my $count = read(STDIN, my $chunk, 65536);
+    defined($count) or fail('manifest input read failed');
+    last if $count == 0;
+    $input .= $chunk;
+  }
+  return () if $input eq '';
+  fail('manifest input must be NUL terminated') unless $input =~ /\x00\z/;
+  chop($input);
+  fail('invalid manifest field') if $input eq '';
+  return split(/\x00/, $input, -1);
+}
+
+my $mode = shift(@ARGV) // '';
+my @rows;
+if ($mode eq 'hashes') {
+  @ARGV or fail('hashes requires one or more paths');
+  @rows = (join(' ', map { digest($_) } @ARGV));
+} elsif ($mode eq 'source' || $mode eq 'beams') {
+  @ARGV == 1 or fail('manifest requires exactly one root');
+  my $root = File::Spec->rel2abs(shift(@ARGV));
+  $root =~ s{/+\z}{} unless $root eq '/';
+  -d $root or fail('manifest root is not a directory');
+  my $prefix = $root eq '/' ? '/' : "$root/";
+
+  for my $input (paths()) {
+    field($input);
+    fail('manifest path contains parent traversal') if $input =~ m{(?:\A|/)\.\.(?:/|\z)};
+    my ($path, $relative);
+    if ($mode eq 'source') {
+      fail('source path must be relative') if File::Spec->file_name_is_absolute($input);
+      ($path, $relative) = ("$prefix$input", $input);
+    } else {
+      fail('BEAM path is outside build root') unless index($input, $prefix) == 0;
+      ($path, $relative) = ($input, substr($input, length($prefix)));
+      field($relative);
+    }
+
+    my @metadata = lstat($path);
+    if (!@metadata) {
+      fail('file inspection failed') unless $mode eq 'source' && $! == ENOENT;
+      push(@rows, "absent\t$relative");
+    } elsif ($mode eq 'source' && S_ISLNK($metadata[2])) {
+      my $target = readlink($path);
+      defined($target) or fail('symlink inspection failed');
+      push(@rows, "symlink\t" . field($target) . "\t$relative");
+    } elsif (S_ISREG($metadata[2])) {
+      my $hash = digest($path);
+      my $row = "$hash\t$relative";
+      $row = sprintf("file\t%o:%d\t%s", $metadata[2] & 07777, $metadata[7], $row) if $mode eq 'source';
+      push(@rows, $row);
+    } else {
+      fail('manifest input is not a regular file or source symlink');
+    }
+  }
+} else {
+  fail('usage: qa-manifest source ROOT | beams BUILD_ROOT | hashes PATH...');
+}
+
+print(join("\n", @rows), @rows ? "\n" : '') or fail('manifest output write failed');
+close(STDOUT) or fail('manifest output close failed');

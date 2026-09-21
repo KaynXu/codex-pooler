@@ -1,11 +1,13 @@
 defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
   use CodexPooler.UnixIntegrationCase,
     async: false,
-    tools: ~w(git stat shasum readlink perl docker),
+    tools: ~w(git perl docker),
     docker_compose: true
 
   @wrapper Path.expand("../../../dev_support/bin/reliability-qa-lifecycle", __DIR__)
   @lifecycle Path.expand("../../../dev_support/bin/dev-server-lifecycle", __DIR__)
+  @manifest Path.expand("../../../dev_support/bin/qa-manifest", __DIR__)
+  @phase Path.expand("../../../dev_support/bin/qa-phase", __DIR__)
 
   test "help describes the explicit lifecycle protocol without mutation" do
     {output, code} = System.cmd(@wrapper, ["--help"], stderr_to_stdout: true)
@@ -67,32 +69,33 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
   end
 
   test "the 20 minute cap starts before preparation rather than after QA_READY" do
-    fixture = wrapper_fixture!(0, 3)
+    fixture = wrapper_fixture!(0, 0)
 
     {output, code} =
-      run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_TIMEOUT_SECONDS", "1"}])
+      run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_TIMEOUT_SECONDS", "1"}, {"FIXTURE_PREPARE_BLOCK", "1"}])
 
     assert code == 124, output
+    # A deferred TERM trap would wait for preparation's fallback completion.
+    # Observe cancellation itself rather than imposing a runner-speed limit.
+    refute File.exists?(Path.join(fixture.root, "prepare-completed"))
     refute output =~ "QA_READY"
     assert File.exists?(fixture.compose_down_marker)
+    [phase_pid, descendant_pid] = fixture.root |> Path.join("phase-pids") |> File.read!() |> String.split()
+    for pid <- [phase_pid, descendant_pid], do: CodexPooler.InstancePresencePeer.assert_os_process_absent!(pid)
   end
 
-  test "provider-connected QA disables and verifies background workers before serving" do
+  test "provider-connected QA requires the serving process verification before readiness" do
     fixture = wrapper_fixture!(23, 0)
     {output, code} = run_wrapper(fixture, "QA_COMPLETE", [{"RELIABILITY_QA_DISABLE_OBAN", "1"}])
     assert code == 23, output
     assert output =~ "QA_READY"
     command = File.read!(Path.join(fixture.runtime_root, "launch-command"))
     assert command =~ "mix phx.server --no-compile --no-start"
-    preboot = File.read!(Path.join(fixture.runtime_root, "preboot.exs"))
-    assert preboot =~ "Keyword.drop([:cron, :lifeline, :pruner])"
-    assert preboot =~ "queues: false, plugins: false, stager: false"
-    assert preboot =~ "actual = Oban.config()"
-    assert preboot =~ "actual.queues == [] and actual.plugins == [] and actual.stager == false"
-    assert {:ok, _} = Code.string_to_quoted(preboot)
-    [configuration, startup] = String.split(preboot, "Application.ensure_all_started")
-    assert configuration =~ "Application.put_env(:codex_pooler, Oban, config)"
-    assert startup =~ "actual = Oban.config()"
+    missing = wrapper_fixture!(23, 0)
+    {output, code} = run_wrapper(missing, "QA_COMPLETE", [{"RELIABILITY_QA_DISABLE_OBAN", "1"}, {"FIXTURE_OBAN_WITNESS", "0"}])
+    assert code != 0
+    assert output =~ "running Oban configuration was not verified"
+    refute output =~ "QA_READY"
   end
 
   test "source manifest preserves real file permissions, size, hash and symlink targets" do
@@ -111,17 +114,12 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     assert manifest =~ "symlink\tmissing.ex\tlib/link.ex\n"
   end
 
-  test "source inspection command failures abort before publishing readiness" do
-    for tool <- ["stat", "shasum", "readlink"] do
-      fixture = wrapper_fixture!(23, 0)
-      File.ln_s!("fixture.ex", Path.join(fixture.root, "lib/link.ex"))
-      write_executable!(Path.join(fixture.bin, tool), "#!/bin/bash\nexit 42\n")
-
-      {output, code} = run_wrapper(fixture, "QA_COMPLETE")
-
-      assert code != 0, tool
-      refute output =~ "QA_READY", tool
-    end
+  test "manifest inspection failure aborts before publishing readiness" do
+    fixture = wrapper_fixture!(23, 0)
+    write_executable!(Path.join(fixture.root, "dev_support/bin/qa-manifest"), "#!/bin/bash\nexit 42\n")
+    {output, code} = run_wrapper(fixture, "QA_COMPLETE")
+    assert code != 0
+    refute output =~ "QA_READY"
   end
 
   test "changes in source permissions, bytes or symlink targets reject startup" do
@@ -144,12 +142,12 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
 
   test "compiled BEAM hashing failure aborts before publishing readiness" do
     fixture = wrapper_fixture!(23, 0)
-    real_shasum = System.find_executable("shasum")
+    real_manifest = @manifest
 
-    write_executable!(Path.join(fixture.bin, "shasum"), """
+    write_executable!(Path.join(fixture.root, "dev_support/bin/qa-manifest"), """
     #!/bin/bash
-    if [[ "$3" == *.beam ]]; then exit 42; fi
-    exec "#{real_shasum}" "$@"
+    if [[ "$1" == beams ]]; then exit 42; fi
+    exec perl "#{real_manifest}" "$@"
     """)
 
     {output, code} = run_wrapper(fixture, "QA_COMPLETE")
@@ -230,6 +228,8 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
     )
 
     File.cp!(@wrapper, Path.join(root, "dev_support/bin/reliability-qa-lifecycle"))
+    File.cp!(@manifest, Path.join(root, "dev_support/bin/qa-manifest"))
+    File.cp!(@phase, Path.join(root, "dev_support/bin/qa-phase"))
 
     write_executable!(
       Path.join(root, "dev_support/bin/dev-server-lifecycle"),
@@ -240,7 +240,8 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
         start)
           mkdir -p "$DEV_SERVER_STATE_DIR"
           printf '%s' "$DEV_SERVER_COMMAND" > "$(dirname "$DEV_SERVER_STATE_DIR")/launch-command"
-          printf 'QA_OBAN_DISABLED queues=0 plugins=0 stager=false\n' > "$DEV_SERVER_LOG"
+          : > "$DEV_SERVER_LOG"
+          if [[ "${FIXTURE_OBAN_WITNESS:-1}" == 1 ]]; then printf 'QA_OBAN_DISABLED queues=0 plugins=0 stager=false\n' > "$DEV_SERVER_LOG"; fi
           printf 'fixturefixturefixturefix\n' > "$DEV_SERVER_STATE_DIR/active"
           printf 'version\t1\nstate\trunning\npid\t123\nstart_signature\tfixture-start\ncommand\tmix phx.server\ncwd\t%s\nport\t%s\n' "$DEV_SERVER_CWD" "$DEV_SERVER_PORT" > "$DEV_SERVER_STATE_DIR/fixturefixturefixturefix.receipt"
           printf secret > "$(dirname "$DEV_SERVER_STATE_DIR")/secret.fixture"
@@ -271,6 +272,15 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
       set -euo pipefail
       shift 2
       if [[ " $* " == *" make "* ]]; then
+        if [[ "${FIXTURE_PREPARE_BLOCK:-0}" == 1 ]]; then
+          trap 'kill "$descendant" 2>/dev/null || true; wait "$descendant" 2>/dev/null || true; exit 143' TERM
+          sleep 4 &
+          descendant=$!
+          printf '%s %s\n' "$$" "$descendant" > phase-pids
+          wait "$descendant"
+          : > prepare-completed
+          exit 99
+        fi
         sleep #{prepare_sleep}
         if [ -n "${FIXTURE_PREPARE_MUTATION:-}" ]; then bash -c "$FIXTURE_PREPARE_MUTATION"; fi
         mkdir -p "$MIX_BUILD_PATH/lib/codex_pooler/ebin"
