@@ -2,8 +2,13 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPoolerWeb.CodexResponsesSocket
+  import ExUnit.CaptureLog
   import CodexPooler.PoolerFixtures
+
+  @shutdown_budget 15_000
 
   defmodule Endpoint do
     import Plug.Conn
@@ -37,6 +42,19 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
 
     %{api_key: key, pool: pool} = active_api_key_fixture()
 
+    on_exit(fn ->
+      for session <- Repo.all(from(s in CodexSession, where: s.pool_id == ^pool.id)) do
+        case WebsocketOwnerSession.lookup(session.id) do
+          {:ok, owner} ->
+            :sys.resume(owner)
+            stop_owner!(owner)
+
+          {:error, :owner_unavailable} ->
+            :ok
+        end
+      end
+    end)
+
     state = %{
       auth: %{api_key: key, pool: pool},
       test_parent: self(),
@@ -58,32 +76,70 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     parent = self()
     handler = make_ref()
 
-    :telemetry.attach(
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :telemetry.attach_many(
       handler,
-      [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
-      fn _, _, metadata, _ ->
-        if metadata.caller == socket, do: send(parent, {:socket_cleanup_finished, handler})
+      [
+        [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+        [:codex_pooler, :gateway, :websocket_control, :failure]
+      ],
+      fn event, _, metadata, _ ->
+        case List.last(event) do
+          :cleanup_finished ->
+            if metadata.caller == socket,
+              do: send(parent, {:socket_cleanup_finished, handler, self()})
+
+          :failure ->
+            if self() == socket,
+              do: send(parent, {:socket_cleanup_failure, handler, metadata})
+        end
       end,
       nil
     )
 
-    on_exit(fn -> :telemetry.detach(handler) end)
-    alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
     assert {:ok, owner} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
+    socket_monitor = Process.monitor(socket)
     :ok = :sys.suspend(owner)
 
-    try do
-      {:ok, websocket, data} = Mint.WebSocket.encode(websocket, {:close, 1000, ""})
-      {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
-      {:ok, conn, responses} = Mint.WebSocket.recv(conn, 0, 2_000)
-      data = for {:data, ^ref, data} <- responses, do: data
-      {:ok, _, frames} = Mint.WebSocket.decode(websocket, IO.iodata_to_binary(data))
-      assert [{:close, 1000, _}] = frames
-      Mint.HTTP.close(conn)
-    after
-      :sys.resume(owner)
-      assert_receive {:socket_cleanup_finished, ^handler}, 15_000
-    end
+    logs =
+      capture_log(fn ->
+        try do
+          {:ok, websocket, data} = Mint.WebSocket.encode(websocket, {:close, 1000, ""})
+          {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
+          {:ok, conn, responses} = Mint.WebSocket.recv(conn, 0, 2_000)
+          data = for {:data, ^ref, data} <- responses, do: data
+          {:ok, _, frames} = Mint.WebSocket.decode(websocket, IO.iodata_to_binary(data))
+          assert [{:close, 1000, _}] = frames
+          Mint.HTTP.close(conn)
+
+          assert_receive {:socket_cleanup_failure, ^handler,
+                          %{phase: :terminate, reason: :cleanup_deferred}},
+                         @shutdown_budget
+
+          assert Process.alive?(owner)
+        after
+          :sys.resume(owner)
+          assert_receive {:socket_cleanup_finished, ^handler, cleanup}, @shutdown_budget
+          await_down!(cleanup, Process.monitor(cleanup), @shutdown_budget)
+          await_down!(socket, socket_monitor, @shutdown_budget)
+          stop_owner!(owner)
+        end
+      end)
+
+    assert ["websocket control path failed phase=terminate reason=cleanup_deferred"] =
+             logs
+             |> String.split("\n", trim: true)
+             |> Enum.map(&String.replace(&1, ~r/^.*\[warning\] /, ""))
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
+    lease = Repo.get_by!(BridgeOwnerLease, codex_session_id: runtime.codex_session.id)
+    assert lease.released_at
+    assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
+
+    CodexPooler.TestDiagnostics.puts(
+      "wire_cleanup caller_down=true task_down=true owner_down=true registry_absent=true lease_released=true requests=0 expected_deferral=1"
+    )
   end
 
   @tag capture_log: true
@@ -128,5 +184,55 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
     assert Repo.aggregate(CodexPooler.Gateway.Persistence.CodexSession, :count) == 0
     Mint.HTTP.close(conn)
+  end
+
+  test "completion fence rejects a live process without a terminal signal" do
+    monitor = Process.monitor(self())
+
+    try do
+      assert_raise ExUnit.AssertionError, fn -> await_down!(self(), monitor, 0) end
+    after
+      Process.demonitor(monitor, [:flush])
+    end
+  end
+
+  test "completion fence waits for a delayed owner exit" do
+    parent = self()
+    owner = start_supervised!({Task, fn -> receive do: (:release -> :ok) end})
+
+    waiter =
+      Task.async(fn ->
+        monitor = Process.monitor(owner)
+        send(parent, :fence_ready)
+        await_down!(owner, monitor, @shutdown_budget)
+      end)
+
+    waiter_monitor = Process.monitor(waiter.pid)
+    assert_receive :fence_ready
+    assert Process.alive?(owner)
+    refute_received {_, :ok}
+    send(owner, :release)
+    assert :ok = Task.await(waiter, @shutdown_budget)
+    await_down!(waiter.pid, waiter_monitor, @shutdown_budget)
+  end
+
+  defp stop_owner!(owner) do
+    monitor = Process.monitor(owner)
+
+    try do
+      GenServer.stop(owner, :shutdown, @shutdown_budget)
+    catch
+      :exit, {:noproc, _} -> :ok
+      :exit, {:normal, _} -> :ok
+    end
+
+    await_down!(owner, monitor, @shutdown_budget)
+  end
+
+  defp await_down!(pid, monitor, budget) do
+    assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, budget
+    assert reason in [:normal, :shutdown, :noproc, {:shutdown, :local_closed}]
+    refute Process.alive?(pid)
+    :ok
   end
 end
