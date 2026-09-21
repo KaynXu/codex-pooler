@@ -261,6 +261,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
+  @spec preserve_request_data(t(), t()) :: t()
+  def preserve_request_data(cockpit, previous) do
+    recent_events =
+      previous.recent_events.items
+      |> Enum.filter(&(&1.source == "request_log"))
+      |> Enum.concat(cockpit.recent_events.items)
+      |> summarize_recent_events()
+
+    merge_deferred_request_data(cockpit, %{
+      request_health: previous.charts.request_health,
+      pool_contribution: previous.charts.pool_contribution,
+      recent_events: recent_events
+    })
+  end
+
   defp load_visible(scope, identity_id, options) when is_binary(identity_id) do
     pools = Pools.list_visible_pools(scope)
 
@@ -522,10 +537,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
         []
       end
 
+    request_items
+    |> Enum.concat(audit_recent_event_items(scope, identity_id))
+    |> Enum.concat(oauth_recent_event_items(oauth_flows))
+    |> summarize_recent_events()
+  end
+
+  defp summarize_recent_events(items) do
     items =
-      request_items
-      |> Enum.concat(audit_recent_event_items(scope, identity_id))
-      |> Enum.concat(oauth_recent_event_items(oauth_flows))
+      items
       |> Enum.sort_by(&datetime_sort_value(&1.timestamp), :desc)
       |> Enum.take(@recent_event_limit)
 

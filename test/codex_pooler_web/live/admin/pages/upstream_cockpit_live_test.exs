@@ -784,8 +784,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     {:ok, pool} =
       Pools.create_pool(scope, %{slug: "cockpit-relink-cancel", name: "Cockpit Relink Cancel"})
 
-    %{identity: identity} =
+    %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{account_label: "Cockpit Relink Cancel Account"})
+
+    failed_request =
+      recent_event_request_fixture(pool, assignment, %{
+        status: "failed",
+        admitted_at: DateTime.add(DateTime.utc_now(), -2, :minute),
+        correlation_id: "cancel-relink-retained-request"
+      })
 
     flow =
       insert_oauth_flow!(pool, identity, scope.user, %{
@@ -796,13 +803,53 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
     assert has_element?(view, "#upstream-cockpit-relink")
 
+    _ = render_async(view)
+    handler_id = {__MODULE__, :cancel_relink_metrics, make_ref()}
+    test_pid = self()
+    identity_binary = Ecto.UUID.dump!(identity.id)
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               identity_binary in (metadata[:params] || []) and
+               String.contains?(to_string(metadata[:query]), "percentile_disc") do
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              15_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
     view
     |> element("#upstream-cockpit-relink-cancel")
     |> render_click()
 
+    assert_receive {^handler_id, query_pid}, 5_000
+
+    try do
+      refute has_element?(view, "#upstream-cockpit-relink")
+      assert has_element?(view, "#upstream-event-summary", "OAuth relink cancelled")
+
+      assert has_element?(
+               view,
+               "#upstream-event-summary button[phx-value-request-id='#{failed_request.request.id}']"
+             )
+    after
+      :telemetry.detach(handler_id)
+      send(query_pid, {handler_id, :release})
+    end
+
+    _ = render_async(view)
     assert Repo.get!(OAuthFlow, flow.id).status == "cancelled"
-    refute has_element?(view, "#upstream-cockpit-relink")
-    assert has_element?(view, "#upstream-event-summary", "OAuth relink cancelled")
   end
 
   test "shows lane labels only when they differ from the account name", %{

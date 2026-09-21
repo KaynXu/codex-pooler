@@ -470,13 +470,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   defp preserve_request_metrics(socket, cockpit) do
-    current = socket.assigns.cockpit.charts
-
-    UpstreamCockpitReadModel.merge_deferred_request_data(cockpit, %{
-      request_health: current.request_health,
-      pool_contribution: current.pool_contribution,
-      recent_events: socket.assigns.cockpit.recent_events
-    })
+    UpstreamCockpitReadModel.preserve_request_data(cockpit, socket.assigns.cockpit)
   end
 
   # Event-driven cockpit reloads must not clobber policy edits in progress:
