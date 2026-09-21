@@ -21,9 +21,9 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
     attr(opts, :effective_model) || model.exposed_model_id || requested_model
   end
 
-  @spec enforce_reservation_limits(term(), struct() | nil, map(), DateTime.t()) ::
+  @spec enforce_reservation_limits(term(), struct() | nil, map(), DateTime.t() | nil) ::
           :ok | {:error, Metadata.accounting_error()}
-  def enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+  def enforce_reservation_limits(api_key, policy, estimate, timestamp \\ nil) do
     with :ok <- enforce_active_request_limit(api_key) do
       enforce_policy_limits(api_key, policy, estimate, timestamp)
     end
@@ -97,6 +97,8 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   defp effective_binding?(_binding, _requested_model), do: false
 
   defp enforce_window_reservation_limits(api_key, policy, estimate, timestamp) do
+    timestamp = timestamp || enforcement_timestamp(policy)
+
     limits =
       [
         {:max_requests_per_minute, policy.max_requests_per_minute, :minute,
@@ -118,7 +120,7 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
       |> Map.new(fn {_field, _max_value, window, since, _usage_field, _delta, _metric, _label} ->
         {window, since}
       end)
-      |> then(&LedgerEntries.window_usages(api_key.id, &1))
+      |> then(&LedgerEntries.window_usages(api_key.id, &1, timestamp))
 
     Enum.reduce_while(limits, :ok, fn
       {field, max_value, window, _since, usage_field, delta, metric, label}, :ok ->
@@ -131,6 +133,23 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
           {:error, error} -> {:halt, {:error, error}}
         end
     end)
+  end
+
+  # Called only after reservation authorization holds the per-key mutex and
+  # reader lock. Admission time stays on the ledger; every enforcement window
+  # instead shares this database clock, including committed mutex predecessors.
+  defp enforcement_timestamp(%{
+         max_requests_per_minute: nil,
+         max_tokens_per_day: nil,
+         max_tokens_per_week: nil
+       }),
+       do: DateTime.utc_now()
+
+  defp enforcement_timestamp(_policy) do
+    Repo.one!(
+      from fragment("SELECT clock_timestamp() AS as_of"),
+        select: type(fragment("as_of"), :utc_datetime_usec)
+    )
   end
 
   defp enforce_request_token_limits(policy, estimate) do

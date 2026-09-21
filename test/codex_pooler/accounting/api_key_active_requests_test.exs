@@ -171,6 +171,84 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
     end)
   end
 
+  test "window enforcement sees a later admission committed before an earlier caller obtains the mutex",
+       context do
+    fixture = fixture(context, nil)
+    parent = self()
+    release = make_ref()
+    earlier = DateTime.add(DateTime.utc_now(), -10, :second)
+    later = DateTime.add(earlier, 1, :second)
+
+    unboxed(fn ->
+      Repo.update_all(from(b in APIKeyPolicyBinding, where: b.api_key_id == ^fixture.api_key.id),
+        set: [status: "active", max_requests_per_minute: 1]
+      )
+    end)
+
+    first =
+      actor(context, fn ->
+        [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+        send(parent, {:holder_backend, backend})
+
+        Process.put(
+          {Reservation, :runtime_authorization_barrier},
+          {parent, release, {:reserve, :after}}
+        )
+
+        reserve_at(fixture, later)
+      end)
+
+    assert_receive {:runtime_authorization_barrier, ^release, :reserve, :after, holder},
+                   @detection_budget
+
+    assert_receive {:holder_backend, holder_backend}, @detection_budget
+
+    second =
+      actor(context, fn ->
+        [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+        send(parent, {:waiter_backend, backend})
+        reserve_at(fixture, earlier)
+      end)
+
+    assert_receive {:waiter_backend, waiter_backend}, @detection_budget
+    refute holder_backend == waiter_backend
+    snapshot = unboxed(fn -> await_blocker(waiter_backend, holder_backend) end)
+    assert snapshot == [[holder_backend, "advisory", false]]
+    first_monitor = Process.monitor(first.pid)
+    second_monitor = Process.monitor(second.pid)
+    send(holder, {:runtime_authorization_release, release})
+    assert {:ok, winner} = Task.await(first, @detection_budget)
+
+    assert {:error, %{code: :api_key_policy_limit_exceeded}} =
+             Task.await(second, @detection_budget)
+
+    assert_receive {:DOWN, ^first_monitor, :process, _, _}, @detection_budget
+    assert_receive {:DOWN, ^second_monitor, :process, _, _}, @detection_budget
+
+    unboxed(fn ->
+      assert Repo.get!(LedgerEntry, winner.reservation.id).occurred_at == later
+      assert counts(fixture) == %{requests: 1, reservations: 1, attempts: 0}
+
+      Repo.update_all(from(b in APIKeyPolicyBinding, where: b.api_key_id == ^fixture.api_key.id),
+        set: [max_requests_per_minute: 2]
+      )
+
+      assert {:ok, delayed} = reserve_at(fixture, earlier)
+      assert Repo.get!(LedgerEntry, delayed.reservation.id).occurred_at == earlier
+    end)
+
+    CodexPooler.TestDiagnostics.puts(
+      inspect(%{
+        scenario: :serialized_enforcement_clock,
+        holder_backend: holder_backend,
+        waiter_backend: waiter_backend,
+        blocked_locks: snapshot,
+        earlier_admission_denied: true,
+        admission_timestamps_preserved: true
+      })
+    )
+  end
+
   test "cap applies with disabled bindings across routes and models and uses fresh key",
        context do
     fixture = fixture(context, 1)
@@ -533,6 +611,15 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
         fixture.model,
         %{"model" => fixture.model.exposed_model_id},
         %{correlation_id: Ecto.UUID.generate()}
+      )
+
+  defp reserve_at(fixture, timestamp),
+    do:
+      Accounting.reserve(
+        fixture.auth,
+        fixture.model,
+        %{"model" => fixture.model.exposed_model_id},
+        %{correlation_id: Ecto.UUID.generate(), now: timestamp}
       )
 
   defp reserve_and_attempt(fixture) do

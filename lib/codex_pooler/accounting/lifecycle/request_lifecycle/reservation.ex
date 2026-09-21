@@ -443,7 +443,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
               attr(opts, :reservation_estimate)
             )
 
-          case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+          case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate) do
             :ok ->
               :ok
 
@@ -754,7 +754,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           attr(opts, :reservation_estimate)
         )
 
-      case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+      case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate) do
         :ok -> :ok
         {:error, error} -> Repo.rollback(error)
       end
