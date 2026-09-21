@@ -84,6 +84,42 @@ defmodule CodexPooler.Accounting.ReservationPolicyTest do
     assert :ok = ReservationPolicy.enforce_reservation_limits(nil, nil, estimate, now)
   end
 
+  test "absent and nil active caps skip database reads for trusted minimal key contexts" do
+    test_pid = self()
+    handler_id = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid and metadata[:repo] == Repo,
+            do: send(test_pid, {handler_id, :query})
+        end,
+        nil
+      )
+
+    estimate = %{input_tokens: 10, output_tokens: 5, total_tokens: 15}
+
+    for key <- [
+          nil,
+          %{id: Ecto.UUID.generate()},
+          %{id: Ecto.UUID.generate(), max_active_requests: nil}
+        ] do
+      assert :ok =
+               ReservationPolicy.enforce_reservation_limits(
+                 key,
+                 nil,
+                 estimate,
+                 DateTime.utc_now()
+               )
+    end
+
+    # The synchronous caller is the telemetry emitter; completion fences all reads.
+    refute_received {^handler_id, :query}
+  end
+
   defp insert_policy(key, model) do
     now = DateTime.utc_now()
 

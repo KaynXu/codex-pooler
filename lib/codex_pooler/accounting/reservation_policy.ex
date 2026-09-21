@@ -31,10 +31,9 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
 
   # Caller holds the per-key reservation advisory mutex through insertion.
   # The cap is independent of the effective model binding and token windows.
-  defp enforce_active_request_limit(%{max_active_requests: nil}), do: :ok
-
-  defp enforce_active_request_limit(api_key) do
-    if LedgerReads.outstanding_reservation_count(api_key.id) >= api_key.max_active_requests do
+  defp enforce_active_request_limit(%{max_active_requests: limit} = api_key)
+       when is_integer(limit) and limit > 0 do
+    if LedgerReads.outstanding_reservation_count(api_key.id) >= limit do
       {:error,
        Metadata.accounting_error(
          :api_key_concurrency_limit_exceeded,
@@ -44,6 +43,8 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
       :ok
     end
   end
+
+  defp enforce_active_request_limit(_api_key), do: :ok
 
   defp enforce_policy_limits(_api_key, nil, _estimate, _timestamp), do: :ok
 
