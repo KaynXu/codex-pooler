@@ -1,5 +1,5 @@
 defmodule CodexPooler.Dev.SavedResetSafetyProbeTest do
-  use CodexPooler.DataCase, async: true
+  use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
 

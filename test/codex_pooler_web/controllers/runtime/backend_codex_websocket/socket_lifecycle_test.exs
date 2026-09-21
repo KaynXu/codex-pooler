@@ -376,6 +376,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     end
   end
 
+  @tag slow:
+         "runs socket termination through pre-cleanup drain, upstream cancellation, and durable aborted receipt settlement"
   test "client disconnect before the terminal records an aborted downstream receipt" do
     release_ref = make_ref()
 

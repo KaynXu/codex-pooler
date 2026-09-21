@@ -6815,6 +6815,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     @tag :input_audio_backport
     @tag timeout: 120_000
+    @tag slow: "decodes the real 50 MiB audio boundary with permitted whitespace"
     test "Responses accepts exactly 50 MiB when only ASCII whitespace exceeds the encoded limit" do
       source = :binary.copy(<<0>>, 52_428_800)
       encoded = Base.encode64(source)
@@ -6833,6 +6834,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     @tag :input_audio_backport
     @tag timeout: 120_000
+    @tag slow: "decodes the real 50 MiB audio rejection boundary"
     test "Responses rejects decoded audio one byte above 50 MiB" do
       source = :binary.copy(<<0>>, 52_428_801)
 

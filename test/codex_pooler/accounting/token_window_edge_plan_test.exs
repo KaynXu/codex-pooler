@@ -6,6 +6,11 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
   alias CodexPooler.Accounting.RequestLifecycle.WindowUsage
   alias CodexPooler.TestDiagnostics
 
+  # Enough rows to distinguish bounded edge discovery (at most 50 rows) from a
+  # retained-history scan, and linear terminal lookup from a quadratic join.
+  # Larger fixtures mostly measure accounting trigger work during insertion.
+  @retained_histories 500
+
   setup tags do
     if tags[:statistics] == :empty do
       # Prime a physical page, then roll back its rows: unlike a pristine
@@ -216,10 +221,10 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
               )
 
             assert usage.day.effective_request_count ==
-                     if(boundary == :few, do: 10_001, else: 10_000)
+                     if(boundary == :few, do: @retained_histories + 1, else: @retained_histories)
 
-            assert usage.minute.effective_request_count == 10_000
-            assert usage.same.effective_request_count == 10_000
+            assert usage.minute.effective_request_count == @retained_histories
+            assert usage.same.effective_request_count == @retained_histories
             assert usage.day.effective_total_tokens == 0
             assert Enum.all?(usage, fn {_window, values} -> values.pending_total_tokens == 0 end)
             assert_receive {:window_query, query, params}
@@ -237,11 +242,11 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
               |> Enum.filter(&(&1["Relation Name"] == "ledger_entries" and &1["Alias"] != "r"))
               |> scanned_rows()
 
-            assert comparisons < 10_000,
-                   "pending lookup must not compare every terminal with every reservation"
+            assert comparisons < @retained_histories,
+                   "pending lookup must not compare every terminal with every reservation: #{comparisons} comparisons"
 
-            assert terminal_scans <= 20_006,
-                   "pending terminal lookup must remain linear in retained histories"
+            assert terminal_scans <= @retained_histories * 2 + 6,
+                   "pending terminal lookup must remain linear in retained histories: #{terminal_scans} scanned rows"
 
             scanned =
               history
@@ -259,7 +264,7 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
                 boundary: boundary,
                 statistics: statistics,
                 analyzed: analyzed,
-                histories_per_key: 10_000,
+                histories_per_key: @retained_histories,
                 keys: 2,
                 scanned_edge_rows: scanned,
                 edge_history_rows: history["Actual Rows"],
@@ -284,7 +289,7 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
       [[ledger_count]] =
         Repo.query!("SELECT count(*) FROM ledger_entries WHERE api_key_id=$1", [key]).rows
 
-      assert ledger_count == if(boundary == :few, do: 20_006, else: 20_000)
+      assert ledger_count == @retained_histories * 2 + if(boundary == :few, do: 6, else: 0)
     end
   end
 
@@ -309,61 +314,60 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
   end
 
   defp insert_retained_histories(setup, at) do
-    # Preserve the retained-history volume without making one fixture statement
-    # process all 20,000 ledger rows through the accounting triggers under N=4.
-    # Do not ANALYZE between batches: the stale-statistics cases exercise that state.
-    for batch <- 1..20 do
-      {elapsed_us, result} =
-        :timer.tc(fn ->
-          Repo.query!(
-            """
-            WITH inserted_requests AS (
-              INSERT INTO requests(
-                pool_id,
-                api_key_id,
-                requested_model,
-                endpoint,
-                transport,
-                correlation_id,
-                admitted_at
-              )
-              SELECT $1,$2,'synthetic-model','/v1/responses','http_json',gen_random_uuid()::text,$3
-              FROM generate_series(1,500)
-              RETURNING id,pool_id,api_key_id,admitted_at
-            )
-            INSERT INTO ledger_entries(
+    {elapsed_us, result} =
+      :timer.tc(fn ->
+        Repo.query!(
+          """
+          WITH inserted_requests AS (
+            INSERT INTO requests(
               pool_id,
               api_key_id,
-              request_id,
-              entry_kind,
-              usage_status,
-              total_tokens,
-              request_count,
-              occurred_at,
-              transport
+              requested_model,
+              endpoint,
+              transport,
+              correlation_id,
+              admitted_at
             )
-            SELECT r.pool_id,r.api_key_id,r.id,event.kind,'usage_pending',512,1,r.admitted_at,'http_json'
-            FROM inserted_requests r
-            CROSS JOIN (VALUES ('reservation'),('release')) AS event(kind)
-            """,
-            [Ecto.UUID.dump!(setup.pool.id), Ecto.UUID.dump!(setup.api_key.id), at]
+            SELECT $1,$2,'synthetic-model','/v1/responses','http_json',gen_random_uuid()::text,$3
+            FROM generate_series(1,$4)
+            RETURNING id,pool_id,api_key_id,admitted_at
           )
-        end)
+          INSERT INTO ledger_entries(
+            pool_id,
+            api_key_id,
+            request_id,
+            entry_kind,
+            usage_status,
+            total_tokens,
+            request_count,
+            occurred_at,
+            transport
+          )
+          SELECT r.pool_id,r.api_key_id,r.id,event.kind,'usage_pending',512,1,r.admitted_at,'http_json'
+          FROM inserted_requests r
+          CROSS JOIN (VALUES ('reservation'),('release')) AS event(kind)
+          """,
+          [
+            Ecto.UUID.dump!(setup.pool.id),
+            Ecto.UUID.dump!(setup.api_key.id),
+            at,
+            @retained_histories
+          ]
+        )
+      end)
 
-      assert %{num_rows: 1_000} = result
+    assert result.num_rows == @retained_histories * 2
 
-      TestDiagnostics.puts(
-        CodexPooler.JSON.encode!(%{
-          scenario: "retained_seed_batch",
-          batch: batch,
-          histories: 500,
-          ledger_rows: result.num_rows,
-          elapsed_us: elapsed_us
-        })
-      )
-    end
+    TestDiagnostics.puts(
+      CodexPooler.JSON.encode!(%{
+        scenario: "retained_seed_batch",
+        histories: @retained_histories,
+        ledger_rows: result.num_rows,
+        elapsed_us: elapsed_us
+      })
+    )
 
-    assert [[10_000]] =
+    assert [[@retained_histories]] =
              Repo.query!("SELECT count(*) FROM requests WHERE api_key_id=$1", [
                Ecto.UUID.dump!(setup.api_key.id)
              ]).rows

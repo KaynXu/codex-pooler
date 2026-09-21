@@ -22,6 +22,7 @@ defmodule CodexPooler.Platform.SupersededIncarnationRecoveryTest do
   # owns it for every caller.
   @cleanup_timeout_ms InstancePresencePeer.cleanup_timeout_ms(@peer_timeout_ms)
 
+  @tag slow: "boots two BEAM incarnations and verifies OS identity and database-only recovery"
   test "a hard-killed named owner is recovered once its in-place successor publishes presence" do
     %{user: owner} = CodexPooler.AccountsFixtures.committed_bootstrap_owner_fixture!()
     slug = "superseded-incarnation-#{Ecto.UUID.generate()}"

@@ -35,23 +35,31 @@ defmodule CodexPooler.ExecutionProofSupport do
     :ok
   end
 
-  @spec await_terminal!(map()) :: :ok
-  def await_terminal!(identity),
-    do: await_terminal(identity, System.monotonic_time(:millisecond) + 15_000)
+  @spec await_terminal!(map(), pid() | nil) :: :ok
+  def await_terminal!(identity, publisher \\ nil),
+    do: await_terminal(identity, publisher, System.monotonic_time(:millisecond) + 15_000)
 
-  defp await_terminal(identity, deadline) do
+  defp await_terminal(identity, publisher, deadline) do
     if ExecutionTerminalProofs.terminal?(identity) do
       :ok
     else
       assert System.monotonic_time(:millisecond) < deadline,
              "terminal execution proof was not published"
 
+      # Drive the owned production publisher on demand. Its default one-second
+      # cadence otherwise charges every batch left by earlier sandbox tests to
+      # this test, making serial and partitioned order produce different costs.
+      if is_pid(publisher) do
+        send(publisher, :publish)
+        :sys.get_state(publisher)
+      end
+
       receive do
       after
         10 -> :ok
       end
 
-      await_terminal(identity, deadline)
+      await_terminal(identity, publisher, deadline)
     end
   end
 end

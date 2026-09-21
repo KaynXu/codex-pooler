@@ -5294,6 +5294,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     @tag :saved_reset_cohort_lock_200
     @tag timeout: 90_000
+    @tag slow: "creates 200 committed identities to verify one ordered cohort lock"
     test "a 200-member cohort uses one exact ordered identity lock and one assignment lock" do
       {:ok, fake} = codex_reset_fake(0)
       on_exit(fn -> FakeUpstream.stop(fake) end)

@@ -300,6 +300,8 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == newest.id))
     end
 
+    @tag slow:
+           "creates 101 real identities to prove the production 100-identity recovery batch limit"
     test "defaults scheduled recovery to at most 100 identities per pass" do
       identities =
         for index <- 1..101 do

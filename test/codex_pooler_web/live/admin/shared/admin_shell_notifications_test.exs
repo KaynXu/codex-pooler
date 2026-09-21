@@ -226,6 +226,8 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     assert Repo.get!(AlertIncident, incident.id).state == incident.state
   end
 
+  @tag slow:
+         "mounts independent operator notification surfaces and verifies dismiss-all ownership across two pools"
   test "dismiss all is server-scoped and independent per operator", %{
     conn: owner_conn,
     scope: scope

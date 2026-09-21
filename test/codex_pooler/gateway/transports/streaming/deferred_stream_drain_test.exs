@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamDrainTest do
 
   # The drain's own budget is the behavior under test; these waits only detect
   # failure and stay well above it.
-  @drain_timeout_ms 2_000
+  @drain_timeout_ms 400
   @await_timeout_ms 15_000
   # Left at the default, `RolloutDrain` reserves a full owner call budget before
   # the poll deadline and a test-sized budget collapses to the deadline floor.

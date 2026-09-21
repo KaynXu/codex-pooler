@@ -15,22 +15,28 @@ defmodule CodexPooler.SchemaSecretRedactionTest do
   # token, so they are redacted like every other capability.
   @internal_fencing_tokens [{CodexPooler.Admin.PoolTrafficGate, :owner_token}]
 
-  test "every secret-shaped schema field is redacted" do
-    {:ok, modules} = :application.get_key(:codex_pooler, :modules)
+  {:ok, modules} = :application.get_key(:codex_pooler, :modules)
 
-    offenders =
-      for module <- modules,
-          Code.ensure_loaded?(module),
-          function_exported?(module, :__schema__, 1),
-          field <- module.__schema__(:fields) ++ module.__schema__(:virtual_fields),
-          name = Atom.to_string(field),
-          Regex.match?(@secret_field, name),
-          not Regex.match?(@not_secret, name),
-          field not in module.__schema__(:redact_fields),
-          {module, field} not in @internal_fencing_tokens,
-          do: {module, field}
+  schemas =
+    Enum.filter(modules, fn module ->
+      {:ok, {^module, [exports: exports]}} = :beam_lib.chunks(:code.which(module), [:exports])
+      {:__schema__, 1} in exports
+    end)
 
-    assert offenders == [],
-           "secret-shaped fields without `redact: true`: #{inspect(offenders)}"
+  for module <- schemas do
+    @tag schema_module: module
+    test "#{inspect(module)} redacts every secret-shaped schema field", %{schema_module: module} do
+      offenders =
+        for field <- module.__schema__(:fields) ++ module.__schema__(:virtual_fields),
+            name = Atom.to_string(field),
+            Regex.match?(@secret_field, name),
+            not Regex.match?(@not_secret, name),
+            field not in module.__schema__(:redact_fields),
+            {module, field} not in @internal_fencing_tokens,
+            do: {module, field}
+
+      assert offenders == [],
+             "secret-shaped fields without `redact: true`: #{inspect(offenders)}"
+    end
   end
 end

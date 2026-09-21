@@ -75,6 +75,7 @@ defmodule CodexPooler.Access.InviteCredentialWriterTest do
     assert {:ok, _contract} = Access.load_usable_invite_contract(token)
   end
 
+  @tag slow: "holds a real invite row lock across credential expiry"
   test "invite completion rejects a token that expires while waiting for the locked invite" do
     # The token must still be valid when completion takes the invite lock and
     # expire only while it waits there, so the wall-clock wait below is the

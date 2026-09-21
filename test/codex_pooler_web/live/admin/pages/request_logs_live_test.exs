@@ -824,6 +824,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{first_request.id}")
   end
 
+  @tag slow:
+         "seeds a full 50-row page plus excluded history and verifies mounted filter choices across two pools"
   test "filter controls use custom selectors with status icons and table-derived models", %{
     conn: conn,
     scope: scope
@@ -3143,6 +3145,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
+  @tag slow:
+         "seeds fifty-one request lifecycles and exercises mounted pagination after a live arrival"
   test "paging forward after a live refresh does not skip records admitted since the load", %{
     conn: conn,
     scope: scope

@@ -128,6 +128,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
     assert Repo.all(RoutingCircuitState) == []
   end
 
+  @tag slow: "keeps a real deferred SSE request alive across heartbeat renewal"
   test "sessioned HTTP streaming keeps the owner lease live until deferred completion" do
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %{OperationalSettings.current() | sse_keepalive_interval_ms: 60_000}
@@ -215,6 +216,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
     )
   end
 
+  @tag slow: "observes actual one-second deferred handoff expiry"
   test "returned but uninvoked sessioned HTTP stream stops its service heartbeat at handoff ttl" do
     upstream = start_upstream(FakeUpstream.sse_stream([]))
     fixture = gateway_setup(upstream)

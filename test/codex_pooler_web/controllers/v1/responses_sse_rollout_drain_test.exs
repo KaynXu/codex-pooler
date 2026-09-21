@@ -49,9 +49,7 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
     end
   end
 
-  # The drain polls settled streams every 200 ms, so the drained stream settles
-  # far inside this budget; the waits below are failure detection, not timers
-  # the behavior depends on.
+  # Cutoffs use the injected clock; the real relay and settlement finish on signals.
   @drain_timeout_ms 5_000
   @await_timeout_ms 15_000
   # `RolloutDrain`'s default deadline margin reserves a full owner call budget
@@ -135,15 +133,21 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
 
     stream_entry = await_registered_stream(stream_registry)
 
+    {response, summary} =
+      WebsocketRolloutDrainSupport.drain_http_request(
+        request_task,
+        drain_options(drain_name),
+        @await_timeout_ms
+      )
+
     assert %{
              result: :ok,
              http_streams_seen: 1,
              http_streams_completed: 1,
              http_streams_aborted: 0,
              http_streams_failed: 0
-           } = RolloutDrain.start_drain(drain_options(drain_name))
+           } = summary
 
-    response = Task.await(request_task, @await_timeout_ms)
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
     assert response.status == 200
@@ -241,15 +245,21 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
 
     _stream_entry = await_registered_stream(stream_registry)
 
+    {response, summary} =
+      WebsocketRolloutDrainSupport.drain_http_request(
+        request_task,
+        drain_options(drain_name),
+        @await_timeout_ms
+      )
+
     assert %{
              result: :ok,
              http_streams_seen: 1,
              http_streams_completed: 1,
              http_streams_aborted: 0,
              http_streams_failed: 0
-           } = RolloutDrain.start_drain(drain_options(drain_name))
+           } = summary
 
-    response = Task.await(request_task, @await_timeout_ms)
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
     # The status is already committed by `send_chunked/2` before the deferred
@@ -418,10 +428,14 @@ defmodule CodexPoolerWeb.V1.ResponsesSseRolloutDrainTest do
 
     await_registered_stream(context.stream_registry)
 
-    assert %{http_streams_completed: 1} =
-             RolloutDrain.start_drain(drain_options(context.drain_name))
+    {response, summary} =
+      WebsocketRolloutDrainSupport.drain_http_request(
+        request_task,
+        drain_options(context.drain_name),
+        @await_timeout_ms
+      )
 
-    response = Task.await(request_task, @await_timeout_ms)
+    assert %{http_streams_completed: 1} = summary
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
     assert response.status == 200
     assert response.resp_body =~ "server_error"

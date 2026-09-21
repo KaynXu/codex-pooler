@@ -5187,6 +5187,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
 
     @tag :scheduled_expiry_reconciliation
+    @tag slow: "holds an assignment row lock across actual saved-reset expiration"
     test "scheduled redemption resolves its decision time after the assignment lock" do
       fixture =
         Sandbox.unboxed_run(Repo, fn ->
@@ -6070,6 +6071,8 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert Repo.get!(PoolUpstreamAssignment, assignment.id) == disabled_before
     end
 
+    @tag slow:
+           "performs real credential refresh failure and drains the already-queued Oban reconciliation"
     test "skips already queued account reconciliation jobs when upstream account requires reauth" do
       {pool, assignment} = active_assignment_fixture(%{})
       identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)

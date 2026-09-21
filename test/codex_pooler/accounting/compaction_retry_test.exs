@@ -68,32 +68,32 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
                Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
     end
 
-    test "rejects altered compact #{failure} evidence without a successor" do
-      for mutation <- [
-            :visible,
-            :request_endpoint,
-            :input_endpoint,
-            :generation,
-            :request_status,
-            :attempt_status,
-            :request_usage,
-            :attempt_usage,
-            :response_status,
-            :attempt_identity,
-            :epoch,
-            :model,
-            :anchor,
-            :entitlement
-          ] do
+    for mutation <- [
+          :visible,
+          :request_endpoint,
+          :input_endpoint,
+          :generation,
+          :request_status,
+          :attempt_status,
+          :request_usage,
+          :attempt_usage,
+          :response_status,
+          :attempt_identity,
+          :epoch,
+          :model,
+          :anchor,
+          :entitlement
+        ] do
+      test "rejects altered compact #{failure} #{mutation} evidence without a successor" do
         {setup, predecessor, opts} = local_failure_predecessor!(unquote(failure))
         turn = Repo.get_by!(CodexTurn, request_id: predecessor.id)
         attempt = Repo.get!(Attempt, turn.final_attempt_id)
-        opts = alter_local_failure!(mutation, setup, predecessor, turn, attempt, opts)
+        opts = alter_local_failure!(unquote(mutation), setup, predecessor, turn, attempt, opts)
         before = row_counts()
 
         assert {:error, _} =
                  Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts),
-               "unexpected successor for #{unquote(failure)} with #{mutation}"
+               "unexpected successor for #{unquote(failure)} with #{unquote(mutation)}"
 
         assert row_counts() == before
       end

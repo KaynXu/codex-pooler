@@ -133,6 +133,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     assert state.pool_upstream_assignment_id == fixture.assignment.id
   end
 
+  @tag slow: "reproduces an inverted assignment-first PostgreSQL lock schedule"
   test "record_success converges without raising against an inverted assignment-first holder" do
     fixture = committed_routing_fixture!()
 

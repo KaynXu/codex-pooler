@@ -779,6 +779,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert quota_first_plan.selected_assignment_id == requested_model_remaining.id
     end
 
+    @tag slow:
+           "persists four quota observations and two routing configurations around the real request snapshot"
     test "quota_first and routing settings consume the request-local route-state snapshot" do
       setup = routing_setup(2)
       [snapshot_best, snapshot_worst] = setup.assignments
@@ -865,6 +867,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert refreshed_plan.selected_assignment_id == second_assignment.id
     end
 
+    @tag slow: "compares live and snapshot routing across 500 independent rendezvous seeds"
     test "quota_first scores reported-percent exhaustion as empty capacity for prepared credit-backed probes" do
       setup = routing_setup(2)
       seed = "bridge-ring-seed-1"

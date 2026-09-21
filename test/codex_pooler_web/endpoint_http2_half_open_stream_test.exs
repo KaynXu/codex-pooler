@@ -55,7 +55,7 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
   # suite saturates the machine; the plug does no work, so two seconds is still
   # orders of magnitude above that. Everything else here is failure detection
   # and stays above that scenario budget.
-  @idle_timeout_ms 2_000
+  @idle_timeout_ms 500
   @recv_timeout 15_000
 
   defmodule RaiseAfterChunkPlug do

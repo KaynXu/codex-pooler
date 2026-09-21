@@ -129,7 +129,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
       end
 
     {fake, identity, assignment} = probe_fixture(entries)
-    task = start_probe(identity, assignment, observed_at, 1_000)
+    task = start_probe(identity, assignment, observed_at, 200)
 
     assert_receive {:fake_upstream_timeout_barrier, ^stage, handler, ^release_ref},
                    @probe_detection_timeout_ms

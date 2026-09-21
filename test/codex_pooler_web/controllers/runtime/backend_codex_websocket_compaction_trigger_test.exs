@@ -42,6 +42,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   for topology <- [:direct, :forwarded], flip? <- [false, true] do
     @tag :queued_lite_compaction
     @tag capture_log: true
+    @tag slow:
+           "drives real queued compaction through current serving-mode admission and owner delivery barriers"
     test "#{topology} queued Lite compact #{if flip?, do: "rejects a current mode flip", else: "uses unresolved owner mode"}" do
       queued_lite_compaction_case(unquote(topology), unquote(flip?))
     end
@@ -547,6 +549,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
+  @tag slow:
+         "captures and flushes full BEAM trace events through a real owner compaction socket lifecycle"
   test "full trace records a real socket owner compact lifecycle without injected events" do
     assert_real_trace_fixture_has_no_manual_emits!()
     enable_owner_forwarding_for_trace!()
@@ -1005,6 +1009,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
+  @tag slow:
+         "runs all measured incremental compaction scenarios through real socket lineage and accounting"
   test "source-derived incremental compaction stays on the response lineage assignment and reuses the socket" do
     :ok = NativeCompactionAuthorizationObserver.arm()
     on_exit(fn -> NativeCompactionAuthorizationObserver.disarm() end)

@@ -139,6 +139,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
   end
 
   @tag timeout: 120_000
+  @tag slow: "validates actual 10 MiB stdout and stderr boundary values and one-byte overflows"
   test "enforces stdout and stderr limits without materializing codepoint lists" do
     maximum = String.duplicate("x", 10_485_760)
     overflow = maximum <> "x"
@@ -154,6 +155,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
   # The bound is code points, not bytes: two-byte text crosses the byte count
   # of the limit at half the code points and must still be counted exactly.
   @tag timeout: 120_000
+  @tag slow:
+         "validates 10 million multibyte codepoints and the one-codepoint overflow without truncation"
   test "enforces the output limit by code point when every code point is multi-byte" do
     multibyte_maximum = String.duplicate("é", 10_485_760)
     multibyte_overflow = multibyte_maximum <> "é"

@@ -120,8 +120,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTaskFailureCleanupTest do
       send(context.task, :fail_finalization)
       assert_receive {:finalization_failed, task}, 15_000
       state = Map.put(state, :response_task_cleanup_results, %{task => :task_exception})
-      # Exercise the real termination drain budget while the owned task awaits cleanup.
+      monitor = Process.monitor(task)
+      # The fixture obeys the real delivery acknowledgement instead of waiting
+      # for the socket's cancellation budget to kill an unresponsive fake task.
       assert :ok = CodexResponsesSocket.terminate(:normal, state)
+      assert_receive {:cleanup_delivery_acknowledged, ^task}, 15_000
+      assert_receive {:DOWN, ^monitor, :process, ^task, :normal}, 15_000
       assert Repo.reload!(fixture.request).last_error_code == "owner_task_exception"
       assert {:ok, %ClientRetry.SuccessorClaim{}} = claim(fixture)
     end
@@ -170,7 +174,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTaskFailureCleanupTest do
          end
 
          receive do
-           :stop -> :ok
+           {:websocket_response_delivery_ack, ^token, :aborted} ->
+             send(parent, {:cleanup_delivery_acknowledged, self()})
+
+           :stop ->
+             :ok
          end
        end})
 
@@ -183,6 +191,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTaskFailureCleanupTest do
       task_monitors: %{},
       queued_response_payloads: :queue.new(),
       response_task_activities: %{task => token},
+      response_task_activity_registry: registry,
       native_turn_output_task_pids: MapSet.new(),
       direct_cleanup_contexts: %{task => context},
       direct_cleanup_receipts: %{task => fixture.receipt}

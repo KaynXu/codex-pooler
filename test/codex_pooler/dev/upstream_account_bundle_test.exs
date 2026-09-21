@@ -764,6 +764,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     assert persistence_counts() == before
   end
 
+  @tag slow:
+         "exercises real encryption and storage rejection across credential provenance variants"
   test "encrypted v2 import rejects missing, forged, and malformed credential provenance before writes" do
     source_pool = pool_fixture()
     _source = account_fixture(source_pool)

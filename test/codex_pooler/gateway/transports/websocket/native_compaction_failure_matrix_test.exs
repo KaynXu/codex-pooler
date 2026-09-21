@@ -17,6 +17,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionFailureMatrix
     assert logs == ""
   end
 
+  @tag slow:
+         "executes the registered native-compaction failure matrix through real runtime observations"
   test "registry is complete, unique, callable, and backed by real observations", context do
     rows = Scenarios.rows()
 

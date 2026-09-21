@@ -329,6 +329,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     end
   end
 
+  @tag slow: "starts a real production compiler subprocess and executes its artifact"
   test "production compilation omits test-only gates and buffers ordinary residue" do
     source = Path.expand("lib/codex_pooler/gateway/runtime/streaming/stream_attempt.ex")
     compile_dir = claim_production_compile_dir()
@@ -338,27 +339,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
         ["-pa", List.to_string(code_path)]
       end)
 
-    elixirc = System.find_executable("elixirc") || flunk("elixirc executable not found")
-
-    {compile_output, compile_status} =
-      System.cmd(
-        elixirc,
-        [
-          "-e",
-          "Mix.start(); Mix.env(:prod)",
-          "--ignore-module-conflict",
-          "--warnings-as-errors",
-          "-o",
-          compile_dir
-        ] ++
-          code_path_args ++ [source],
-        env: [{"MIX_ENV", "prod"}],
-        stderr_to_stdout: true
-      )
-
-    assert compile_status == 0, compile_output
-
     script = """
+    Mix.start()
+    Mix.env(:prod)
+    Code.compiler_options(ignore_module_conflict: true)
+    {:ok, _, []} = Kernel.ParallelCompiler.compile_to_path([#{inspect(source)}], #{inspect(compile_dir)})
     module = CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
     false = function_exported?(module, :classify_first_event, 4)
 
@@ -375,7 +360,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     {output, status} =
       System.cmd(
         elixir,
-        code_path_args ++ ["-pa", compile_dir, "-e", script],
+        code_path_args ++ ["-e", script],
         env: [{"MIX_ENV", "prod"}],
         stderr_to_stdout: true
       )

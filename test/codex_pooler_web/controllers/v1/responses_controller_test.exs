@@ -3286,6 +3286,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end
   end
 
+  @tag slow: "dispatches the complete compaction replay variant matrix over both JSON and SSE"
   test "POST /v1/responses preserves verified compaction variants across JSON and SSE", %{
     conn: conn
   } do

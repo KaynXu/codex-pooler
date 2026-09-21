@@ -476,6 +476,8 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
     end
   end
 
+  @tag slow:
+         "creates 128 finalized reservations plus unrelated history to prove scoped index access"
   test "active count excludes retained terminals regardless of amount status", context do
     fixture = fixture(context, 2)
     unrelated = fixture(context, nil)

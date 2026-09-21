@@ -840,17 +840,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  @tag :model_serving_modes
-  test "backend response aliases keep the selected Pool model mode across JSON and SSE", %{
-    conn: conn
-  } do
-    routes = [
-      {"/backend-api/codex/responses", :responses},
-      {"/backend-api/codex/v1/responses", :responses},
-      {"/backend-api/codex/v1/chat/completions", :chat}
-    ]
-
-    for {path, kind} <- routes, stream? <- [false, true] do
+  for {path, kind} <- [
+        {"/backend-api/codex/responses", :responses},
+        {"/backend-api/codex/v1/responses", :responses},
+        {"/backend-api/codex/v1/chat/completions", :chat}
+      ],
+      stream? <- [false, true] do
+    @tag :model_serving_modes
+    @tag mode_path: path, mode_kind: kind, mode_stream: stream?
+    test "backend response alias #{path} keeps the selected Pool model mode with stream=#{stream?}",
+         %{conn: conn, mode_path: path, mode_kind: kind, mode_stream: stream?} do
       upstream = start_upstream(backend_mode_matrix_upstream(kind, stream?))
       setup = gateway_setup(upstream)
       payload = backend_mode_matrix_payload(setup, kind, stream?)
@@ -13276,54 +13275,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end)
   end
 
-  test "POST /backend-api/codex/responses rejects incomplete selected account and additional windows before dispatch",
-       %{conn: conn} do
-    valid_window = %{
-      "used_percent" => 25,
-      "limit_window_seconds" => 18_000,
-      "reset_after_seconds" => 3_600,
-      "reset_at" => DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
-    }
+  for field <- ~w(limit_window_seconds reset_after_seconds reset_at),
+      mutation <- [:missing, :wrong_type],
+      scope <- [:account, :additional] do
+    @tag window_field: field, window_mutation: mutation, window_scope: scope
+    test "POST /backend-api/codex/responses rejects #{scope} window #{field} #{mutation} before dispatch",
+         %{conn: conn, window_field: field, window_mutation: mutation, window_scope: scope} do
+      valid_window = %{
+        "used_percent" => 25,
+        "limit_window_seconds" => 18_000,
+        "reset_after_seconds" => 3_600,
+        "reset_at" => DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
+      }
 
-    invalid_windows =
-      for field <- ~w(limit_window_seconds reset_after_seconds reset_at),
-          mutation <- [:missing, :wrong_type] do
+      window =
         case mutation do
           :missing -> Map.delete(valid_window, field)
           :wrong_type -> Map.put(valid_window, field, "invalid")
         end
-      end
 
-    cases =
-      Enum.flat_map(invalid_windows, fn window ->
-        [
-          %{
-            "plan_type" => "sample_malformed_account_window",
-            "rate_limit" => %{
-              "allowed" => true,
-              "limit_reached" => false,
-              "primary_window" => window
-            }
-          },
-          %{
-            "plan_type" => "sample_malformed_additional_window",
-            "rate_limit" => %{"allowed" => true, "limit_reached" => false},
-            "additional_rate_limits" => [
-              %{
-                "limit_name" => "Sample model",
-                "metered_feature" => "sample_model",
-                "rate_limit" => %{
-                  "allowed" => true,
-                  "limit_reached" => false,
-                  "primary_window" => window
-                }
+      usage_payload =
+        case scope do
+          :account ->
+            %{
+              "plan_type" => "sample_malformed_account_window",
+              "rate_limit" => %{
+                "allowed" => true,
+                "limit_reached" => false,
+                "primary_window" => window
               }
-            ]
-          }
-        ]
-      end)
+            }
 
-    Enum.each(cases, fn usage_payload ->
+          :additional ->
+            %{
+              "plan_type" => "sample_malformed_additional_window",
+              "rate_limit" => %{"allowed" => true, "limit_reached" => false},
+              "additional_rate_limits" => [
+                %{
+                  "limit_name" => "Sample model",
+                  "metered_feature" => "sample_model",
+                  "rate_limit" => %{
+                    "allowed" => true,
+                    "limit_reached" => false,
+                    "primary_window" => window
+                  }
+                }
+              ]
+            }
+        end
+
       upstream = start_windowless_lifecycle_upstream(usage_payload, "resp_must_not_dispatch")
       setup = gateway_setup(upstream, quota?: false)
 
@@ -13345,7 +13345,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert model_dispatch_count(upstream) == 0
       assert Repo.aggregate(Attempt, :count) == 0
       assert QuotaWindows.list_quota_windows(setup.identity) == []
-    end)
+    end
   end
 
   test "POST /backend-api/codex/responses invalidates a positive snapshot after credential rotation",

@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
     service_tier: "priority"
   }
 
+  @tag slow: "exhaustively checks every byte split across newline and ignored-field variants"
   test "ignored fields and capped event labels preserve records across every transport split" do
     ignored_value = ~s({"usage":{"input_tokens":999},"type":"response.failed"})
     capped_label = String.pad_trailing(" response.completed", 80)

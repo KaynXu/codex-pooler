@@ -14,6 +14,8 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
         :cleanup_failure,
         :candidate_failure
       ] do
+    @tag slow:
+           "boots an isolated BEAM peer and exercises PostgreSQL proof publication and recovery"
     test "an owner without distribution publishes task death with its database #{database}" do
       %{user: owner} = CodexPooler.AccountsFixtures.committed_bootstrap_owner_fixture!()
       slug = "disconnected-execution-#{Ecto.UUID.generate()}"

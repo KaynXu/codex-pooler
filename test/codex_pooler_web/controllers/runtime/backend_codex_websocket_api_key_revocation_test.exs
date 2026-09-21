@@ -227,6 +227,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationTest do
     end
 
     @tag :replay_race
+    @tag slow:
+           "coordinates an admitted real websocket turn, queued-frame revocation, and terminal close through socket barriers"
     test "#{path} drains one admitted turn then drops queued and later frames after pause" do
       route_label = unquote(route_label)
       path = unquote(path)
@@ -666,6 +668,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationDistribute
 
   for {route_label, path} <- @backend_websocket_routes do
     @tag :distributed
+    @tag slow:
+           "boots a real peer and observes API-key pause through the PostgreSQL relay on an open socket"
     test "#{path} receives a prompt pause through the peer PostgreSQL relay" do
       route_label = unquote(route_label)
       path = unquote(path)
@@ -697,6 +701,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyRevocationDistribute
     end
 
     @tag :distributed
+    @tag slow:
+           "boots a real peer, delays relay delivery and verifies the durable key fence rejects the next frame"
     test "#{path} rejects the next frame from the durable fence while relay delivery is delayed" do
       route_label = unquote(route_label)
       path = unquote(path)

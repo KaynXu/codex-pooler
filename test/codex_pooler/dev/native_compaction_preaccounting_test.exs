@@ -112,11 +112,7 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
         {:ok, control} =
           WebsocketOwnerAdmissionControlV1.new(attrs)
 
-        try do
-          WebsocketOwnerSession.admission_control(owner, control)
-        catch
-          :exit, {:timeout, {GenServer, :call, _}} -> :owner_call_timed_out
-        end
+        WebsocketOwnerSession.admission_control(owner, control)
       end)
 
     assert_capture(setup.pool.id, System.monotonic_time(:millisecond) + 1000)
@@ -126,9 +122,9 @@ defmodule CodexPooler.Dev.NativeCompactionPreaccountingTest do
   end
 
   defp finish_control(:release, %{pool: %{id: pool_id}}, task) do
-    # The real five-second owner timeout is the fixture's interruption boundary.
-    assert :owner_call_timed_out = Task.await(task, 10_000)
+    # Capture was observed before release; the held owner call must now finish.
     assert {:ok, %{released: true, compact_request_count: 0}} = Control.release(pool_id)
+    assert {:ok, _} = Task.await(task, 15_000)
   end
 
   defp finish_control(:controller_death, _setup, task) do

@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
+  @tag slow: "races committed PostgreSQL registration and alias attach with lock observation"
   test "bootstrap continuity registration and turn-state attach do not deadlock" do
     fixture = committed_fixture!()
 

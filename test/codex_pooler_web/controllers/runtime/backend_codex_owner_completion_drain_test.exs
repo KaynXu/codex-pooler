@@ -19,6 +19,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
   @moduletag capture_log: true
 
   for disposition <- [:complete, :deadline] do
+    @tag slow:
+           "runs eight accounted websocket turns across owner replacement and a controlled finalization drain"
     test "normal drain retains cleanup authority before caller #{disposition}" do
       {setup, upstream, state, release_ref} =
         fixture(completed_responses: Enum.map(1..7, &custom_response/1))

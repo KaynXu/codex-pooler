@@ -97,19 +97,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     end
   end
 
-  test "V2 native collector terminal families fail once without retry or replay" do
-    cases = [
-      {"response.failed", response_failed(), {"context_length_exceeded", "input"},
-       {"context_length_exceeded", "response.failed", "input"}, :neutral},
-      {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"},
-       {"server_error", "response.failed", "input"}, :neutral},
-      {"error", top_level_error(), {"invalid_request", "input"},
-       {"invalid_request", "response.failed", "input"}, :neutral},
-      {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil},
-       {"max_output_tokens", "response.incomplete", nil}, :neutral}
-    ]
+  for family <- [:failed, :failure_coded_incomplete, :top_level_error, :ordinary_incomplete] do
+    @tag collector_family: family
+    test "V2 native collector #{family} fails once without retry or replay", %{
+      collector_family: family
+    } do
+      {event_type, terminal, {code, param}, diagnostics} = collector_terminal(family)
 
-    for {event_type, terminal, {code, param}, diagnostics, health} <- cases do
       mode =
         FakeUpstream.sse_stream(
           [native_compaction_item_event(), {event_type, terminal}],
@@ -123,10 +117,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
       assert_failure_contract(result, code,
         diagnostics: diagnostics,
-        health: health
+        health: :neutral
       )
     end
   end
+
+  defp collector_terminal(:failed),
+    do:
+      {"response.failed", response_failed(), {"context_length_exceeded", "input"},
+       {"context_length_exceeded", "response.failed", "input"}}
+
+  defp collector_terminal(:failure_coded_incomplete),
+    do:
+      {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"},
+       {"server_error", "response.failed", "input"}}
+
+  defp collector_terminal(:top_level_error),
+    do:
+      {"error", top_level_error(), {"invalid_request", "input"},
+       {"invalid_request", "response.failed", "input"}}
+
+  defp collector_terminal(:ordinary_incomplete),
+    do:
+      {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil},
+       {"max_output_tokens", "response.incomplete", nil}}
 
   test "V2 full-history collector preserves a canonicalized typeless terminal failure" do
     result =

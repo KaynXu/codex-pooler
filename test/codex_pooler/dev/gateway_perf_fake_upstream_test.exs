@@ -145,6 +145,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     assert model["capabilities"]["responses"] == true
   end
 
+  @tag slow: "compares actual loopback SSE streams on backend and public routes"
   test "backend and v1 routes emit equivalent successful SSE streams" do
     server = start_server!("short-ok")
 

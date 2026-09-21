@@ -322,6 +322,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     end
   end
 
+  @tag slow: "runs real retry claims at concurrency 1, 4 and 16 and verifies exact SQL schedules"
   test "fixed client retry workload keeps the same query schedule at concurrency 1 4 and 16" do
     logical_operations = 16
 

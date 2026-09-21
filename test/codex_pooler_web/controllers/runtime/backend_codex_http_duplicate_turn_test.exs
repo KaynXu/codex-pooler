@@ -516,6 +516,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # The routing circuit is cleared between attempts so the chain is the only
   # thing under test: an open circuit would end the run with `no_eligible_backend`
   # long before the depth bound is reached.
+  @tag slow:
+         "dispatches and accounts twenty real HTTP turns to cross the durable retry-chain depth bound"
   test "a turn past the chain depth bound is still served, not refused", %{conn: conn} do
     upstream = start_upstream(first_event_terminal_sse("response.failed", "rate_limit_exceeded"))
     setup = gateway_setup(upstream)

@@ -130,6 +130,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert {"Europe/Rome", "Europe/Rome"} in timezone_options
   end
 
+  @tag slow: "saves real operator display preferences and remounts the page to verify persistence"
   test "saves datetime preferences through the account form and reloads selected", %{
     conn: conn,
     user: user
@@ -228,6 +229,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert has_element?(view, "#settings-mcp-usage-warning", "Usage is not tracked per key")
   end
 
+  @tag slow:
+         "creates a real operator credential and remounts the settings page to prove the raw secret is shown only once"
   test "creates MCP key and reveals raw token only for the create result", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/settings?tab=account")
 
@@ -253,6 +256,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     refute remounted_html =~ raw_token
   end
 
+  @tag slow:
+         "mounts authenticated settings and updates an actual credential while checking its secret is never rendered"
   test "renames MCP key without re-revealing raw token", %{conn: conn, user: user} do
     {:ok, %{key: key, raw_token: raw_token}} =
       MCP.create_operator_token(user, %{label: "Old MCP"})

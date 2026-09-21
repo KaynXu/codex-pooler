@@ -92,6 +92,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   # bound, separate from the production lease-derived budget.
   @blocked_renewal_call_timeout_ms 10_000
 
+  @tag slow: "holds a real PostgreSQL session lock beyond the former one-second caller budget"
   test "healthy HTTP ownership survives a finite session lock wait beyond the former call budget",
        %{conn: conn} do
     upstream =
@@ -122,7 +123,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     # The observed real row wait must outlast both the old 800 ms lock budget
     # and 1 s caller budget; match the finite commit pressure seen in production.
-    Process.send_after(self(), {:release_healthy_lock, barrier_ref}, 3_800)
+    Process.send_after(self(), {:release_healthy_lock, barrier_ref}, 1_100)
 
     try do
       assert_receive {:release_healthy_lock, ^barrier_ref}, @detection_budget
@@ -441,6 +442,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              0
   end
 
+  @tag slow: "observes real heartbeat renewal beyond the initial three-second database lease"
   test "backend HTTP renews ownership beyond the initial ttl", %{conn: conn} do
     release_ref = make_ref()
 
@@ -519,6 +521,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
   end
 
+  @tag slow: "holds real SSE until heartbeat renewal exceeds the initial three-second lease"
   test "backend SSE renews through delayed terminal delivery and settles after release", %{
     conn: conn
   } do
@@ -569,6 +572,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert %{status: "succeeded"} = Repo.get_by!(CodexTurn, request_id: request.id)
   end
 
+  @tag slow:
+         "waits for the real three-second lease's periodic heartbeat to detect takeover during SSE"
   test "takeover during backend SSE keeps public completion and accounting but fences old continuity",
        %{conn: conn} do
     release_ref = make_ref()
@@ -638,6 +643,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
   end
 
+  @tag slow: "holds public SSE until heartbeat renewal exceeds the initial three-second lease"
   test "/v1 Responses preserves its public SSE envelope while the owner heartbeat remains live",
        %{conn: conn} do
     release_ref = make_ref()
@@ -729,6 +735,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     send(upstream_pid, {:fake_upstream_release_gate, release_ref})
   end
 
+  @tag slow:
+         "waits for a real periodic heartbeat, terminates its blocked PostgreSQL backend, and verifies fencing"
   test "renewal database failure stops an in-flight heartbeat and stale completion stays fenced",
        %{conn: conn} do
     release_ref = make_ref()
@@ -782,6 +790,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
   end
 
+  @tag slow:
+         "waits for periodic renewal to block on PostgreSQL before terminating its backend and releasing SSE"
   test "renewal database failure before delayed headers preserves the dispatched response",
        %{conn: conn} do
     release_ref = make_ref()
@@ -847,7 +857,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     task =
       controller_request(conn, setup, session_key, http_payload(setup), parent,
         ttl_seconds: 30,
-        barrier: {barrier_ref, {:heartbeat, :before}}
+        barrier: {barrier_ref, {:heartbeat, :before}},
+        renew_call_timeout_ms: 1_000
       )
 
     assert_receive {:runtime_authorization_barrier, ^barrier_ref, :heartbeat, :before, task_pid},

@@ -479,6 +479,107 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     ]
   end
 
+  @doc "Drives a held HTTP request through the cutoff, then observes real settlement."
+  @spec drain_http_request(Task.t(), keyword(), pos_integer()) :: {term(), map()}
+  def drain_http_request(request_task, opts, await_timeout_ms) do
+    deadline = start_virtual_deadline(self())
+    worker_tracker = start_http_drain_worker_tracker(await_timeout_ms)
+    parent = self()
+    completed_ref = make_ref()
+    request_monitor = Process.monitor(request_task.pid)
+    task_supervisor = ExUnit.Callbacks.start_supervised!({Task.Supervisor, []})
+
+    drain_task =
+      Task.Supervisor.async(task_supervisor, fn ->
+        summary =
+          RolloutDrain.start_drain(opts ++ tracked_deadline_options(deadline, worker_tracker))
+
+        send(parent, {:http_drain_completed, completed_ref})
+        summary
+      end)
+
+    drain_monitor = Process.monitor(drain_task.pid)
+
+    receive do
+      {:rollout_drain_deadline_wait, ^deadline, _wait_ms} -> :ok
+    after
+      await_timeout_ms -> raise "HTTP drain did not reach its first deadline wait"
+    end
+
+    # Advance only after the coordinator has published the original cutoff.
+    # The request still owns its real upstream relay and database settlement.
+    cutoff_ms = Keyword.fetch!(opts, :timeout_ms) - Keyword.fetch!(opts, :deadline_margin_ms)
+    VirtualDeadline.advance(deadline, cutoff_ms)
+    response = Task.await(request_task, await_timeout_ms)
+    await_process_down!(request_monitor, request_task.pid, await_timeout_ms)
+
+    await_http_drain_completion!(
+      deadline,
+      completed_ref,
+      System.monotonic_time(:millisecond) + await_timeout_ms
+    )
+
+    summary = Task.await(drain_task, await_timeout_ms)
+    await_process_down!(drain_monitor, drain_task.pid, await_timeout_ms)
+    :ok = await_drain_workers(Keyword.fetch!(opts, :name), worker_tracker)
+    {response, summary}
+  end
+
+  defp start_http_drain_worker_tracker(timeout_ms) do
+    tracker_name = :"http-drain-workers-#{System.unique_integer([:positive])}"
+
+    # RolloutDrain starts unlinked workers. Retain their ownership beyond the
+    # test supervisor so a failed barrier cannot abandon a virtual-clock wait.
+    ExUnit.Callbacks.on_exit(fn ->
+      if tracker = Process.whereis(tracker_name) do
+        stop_http_drain_workers!(tracker, timeout_ms)
+        Agent.stop(tracker)
+      end
+    end)
+
+    {:ok, tracker} = Agent.start(fn -> MapSet.new() end, name: tracker_name)
+    tracker
+  end
+
+  defp stop_http_drain_workers!(tracker, timeout_ms) do
+    workers = Agent.get(tracker, &MapSet.to_list/1)
+    monitors = Enum.map(workers, &{Process.monitor(&1), &1})
+    Enum.each(workers, &Process.exit(&1, :kill))
+
+    Enum.each(monitors, fn {monitor, pid} ->
+      receive do
+        {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+      after
+        timeout_ms -> raise "HTTP drain worker did not stop during cleanup"
+      end
+    end)
+  end
+
+  defp await_http_drain_completion!(deadline, completed_ref, detection_deadline_ms) do
+    remaining_ms = max(detection_deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:http_drain_completed, ^completed_ref} ->
+        :ok
+
+      {:rollout_drain_deadline_wait, ^deadline, wait_ms} ->
+        # A completed request may race the coordinator's next poll registration.
+        # Advance after its registration signal, never after an arbitrary sleep.
+        VirtualDeadline.advance(deadline, wait_ms)
+        await_http_drain_completion!(deadline, completed_ref, detection_deadline_ms)
+    after
+      remaining_ms -> raise "HTTP drain did not observe request settlement"
+    end
+  end
+
+  defp await_process_down!(monitor, pid, timeout_ms) do
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, :normal} -> :ok
+    after
+      timeout_ms -> raise "HTTP drain task did not stop normally"
+    end
+  end
+
   @spec start_rollout_drain_harness(pid(), keyword()) :: %{
           activity_registry: atom(),
           deadline: pid(),
@@ -552,7 +653,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
           # The named coordinator and stream registry also sample the cutoff.
           # They are supervised harness resources, not finite drain workers.
           if Process.info(self(), :registered_name) == {:registered_name, []} do
-            Agent.update(worker_tracker, &MapSet.put(&1, self()))
+            worker = self()
+            Agent.update(worker_tracker, &MapSet.put(&1, worker))
           end
 
           policy.now_ms.()

@@ -617,7 +617,11 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   end
 
   describe "a sample the storage layer will never accept" do
-    test "is refused where it is captured, and counted", %{runtime: runtime, table: table} do
+    test "is refused where it is captured, and counted", %{
+      runtime: runtime,
+      table: table,
+      handler: handler
+    } do
       # `flush_snapshot/3` re-accumulates anything that did not insert, which is
       # right for an outage and wrong for a value no retry can fix: a rejected
       # sample was re-queued forever, holding a `max_series` slot, with no
@@ -626,21 +630,30 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
       # same question the changeset asks, so the corrupt sample never becomes a
       # permanent resident.
       before = rejected_samples()
+      quota_event = [:codex_pooler, :quota, :cycle, :decision]
+      quota_handlers = :telemetry.list_handlers(quota_event)
+      %{config: handler_config} = Enum.find(quota_handlers, &(&1.id == handler))
 
-      :telemetry.execute(
+      # Exercise the owned relay's invalid-input boundary. Broadcasting an
+      # invalid floating counter also crashes and detaches the unrelated Core
+      # reporter, whose ETS counter intentionally accepts integers only.
+      RelayRuntime.handle_event(
         [:codex_pooler, :saved_reset, :convergence],
         %{count: 1, applied_to_canonical_ms: 1.5},
-        %{source: "reconciliation"}
+        %{source: "reconciliation"},
+        handler_config
       )
 
-      :telemetry.execute(
-        [:codex_pooler, :quota, :cycle, :decision],
+      RelayRuntime.handle_event(
+        quota_event,
         %{count: 1.5},
-        %{scope: :account}
+        %{scope: :account},
+        handler_config
       )
 
       :sys.get_state(runtime)
       assert :ets.tab2list(table) == []
+      assert :telemetry.list_handlers(quota_event) == quota_handlers
 
       # Five cycles, because the defect was unbounded re-queuing rather than a
       # single lost flush: this is the state that used to never change.

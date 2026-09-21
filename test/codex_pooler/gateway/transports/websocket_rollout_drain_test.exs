@@ -181,6 +181,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert ActivityRegistry.draining?(name: harness.activity_registry)
   end
 
+  test "harness deadline tracking records the calling worker rather than the tracker" do
+    harness = start_rollout_drain_harness(self())
+    %{drain_policy: policy} = :sys.get_state(harness.name)
+    parent = self()
+
+    worker =
+      Task.async(fn ->
+        now_ms = policy.now_ms.()
+        send(parent, {:drain_clock_read, self()})
+
+        receive do
+          :release_clock_reader -> now_ms
+        end
+      end)
+
+    worker_pid = worker.pid
+    monitor = Process.monitor(worker_pid)
+    assert_receive {:drain_clock_read, ^worker_pid}, @await_timeout_ms
+
+    assert Agent.get(harness.worker_tracker, & &1) == MapSet.new([worker_pid])
+
+    send(worker_pid, :release_clock_reader)
+    assert Task.await(worker, @await_timeout_ms) == 0
+    assert_receive {:DOWN, ^monitor, :process, ^worker_pid, :normal}, @await_timeout_ms
+    assert :ok = await_rollout_drain_harness(harness)
+  end
+
   test "release-callable shutdown drain is idempotent through configured app server",
        %{drain_name: drain_name} do
     configure_rollout_drain_server(drain_name)
@@ -767,6 +794,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   end
 
   @tag :rollout_drain_cleanup_budget
+  @tag slow: "proves the real post-deadline owner shutdown budget"
   test "harness budget leaves room for a normal post-deadline owner shutdown" do
     harness = start_rollout_drain_harness(self())
     owner_key = owner_key()

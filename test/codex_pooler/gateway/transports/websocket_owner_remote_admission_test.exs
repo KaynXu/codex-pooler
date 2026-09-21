@@ -144,6 +144,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
     }
   end
 
+  @tag slow:
+         "boots a remote BEAM owner and verifies real committed admission cancellation before lease release"
   test "remote drain cancels proxy admission and finalizes a committed reservation before releasing its lease",
        context do
     {task, cleanup} = start_admission(context)
@@ -200,6 +202,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
     assert_remote_log_clean(context)
   end
 
+  @tag slow: "boots a remote BEAM owner and verifies stale admission cannot mutate PostgreSQL"
   test "stale owner binding rejects a real remote registration with no persistent mutations",
        context do
     stale = %{context.session | owner_lease_token: Ecto.UUID.generate()}

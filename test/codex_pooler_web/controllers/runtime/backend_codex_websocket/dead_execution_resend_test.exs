@@ -32,6 +32,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
 
   for forwarding <- [false, true] do
     @tag forwarding: forwarding
+    @tag slow:
+           "kills a real executor, waits for its durable proof, and verifies exactly one websocket resend"
     test "socket forwarding=#{forwarding} resends an exactly recovered execution", %{
       forwarding: forwarding
     } do
@@ -117,12 +119,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
         # The production publisher reads the registry tombstone and publishes
         # the terminal proof this test then waits for; the publisher is started
         # here only because the test environment leaves it disabled.
-        start_supervised!(
-          {ExecutionProofPublisher,
-           enabled: true, name: :"dead_execution_resend_publisher_#{unquote(forwarding)}"}
-        )
+        publisher =
+          start_supervised!(
+            {ExecutionProofPublisher,
+             enabled: true, name: :"dead_execution_resend_publisher_#{unquote(forwarding)}"}
+          )
 
-        :ok = CodexPooler.ExecutionProofSupport.await_terminal!(attempt)
+        :ok = CodexPooler.ExecutionProofSupport.await_terminal!(attempt, publisher)
         assert ExecutionTerminalProofs.terminal?(attempt)
 
         # Scheduled recovery entry, at a time past the liveness window.

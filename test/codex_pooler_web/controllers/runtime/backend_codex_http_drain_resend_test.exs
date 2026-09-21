@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDrainResendTest do
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -106,12 +107,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDrainResendTest do
 
     await_registered_stream(stream_registry)
 
-    assert %{result: :ok, http_streams_seen: 1} =
-             RolloutDrain.start_drain(
-               [name: drain_name, timeout_ms: @drain_timeout_ms] ++ @drain_options
-             )
+    {cut, summary} =
+      WebsocketRolloutDrainSupport.drain_http_request(
+        request_task,
+        [name: drain_name, timeout_ms: @drain_timeout_ms] ++ @drain_options,
+        @await_timeout_ms
+      )
 
-    cut = Task.await(request_task, @await_timeout_ms)
+    assert %{result: :ok, http_streams_seen: 1} = summary
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
     assert cut.status == 200
 

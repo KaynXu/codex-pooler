@@ -1,3 +1,8 @@
+# The suite declares each transport topology explicitly. A development shell
+# may enable owner forwarding; it must not turn direct socket fixtures into
+# owner-driven sockets with a different callback and lifetime contract.
+Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+
 native_turn_console_filter = :codex_pooler_test_native_turn_console_filter
 
 # This filter belongs only to Logger's default console handler. ExUnit's
@@ -28,6 +33,16 @@ ExUnit.start(
   capture_log: true,
   exclude: [unix_integration: true]
 )
+
+:ok = CodexPooler.TestDurationGuard.start!()
+
+# Load immutable tokenizer dictionaries once before async tests race to use
+# them. Cold-loading regression tests still explicitly clear their own cache.
+alias CodexPooler.Gateway.RequestCompression.TokenCounter.Ranks
+
+for encoding <- Ranks.supported_encodings() do
+  {:ok, _ranks} = Ranks.load(encoding)
+end
 
 # The cache process can start while the reset test database is still being
 # migrated. Publish one authoritative snapshot before manual sandbox ownership

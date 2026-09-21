@@ -99,23 +99,23 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
     refute Repo.exists?(from attempt in Attempt, where: attempt.request_id == ^fixture.request.id)
   end
 
-  test "claimed-only retry rejects changed scope and incomplete cancellation evidence" do
-    for mutation <- [
-          :marker,
-          :active,
-          :attempt,
-          :expired,
-          :future,
-          :witness,
-          :payload,
-          :epoch,
-          :anchor,
-          :model,
-          :endpoint,
-          :claim
-        ] do
-      fixture = claimed_predecessor_fixture() |> mutate(mutation)
-      assert {:error, _} = claim(fixture), "accepted #{mutation}"
+  for mutation <- [
+        :marker,
+        :active,
+        :attempt,
+        :expired,
+        :future,
+        :witness,
+        :payload,
+        :epoch,
+        :anchor,
+        :model,
+        :endpoint,
+        :claim
+      ] do
+    test "claimed-only retry rejects #{mutation} evidence" do
+      fixture = claimed_predecessor_fixture() |> mutate(unquote(mutation))
+      assert {:error, _} = claim(fixture), "accepted #{unquote(mutation)}"
 
       refute Repo.exists?(
                from link in RequestClientRetryLink,
@@ -203,29 +203,29 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
              claim(%{fixture | opts: Map.put(wrong, :owner_lease_token, token)})
   end
 
-  test "incomplete or unsafe zero-attempt drain evidence never creates a successor" do
-    for mutation <- [
-          :marker,
-          :ordinary_failure,
-          :active,
-          :visible,
-          :attempt,
-          :release,
-          :phase,
-          :settlement,
-          :expired,
-          :future,
-          :witness,
-          :payload,
-          :epoch,
-          :anchor,
-          :model,
-          :endpoint
-        ] do
+  for mutation <- [
+        :marker,
+        :ordinary_failure,
+        :active,
+        :visible,
+        :attempt,
+        :release,
+        :phase,
+        :settlement,
+        :expired,
+        :future,
+        :witness,
+        :payload,
+        :epoch,
+        :anchor,
+        :model,
+        :endpoint
+      ] do
+    test "zero-attempt drain rejects #{mutation} evidence without a successor" do
       fixture = predecessor_fixture()
-      fixture = mutate(fixture, mutation)
+      fixture = mutate(fixture, unquote(mutation))
       count = Repo.aggregate(Request, :count)
-      assert {:error, _reason} = claim(fixture), "accepted #{mutation}"
+      assert {:error, _reason} = claim(fixture), "accepted #{unquote(mutation)}"
       assert Repo.aggregate(Request, :count) == count
 
       refute Repo.exists?(

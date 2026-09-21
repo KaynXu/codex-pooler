@@ -5,6 +5,8 @@ defmodule CodexPooler.Platform.HeartbeatWriteBudgetTest do
   alias CodexPooler.Telemetry.Relay
 
   @tag capture_log: true
+  @tag slow:
+         "three real PostgreSQL heartbeat writes each exhaust their one-second production query budget"
   test "heartbeat writes release their checkout before a slow database operation completes" do
     suffix = System.unique_integer([:positive])
     function = "heartbeat_budget_#{suffix}"

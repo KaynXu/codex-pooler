@@ -15,7 +15,9 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
   @fact_index_predicates ["request_id"]
   @maximum_scoped_rows 240
   @maximum_relation_work 241
-  @minimum_fixture_rows 7_241
+  # Each wrong-key, wrong-pool and outside-window cohort has 480 rows, twice
+  # the unchanged scoped-read budget; losing any scope remains discriminating.
+  @minimum_fixture_rows 1_680
 
   def maximum_relation_work, do: @maximum_relation_work
 

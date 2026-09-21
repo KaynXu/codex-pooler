@@ -24,6 +24,8 @@ defmodule CodexPooler.CommittedWriteGuardTest do
 
   @probe_path "test/support/fixtures/committed_write_guard_probe.exs"
 
+  @tag slow:
+         "boots an isolated ExUnit runtime and verifies actual committed leaks and cleanup outcomes"
   test "fails the tests that leave committed rows behind, and the run when nothing guarded them" do
     on_exit(&delete_probe_rows!/0)
     probe = run_probe!()

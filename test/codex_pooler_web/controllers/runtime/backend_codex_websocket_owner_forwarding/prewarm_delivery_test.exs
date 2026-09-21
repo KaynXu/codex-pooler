@@ -22,6 +22,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.PrewarmDel
   end
 
   for topology <- [:local_owner, :proxy] do
+    if topology == :proxy do
+      @tag slow:
+             "boots a real peer owner and verifies prewarm acknowledgement releases the queued generation"
+    end
+
     test "#{topology} prewarm acknowledges its local terminal and releases the next generation" do
       topology = unquote(topology)
       prepare_database(topology)

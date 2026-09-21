@@ -174,6 +174,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
   end
 
   @tag :public_remote_success
+  @tag slow:
+         "boots a real remote owner and verifies public websocket terminal delivery and accounting"
   test "public responses bridge remote v1 success settles and delivers one terminal", %{
     conn: conn
   } do
@@ -253,6 +255,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
   end
 
+  @tag slow:
+         "boots a real remote owner and verifies upstream admission before proxy delivery acknowledgement"
   test "admitted native proxy starts a real peer upstream before terminal delivery acknowledgement" do
     ensure_test_distribution_started!()
     assert :ok = Sandbox.mode(Repo, :auto)
@@ -355,6 +359,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     end
   end
 
+  @tag slow:
+         "boots a real remote owner and verifies quota retarget with shared PostgreSQL session continuity"
   test "remote owner moves a quota rejected full-history turn and retains the shared session" do
     ensure_test_distribution_started!()
     assert :ok = Sandbox.mode(Repo, :auto)
@@ -567,6 +573,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
   end
 
   @tag :public_protocol_fallback
+  @tag slow:
+         "boots a real previous-protocol peer and verifies incompatibility rejects before upstream dispatch"
   test "public responses bridge protocol incompatibility fails without upstream submission", %{
     conn: conn
   } do
@@ -636,6 +644,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
   end
 
+  @tag slow: "compares real local and remote BEAM owner metadata for the same turn snapshot"
   test "local and remote owners emit identical native metadata bytes for one turn snapshot" do
     upstream =
       start_upstream(
@@ -735,6 +744,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     end
   end
 
+  @tag slow: "compares real local and remote BEAM owner wire metadata and provider frame ordering"
   test "local and remote owners relay provider metadata after the Pooler event without its ETag" do
     provider_etag = ~s(W/"provider-models-etag-owner-sentinel")
 

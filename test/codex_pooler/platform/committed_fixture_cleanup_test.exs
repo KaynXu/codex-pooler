@@ -28,6 +28,8 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
 
   @probe_path "test/support/fixtures/committed_fixture_cleanup_probe.exs"
 
+  @tag slow:
+         "boots a separate runtime to prove failure-path cleanup removes committed rows after the caller dies"
   test "an assertion failing inside an unboxed block still runs registered cleanup, never scoped" do
     probe = run_probe!()
 

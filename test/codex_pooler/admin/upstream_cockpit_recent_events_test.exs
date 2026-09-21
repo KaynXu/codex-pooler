@@ -161,6 +161,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
            "five sparse events read #{attempt_reads} attempt tuples across 10,005 attempts: #{inspect(explain)}"
   end
 
+  @tag slow: "seeds 10001 real request/attempt rows and proves bounded dense-history SQL plans"
   test "dense identity history keeps recent-event probes bounded", context do
     now = DateTime.utc_now()
     seed_request = insert_request(context, "failed", now)

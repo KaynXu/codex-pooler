@@ -9,6 +9,31 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
 
   @detection_timeout_ms 15_000
 
+  test "owned publisher drains a queued proof backlog without spending each periodic interval" do
+    alias CodexPooler.Platform.ExecutionRegistry
+    registry = start_supervised!({ExecutionRegistry, name: nil})
+
+    ids =
+      for _ <- 1..1_001 do
+        id = Ecto.UUID.generate()
+        assert :ok = ExecutionRegistry.register(id, registry)
+        assert :ok = ExecutionRegistry.complete(id, registry)
+        id
+      end
+
+    last_id = List.last(ids)
+
+    proof =
+      Enum.find(ExecutionRegistry.pending(2_000, registry), &(&1.owner_execution_id == last_id))
+
+    publisher =
+      start_supervised!({ExecutionProofPublisher, enabled: true, name: nil, registry: registry})
+
+    assert :ok = CodexPooler.ExecutionProofSupport.await_terminal!(proof, publisher)
+    assert [] = ExecutionRegistry.pending(2_000, registry)
+    assert Repo.aggregate("execution_terminal_proofs", :count) == 1_001
+  end
+
   # Real gateway boundary (findings#207): the executor identity a request
   # records is the Bandit connection process that ran it, its terminal proof is
   # published by the production publisher once the request completes, and a
@@ -29,14 +54,15 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
     setup = gateway_setup(upstream, compact?: true)
     port = start_public_endpoint!()
 
-    start_supervised!(
-      # One fixed name: the file is synchronous, so no two tests hold it at once
-      # and long sessions do not mint an atom per run. The publisher drains the
-      # global ExecutionRegistry, so a proof another sandboxed test left pending
-      # could be acknowledged here while its write rolls back; both files that
-      # start the real publisher are `async: false` for that reason.
-      {ExecutionProofPublisher, enabled: true, name: :execution_http_lifecycle_publisher}
-    )
+    publisher =
+      start_supervised!(
+        # One fixed name: the file is synchronous, so no two tests hold it at once
+        # and long sessions do not mint an atom per run. The publisher drains the
+        # global ExecutionRegistry, so a proof another sandboxed test left pending
+        # could be acknowledged here while its write rolls back; both files that
+        # start the real publisher are `async: false` for that reason.
+        {ExecutionProofPublisher, enabled: true, name: :execution_http_lifecycle_publisher}
+      )
 
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
     on_exit(fn -> Mint.HTTP.close(conn) end)
@@ -57,7 +83,7 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
     # and the publisher turns that registry tombstone into the durable proof.
     # The registry retirement happens after the response bytes reach the
     # client, so wait for the durable proof before reading the registry state.
-    :ok = CodexPooler.ExecutionProofSupport.await_terminal!(first_attempt)
+    :ok = CodexPooler.ExecutionProofSupport.await_terminal!(first_attempt, publisher)
     assert ExecutionIdentity.status(first_attempt) == :dead
 
     {conn, 200, second_body} = gateway_request!(conn, setup, "execution-keep-alive-second")
@@ -70,7 +96,7 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
     assert is_binary(second_attempt.owner_execution_id)
     refute second_attempt.owner_execution_id == first_attempt.owner_execution_id
     assert Process.alive?(executor)
-    :ok = CodexPooler.ExecutionProofSupport.await_terminal!(second_attempt)
+    :ok = CodexPooler.ExecutionProofSupport.await_terminal!(second_attempt, publisher)
     assert ExecutionIdentity.status(second_attempt) == :dead
 
     assert FakeUpstream.count(upstream) == 2

@@ -1563,6 +1563,8 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   end
 
   describe "the guard itself" do
+    @tag slow:
+           "compiles a synthetic worker and scans the actual whole-application BEAM call graph for unscripted job metrics"
     test "a metric added on a new job path is derived even though nothing declares it", context do
       {dir, modules} = compile_synthetic_worker()
 

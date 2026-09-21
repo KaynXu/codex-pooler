@@ -28,6 +28,8 @@ defmodule CodexPooler.MixTasks.TestDatabasePruneTest do
 
   # Creates three real databases on the test server: which databases PostgreSQL lets a session drop
   # is the property under test, so it cannot be faked.
+  @tag slow:
+         "creates real PostgreSQL databases and verifies active-session and advisory-lock protection before dropping only idle owned databases"
   test "drops an idle run-scoped database and keeps one a session holds or a test run has locked" do
     namespace = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
     [idle, connected, locked] = for p <- ["1", "2", "3"], do: configured_database(namespace, p)

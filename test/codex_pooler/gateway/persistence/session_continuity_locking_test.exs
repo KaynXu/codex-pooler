@@ -221,6 +221,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
              end)
   end
 
+  @tag slow:
+         "real deferred PostgreSQL COMMIT trigger retains the lock beyond the old renewal budget"
   test "synchronous renewal survives a healthy transaction retaining the session lock during commit" do
     fixture = unboxed_owner_session_fixture("renewal-commit-latency", 1)
     parent = self()
@@ -413,6 +415,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     @tag :session_continuity_pin
     @tag timeout: 120_000
+    @tag slow:
+           "boots a fresh BEAM runtime to verify returned database columns before their atoms exist"
     test "turn allocation loads returned columns in a fresh runtime" do
       fixture = unboxed_fresh_runtime_turn_fixture()
 
@@ -594,6 +598,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   describe "session continuity session and owner-lease contention" do
     @tag :session_continuity_contention
     @tag timeout: 30_000
+    @tag slow: "holds a real row lock until the owner lease expires"
     test "renewal cannot revive an owner that expires while waiting for the session lock" do
       fixture = unboxed_owner_session_fixture("renewal-expiry-wait", 1)
       fixture = set_unboxed_owner_deadline!(fixture, 1)
@@ -754,6 +759,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     @tag :session_continuity_contention
     @tag timeout: 30_000
+    @tag slow:
+           "exercises a real PostgreSQL renewal timeout through a session-to-key mutex wait chain"
     test "a bounded renewal behind a session holder waiting on the key-wide mutex names that wait" do
       fixture = unboxed_owner_session_fixture("bounded-renewal-api-key-chain", 1)
       api_key = fixture.auth.api_key
@@ -861,6 +868,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     for held_row <- [:session, :lease] do
       @tag :session_continuity_contention
       @tag timeout: 30_000
+      @tag slow: "exercises actual PostgreSQL statement timeout on a held owner row"
       test "a bounded renewal ends its wait on a held #{held_row} row inside PostgreSQL" do
         held_row = unquote(held_row)
         fixture = unboxed_owner_session_fixture("bounded-renewal-#{held_row}", 1)

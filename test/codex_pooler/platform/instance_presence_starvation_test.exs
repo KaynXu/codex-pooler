@@ -5,9 +5,10 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
   alias CodexPooler.Platform.{ExecutionIdentity, InstancePresence}
   alias CodexPooler.Platform.InstancePresence.Instance
 
-  # Real 15-second heartbeat cadence and the 120-second boundary are the
-  # behavior under test. Each next observation is triggered by a failed write.
-  @tag timeout: 180_000
+  # Keep the real disconnected peer and failing writes; seed stale presence
+  # and shorten only the publisher cadence, not the production liveness window.
+  @tag slow:
+         "boots a disconnected BEAM peer and proves live execution preservation through failed heartbeat writes"
   test "owner-only heartbeat starvation cannot finalize a living disconnected response task",
        context do
     start_distribution!()
@@ -86,15 +87,23 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
 
     identity = :peer.call(peer, InstancePresence, :local_identity, [])
 
-    UnboxedFixture.register_unboxed_cleanup!(fn ->
-      assert not Process.alive?(peer)
-      Repo.delete_all(from i in Instance, where: i.instance_id == ^identity.instance_id)
+    UnboxedFixture.register_unboxed_cleanup!(
+      fn ->
+        # The supervised caller's exit does not order its peer's shutdown.
+        # Stop the peer before deleting rows its publisher can still write.
+        if Process.alive?(peer), do: :peer.stop(peer)
 
-      Repo.delete_all(
-        from p in CodexPooler.Platform.ExecutionTerminalProof,
-          where: p.owner_instance_boot_id == ^identity.boot_id
-      )
-    end)
+        CodexPooler.InstancePresencePeer.purge_peer_state!(identity.boot_id, fn ->
+          Repo.delete_all(from i in Instance, where: i.instance_id == ^identity.instance_id)
+
+          Repo.delete_all(
+            from p in CodexPooler.Platform.ExecutionTerminalProof,
+              where: p.owner_instance_boot_id == ^identity.boot_id
+          )
+        end)
+      end,
+      CodexPooler.InstancePresencePeer.cleanup_timeout_ms(15_000)
+    )
 
     {:ok, _} = :peer.call(peer, InstancePresence, :record_heartbeat, [])
 
@@ -104,11 +113,25 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
     assert :alive == :peer.call(peer, ExecutionIdentity, :status, [attempt])
     assert ExecutionIdentity.status(attempt) == :unknown
 
-    # The long cadence exercise owns committed fixtures and separate peer
-    # connections; release the unused sandbox before its ownership timeout.
+    # The exercise owns committed fixtures and separate peer connections.
     CodexPooler.DataCase.stop_sandbox(context.sandbox_owner, context.sandbox_settings_cache)
 
     UnboxedFixture.run_unboxed(fn ->
+      stale_at =
+        DateTime.add(
+          InstancePresence.database_now(),
+          -InstancePresence.liveness_window_seconds() - 1,
+          :second
+        )
+
+      {:ok, _} = InstancePresence.record_heartbeat(identity, stale_at)
+
+      # Recovery requires both stale presence and an old attempt. Keep the
+      # actual executor identity and reservation; only age the candidate.
+      Repo.update_all(from(a in Accounting.Attempt, where: a.id == ^attempt.id),
+        set: [started_at: stale_at]
+      )
+
       Repo.query!("""
       CREATE FUNCTION presence_starvation_failure() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
@@ -125,7 +148,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
     end)
 
     assert %{failures: failures, age_seconds: age, warned: true} =
-             :peer.call(peer, CodexPooler.InstancePresencePeer, :await_starvation, [], 150_000)
+             :peer.call(peer, CodexPooler.InstancePresencePeer, :await_starvation, [], 15_000)
 
     assert failures >= 8
     assert age > 120

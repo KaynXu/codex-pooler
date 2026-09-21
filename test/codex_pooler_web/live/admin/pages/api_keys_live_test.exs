@@ -461,6 +461,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
     view |> element("#edit-api-key-#{api_key.id}") |> render_click()
 
+    # This assertion owns cancel's query shape, not cancellation of an active
+    # snapshot query on the shared sandbox connection.
+    _ = render_async(view, 5_000)
+
     {_html, cancel_queries} =
       capture_repo_queries(view.pid, fn ->
         view |> element("#api-key-cancel-edit") |> render_click()

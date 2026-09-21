@@ -291,6 +291,8 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     end
   end
 
+  @tag slow:
+         "feeds actual 64 MiB terminal and 8 MiB ordinary overflow buffers through the public SSE classifier"
   test "public POST overflow telemetry records the applicable incomplete buffer limit" do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
     test_pid = self()

@@ -467,6 +467,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   @tag :replay_race
   @tag :replay_topology
   @tag :replay_cleanup
+  @tag slow: "boots a real BEAM peer and verifies websocket replay through a non-owner proxy"
   test "real peer owner replays one pre-visible disconnect through the non-owner proxy" do
     ensure_test_distribution_started!()
     assert :ok = Sandbox.mode(Repo, :auto)
@@ -676,6 +677,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
   end
 
   @tag :client_retry_owner_race
+  @tag slow: "boots a real peer owner and races two proxy sockets against one durable retry claim"
   test "two proxy downstreams race one client retry through the real peer owner" do
     ensure_test_distribution_started!()
     assert :ok = Sandbox.mode(Repo, :auto)

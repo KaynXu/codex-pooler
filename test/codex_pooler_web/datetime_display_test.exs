@@ -81,6 +81,8 @@ defmodule CodexPoolerWeb.DateTimeDisplayTest do
   end
 
   describe "timezone_options/0" do
+    @tag slow:
+           "enumerates the installed IANA timezone filesystem and validates the complete sorted inventory"
     test "returns Etc/UTC first and remaining IANA zones alphabetically" do
       options = DateTimeDisplay.timezone_options()
 

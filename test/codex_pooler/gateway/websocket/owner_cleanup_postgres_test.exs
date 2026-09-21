@@ -29,6 +29,8 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
 
   for {source, target} <- [{0, 1}, {1, 0}],
       mode <- [:stale_token, :same_token, :absent_witness] do
+    @tag slow:
+           "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
     test "delayed #{mode} cleanup #{source} to #{target} preserves accepted live replacement", %{
       peers: peers
     } do
@@ -65,6 +67,8 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
   end
 
   for mode <- [:expired_lease, :generation_changed] do
+    @tag slow:
+           "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
     test "accepted owner snapshot rejects #{mode}", %{peers: [source, target]} do
       {setup, session} = fixture(source)
       current = call(source, :start_request, [setup, session, self()])
@@ -86,6 +90,8 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
     end
   end
 
+  @tag slow:
+         "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
   test "current accepted owner witness interrupts exactly its request", %{peers: [source, _]} do
     {setup, session} = fixture(source)
     current = call(source, :start_request, [setup, session, self()])
@@ -113,6 +119,8 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
     finish(source, current)
   end
 
+  @tag slow:
+         "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
   test "same owner token cleanup of a completed request preserves the next accepted request",
        %{peers: [source, _]} do
     {setup, session} = fixture(source)
@@ -149,6 +157,8 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanupPostgresTest do
     finish(source, current)
   end
 
+  @tag slow:
+         "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
   test "draining the actual owner retains its accepted witness through termination",
        %{peers: [source, _]} do
     {setup, session} = fixture(source)

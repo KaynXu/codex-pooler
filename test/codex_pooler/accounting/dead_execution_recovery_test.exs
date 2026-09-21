@@ -280,6 +280,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
     end
   end
 
+  @tag slow: "crosses the production 100-row recovery batch with real live execution identities"
   test "bounded passes advance past one hundred active executions" do
     setup = accounting_setup()
 

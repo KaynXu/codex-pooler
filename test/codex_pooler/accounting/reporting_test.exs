@@ -691,6 +691,8 @@ defmodule CodexPooler.Accounting.ReportingTest do
            ).rows == []
   end
 
+  @tag slow:
+         "compares SQL query counts and result cardinality across seven models and tenfold real ledger volume"
   test "model usage query count and returned cardinality stay invariant as fixture volume grows" do
     started_at = ~U[2026-08-14 10:15:00.000000Z]
     ended_at = ~U[2026-08-14 12:45:00.000000Z]

@@ -402,7 +402,7 @@ defmodule CodexPooler.InstancePresencePeer do
     try do
       {result, logs} =
         ExUnit.CaptureLog.with_log(fn ->
-          {:ok, heartbeat} = InstanceHeartbeat.start_link(enabled: true)
+          {:ok, heartbeat} = InstanceHeartbeat.start_link(enabled: true, interval_ms: 10)
           Process.unlink(heartbeat)
 
           try do

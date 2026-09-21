@@ -31,6 +31,8 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
   # bound is the only way the synchronous renewal can end.
   @parked_renewal_call_timeout_ms 50
 
+  @tag slow:
+         "two real PostgreSQL triggers take 600ms each to exceed the former one-second call limit"
   test "a healthy owner survives cumulative PostgreSQL renewal latency beyond one second" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token, ttl_seconds: 90)
@@ -392,6 +394,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     assert :ok = SessionLeaseHeartbeat.stop(heartbeat)
   end
 
+  @tag slow: "observes real one-second handoff expiry with a surviving caller"
   test "an abandoned deferred handoff stops after one owner ttl while its caller remains alive" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token, ttl_seconds: 1)

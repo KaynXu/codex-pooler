@@ -2029,6 +2029,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  @tag slow:
+         "executes anchored compaction on direct and forwarded real websocket connections in both Full and Lite"
   test "direct and owner-forwarded GET /v1/responses collect anchored compaction on the lineage connection in Full and Lite" do
     for {owner_forwarding?, mode} <- [
           {false, "full"},

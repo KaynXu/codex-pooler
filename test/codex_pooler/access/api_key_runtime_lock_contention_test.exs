@@ -131,6 +131,7 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
     end
   end
 
+  @tag slow: "observes actual PostgreSQL key mutex contention and independent completion"
   test "a second same-key reservation waits for the key-wide mutex", %{fixture: fixture} do
     try do
       holder = hold_reservation_lock!(fixture)

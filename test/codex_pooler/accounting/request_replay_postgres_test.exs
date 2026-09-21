@@ -133,6 +133,8 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     cleanup_fixture(second)
   end
 
+  @tag slow:
+         "races actual committed entitlement arming and terminal finalization on separate PostgreSQL connections"
   test "independent PostgreSQL arm and terminal finalization transactions converge once" do
     for _ <- 1..10 do
       fixture = committed_replay_fixture!()
@@ -260,6 +262,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     cleanup_fixture(expired_fixture)
   end
 
+  @tag slow: "holds a real PostgreSQL session lock across entitlement expiry"
   test "consume checks expiry after a real PostgreSQL session lock wait" do
     fixture = committed_replay_fixture!()
     parent = self()
