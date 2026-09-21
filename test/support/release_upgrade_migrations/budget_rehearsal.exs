@@ -65,6 +65,398 @@ defmodule CodexPooler.Verification.BudgetRehearsal do
     })
   end
 
+  defp run_scenario("budget_online", fixture, migration) do
+    for minute <- 0..204 do
+      request = request(fixture, fixture.history_key)
+
+      entry(
+        fixture,
+        fixture.history_key,
+        request,
+        "reservation",
+        "usage_pending",
+        17,
+        DateTime.add(~U[2026-01-03 00:00:00Z], minute * 60, :second)
+      )
+    end
+
+    for interruption <- 1..2 do
+      with_connection(fn blocker ->
+        query("""
+        CREATE FUNCTION verification_online_pause() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF (current_query() LIKE '%usage_component_backfill%'
+            OR current_query() LIKE 'SELECT public.rebuild_api_key_usage_components()%')
+            AND NEW.bucket_started_at='2026-01-03 02:30:00'::timestamp THEN
+            PERFORM pg_advisory_xact_lock(23508);
+          END IF;
+          RETURN NEW;
+        END $$
+        """)
+
+        query(
+          "CREATE TRIGGER verification_online_pause BEFORE UPDATE ON api_key_usage_buckets FOR EACH ROW EXECUTE FUNCTION verification_online_pause()"
+        )
+
+        Postgrex.query!(blocker, "SELECT pg_advisory_lock($1)", [@barrier])
+        task = migrate_async(migration, @components)
+
+        pid =
+          await(fn ->
+            query(
+              "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory'"
+            ).rows
+          end)
+
+        # A new minute cannot overlap any backfill row. Its real ledger write must
+        # commit while the migration is paused, rather than queue behind a table lock.
+        writer =
+          Task.async(fn ->
+            Repo.checkout(fn ->
+              query("SET lock_timeout='1s'")
+
+              try do
+                request = request(fixture, fixture.history_key)
+
+                entry(
+                  fixture,
+                  fixture.history_key,
+                  request,
+                  "reservation",
+                  "usage_pending",
+                  17,
+                  ~U[2026-01-04 00:00:00Z]
+                )
+              after
+                query("RESET lock_timeout")
+              end
+            end)
+          end)
+
+        owner = self()
+
+        same_bucket =
+          Task.async(fn ->
+            Repo.checkout(fn ->
+              [[backend]] = query("SELECT pg_backend_pid()").rows
+              send(owner, {:same_bucket_backend, backend})
+              request = request(fixture, fixture.history_key)
+
+              entry(
+                fixture,
+                fixture.history_key,
+                request,
+                "reservation",
+                "usage_pending",
+                17,
+                ~U[2026-01-03 02:30:00Z]
+              )
+            end)
+          end)
+
+        same_bucket_pid =
+          receive do
+            {:same_bucket_backend, backend} -> backend
+          after
+            15_000 -> raise "same-bucket writer did not start"
+          end
+
+        try do
+          Task.await(writer, 15_000)
+
+          ^same_bucket_pid =
+            await(fn ->
+              query("SELECT $1::integer WHERE $2::integer=ANY(pg_blocking_pids($1))", [
+                same_bucket_pid,
+                pid
+              ]).rows
+            end)
+
+          [[committed]] =
+            query(
+              "SELECT count(*) FROM api_key_usage_buckets WHERE bucket_started_at >= '2026-01-03' AND bucket_started_at < '2026-01-04' AND admission_count=1"
+            ).rows
+
+          true = committed >= 90 and committed < 205
+          receipt("budget_online_batches", %{committed_before_interruption: committed})
+
+          receipt("budget_online_writer", %{
+            interruption: interruption,
+            committed_while_backfill_paused: true
+          })
+        after
+          query("SELECT pg_cancel_backend($1)", [pid])
+          {:error, "57014"} = Task.await(task, 15_000)
+          Task.await(same_bucket, 15_000)
+          Postgrex.query!(blocker, "SELECT pg_advisory_unlock($1)", [@barrier])
+          query("DROP TRIGGER verification_online_pause ON api_key_usage_buckets")
+          query("DROP FUNCTION verification_online_pause()")
+        end
+      end)
+    end
+
+    migration.migrate.(:all)
+
+    [[205, 207]] =
+      query(
+        "SELECT count(*),sum(admission_count)::bigint FROM api_key_usage_buckets WHERE bucket_started_at >= '2026-01-03' AND bucket_started_at < '2026-01-04'"
+      ).rows
+
+    assert_current(fixture)
+    assert_rebuild()
+    receipt("budget_online_resume", %{interrupted_backfill_converged: true})
+  end
+
+  defp run_scenario("budget_indexes", fixture, migration) do
+    name = "ledger_entries_reservation_key_occurred_idx"
+    query("CREATE INDEX #{name} ON ledger_entries(id)")
+
+    try do
+      migration.migrate.(@components)
+      raise "conflicting index was accepted"
+    rescue
+      e in RuntimeError ->
+        true = e.message == "conflicting index: #{name}"
+    end
+
+    query("DROP INDEX #{name}")
+
+    with_connection(fn blocker ->
+      with_connection(fn builder ->
+        held = hold_lock(blocker, "UPDATE ledger_entries SET details=details")
+        [[pid]] = Postgrex.query!(builder, "SELECT pg_backend_pid()", []).rows
+
+        task =
+          Task.async(fn ->
+            Postgrex.query(
+              builder,
+              "CREATE INDEX CONCURRENTLY #{name} ON public.ledger_entries (api_key_id, occurred_at) INCLUDE (request_id, total_tokens) WHERE entry_kind='reservation' AND amount_status='recorded'",
+              [],
+              timeout: 20_000
+            )
+          end)
+
+        await(fn ->
+          query(
+            "SELECT $1::integer FROM pg_index WHERE indexrelid=to_regclass($2) AND NOT indisvalid",
+            [pid, name]
+          ).rows
+        end)
+
+        [[true]] = query("SELECT pg_cancel_backend($1)", [pid]).rows
+        {:error, %Postgrex.Error{postgres: %{pg_code: "57014"}}} = Task.await(task, 15_000)
+        release(held)
+
+        [[false]] =
+          query("SELECT indisvalid FROM pg_index WHERE indexrelid=to_regclass($1)", [name]).rows
+      end)
+    end)
+
+    migration.migrate.(:all)
+    assert_current(fixture)
+    assert_schema(:current)
+
+    receipt("budget_indexes", %{
+      conflicting_definition_rejected: true,
+      cancelled_build_repaired: true
+    })
+  end
+
+  defp run_scenario("budget_missing", fixture, migration) do
+    request = request(fixture, fixture.history_key)
+    entry(fixture, fixture.history_key, request, "reservation", "usage_pending", 512, @old)
+
+    original =
+      entry(
+        fixture,
+        fixture.history_key,
+        request,
+        "settlement",
+        "usage_known",
+        111,
+        ~U[2026-01-03 00:00:00Z]
+      )
+
+    query("UPDATE ledger_entries SET amount_status='voided' WHERE id=$1", [original])
+
+    entry(
+      fixture,
+      fixture.history_key,
+      request,
+      "settlement",
+      "usage_known",
+      1234,
+      ~U[2026-01-04 00:00:00Z]
+    )
+
+    # Recreate the real legacy bucket migration after the historical correction.
+    # Its recorded-only scan legitimately omits the original terminal minute.
+    # The deleted-key fixture belongs to a later schema generation; the original
+    # bucket migration predates null-key history support.
+    query("DELETE FROM ledger_entries WHERE api_key_id IS NULL")
+    migration.down.(20_260_802_010_640)
+    migration.migrate.(@components - 1)
+
+    [[0]] =
+      query(
+        "SELECT count(*) FROM api_key_usage_buckets WHERE api_key_id=$1 AND bucket_started_at='2026-01-03'",
+        [fixture.history_key]
+      ).rows
+
+    # Pause before the missing row is inserted. A concurrent ledger writer wins
+    # that row's insertion; migration must preserve its delta, then reconcile.
+    with_connection(fn blocker ->
+      query("""
+      CREATE FUNCTION verification_bucket_seed_pause() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF current_query() LIKE '%usage_component_bucket_seed%'
+          AND NEW.bucket_started_at='2026-01-03'::timestamp THEN
+          PERFORM pg_advisory_xact_lock(23508);
+        END IF;
+        RETURN NEW;
+      END $$
+      """)
+
+      query(
+        "CREATE TRIGGER verification_bucket_seed_pause BEFORE INSERT ON api_key_usage_buckets FOR EACH ROW EXECUTE FUNCTION verification_bucket_seed_pause()"
+      )
+
+      Postgrex.query!(blocker, "SELECT pg_advisory_lock($1)", [@barrier])
+      task = migrate_async(migration, @components)
+
+      pid =
+        await(fn ->
+          query(
+            "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory'"
+          ).rows
+        end)
+
+      try do
+        {:ok, _} =
+          Repo.transaction(fn ->
+            query("SET LOCAL lock_timeout='1s'")
+            writer_request = request(fixture, fixture.history_key)
+
+            entry(
+              fixture,
+              fixture.history_key,
+              writer_request,
+              "reservation",
+              "usage_pending",
+              17,
+              ~U[2026-01-03 00:00:00Z]
+            )
+          end)
+
+        [[1]] =
+          query(
+            "SELECT admission_count FROM api_key_usage_buckets WHERE api_key_id=$1 AND bucket_started_at='2026-01-03'",
+            [fixture.history_key]
+          ).rows
+
+        receipt("budget_missing_writer", %{committed_before_migration_insert: true})
+      after
+        Postgrex.query!(blocker, "SELECT pg_advisory_unlock($1)", [@barrier])
+      end
+
+      {:ok, _} = Task.await(task, 15_000)
+
+      [[0]] =
+        query("SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND wait_event='advisory'", [
+          pid
+        ]).rows
+
+      query("DROP TRIGGER verification_bucket_seed_pause ON api_key_usage_buckets")
+      query("DROP FUNCTION verification_bucket_seed_pause()")
+    end)
+
+    migration.migrate.(:all)
+    before = component_snapshot()
+    query("SELECT rebuild_api_key_usage_components()")
+
+    [[1234, 1]] =
+      query(
+        "SELECT known_total_tokens,admission_count FROM api_key_usage_buckets WHERE api_key_id=$1 AND bucket_started_at='2026-01-03'",
+        [fixture.history_key]
+      ).rows
+
+    true = before == component_snapshot()
+
+    receipt("budget_missing", %{
+      legacy_original_minute_absent: true,
+      corrected_tokens: 1234,
+      rebuild_equal: true
+    })
+  end
+
+  defp run_scenario("budget_plan", fixture, migration) do
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        &__MODULE__.capture_backfill/4,
+        self()
+      )
+
+    try do
+      migration.migrate.(:all)
+    after
+      :telemetry.detach(handler)
+    end
+
+    sql =
+      receive do
+        {:backfill_sql, sql} -> sql
+      after
+        15_000 -> raise "migration backfill query not observed"
+      end
+
+    query("ANALYZE ledger_entries")
+    # Challenge the history join with the same merge-join preference observed on
+    # retained production cardinality. Correlated probes must stay selective.
+    {:error, {:plan, plan}} =
+      Repo.transaction(fn ->
+        query("SET LOCAL enable_hashjoin=off")
+        query("SET LOCAL enable_nestloop=off")
+
+        [[[%{"Plan" => plan}]]] =
+          query(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> sql,
+            [[fixture.key, fixture.key], [DateTime.to_naive(@old), DateTime.to_naive(@since)]]
+          ).rows
+
+        Repo.rollback({:plan, plan})
+      end)
+
+    scans =
+      plan_nodes(plan)
+      |> Enum.filter(
+        &(&1["Relation Name"] == "ledger_entries" or
+            String.starts_with?(&1["Index Name"] || "", "ledger_entries_"))
+      )
+
+    receipt("budget_plan", %{
+      ledger_scans:
+        Enum.map(
+          scans,
+          &Map.take(&1, [
+            "Node Type",
+            "Index Name",
+            "Index Cond",
+            "Actual Rows",
+            "Actual Loops",
+            "Shared Hit Blocks",
+            "Shared Read Blocks"
+          ])
+        )
+    })
+
+    true = Enum.any?(scans, &String.contains?(&1["Index Cond"] || "", "request_id"))
+    true = Enum.all?(scans, &(&1["Actual Rows"] * &1["Actual Loops"] <= 40))
+  end
+
   defp run_scenario("budget_locks", fixture, migration) do
     before = retained_snapshot()
 
@@ -138,7 +530,9 @@ defmodule CodexPooler.Verification.BudgetRehearsal do
       migration_pid = await_barrier()
       traffic = start_traffic(fixture)
       writer_pid = await_blocked("ledger_entries")
-      reader = Task.async(&read_totals/0)
+      # The running release reads legacy columns until the migration job finishes.
+      # New component readers are admitted only after the online backfill completes.
+      reader = Task.async(fn -> legacy_window(fixture.key) end)
       reader_pid = await_blocked("api_key_usage_buckets")
       capture_locks("migration_traffic", [migration_pid, writer_pid, reader_pid])
       # This query uses only columns available to the old release.
@@ -148,7 +542,9 @@ defmodule CodexPooler.Verification.BudgetRehearsal do
       Postgrex.query!(blocker, "SELECT pg_advisory_unlock($1)", [@barrier])
       {:ok, _} = Task.await(task, 15_000)
       finish_traffic(traffic)
-      assert_totals(Task.await(reader, 15_000), fixture, 0..4)
+      [[legacy]] = Task.await(reader, 15_000)
+      true = Decimal.to_integer(legacy) in [2560, 4608, 6656]
+      assert_totals(read_totals(), fixture, 4..4)
       remove_barrier()
     end)
 
@@ -196,6 +592,18 @@ defmodule CodexPooler.Verification.BudgetRehearsal do
       rebuild_equal: true
     })
   end
+
+  @doc false
+  @spec capture_backfill(list(), map(), map(), pid()) :: :ok
+  def capture_backfill(_event, _measurements, metadata, owner) do
+    if is_binary(metadata.query) and String.contains?(metadata.query, "usage_component_backfill") do
+      send(owner, {:backfill_sql, metadata.query})
+    end
+
+    :ok
+  end
+
+  defp plan_nodes(plan), do: [plan | Enum.flat_map(Map.get(plan, "Plans", []), &plan_nodes/1)]
 
   defp seed(rows) do
     [[pool]] =

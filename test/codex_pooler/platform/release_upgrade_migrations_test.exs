@@ -6,7 +6,7 @@ defmodule CodexPooler.ReleaseUpgradeMigrationsTest do
   @moduletag timeout: 180_000
 
   for scenario <-
-        ~w(widths fresh head invalid invalid_owner client_exit locks historical_indexes validation null_history migration_lock index_conflicts rollback_cancel rollback_delete budget_upgrade budget_locks budget_traffic) do
+        ~w(widths fresh head invalid invalid_owner client_exit locks historical_indexes validation null_history migration_lock index_conflicts rollback_cancel rollback_delete budget_upgrade budget_locks budget_traffic budget_online budget_indexes budget_missing budget_plan) do
     @tag scenario: scenario
     test "release upgrade rehearsal: #{scenario}" do
       namespace = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)

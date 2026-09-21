@@ -10,7 +10,7 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
   Scenarios: widths, fresh, head, invalid, invalid_owner, client_exit,
   locks, historical_indexes, validation, null_history, migration_lock,
   scale, index_conflicts, rollback_cancel, rollback_delete, budget_upgrade,
-  budget_locks, budget_traffic. Optional --rows controls the
+  budget_locks, budget_traffic, budget_online, budget_indexes, budget_missing, budget_plan. Optional --rows controls the
   synthetic request count. The database must not exist and is always dropped.
   """
   alias CodexPooler.Repo
@@ -51,7 +51,7 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
     scenario = Keyword.fetch!(opts, :scenario)
     rows = Keyword.get(opts, :rows, 100)
 
-    unless scenario in ~w(widths fresh head invalid invalid_owner client_exit locks historical_indexes validation null_history migration_lock scale index_conflicts rollback_cancel rollback_delete budget_upgrade budget_locks budget_traffic) and
+    unless scenario in ~w(widths fresh head invalid invalid_owner client_exit locks historical_indexes validation null_history migration_lock scale index_conflicts rollback_cancel rollback_delete budget_upgrade budget_locks budget_traffic budget_online budget_indexes budget_missing budget_plan) and
              rows in 1..1_000_000,
            do: raise(ArgumentError, "invalid scenario or row count")
 
@@ -155,7 +155,7 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
   end
 
   defp run_scenario(scenario, rows)
-       when scenario in ~w(budget_upgrade budget_locks budget_traffic) do
+       when scenario in ~w(budget_upgrade budget_locks budget_traffic budget_online budget_indexes budget_missing budget_plan) do
     BudgetRehearsal.run(scenario, rows, %{
       migrate: &migrate/1,
       down: &down/1
