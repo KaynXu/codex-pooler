@@ -2096,6 +2096,196 @@ body {
   opacity: 0.45;
 }
 
+/* OAuth callback paste demo (browser route).
+   ------------------------------------------------------------------
+   The one step of the browser flow that happens outside this app: the
+   callback lands on a page that cannot load, and the URL in the address bar
+   is the proof the dialog is waiting for. The figure draws that move - select,
+   copy, paste, submit - on the same timeline, so the moving parts are the
+   instruction rather than decoration, which is the exception this block claims
+   to the no-looping-motion rule in DESIGN.md.
+
+   Parts are prefixed `opd-` (oauth paste demo) so the SVG reads as one object.
+   One shared period keyed off `--opd-loop` keeps every part on the same clock;
+   percentages below are that period. A short veil near the end (`opd-veil`)
+   covers the instant reset, so the loop restarts without a visible rewind.
+   `prefers-reduced-motion` stops all of it and pins the finished frame, where
+   the selection, the pasted value and both key pills are already shown. */
+.oauth-paste-demo {
+  --opd-loop: 8s;
+  --opd-line: color-mix(in oklab, var(--color-base-content) 12%, transparent);
+  --opd-ink: color-mix(in oklab, var(--color-base-content) 62%, transparent);
+  --opd-faint: color-mix(in oklab, var(--color-base-content) 38%, transparent);
+  --opd-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.oauth-paste-demo .opd-panel {
+  fill: color-mix(in oklab, var(--color-base-content) 3%, transparent);
+  stroke: var(--opd-line);
+  stroke-width: 1;
+}
+.oauth-paste-demo .opd-panel--dialog { fill: var(--color-base-100); }
+.oauth-paste-demo .opd-dot { fill: color-mix(in oklab, var(--color-base-content) 20%, transparent); }
+.oauth-paste-demo .opd-omnibox {
+  fill: var(--color-base-100);
+  stroke: var(--opd-line);
+  stroke-width: 1;
+}
+.oauth-paste-demo .opd-rule { stroke: color-mix(in oklab, var(--color-base-content) 9%, transparent); stroke-width: 1; }
+.oauth-paste-demo .opd-arrow {
+  fill: none;
+  stroke: color-mix(in oklab, var(--color-base-content) 28%, transparent);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.oauth-paste-demo .opd-body-text { fill: var(--opd-faint); font-size: 8px; }
+.oauth-paste-demo .opd-field-label {
+  fill: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  font-size: 7.2px;
+  font-weight: 600;
+  letter-spacing: .09em;
+}
+.oauth-paste-demo .opd-input {
+  fill: var(--color-base-100);
+  stroke: color-mix(in oklab, var(--color-base-content) 18%, transparent);
+  stroke-width: 1;
+}
+.oauth-paste-demo .opd-submit {
+  fill: color-mix(in oklab, var(--color-base-content) 7%, transparent);
+  stroke: var(--opd-line);
+  stroke-width: 1;
+}
+.oauth-paste-demo .opd-submit-label {
+  fill: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  font-size: 7.6px;
+  font-weight: 600;
+  text-anchor: middle;
+}
+.oauth-paste-demo .opd-url { fill: var(--opd-ink); font-family: var(--opd-mono); font-size: 9px; }
+.oauth-paste-demo .opd-placeholder { fill: color-mix(in oklab, var(--color-base-content) 30%, transparent); font-family: var(--opd-mono); font-size: 8.4px; }
+.oauth-paste-demo .opd-pasted { fill: var(--opd-ink); font-family: var(--opd-mono); font-size: 8.4px; }
+.oauth-paste-demo .opd-selection {
+  fill: color-mix(in oklab, var(--color-primary) 30%, transparent);
+  transform-box: fill-box;
+  transform-origin: left center;
+  scale: 0 1;
+}
+.oauth-paste-demo .opd-chip-body {
+  fill: color-mix(in oklab, var(--color-primary) 16%, var(--color-base-100));
+  stroke: color-mix(in oklab, var(--color-primary) 45%, transparent);
+  stroke-width: 1;
+}
+.oauth-paste-demo .opd-chip-text { fill: var(--opd-ink); font-family: var(--opd-mono); font-size: 9px; }
+.oauth-paste-demo .opd-chip { opacity: 0; }
+.oauth-paste-demo .opd-cursor {
+  fill: color-mix(in oklab, var(--color-base-content) 78%, transparent);
+  stroke: var(--color-base-100);
+  stroke-width: .9;
+  stroke-linejoin: round;
+  translate: 320px 40px;
+}
+.oauth-paste-demo .opd-pill { opacity: 0; transform-box: fill-box; transform-origin: 12px 7px; }
+.oauth-paste-demo .opd-pill--copy { translate: 158px 24px; }
+.oauth-paste-demo .opd-pill--paste { translate: 126px 103px; }
+.oauth-paste-demo .opd-pill-body { fill: color-mix(in oklab, var(--color-base-content) 90%, transparent); }
+.oauth-paste-demo .opd-pill-glyph { fill: none; stroke: var(--color-base-100); stroke-width: .9; }
+.oauth-paste-demo .opd-pill-text { fill: var(--color-base-100); font-size: 8px; font-weight: 600; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .oauth-paste-demo .opd-play { animation: opd-veil var(--opd-loop) linear infinite; }
+  .oauth-paste-demo .opd-cursor { animation: opd-cursor var(--opd-loop) ease-in-out infinite; }
+  .oauth-paste-demo .opd-selection { animation: opd-select var(--opd-loop) ease-out infinite; }
+  .oauth-paste-demo .opd-pill--copy { animation: opd-pill-copy var(--opd-loop) ease-out infinite; }
+  .oauth-paste-demo .opd-pill--paste { animation: opd-pill-paste var(--opd-loop) ease-out infinite; }
+  .oauth-paste-demo .opd-chip { animation: opd-chip var(--opd-loop) ease-in-out infinite; }
+  .oauth-paste-demo .opd-placeholder { animation: opd-placeholder var(--opd-loop) linear infinite; }
+  .oauth-paste-demo .opd-pasted { animation: opd-pasted var(--opd-loop) ease-out infinite; }
+  .oauth-paste-demo .opd-input { animation: opd-input var(--opd-loop) linear infinite; }
+  .oauth-paste-demo .opd-submit { animation: opd-submit var(--opd-loop) linear infinite; }
+  .oauth-paste-demo .opd-submit-label { animation: opd-submit-label var(--opd-loop) linear infinite; }
+}
+
+@keyframes opd-veil {
+  0%, 86% { opacity: 1; }
+  90%, 94% { opacity: 0; }
+  98%, 100% { opacity: 1; }
+}
+@keyframes opd-cursor {
+  0%, 6% { translate: 320px 40px; }
+  18%, 44% { translate: 150px 13px; }
+  54%, 72% { translate: 118px 92px; }
+  80%, 91% { translate: 298px 92px; }
+  91.5%, 100% { translate: 320px 40px; }
+}
+@keyframes opd-select {
+  0%, 20% { scale: 0 1; }
+  26%, 91% { scale: 1 1; }
+  91.5%, 100% { scale: 0 1; }
+}
+@keyframes opd-pill-copy {
+  0%, 26% { opacity: 0; scale: .85; }
+  30%, 42% { opacity: 1; scale: 1; }
+  46%, 100% { opacity: 0; scale: .85; }
+}
+@keyframes opd-pill-paste {
+  0%, 57% { opacity: 0; scale: .85; }
+  61%, 70% { opacity: 1; scale: 1; }
+  74%, 100% { opacity: 0; scale: .85; }
+}
+@keyframes opd-chip {
+  0%, 42% { opacity: 0; translate: 0 0; }
+  45% { opacity: 1; translate: 0 0; }
+  55% { opacity: 1; translate: -26px 82px; }
+  55.5%, 91% { opacity: 0; translate: -26px 82px; }
+  91.5%, 100% { opacity: 0; translate: 0 0; }
+}
+@keyframes opd-placeholder {
+  0%, 50% { opacity: 1; }
+  53%, 91% { opacity: 0; }
+  91.5%, 100% { opacity: 1; }
+}
+/* The chip and the pasted value swap in one frame rather than crossfading:
+   the value is one thing arriving, not two overlapping strings. */
+@keyframes opd-pasted {
+  0%, 55% { opacity: 0; }
+  55.5%, 91% { opacity: 1; }
+  91.5%, 100% { opacity: 0; }
+}
+/* The field and the button live in the frame rather than under the veil, so
+   they cannot snap back the way the veiled parts do: they cool back to their
+   resting color across the reset instead. */
+@keyframes opd-input {
+  0%, 55% { stroke: color-mix(in oklab, var(--color-base-content) 18%, transparent); }
+  58%, 88% { stroke: var(--color-primary); }
+  100% { stroke: color-mix(in oklab, var(--color-base-content) 18%, transparent); }
+}
+@keyframes opd-submit {
+  0%, 78% { fill: color-mix(in oklab, var(--color-base-content) 7%, transparent); stroke: var(--opd-line); }
+  82%, 88% { fill: var(--color-primary); stroke: var(--color-primary); }
+  100% { fill: color-mix(in oklab, var(--color-base-content) 7%, transparent); stroke: var(--opd-line); }
+}
+@keyframes opd-submit-label {
+  0%, 78% { fill: color-mix(in oklab, var(--color-base-content) 45%, transparent); }
+  82%, 88% { fill: var(--color-primary-content); }
+  100% { fill: color-mix(in oklab, var(--color-base-content) 45%, transparent); }
+}
+
+/* Reduced motion keeps the drawing and drops the clock: the finished frame
+   still shows the selection, both key pills, the pasted value and the armed
+   button, which is the whole instruction without a single moving part. */
+@media (prefers-reduced-motion: reduce) {
+  .oauth-paste-demo .opd-cursor,
+  .oauth-paste-demo .opd-chip { display: none; }
+  .oauth-paste-demo .opd-selection { scale: 1 1; }
+  .oauth-paste-demo .opd-pill { opacity: 1; }
+  .oauth-paste-demo .opd-placeholder { opacity: 0; }
+  .oauth-paste-demo .opd-pasted { opacity: 1; }
+  .oauth-paste-demo .opd-input { stroke: var(--color-primary); }
+  .oauth-paste-demo .opd-submit { fill: var(--color-primary); stroke: var(--color-primary); }
+  .oauth-paste-demo .opd-submit-label { fill: var(--color-primary-content); }
+}
+
 /* Touch-target floor for dialogs.
    ------------------------------------------------------------------
    Admin dialog controls are sized for a mouse: `btn-sm` footers land at 28px,

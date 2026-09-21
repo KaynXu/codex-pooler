@@ -182,6 +182,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
     assert has_element?(view, "#oauth-link-callback-form")
     assert has_element?(view, "#oauth-link-callback-url[required][aria-describedby]")
+    # The step also draws the move itself, once, for the browser the pooler
+    # cannot see into.
+    assert has_element?(view, "#oauth-link-callback-demo[data-role='oauth-callback-paste-demo']")
     # The completing action lives in the dialog footer, beside Cancel, and is the
     # dialog's only filled orange: the URL row's Open and Copy are peers below it.
     assert has_element?(

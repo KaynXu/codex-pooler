@@ -238,8 +238,19 @@ animated):
   150ms, and the tab opens on the release gesture so popup blockers stay
   quiet. Only the 300ms launch pop is decorative, and it is motion-gated.
 
+- OAuth callback paste figure (`oauth-paste-demo` in `app.css`, browser route of
+  the [OAuth handoff dialog](#oauth-handoff-dialog-two-doors)): one 8s loop on a
+  single `--opd-loop` clock — select, `Copy`, carry the value down into the
+  field, `Paste`, arm `Complete link` — with a short opacity veil covering the
+  reset so the loop never rewinds on screen. Reduced motion stops the clock and
+  keeps the finished frame, where the selection, the pasted value, both key
+  pills and the armed button are already shown.
+
 Rule: no looping decorative animation; the burn shine is the ceiling for
-ambient motion and it is evidence-driven (recent token burn).
+ambient motion and it is evidence-driven (recent token burn). The callback paste
+figure is the one loop that is not ambient: every moving part is a step of an
+instruction for something that happens outside this app, it runs only while that
+step is actually owed, and it holds the same drawing still under reduced motion.
 
 ## Colors
 
@@ -1406,6 +1417,15 @@ The API-key Limits panel uses a compact tonal key-wide control band, a bordered 
   countdown inside the help sentence, and the only status line in the dialog —
   a poll really is running there. The browser route has no status line: nothing
   is running, the pooler is waiting for the operator.
+- **The browser route draws its one off-screen step.** Under the callback help
+  text, `callback_paste_demo/1` renders an inline SVG figure (`oauth-paste-demo`
+  in `app.css`): a browser window whose address bar holds the callback URL over
+  a page that did not load, an arrow down to the dialog's own field, and an
+  8s loop that selects the URL, shows a `Copy` pill, carries the value into the
+  field, shows a `Paste` pill and arms `Complete link`. It is the only place
+  where the flow leaves the pooler's screen, and the dead page is drawn as part
+  of the expected picture rather than left to read as the error it resembles.
+  See [Motion](#motion) for the exception this claims and its reduced-motion frame.
 - **The completing action lives in the dialog footer**, beside the dismiss,
   submitting the body form through `form=`. It is the dialog's only filled
   orange; `Open` is secondary. A finished flow replaces it with `Open cockpit`,

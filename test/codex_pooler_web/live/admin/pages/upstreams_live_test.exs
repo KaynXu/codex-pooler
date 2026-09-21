@@ -1151,6 +1151,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#oauth-link-authorization-step", "Authorization page")
     assert has_element?(view, "#oauth-link-callback-url")
     assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
+    # The copy-then-paste figure belongs to this route only: it draws the move
+    # the operator has to make in a browser the pooler cannot reach.
+    assert has_element?(view, "#oauth-link-callback-demo[data-role='oauth-callback-paste-demo']")
     assert has_element?(view, "#oauth-link-submit-callback")
     # Nothing to open yet: a pending flow has no linked identity to point at.
     refute has_element?(view, "#oauth-link-open-cockpit")
@@ -1442,6 +1445,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> render_click()
 
     assert has_element?(view, "#oauth-link-device-code", "CODE-UI")
+    # Nothing is pasted back on this route, so the paste figure stays away.
+    refute has_element?(view, "[data-role='oauth-callback-paste-demo']")
 
     assert has_element?(
              view,
