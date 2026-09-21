@@ -69,6 +69,13 @@ defmodule CodexPooler.Platform.InstancePresencePeerCleanupPostgresTest do
                end,
                await: fn ^boot_id, @detection_budget_ms ->
                  assert backend_count(observer, application_name) == 1
+
+                 assert %{rows: [[1]]} =
+                          Repo.query!(
+                            "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+                            [application_name]
+                          )
+
                  send(terminator_pid, :dispatch_termination)
                  assert %{rows: [[true]]} = Task.await(terminator, @detection_budget_ms)
 

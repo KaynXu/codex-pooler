@@ -82,6 +82,12 @@ defmodule CodexPooler.InstancePresencePeer do
   end
 
   defp await_peer_connections_absent(boot_id, deadline) do
+    # PostgreSQL caches statistics snapshots for the current transaction. The
+    # SQL sandbox keeps one transaction open for the whole test, so a sample
+    # taken before pg_terminate_backend finishes would otherwise stay stale for
+    # every retry and falsely exhaust the detection budget.
+    CodexPooler.Repo.query!("SELECT pg_stat_clear_snapshot()")
+
     %{rows: [[count]]} =
       CodexPooler.Repo.query!(
         "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
