@@ -86,9 +86,7 @@ defmodule CodexPooler.Platform.ExecutionIdentityTest do
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
     assert ExecutionIdentity.status(identity) == :dead
 
-    CodexPooler.TestDiagnostics.puts(
-      "execution identity peer: connected=true active=alive unregistered_token=unknown wrong_boot=unknown monitored_exit=dead"
-    )
+    CodexPooler.TestDiagnostics.puts("execution identity peer: connected=true active=alive unregistered_token=unknown wrong_boot=unknown monitored_exit=dead")
 
     :erpc.call(remote, :code, :purge, [ExecutionIdentity])
     :erpc.call(remote, :code, :delete, [ExecutionIdentity])
@@ -141,9 +139,7 @@ defmodule CodexPooler.Platform.ExecutionIdentityTest do
     alias CodexPooler.Platform.ExecutionRegistry
 
     registry =
-      start_supervised!(
-        Supervisor.child_spec({ExecutionRegistry, name: nil}, restart: :temporary)
-      )
+      start_supervised!(Supervisor.child_spec({ExecutionRegistry, name: nil}, restart: :temporary))
 
     id = Ecto.UUID.generate()
     assert :ok == ExecutionRegistry.register(id, registry)

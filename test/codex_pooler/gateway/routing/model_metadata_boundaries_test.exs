@@ -10,8 +10,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataBoundariesTest do
     for {buckets, metadata, expected} <- [
           {["short_context"], %{"context_window" => 200_000}, 128_000},
           {["short_context"], %{"context_window" => 50_000}, 50_000},
-          {["long_context"], %{"context_window" => 200_000, "max_context_window" => 300_000},
-           300_000},
+          {["long_context"], %{"context_window" => 200_000, "max_context_window" => 300_000}, 300_000},
           {["long_context"], %{"context_window" => 200_000}, 200_000},
           {["standard"], %{"context_window" => 200_000}, 200_000}
         ] do

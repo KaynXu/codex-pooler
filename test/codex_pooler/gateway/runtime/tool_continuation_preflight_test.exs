@@ -200,9 +200,7 @@ defmodule CodexPooler.Gateway.Runtime.ToolContinuationPreflightTest do
         "/backend-api/codex/responses",
         payload
       )
-      |> RequestOptions.put_runtime_context(
-        api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch
-      )
+      |> RequestOptions.put_runtime_context(api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch)
 
     {:ok, prepared} =
       WebsocketCodec.prepare_frame(CodexPooler.JSON.encode!(payload), options, fn _ -> :ok end)

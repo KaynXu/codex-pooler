@@ -40,10 +40,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     # HTTP SSE stream through the global registry.
     start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
-    start_supervised!(
-      {RolloutDrain,
-       name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry}
-    )
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry})
 
     on_exit(fn ->
       if previous_config do
@@ -55,10 +52,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
       restore_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", previous_timeout)
     end)
 
-    {:ok,
-     activity_registry: activity_registry,
-     drain_name: drain_name,
-     stream_registry: stream_registry}
+    {:ok, activity_registry: activity_registry, drain_name: drain_name, stream_registry: stream_registry}
   end
 
   test "flips the app drain flag and drains local owner sessions with a compact summary",
@@ -256,9 +250,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     # cost the suite a second of pure waiting. The assertions below hold
     # whichever of the two elapses first.
     _owner =
-      start_supervised!(
-        {DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 250}
-      )
+      start_supervised!({DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 250})
 
     first_summary = RolloutDrain.drain_for_shutdown()
 
@@ -281,9 +273,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     survivor_key = owner_key()
 
     _survivor =
-      start_supervised!(
-        {DrainProbeOwner, key: survivor_key, parent: self(), release_timeout_ms: 1_000}
-      )
+      start_supervised!({DrainProbeOwner, key: survivor_key, parent: self(), release_timeout_ms: 1_000})
 
     second_summary = RolloutDrain.drain_for_shutdown()
 
@@ -437,9 +427,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     drain_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}
@@ -472,9 +460,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     drain_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}
@@ -517,9 +503,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     drain_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     assert_receive {:rollout_drain_deadline_wait, ^deadline, _wait_ms}
@@ -583,8 +567,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert_receive {:proxy_turn_cancelled, ^response_task, :owner_drained}
     assert_receive {:websocket_response_activity, ^response_task, activity_token}
 
-    assert_receive {:websocket_response_activity_cancelled, ^response_task, ^activity_token,
-                    ack_pid, :owner_drained}
+    assert_receive {:websocket_response_activity_cancelled, ^response_task, ^activity_token, ack_pid, :owner_drained}
 
     assert :ok = ResponseTask.acknowledge_delivery(ack_pid, activity_token)
     assert_receive {:codex_response_done, ^response_task, {:error, :owner_drained}}
@@ -627,9 +610,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     first_caller =
       spawn(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     first_caller_ref = Process.monitor(first_caller)
@@ -643,9 +624,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     second_drain =
       Task.async(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     assert_receive {:rollout_drain_deadline_wait, _deadline, _wait_ms}
@@ -735,9 +714,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     drain_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}
@@ -910,9 +887,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     drain_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(
-          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
-        )
+        RolloutDrain.start_drain([name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline))
       end)
 
     assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}

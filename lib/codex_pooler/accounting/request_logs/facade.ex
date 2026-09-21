@@ -152,9 +152,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
 
   defp request_log_items(rows, surface) do
     attempts_by_request =
-      request_log_attempts_by_request(
-        Enum.map(rows, fn {request, _, _, _, _, _, _} -> request.id end)
-      )
+      request_log_attempts_by_request(Enum.map(rows, fn {request, _, _, _, _, _, _} -> request.id end))
 
     turns_by_request =
       rows
@@ -196,8 +194,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       requested_model: request.requested_model,
       reasoning_effort: request.reasoning_effort,
       applied_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "applied_effort"),
-      effective_reasoning_effort:
-        reasoning_metadata_field(reasoning_metadata, "effective_effort"),
+      effective_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "effective_effort"),
       reasoning_effort_source: reasoning_metadata_field(reasoning_metadata, "source"),
       reasoning_effort_rewrite: reasoning_metadata_field(reasoning_metadata, "rewrite"),
       service_tier: request.service_tier,

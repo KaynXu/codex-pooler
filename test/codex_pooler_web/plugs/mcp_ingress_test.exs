@@ -99,8 +99,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
                }
              }
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "mcp", reason: "settings_unavailable"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "mcp", reason: "settings_unavailable"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -201,8 +200,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
 
       assert json_rpc_error(denied_conn, 403)["error"]["message"] == "client IP is not allowed"
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "mcp", reason: "duplicate_x_real_ip"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "mcp", reason: "duplicate_x_real_ip"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end

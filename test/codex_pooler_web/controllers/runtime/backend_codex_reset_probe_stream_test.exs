@@ -93,16 +93,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
     release_ref = make_ref()
 
     fixture =
-      reset_probe_fixture(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      reset_probe_fixture(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     {conn, logs} =
       with_log([level: :warning], fn ->
         conn = post_reset_probe(conn, fixture.setup)
 
-        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                        ^release_ref},
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                        1_000
 
         send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -128,8 +125,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
   end
 
   for {label, stage, mode_kind, expected_error} <- [
-        {"silent stream after headers", :after_sse_headers, :after_headers,
-         "stream_idle_timeout"},
+        {"silent stream after headers", :after_sse_headers, :after_headers, "stream_idle_timeout"},
         {"partial stream", :mid_stream, :mid_stream, "stream_idle_timeout"}
       ] do
     test "#{label} timeout leaves the guarded SSE reset probe claimed", %{conn: conn} do
@@ -162,8 +158,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
     fixture =
       reset_probe_fixture(
         FakeUpstream.abrupt_close_mid_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "partial"}}
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}}
         ])
       )
 
@@ -183,8 +178,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
     fixture =
       reset_probe_fixture(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible"}}
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible"}}
         ])
       )
 
@@ -229,8 +223,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
       reset_probe_fixture(
         FakeUpstream.delayed_terminal_sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}}
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}}
           ],
           completed_event("resp_reset_probe_late_terminal"),
           notify: self(),
@@ -264,9 +257,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
         {:path_json,
          %{
            "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-           "/api/codex/usage" =>
-             {200,
-              %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+           "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
          }}
       )
 

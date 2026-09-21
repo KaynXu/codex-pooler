@@ -670,9 +670,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   # A real top-level error alongside a null nested error keeps the existing
   # copy-into-response behavior instead of fabricating from the null.
-  defp normalize_response_error(
-         %{"error" => %{} = public_error, "response" => %{"error" => nil} = response} = decoded
-       ) do
+  defp normalize_response_error(%{"error" => %{} = public_error, "response" => %{"error" => nil} = response} = decoded) do
     Map.put(decoded, "response", Map.put(response, "error", public_error))
   end
 
@@ -686,9 +684,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     )
   end
 
-  defp normalize_response_error(
-         %{"error" => %{} = public_error, "response" => %{} = response} = decoded
-       ) do
+  defp normalize_response_error(%{"error" => %{} = public_error, "response" => %{} = response} = decoded) do
     Map.put(decoded, "response", Map.put(response, "error", public_error))
   end
 
@@ -712,8 +708,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       "created_at" => 0,
       "status" => "failed",
       "error" => normalize_terminal_error(Map.get(response, "error")),
-      "incomplete_details" =>
-        project_failed_incomplete_details(Map.get(response, "incomplete_details")),
+      "incomplete_details" => project_failed_incomplete_details(Map.get(response, "incomplete_details")),
       "model" => "unknown",
       "object" => "response",
       "output" => [],
@@ -763,8 +758,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     %{
       "input_tokens" => input_tokens,
       "input_tokens_details" => %{
-        "cache_write_tokens" =>
-          bounded_usage_integer(Map.get(input_details, "cache_write_tokens")),
+        "cache_write_tokens" => bounded_usage_integer(Map.get(input_details, "cache_write_tokens")),
         "cached_tokens" => bounded_usage_integer(Map.get(input_details, "cached_tokens"))
       },
       "output_tokens" => output_tokens,

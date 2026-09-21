@@ -37,9 +37,7 @@ defmodule CodexPooler.AccessTest do
       assert {:ok, _} = Access.update_api_key(scope, key, %{max_active_requests: 2})
       assert Map.get(Repo.get!(APIKey, key.id), :max_active_requests) == 2
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap persisted_create=nil persisted_update=2"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap persisted_create=nil persisted_update=2")
 
       assert {:ok, %{api_key: rotated}} = Access.rotate_api_key(scope, key)
       assert Map.get(Repo.get!(APIKey, rotated.id), :max_active_requests) == 2
@@ -54,9 +52,7 @@ defmodule CodexPooler.AccessTest do
       assert {:ok, read} = Access.get_api_key(scope, key.id)
       assert Map.get(read, :max_active_requests) == 2
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap persisted_rotation=2 persisted_pool_move=2 safe_read=2"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap persisted_rotation=2 persisted_pool_move=2 safe_read=2")
 
       assert {:ok, _} =
                Access.update_api_key_with_policy(scope, key.id, %{"max_active_requests" => nil})
@@ -71,9 +67,7 @@ defmodule CodexPooler.AccessTest do
                  "max_active_requests" in (event.details["changed_fields"] || [])
              end)
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap persisted_clear=nil audit_previous=2 audit_current=nil audit_changed_field=true"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap persisted_clear=nil audit_previous=2 audit_current=nil audit_changed_field=true")
     end
 
     test "rejects malformed caps without changing persisted state and casts numeric form strings" do
@@ -103,9 +97,7 @@ defmodule CodexPooler.AccessTest do
         end
       end
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap malformed_create_and_updates=rejected persisted_after_each_failure=4"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap malformed_create_and_updates=rejected persisted_after_each_failure=4")
 
       assert {:ok, _} = Access.update_api_key(scope, key, %{"max_active_requests" => "7"})
       assert Map.get(Repo.get!(APIKey, key.id), :max_active_requests) == 7

@@ -368,9 +368,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
         assert {:ok, _} =
                  Forwarded.admission_control(
                    owner,
-                   control(:record_first_compact_collected, downstream,
-                     first_compact_collection: proof
-                   )
+                   control(:record_first_compact_collected, downstream, first_compact_collection: proof)
                  )
 
         confirmation = %Admission.Confirmation{

@@ -177,8 +177,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.StreamFlagTest do
     # connection-bound compaction collector.
     prepared = %{
       prepared
-      | request_options:
-          RequestOptions.put_transport(prepared.request_options, websocket_writer: nil)
+      | request_options: RequestOptions.put_transport(prepared.request_options, websocket_writer: nil)
     }
 
     assert {:error, %{status: 500, code: "websocket_transport_required"} = reason} =

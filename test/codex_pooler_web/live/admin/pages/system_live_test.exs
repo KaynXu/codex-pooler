@@ -114,12 +114,9 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       Repo.aggregate(from(event in AuditEvent, where: event.actor_user_id == ^admin.id), :count)
 
     for {event, params} <- [
-          {"validate_instance_settings",
-           %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
-          {"save_instance_settings",
-           %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
-          {"autosave_instance_settings",
-           %{"instance_settings" => %{"mcp" => %{"enabled" => "true"}}}},
+          {"validate_instance_settings", %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
+          {"save_instance_settings", %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
+          {"autosave_instance_settings", %{"instance_settings" => %{"mcp" => %{"enabled" => "true"}}}},
           {"test_smtp", %{}},
           {"import_sample_data", %{}},
           {"import_pricing_catalog", %{}}

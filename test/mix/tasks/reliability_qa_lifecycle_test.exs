@@ -24,9 +24,7 @@ defmodule CodexPooler.MixTasks.ReliabilityQaLifecycleTest do
       )
 
     {output, code} =
-      System.cmd(@wrapper, ["--root", root, "--run-id", "a203b8f15e6d4901invalid"],
-        stderr_to_stdout: true
-      )
+      System.cmd(@wrapper, ["--root", root, "--run-id", "a203b8f15e6d4901invalid"], stderr_to_stdout: true)
 
     assert code != 0
     assert output =~ "invalid Pooler root"

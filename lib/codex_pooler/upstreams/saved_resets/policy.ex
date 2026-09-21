@@ -19,9 +19,7 @@ defmodule CodexPooler.Upstreams.SavedResetPolicy do
     with {:ok, identity} <- AccountLifecycle.authorize(scope, identity_or_id) do
       identity
       |> update_policy(attrs)
-      |> AccountAudit.record_change(scope, "upstream_account.saved_reset_policy_update",
-        trigger_kind: trigger_kind(attrs)
-      )
+      |> AccountAudit.record_change(scope, "upstream_account.saved_reset_policy_update", trigger_kind: trigger_kind(attrs))
     end
   end
 
@@ -56,8 +54,7 @@ defmodule CodexPooler.Upstreams.SavedResetPolicy do
 
   defp normalize_attrs(%UpstreamIdentity{} = identity, attrs) do
     %{
-      saved_reset_auto_redeem_enabled:
-        truthy?(fetch_any(attrs, [:auto_redeem_enabled, :saved_reset_auto_redeem_enabled])),
+      saved_reset_auto_redeem_enabled: truthy?(fetch_any(attrs, [:auto_redeem_enabled, :saved_reset_auto_redeem_enabled])),
       saved_reset_auto_redeem_min_blocked_minutes:
         non_negative_integer(
           fetch_any(attrs, [:min_blocked_minutes, :saved_reset_auto_redeem_min_blocked_minutes]),

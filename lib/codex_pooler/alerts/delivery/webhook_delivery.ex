@@ -343,18 +343,15 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
         {:ok, secret}
 
       {:ok, _empty} ->
-        {:failure, "alert_webhook_signing_secret_missing",
-         "webhook signing secret is unavailable"}
+        {:failure, "alert_webhook_signing_secret_missing", "webhook signing secret is unavailable"}
 
       {:error, _reason} ->
-        {:failure, "alert_webhook_signing_secret_invalid",
-         "webhook signing secret is unavailable"}
+        {:failure, "alert_webhook_signing_secret_invalid", "webhook signing secret is unavailable"}
     end
   end
 
   defp recover_signing_secret(%AlertChannel{}),
-    do:
-      {:failure, "alert_webhook_signing_secret_missing", "webhook signing secret is unavailable"}
+    do: {:failure, "alert_webhook_signing_secret_missing", "webhook signing secret is unavailable"}
 
   defp success_metadata(incident, channel, event_id, body_bytes, status) do
     incident

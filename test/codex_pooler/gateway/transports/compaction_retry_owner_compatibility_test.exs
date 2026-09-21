@@ -27,8 +27,7 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
       start_upstream(
         FakeUpstream.barrier_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => "resp_reclaim"}}},
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_reclaim"}}},
             {"response.output_item.done",
              %{
                "type" => "response.output_item.done",
@@ -311,8 +310,7 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
 
     assert_received {:compatible_owner_hold, hold}
 
-    assert_received {:compatible_owner_submission,
-                     [_session_id, _downstream, %WebsocketOwnerRequestV7{} = envelope]}
+    assert_received {:compatible_owner_submission, [_session_id, _downstream, %WebsocketOwnerRequestV7{} = envelope]}
 
     assert envelope.compaction_retry_submit_hold == hold
 
@@ -389,8 +387,7 @@ defmodule CodexPooler.Gateway.Transports.CompactionRetryOwnerCompatibilityTest d
     assert transport_error.code == "owner_drained"
     assert_received {:compatible_owner_hold, hold}
 
-    assert_received {:compatible_owner_submission,
-                     [_session_id, _downstream, %WebsocketOwnerRequestV7{} = envelope]}
+    assert_received {:compatible_owner_submission, [_session_id, _downstream, %WebsocketOwnerRequestV7{} = envelope]}
 
     assert envelope.compaction_retry_submit_hold == hold
     assert [link] = Repo.all(RequestClientRetryLink)

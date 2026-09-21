@@ -366,8 +366,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
       turns =
         Repo.all(
           from(turn in CodexTurn,
-            where:
-              turn.codex_session_id == ^state.codex_session.id and turn.request_id in ^request_ids,
+            where: turn.codex_session_id == ^state.codex_session.id and turn.request_id in ^request_ids,
             order_by: [asc: turn.turn_sequence]
           )
         )
@@ -621,8 +620,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
           FakeUpstream.strict_sequence([
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
-              respond:
-                FakeUpstream.websocket_text_frames([terminal.("resp_overlap_ordinary", [])])
+              respond: FakeUpstream.websocket_text_frames([terminal.("resp_overlap_ordinary", [])])
             ),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -642,8 +640,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
             ),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
-              respond:
-                FakeUpstream.websocket_text_frames([terminal.("resp_overlap_followup", [])])
+              respond: FakeUpstream.websocket_text_frames([terminal.("resp_overlap_followup", [])])
             )
           ])
         )
@@ -819,8 +816,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
       compact_requests =
         Repo.all(
           from(r in Request,
-            where:
-              r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
+            where: r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
           )
         )
 
@@ -896,8 +892,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
               equals: %{"type" => "response.create"},
               forbidden: ["previous_response_id"]
             ],
-            respond:
-              FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(anchor_terminal)])
+            respond: FakeUpstream.websocket_text_frames([CodexPooler.JSON.encode!(anchor_terminal)])
           ),
           FakeUpstream.expect_request(
             method: "WEBSOCKET",
@@ -1000,8 +995,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
     compact_requests =
       Repo.all(
         from(r in Request,
-          where:
-            r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
+          where: r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
         )
       )
 

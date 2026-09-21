@@ -43,8 +43,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     events = [
       {[:codex_pooler, :quota, :cycle, :decision], "quota_cycle_decision", %{scope: :account}},
       {[:codex_pooler, :saved_reset, :convergence], "saved_reset_convergence", %{source: "x"}},
-      {[:codex_pooler, :accounting, :reservation, :pre_attempt_release], "pre_attempt_release",
-       %{phase: :reserve}},
+      {[:codex_pooler, :accounting, :reservation, :pre_attempt_release], "pre_attempt_release", %{phase: :reserve}},
       {[:codex_pooler, :gateway, :stream, :outcome], "stream_outcome", %{outcome: :ok}}
     ]
 
@@ -132,9 +131,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     web =
       start_supervised!(%{
         id: make_ref(),
-        start:
-          {RelayRuntime, :start_link,
-           [[enabled: true, role: "web", start_paused: true, name: nil]]}
+        start: {RelayRuntime, :start_link, [[enabled: true, role: "web", start_paused: true, name: nil]]}
       })
 
     Sandbox.allow(Repo, owner, web)
@@ -234,9 +231,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
         assert Repo.all(RelayEvent) == []
 
         assert %{rows: [[1]]} =
-                 Repo.query!(
-                   "SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'"
-                 )
+                 Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'")
       end
     end
   end
@@ -287,9 +282,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(runtime) end)
 
     assert %{rows: [[1]]} =
-             Repo.query!(
-               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
-             )
+             Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'")
   end
 
   test "sharded pending capacity stays global under concurrent admissions", %{
@@ -352,9 +345,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     ExUnit.CaptureLog.capture_log(fn -> GenServer.stop(runtime) end)
 
     assert %{rows: [[dropped]]} =
-             Repo.query!(
-               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
-             )
+             Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'")
 
     assert dropped + length(held) == 128
   end
@@ -362,12 +353,7 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   test "failed final flush records known shutdown loss", %{sandbox_owner: owner} do
     pid =
       start_supervised!(
-        {RelayRuntime,
-         enabled: true,
-         role: "worker",
-         start_paused: true,
-         name: nil,
-         insert_fun: fn _, _, _, _, _ -> {:error, :synthetic_unavailable} end},
+        {RelayRuntime, enabled: true, role: "worker", start_paused: true, name: nil, insert_fun: fn _, _, _, _, _ -> {:error, :synthetic_unavailable} end},
         id: make_ref()
       )
 
@@ -384,21 +370,13 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
     assert log =~ "unflushed_samples=1"
 
     assert %{rows: [[1]]} =
-             Repo.query!(
-               "SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'"
-             )
+             Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'")
   end
 
   test "returned loss checkpoint errors warn with bounded sample count", %{sandbox_owner: owner} do
     pid =
       start_supervised!(
-        {RelayRuntime,
-         enabled: true,
-         role: "worker",
-         start_paused: true,
-         name: nil,
-         insert_fun: fn _, _, _, _, _ -> {:error, :unavailable} end,
-         loss_fun: fn _, _, _ -> {:error, :unavailable} end},
+        {RelayRuntime, enabled: true, role: "worker", start_paused: true, name: nil, insert_fun: fn _, _, _, _, _ -> {:error, :unavailable} end, loss_fun: fn _, _, _ -> {:error, :unavailable} end},
         id: make_ref()
       )
 

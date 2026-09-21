@@ -243,13 +243,10 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.ApiKeys do
       title: "List Pool API keys",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs bounded Pool API key metadata discovery. Pool API keys, not MCP tokens",
-          returns:
-            "sanitized Pool API key records with Pool labels, status, prefixes, policy summaries, and usage summaries only",
+          use_when: "an MCP client needs bounded Pool API key metadata discovery. Pool API keys, not MCP tokens",
+          returns: "sanitized Pool API key records with Pool labels, status, prefixes, policy summaries, and usage summaries only",
           never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
-          filters_limits:
-            "accepts optional query, status, pool_selector, and limit; limit is capped at #{Common.max_limit()} records"
+          filters_limits: "accepts optional query, status, pool_selector, and limit; limit is capped at #{Common.max_limit()} records"
         ),
       input_schema: Common.list_schema(),
       output_schema: Common.list_output_schema(),
@@ -264,13 +261,10 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.ApiKeys do
       title: "Get Pool API key",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs one Pool API key metadata record by id, Pool API-key prefix, or display name. Pool API keys, not MCP tokens",
-          returns:
-            "one sanitized Pool API key record or structured ambiguity candidates when the selector matches multiple records",
+          use_when: "an MCP client needs one Pool API key metadata record by id, Pool API-key prefix, or display name. Pool API keys, not MCP tokens",
+          returns: "one sanitized Pool API key record or structured ambiguity candidates when the selector matches multiple records",
           never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
-          filters_limits:
-            "requires selector; exact id and Pool API-key prefix are preferred, while duplicate display names return ambiguity candidates"
+          filters_limits: "requires selector; exact id and Pool API-key prefix are preferred, while duplicate display names return ambiguity candidates"
         ),
       input_schema: Common.selector_schema(),
       output_schema: Common.get_output_schema(),

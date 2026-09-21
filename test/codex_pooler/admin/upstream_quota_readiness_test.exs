@@ -385,8 +385,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, @as_of, 1)
           }
         })
 
@@ -422,8 +421,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, @as_of, 1)
           }
         })
 
@@ -459,8 +457,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
       for {state, observed_at, epoch, expected_state} <- [
             {:blocked, @as_of, 1, "blocked"},
             {:unknown, @as_of, 1, "missing_evidence"},
-            {:available, DateTime.add(@as_of, -(Evidence.freshness_ttl_seconds() + 1), :second),
-             1, "missing_evidence"},
+            {:available, DateTime.add(@as_of, -(Evidence.freshness_ttl_seconds() + 1), :second), 1, "missing_evidence"},
             {:available, @as_of, 2, "missing_evidence"}
           ] do
         pool = pool_fixture()
@@ -469,8 +466,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
           upstream_assignment_fixture(pool, %{
             identity_metadata: %{
               "credential_epoch" => 1,
-              AccountAvailabilityStore.metadata_key() =>
-                AccountAvailabilityStore.encode!(state, observed_at, epoch)
+              AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(state, observed_at, epoch)
             }
           })
 
@@ -492,8 +488,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, @as_of, 1)
           }
         })
 

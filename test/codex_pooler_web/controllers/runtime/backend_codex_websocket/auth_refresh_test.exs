@@ -337,9 +337,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
           # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_native_request(1, websocket_terminal_auth_failure(auth_code)),
-            strict_oauth_refresh(
-              FakeUpstream.json_response(%{"access_token" => "upstream-token-refreshed"}, 200)
-            ),
+            strict_oauth_refresh(FakeUpstream.json_response(%{"access_token" => "upstream-token-refreshed"}, 200)),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
               path: "/backend-api/codex/responses",
@@ -470,8 +468,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
         )
       end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
                    1_000
 
     metadata = active_token_refresh_metadata()
@@ -548,9 +545,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
           # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_native_request(1, websocket_terminal_auth_failure("invalid_authentication")),
-            strict_oauth_refresh(
-              FakeUpstream.json_response(@refresh_response_body, @refresh_response_status)
-            )
+            strict_oauth_refresh(FakeUpstream.json_response(@refresh_response_body, @refresh_response_status))
           ])
         )
 
@@ -628,9 +623,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
             json: [valid: true, equals: %{"type" => "response.create"}],
             respond:
               FakeUpstream.websocket_text_frames([
-                CodexPooler.JSON.encode!(
-                  websocket_auth_retry_success_payload("disconnect_refresh")
-                )
+                CodexPooler.JSON.encode!(websocket_auth_retry_success_payload("disconnect_refresh"))
               ])
           )
         ])
@@ -778,8 +771,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -879,8 +871,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
       "status" => "refreshing",
       "attempt_id" => Ecto.UUID.generate(),
       "generation" => Keyword.get(opts, :generation, 1),
-      "started_at" =>
-        DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+      "started_at" => DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
       "trigger_kind" => "test",
       "receive_timeout_ms" => Keyword.get(opts, :receive_timeout_ms, 30_000),
       "stale_after_ms" => Keyword.get(opts, :stale_after_ms, 60_000)

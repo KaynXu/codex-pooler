@@ -130,28 +130,22 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
     test "rejects bogus types at every supported schema graph location" do
       cases = [
         {"root", %{"type" => "future-type"}, "tools.0.parameters.type"},
-        {"properties", strict_object_schema(%{"value" => %{"type" => "future-type"}}),
-         "tools.0.parameters.properties.value.type"},
-        {"$defs", %{"type" => "string", "$defs" => %{"value" => %{"type" => "future-type"}}},
-         "tools.0.parameters.$defs.value.type"},
+        {"properties", strict_object_schema(%{"value" => %{"type" => "future-type"}}), "tools.0.parameters.properties.value.type"},
+        {"$defs", %{"type" => "string", "$defs" => %{"value" => %{"type" => "future-type"}}}, "tools.0.parameters.$defs.value.type"},
         {"definitions",
          %{
            "type" => "string",
            "definitions" => %{"value" => %{"type" => "future-type"}}
          }, "tools.0.parameters.definitions.value.type"},
-        {"map items", %{"type" => "array", "items" => %{"type" => "future-type"}},
-         "tools.0.parameters.items.type"},
+        {"map items", %{"type" => "array", "items" => %{"type" => "future-type"}}, "tools.0.parameters.items.type"},
         {"tuple items",
          %{
            "type" => "array",
            "items" => [%{"type" => "string"}, %{"type" => "future-type"}]
          }, "tools.0.parameters.items.1.type"},
-        {"anyOf", %{"type" => "string", "anyOf" => [%{"type" => "future-type"}]},
-         "tools.0.parameters.anyOf.0.type"},
-        {"oneOf", %{"type" => "string", "oneOf" => [%{"type" => "future-type"}]},
-         "tools.0.parameters.oneOf.0.type"},
-        {"allOf", %{"type" => "string", "allOf" => [%{"type" => "future-type"}]},
-         "tools.0.parameters.allOf.0.type"},
+        {"anyOf", %{"type" => "string", "anyOf" => [%{"type" => "future-type"}]}, "tools.0.parameters.anyOf.0.type"},
+        {"oneOf", %{"type" => "string", "oneOf" => [%{"type" => "future-type"}]}, "tools.0.parameters.oneOf.0.type"},
+        {"allOf", %{"type" => "string", "allOf" => [%{"type" => "future-type"}]}, "tools.0.parameters.allOf.0.type"},
         {"resolved local ref",
          strict_object_schema(
            %{"value" => %{"$ref" => "#/$defs/value"}},
@@ -227,10 +221,8 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
 
     test "covers flat, nested, namespace, and structured-output strict targets" do
       cases = [
-        {%{"tools" => [strict_flat_function_tool("flat_fixture", %{"type" => "future"})]},
-         "tools.0.parameters.type", "invalid_function_parameters"},
-        {%{"tools" => [strict_nested_function_tool("nested_fixture", %{"type" => "future"})]},
-         "tools.0.function.parameters.type", "invalid_function_parameters"},
+        {%{"tools" => [strict_flat_function_tool("flat_fixture", %{"type" => "future"})]}, "tools.0.parameters.type", "invalid_function_parameters"},
+        {%{"tools" => [strict_nested_function_tool("nested_fixture", %{"type" => "future"})]}, "tools.0.function.parameters.type", "invalid_function_parameters"},
         {%{
            "tools" => [
              %{
@@ -241,8 +233,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
              }
            ]
          }, "tools.0.tools.0.parameters.type", "invalid_function_parameters"},
-        {%{"text" => %{"format" => strict_text_format(%{"type" => "future"})}},
-         "text.format.schema.type", "invalid_json_schema"},
+        {%{"text" => %{"format" => strict_text_format(%{"type" => "future"})}}, "text.format.schema.type", "invalid_json_schema"},
         {%{
            "response_format" => %{
              "type" => "json_schema",
@@ -273,8 +264,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
   describe "validate_public_root_contract/1" do
     test "rejects every non-concrete object root through every strict target layout" do
       invalid_roots = [
-        {"omitted type",
-         %{"properties" => %{}, "required" => [], "additionalProperties" => false}},
+        {"omitted type", %{"properties" => %{}, "required" => [], "additionalProperties" => false}},
         {"primitive", %{"type" => "string"}},
         {"array", %{"type" => "array", "items" => %{"type" => "string"}}},
         {"singleton object type array", %{"type" => ["object"]}},
@@ -651,10 +641,8 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
     test "does not repair ambiguous or structurally incomplete evidence" do
       cases = [
         {"mixed evidence", Map.put(strict_object_evidence(), "items", %{"type" => "string"})},
-        {"missing additionalProperties",
-         Map.delete(strict_object_evidence(), "additionalProperties")},
-        {"additionalProperties true",
-         Map.put(strict_object_evidence(), "additionalProperties", true)},
+        {"missing additionalProperties", Map.delete(strict_object_evidence(), "additionalProperties")},
+        {"additionalProperties true", Map.put(strict_object_evidence(), "additionalProperties", true)},
         {"missing required", Map.delete(strict_object_evidence(), "required")},
         {"duplicate required",
          %{
@@ -834,8 +822,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
 
   defp strict_target_payloads(schema) do
     [
-      {"text format", %{"text" => %{"format" => strict_text_format(schema)}},
-       "invalid_json_schema", "text.format.schema"},
+      {"text format", %{"text" => %{"format" => strict_text_format(schema)}}, "invalid_json_schema", "text.format.schema"},
       {"response format",
        %{
          "response_format" => %{
@@ -843,10 +830,8 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
            "json_schema" => strict_json_schema(schema)
          }
        }, "invalid_json_schema", "response_format.json_schema.schema"},
-      {"flat function", %{"tools" => [strict_flat_function_tool("flat_fixture", schema)]},
-       "invalid_function_parameters", "tools.0.parameters"},
-      {"nested function", %{"tools" => [strict_nested_function_tool("nested_fixture", schema)]},
-       "invalid_function_parameters", "tools.0.function.parameters"},
+      {"flat function", %{"tools" => [strict_flat_function_tool("flat_fixture", schema)]}, "invalid_function_parameters", "tools.0.parameters"},
+      {"nested function", %{"tools" => [strict_nested_function_tool("nested_fixture", schema)]}, "invalid_function_parameters", "tools.0.function.parameters"},
       {"namespace function",
        %{
          "tools" => [

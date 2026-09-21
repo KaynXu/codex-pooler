@@ -39,10 +39,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.FileBridgeContext do
       pool_upstream_assignment_id: Map.get(opts, :pool_upstream_assignment_id),
       upstream_identity_id: Map.get(opts, :upstream_identity_id),
       defer_create_request: Map.get(opts, :defer_file_create_request),
-      finalize_retry_timeout_ms:
-        Normalization.optional_non_negative_integer(Map.get(opts, :finalize_retry_timeout_ms)),
-      finalize_retry_interval_ms:
-        Normalization.optional_non_negative_integer(Map.get(opts, :finalize_retry_interval_ms))
+      finalize_retry_timeout_ms: Normalization.optional_non_negative_integer(Map.get(opts, :finalize_retry_timeout_ms)),
+      finalize_retry_interval_ms: Normalization.optional_non_negative_integer(Map.get(opts, :finalize_retry_interval_ms))
     }
   end
 

@@ -75,9 +75,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
   defp register_owner_admission(%{owner_binding: nil}, _options), do: :ok
 
   @spec finish(RequestOptions.t()) :: :ok
-  def finish(
-        %RequestOptions{runtime: %{direct_cleanup: %{owner_binding: binding} = context}} = options
-      )
+  def finish(%RequestOptions{runtime: %{direct_cleanup: %{owner_binding: binding} = context}} = options)
       when is_map(binding) do
     WebsocketOwnerForwarder.finish_pre_attempt_admission(
       options.continuity.codex_session,

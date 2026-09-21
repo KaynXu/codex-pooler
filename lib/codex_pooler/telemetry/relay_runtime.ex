@@ -131,8 +131,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       loss_fun: Keyword.get(opts, :loss_fun, &Relay.checkpoint_loss/3),
       claim_fun: Keyword.get(opts, :claim_fun, &Relay.claim/2),
       heartbeat_fun: Keyword.get(opts, :heartbeat_fun, &Relay.refresh_heartbeat/1),
-      consumer_heartbeat_fun:
-        Keyword.get(opts, :consumer_heartbeat_fun, &Relay.consumer_heartbeat/2),
+      consumer_heartbeat_fun: Keyword.get(opts, :consumer_heartbeat_fun, &Relay.consumer_heartbeat/2),
       cleanup_interval_ms: cleanup_interval_ms
     }
 
@@ -332,8 +331,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
 
       [{^key, prior}] ->
         replacement = [
-          {{:"$1", :"$2"}, [{:"=:=", :"$1", {:const, key}}, {:"=:=", :"$2", prior}],
-           [{{:"$1", prior + count}}]}
+          {{:"$1", :"$2"}, [{:"=:=", :"$1", {:const, key}}, {:"=:=", :"$2", prior}], [{{:"$1", prior + count}}]}
         ]
 
         if :ets.select_replace(table, replacement) == 0 do
@@ -474,10 +472,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       dropped = :atomics.get(capacity, 2)
 
       if dropped > state.overflow_reported,
-        do:
-          Logger.warning(
-            "telemetry relay buffer full dropped_events=#{dropped - state.overflow_reported}"
-          )
+        do: Logger.warning("telemetry relay buffer full dropped_events=#{dropped - state.overflow_reported}")
 
       if dropped > 0, do: safe_loss(state, "buffer_overflow", dropped)
 
@@ -488,9 +483,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
       rejected = :atomics.get(capacity, @rejected_slot)
 
       if rejected > state.rejected_reported do
-        Logger.warning(
-          "telemetry relay refused unstorable samples=#{rejected - state.rejected_reported}"
-        )
+        Logger.warning("telemetry relay refused unstorable samples=#{rejected - state.rejected_reported}")
 
         case safe_loss(state, "rejected_sample", rejected) do
           :ok -> %{state | overflow_reported: dropped, rejected_reported: rejected}
@@ -554,9 +547,7 @@ defmodule CodexPooler.Telemetry.RelayRuntime do
     error ->
       # The consumer heartbeat feeds the fresh-consumer gauge; a silent write
       # failure would look exactly like a dead consumer.
-      Logger.warning(
-        "telemetry relay consumer heartbeat failed reason=#{inspect(error.__struct__)}"
-      )
+      Logger.warning("telemetry relay consumer heartbeat failed reason=#{inspect(error.__struct__)}")
 
       :ok
   catch

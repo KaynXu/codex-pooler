@@ -53,8 +53,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
               FakeUpstream.expect_request(
                 method: "WEBSOCKET",
                 json: [valid: true, forbidden: ["previous_response_id"]],
-                respond:
-                  FakeUpstream.websocket_text_frames([terminal.("resp_locking_anchor", [])])
+                respond: FakeUpstream.websocket_text_frames([terminal.("resp_locking_anchor", [])])
               ),
               FakeUpstream.expect_request(
                 method: "WEBSOCKET",
@@ -325,16 +324,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Compaction
            ) == expected
 
     if scenario == :rollback,
-      do:
-        assert(
-          Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 1
-        )
+      do: assert(Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 1)
 
     compact_requests =
       Repo.all(
         from(r in Request,
-          where:
-            r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
+          where: r.pool_id == ^setup.pool.id and r.endpoint == "/backend-api/codex/responses/compact"
         )
       )
 

@@ -14,8 +14,7 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
         :cleanup_failure,
         :candidate_failure
       ] do
-    @tag slow:
-           "boots an isolated BEAM peer and exercises PostgreSQL proof publication and recovery"
+    @tag slow: "boots an isolated BEAM peer and exercises PostgreSQL proof publication and recovery"
     test "an owner without distribution publishes task death with its database #{database}" do
       %{user: owner} = CodexPooler.AccountsFixtures.committed_bootstrap_owner_fixture!()
       slug = "disconnected-execution-#{Ecto.UUID.generate()}"
@@ -162,15 +161,11 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
       case unquote(database) do
         :cleanup_failure ->
           UnboxedFixture.register_unboxed_cleanup!(fn ->
-            Repo.query!(
-              "ALTER TABLE IF EXISTS execution_test_hidden_presences RENAME TO instance_presences"
-            )
+            Repo.query!("ALTER TABLE IF EXISTS execution_test_hidden_presences RENAME TO instance_presences")
           end)
 
           UnboxedFixture.run_unboxed(fn ->
-            Repo.query!(
-              "ALTER TABLE instance_presences RENAME TO execution_test_hidden_presences"
-            )
+            Repo.query!("ALTER TABLE instance_presences RENAME TO execution_test_hidden_presences")
           end)
 
           {result, logs} =
@@ -184,9 +179,7 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
           assert logs =~ "runtime state cleanup completed with failures"
 
           UnboxedFixture.run_unboxed(fn ->
-            Repo.query!(
-              "ALTER TABLE execution_test_hidden_presences RENAME TO instance_presences"
-            )
+            Repo.query!("ALTER TABLE execution_test_hidden_presences RENAME TO instance_presences")
           end)
 
         :candidate_failure ->
@@ -219,13 +212,10 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
             END $$
             """)
 
-            Repo.query!(
-              "CREATE TRIGGER execution_test_fail_finalization BEFORE UPDATE ON attempts FOR EACH ROW EXECUTE FUNCTION execution_test_fail_finalization()"
-            )
+            Repo.query!("CREATE TRIGGER execution_test_fail_finalization BEFORE UPDATE ON attempts FOR EACH ROW EXECUTE FUNCTION execution_test_fail_finalization()")
           end)
 
-          assert {:error, {:dead_execution_candidates_failed, [_failure]},
-                  %{dead_execution_attempts_recovered: 1}} =
+          assert {:error, {:dead_execution_candidates_failed, [_failure]}, %{dead_execution_attempts_recovered: 1}} =
                    UnboxedFixture.run_unboxed(fn ->
                      DeadExecutionRecovery.recover(DateTime.add(DateTime.utc_now(), 121))
                    end)
@@ -284,9 +274,7 @@ defmodule CodexPooler.Platform.DisconnectedExecutionRecoveryTest do
       assert_receive {:DOWN, ^monitor, :process, ^peer_owner, :normal}, 15_000
       assert_peer_process_absent(peer_os_pid, System.monotonic_time(:millisecond) + 15_000)
 
-      CodexPooler.TestDiagnostics.puts(
-        "disconnected execution: distribution=false live_skipped=true terminal_recovered_once=true peer_process_absent=true"
-      )
+      CodexPooler.TestDiagnostics.puts("disconnected execution: distribution=false live_skipped=true terminal_recovered_once=true peer_process_absent=true")
     end
   end
 

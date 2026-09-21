@@ -129,9 +129,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
         select: attempt.request_id
 
     Request
-    |> join(:inner, [request], target in subquery(target_request_ids),
-      on: target.request_id == request.id
-    )
+    |> join(:inner, [request], target in subquery(target_request_ids), on: target.request_id == request.id)
     |> where([request], request.pool_id in ^pool_ids)
     |> where([request], request.status == "succeeded")
     |> where([request], request.admitted_at >= ^start_7d and request.admitted_at <= ^as_of)

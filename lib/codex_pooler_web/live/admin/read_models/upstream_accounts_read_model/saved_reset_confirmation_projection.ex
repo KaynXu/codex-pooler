@@ -78,8 +78,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
           effective_windows,
           snapshot_at
         ),
-      additional_account_blocker_state:
-        additional_account_blocker_state(challenged_key, effective_windows, snapshot_at),
+      additional_account_blocker_state: additional_account_blocker_state(challenged_key, effective_windows, snapshot_at),
       observed_at: candidate_observed_at || accepted_observed_at || fallback_observed_at
     }
   end

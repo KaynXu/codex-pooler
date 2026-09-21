@@ -95,8 +95,7 @@ config :codex_pooler, CodexPoolerWeb.Endpoint,
 # that exit for the release budget of 50 s. The drain's deadline margin collapses any budget this
 # short to its floor, so a leaked turn is aborted at once; the release environment variable still
 # takes precedence.
-config :codex_pooler, CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
-  shutdown_timeout_ms: 1_000
+config :codex_pooler, CodexPooler.Gateway.Transports.Websocket.RolloutDrain, shutdown_timeout_ms: 1_000
 
 config :codex_pooler, CodexPooler.Mailer, adapter: Swoosh.Adapters.Test
 config :codex_pooler, dev_features_build_enabled: true
@@ -124,8 +123,7 @@ config :logger, level: :warning
 
 # Dev tracing restorer: keep the three bounded restore attempts but not a
 # second each (see CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer).
-config :codex_pooler, CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer,
-  restore_timeout_ms: 50
+config :codex_pooler, CodexPooler.Dev.NativeCompactionTrace.SensitivityRestorer, restore_timeout_ms: 50
 
 config :phoenix, :plug_init_mode, :runtime
 

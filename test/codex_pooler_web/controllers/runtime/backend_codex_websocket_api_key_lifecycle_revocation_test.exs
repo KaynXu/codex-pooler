@@ -364,13 +364,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
         )
       )
 
-      Repo.delete_all(
-        from(window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity_id)
-      )
+      Repo.delete_all(from(window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity_id))
 
-      Repo.delete_all(
-        from(secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id)
-      )
+      Repo.delete_all(from(secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id))
 
       Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id == ^identity_id))
     end)
@@ -389,9 +385,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
   end
 
   defp pool_owner_pids(pool_id) do
-    Repo.all(
-      from(session in CodexSession, where: session.pool_id == ^pool_id, select: session.id)
-    )
+    Repo.all(from(session in CodexSession, where: session.pool_id == ^pool_id, select: session.id))
     |> Enum.flat_map(fn session_id ->
       case WebsocketOwnerSession.lookup(session_id) do
         {:ok, pid} -> [pid]
@@ -535,8 +529,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketAPIKeyLifecycleRevocationT
                   assert {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
                   decoded = Enum.reject(decoded, &metadata_control_frame?/1)
 
-                  {websocket, frames ++ decoded,
-                   closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
+                  {websocket, frames ++ decoded, closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
 
                 _response, acc ->
                   acc

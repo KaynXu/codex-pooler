@@ -308,9 +308,7 @@ defmodule CodexPoolerWeb.V1.APIKeyActiveRequestsTest do
       assert_receive {:DOWN, ^monitor, :process, ^server, _}, 15_000
       assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000)
 
-      CodexPooler.TestDiagnostics.puts(
-        inspect(%{scenario: :wire_cleanup, listener_stopped: true, port_closed: true})
-      )
+      CodexPooler.TestDiagnostics.puts(inspect(%{scenario: :wire_cleanup, listener_stopped: true, port_closed: true}))
     end)
 
     port

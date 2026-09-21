@@ -89,9 +89,7 @@ defmodule CodexPooler.Platform.ExecutionTerminalProofs do
         select: p.execution_id
 
     {count, _} =
-      Repo.delete_all(
-        from p in ExecutionTerminalProof, where: p.execution_id in subquery(expired)
-      )
+      Repo.delete_all(from p in ExecutionTerminalProof, where: p.execution_id in subquery(expired))
 
     {:ok, %{execution_terminal_proofs_pruned: count}}
   end

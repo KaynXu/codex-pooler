@@ -50,8 +50,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDroppedFrameReleaseTest do
                owner_instance_id: "drop-absent-instance@127.0.0.1"
              })
 
-    {:ok,
-     auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
+    {:ok, auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
   end
 
   test "aborting a public turn releases the capability of the queued frame it drops", %{

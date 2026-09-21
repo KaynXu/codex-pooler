@@ -10,8 +10,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag capture_log: true
-  @tag slow:
-         "boots the real owner control boundary, captures a committed reservation and observes actual response-task release"
+  @tag slow: "boots the real owner control boundary, captures a committed reservation and observes actual response-task release"
   test "captures a real committed reservation once and releases its actual response task" do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)

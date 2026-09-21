@@ -299,11 +299,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capabi
       ) do
     if secure_digest_match?(binding_digest, proof_digest) and
          secure_digest_match?(binding_digest, expected_digest) and is_binary(correlation_id) do
-      {:reply, {:ok, correlation_id}, %{state | runtime_proof_redeemed?: true},
-       state.consumed_retention_ms}
+      {:reply, {:ok, correlation_id}, %{state | runtime_proof_redeemed?: true}, state.consumed_retention_ms}
     else
-      {:reply, {:error, :invalid}, %{state | runtime_proof_redeemed?: true},
-       state.consumed_retention_ms}
+      {:reply, {:error, :invalid}, %{state | runtime_proof_redeemed?: true}, state.consumed_retention_ms}
     end
   end
 

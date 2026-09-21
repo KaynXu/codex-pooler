@@ -82,9 +82,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
           transport_opts: [timeout: timeouts.connect_timeout_ms]
         )
       else
-        OperationalSettings.upstream_http_pool_options(
-          transport_opts: [timeout: timeouts.connect_timeout_ms]
-        )
+        OperationalSettings.upstream_http_pool_options(transport_opts: [timeout: timeouts.connect_timeout_ms])
       end
 
     [

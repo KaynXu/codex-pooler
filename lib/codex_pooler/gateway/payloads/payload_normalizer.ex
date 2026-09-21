@@ -292,9 +292,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> put_upstream_previous_response_id(upstream_payload)
       |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
-      |> RequestOptions.put_runtime_context(
-        prompt_cache_controls_downgraded: prompt_cache_controls_downgraded
-      )
+      |> RequestOptions.put_runtime_context(prompt_cache_controls_downgraded: prompt_cache_controls_downgraded)
 
     with :ok <- validate(payload, request_options),
          {:ok, encoded} <- CodexPooler.JSON.encode(upstream_payload) do
@@ -316,9 +314,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
         |> Enum.map(fn {key, value} -> {key, to_string(value)} end)
 
       file_part =
-        {:file,
-         {stream,
-          filename: upload.redacted_filename, content_type: upload.content_type, size: upload.size}}
+        {:file, {stream, filename: upload.redacted_filename, content_type: upload.content_type, size: upload.size}}
 
       {:ok, {:multipart, [file_part | prompt_fields ++ array_fields]}, request_options}
     end
@@ -750,9 +746,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
        when type in ["function_call_output", "custom_tool_call_output"] and is_list(output),
        do: Map.put(item, "output", Enum.map(output, &strip_input_image_detail/1))
 
-  defp strip_responses_lite_image_details(
-         %{"type" => type, "output" => %{"content" => content} = output} = item
-       )
+  defp strip_responses_lite_image_details(%{"type" => type, "output" => %{"content" => content} = output} = item)
        when type in ["function_call_output", "custom_tool_call_output"] and is_list(content) do
     Map.put(
       item,
@@ -1161,8 +1155,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp decision_configured_effort(nil), do: nil
 
   defp reasoning_effort_rewrite(applied_effort, effective_effort) do
-    case {normalize_effort_for_compare(applied_effort),
-          normalize_effort_for_compare(effective_effort)} do
+    case {normalize_effort_for_compare(applied_effort), normalize_effort_for_compare(effective_effort)} do
       {"minimal", "low"} -> "minimal_to_low"
       {"ultra", target} when target in @ultra_rewrite_targets -> "ultra_to_" <> target
       _efforts -> nil
@@ -1199,9 +1192,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp remove_client_supplied_responses_lite_metadata(
-         %{"client_metadata" => %{} = metadata} = payload
-       ) do
+  defp remove_client_supplied_responses_lite_metadata(%{"client_metadata" => %{} = metadata} = payload) do
     Map.put(
       payload,
       "client_metadata",

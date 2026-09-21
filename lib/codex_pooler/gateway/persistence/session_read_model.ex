@@ -209,8 +209,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
       api_key_prefix: key && key.key_prefix,
       session_key: session.session_key,
       conversation_key: session.conversation_key,
-      pool_upstream_assignment_id:
-        session.pool_upstream_assignment_id || (attempt && attempt.pool_upstream_assignment_id),
+      pool_upstream_assignment_id: session.pool_upstream_assignment_id || (attempt && attempt.pool_upstream_assignment_id),
       upstream_identity_id: attempt && attempt.upstream_identity_id,
       requested_model: request && request.requested_model,
       status: session.status,
@@ -263,8 +262,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
       turn_sequence: turn.turn_sequence,
       transport_kind: turn.transport_kind,
       status: turn.status,
-      error_code:
-        turn.error_code || request.last_error_code || (attempt && attempt.network_error_code),
+      error_code: turn.error_code || request.last_error_code || (attempt && attempt.network_error_code),
       final_attempt_id: turn.final_attempt_id,
       requested_model: request.requested_model,
       request_status: request.status,

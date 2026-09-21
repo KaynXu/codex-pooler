@@ -62,25 +62,15 @@ defmodule CodexPooler.TestDurationGuardTest do
   end
 
   for mode <- ["normal", "trace"], scenario <- ["ordinary", "hard", "assertion"] do
-    @tag slow:
-           "boots an isolated BEAM VM to verify CI timing reports do not mask assertion failures"
+    @tag slow: "boots an isolated BEAM VM to verify CI timing reports do not mask assertion failures"
     test "CI #{mode} reports #{scenario} without enforcing wall-clock budgets" do
-      {output, exit_code} =
-        System.cmd(
-          "elixir",
-          ["--erl", "+S 2:2", "-r", @guard, @probe, unquote(scenario), unquote(mode)],
-          env: List.keystore(@local_env, "CI", 0, {"CI", "true"}),
-          stderr_to_stdout: true
-        )
-
+      {output, exit_code} = System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, unquote(scenario), unquote(mode)], env: List.keystore(@local_env, "CI", 0, {"CI", "true"}), stderr_to_stdout: true)
       expected_exit = if unquote(scenario) == "assertion", do: 2, else: 0
       assert exit_code == expected_exit, output
       refute output =~ "test duration guard failed:", output
       assert output =~ "probe teardown completed", output
       assert output =~ "guard receipts remaining=0", output
-
-      if unquote(scenario) != "assertion",
-        do: assert(output =~ "test duration report (CI; non-blocking):", output)
+      if unquote(scenario) != "assertion", do: assert(output =~ "test duration report (CI; non-blocking):", output)
     end
   end
 

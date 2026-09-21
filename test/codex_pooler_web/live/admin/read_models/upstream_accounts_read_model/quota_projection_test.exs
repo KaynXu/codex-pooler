@@ -689,17 +689,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
         identity_observability(
           now,
           [
-            reconciliation_assignment("00000000-0000-0000-0000-000000000001", "failed", -120,
-              code: "quota_refresh_unavailable"
-            ),
+            reconciliation_assignment("00000000-0000-0000-0000-000000000001", "failed", -120, code: "quota_refresh_unavailable"),
             reconciliation_assignment("00000000-0000-0000-0000-000000000002", "succeeded", 60),
             reconciliation_assignment("00000000-0000-0000-0000-000000000003", "refreshing", -10),
-            reconciliation_assignment("00000000-0000-0000-0000-000000000004", "failed", -5,
-              finished_at: "malformed"
-            ),
-            reconciliation_assignment("00000000-0000-0000-0000-000000000005", "succeeded", -1,
-              assignment_status: "deleted"
-            )
+            reconciliation_assignment("00000000-0000-0000-0000-000000000004", "failed", -5, finished_at: "malformed"),
+            reconciliation_assignment("00000000-0000-0000-0000-000000000005", "succeeded", -1, assignment_status: "deleted")
           ]
         )
 
@@ -715,9 +709,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
         identity_observability(
           now,
           [
-            reconciliation_assignment("00000000-0000-0000-0000-000000000001", "failed", -60,
-              code: "quota_refresh_failed"
-            ),
+            reconciliation_assignment("00000000-0000-0000-0000-000000000001", "failed", -60, code: "quota_refresh_failed"),
             reconciliation_assignment("00000000-0000-0000-0000-000000000002", "succeeded", -60)
           ]
         )
@@ -1251,9 +1243,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     rows =
       [
-        spark_window("secondary", 10_080, observed_at,
-          metadata: %{"reset_state" => "floating", "reset_after_seconds" => 604_800}
-        )
+        spark_window("secondary", 10_080, observed_at, metadata: %{"reset_state" => "floating", "reset_after_seconds" => 604_800})
       ]
       |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
 

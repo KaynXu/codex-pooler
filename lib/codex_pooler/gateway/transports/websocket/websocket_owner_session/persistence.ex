@@ -28,8 +28,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
            opts
          ) do
       {:ok, %{owner_lease_token: owner_lease_token, owner_instance_id: owner_instance_id}} ->
-        {:ok,
-         %{state | owner_lease_token: owner_lease_token, owner_instance_id: owner_instance_id}}
+        {:ok, %{state | owner_lease_token: owner_lease_token, owner_instance_id: owner_instance_id}}
 
       {:error, reason} ->
         {:error, reason}

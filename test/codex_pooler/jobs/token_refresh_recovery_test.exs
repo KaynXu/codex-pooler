@@ -300,8 +300,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == newest.id))
     end
 
-    @tag slow:
-           "creates 101 real identities to prove the production 100-identity recovery batch limit"
+    @tag slow: "creates 101 real identities to prove the production 100-identity recovery batch limit"
     test "defaults scheduled recovery to at most 100 identities per pass" do
       identities =
         for index <- 1..101 do
@@ -445,8 +444,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       missing_finished =
         recovery_identity_fixture("active",
           updated_at: DateTime.add(@now, -7, :hour),
-          metadata:
-            update_in(without_finished_at, ["token_refresh"], &Map.delete(&1, "finished_at"))
+          metadata: update_in(without_finished_at, ["token_refresh"], &Map.delete(&1, "finished_at"))
         )
 
       assert {:ok, %{inserted: jobs, conflicts: [], errors: []}} =

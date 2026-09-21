@@ -600,8 +600,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     {first_conn, _first_websocket} =
       public_websocket_send_text!(first_conn, first_websocket, first_ref, payload)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_close, first_upstream_pid,
-                    ^first_release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, first_upstream_pid, ^first_release_ref},
                    @large_websocket_frame_timeout
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -621,8 +620,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     {replay_conn, _replay_websocket} =
       public_websocket_send_text!(replay_conn, replay_websocket, replay_ref, payload)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_close, second_upstream_pid,
-                    ^second_release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, second_upstream_pid, ^second_release_ref},
                    @large_websocket_frame_timeout
 
     assert [persisted_attempt_n, attempt_n_plus_one] =
@@ -1030,8 +1028,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
       {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
       {conn, _websocket} = public_websocket_send_text!(conn, websocket, ref, raw_payload)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
                      @large_websocket_frame_timeout
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -1078,8 +1075,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
       {replay_conn, _replay_websocket, frames} =
         receive_raw_texts_until_terminal!(replay_conn, replay_websocket, replay_ref, [])
 
-      assert_receive {Events,
-                      %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+      assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
                      @connection_shutdown_timeout_ms
 
       # The native replay path is the only one that settles a generation 1
@@ -1442,10 +1438,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
              Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
 
     persisted =
-      inspect(
-        {request.request_metadata, turn,
-         Repo.all(from(a in Attempt, where: a.request_id == ^request.id))}
-      )
+      inspect({request.request_metadata, turn, Repo.all(from(a in Attempt, where: a.request_id == ^request.id))})
 
     refute persisted =~ setup.authorization
     refute persisted =~ raw_payload
@@ -1550,10 +1543,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
 
   defp replay_boundary_counts(pool_id, session_id, request_id) do
     %{
-      requests:
-        Repo.aggregate(from(request in Request, where: request.pool_id == ^pool_id), :count),
-      attempts:
-        Repo.aggregate(from(attempt in Attempt, where: attempt.request_id == ^request_id), :count),
+      requests: Repo.aggregate(from(request in Request, where: request.pool_id == ^pool_id), :count),
+      attempts: Repo.aggregate(from(attempt in Attempt, where: attempt.request_id == ^request_id), :count),
       turns:
         Repo.aggregate(
           from(turn in CodexTurn, where: turn.codex_session_id == ^session_id),

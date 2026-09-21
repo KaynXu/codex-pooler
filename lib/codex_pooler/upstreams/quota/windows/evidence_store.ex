@@ -1937,9 +1937,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
-  defp account_weekly_zero_observation?(
-         %Evidence{used_percent: %Decimal{} = used_percent} = evidence
-       ) do
+  defp account_weekly_zero_observation?(%Evidence{used_percent: %Decimal{} = used_percent} = evidence) do
     account_weekly_evidence?(evidence) and zero_percent?(used_percent)
   end
 
@@ -2306,9 +2304,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     do:
       Map.get(metadata, "reset_at_source") != "explicit" and
         Map.get(metadata, :reset_at_source) != "explicit" and
-        not is_nil(
-          Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds)
-        )
+        not is_nil(Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds))
 
   defp relative_reset_metadata?(_metadata), do: false
 

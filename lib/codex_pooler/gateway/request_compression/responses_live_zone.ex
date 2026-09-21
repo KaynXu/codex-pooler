@@ -56,8 +56,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
                                  "local_shell_call_output",
                                  "apply_patch_call_output"
                                ])
-  @external_retrieval_name <<104, 101, 97, 100, 114, 111, 111, 109, 95, 114, 101, 116, 114, 105,
-                             101, 118, 101>>
+  @external_retrieval_name <<104, 101, 97, 100, 114, 111, 111, 109, 95, 114, 101, 116, 114, 105, 101, 118, 101>>
   @external_retrieval_suffix <<95, 95>> <> @external_retrieval_name
   @default_excluded_function_tool_name_list ~w(
     Read Glob Grep Write Edit WebSearch WebFetch
@@ -201,10 +200,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   end
 
   defp call_id_sets(items, excluded_function_tool_names, schema_bound_tool_names) do
-    Enum.reduce(items, {MapSet.new(), MapSet.new(), MapSet.new()}, fn {item, _path},
-                                                                      {skipped_call_ids,
-                                                                       known_call_ids,
-                                                                       schema_bound_call_ids} ->
+    Enum.reduce(items, {MapSet.new(), MapSet.new(), MapSet.new()}, fn {item, _path}, {skipped_call_ids, known_call_ids, schema_bound_call_ids} ->
       known_call_ids = put_known_function_call_id(known_call_ids, item)
 
       schema_bound_call_ids =

@@ -164,8 +164,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       "scope_type" => @default_scope_type,
       "rule_kind" => @default_rule_kind,
       "display_name" => "",
-      "severity" =>
-        default_severity_for_rule_kind(string_value(attrs, "rule_kind", @default_rule_kind)),
+      "severity" => default_severity_for_rule_kind(string_value(attrs, "rule_kind", @default_rule_kind)),
       "cooldown_minutes" => AlertRule.default_cooldown_minutes(),
       "state" => @default_state,
       "model" => "",

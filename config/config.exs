@@ -189,8 +189,7 @@ config :codex_pooler, CodexPooler.Mailer, adapter: Swoosh.Adapters.Local
 config :esbuild,
   version: "0.25.4",
   codex_pooler: [
-    args:
-      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+    args: ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
@@ -224,8 +223,7 @@ config :phoenix, :json_library, CodexPooler.JSON
 config :postgrex, :json_library, CodexPooler.JSON
 config :swoosh, :json_library, CodexPooler.JSON
 
-config :req, :default_options,
-  decoders: [json: &CodexPooler.JSON.decode/1, json_api: &CodexPooler.JSON.decode/1]
+config :req, :default_options, decoders: [json: &CodexPooler.JSON.decode/1, json_api: &CodexPooler.JSON.decode/1]
 
 config :phoenix, :filter_parameters, [
   "access_token",

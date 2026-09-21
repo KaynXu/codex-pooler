@@ -67,11 +67,9 @@ defmodule CodexPooler.Quotas.Evidence do
 
   @type errors :: %{optional(atom()) => [String.t()]}
   @type persistence_identity_key ::
-          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), pos_integer(),
-           String.t(), String.t(), String.t(), String.t()}
+          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), pos_integer(), String.t(), String.t(), String.t(), String.t()}
   @type descriptor_key ::
-          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), String.t(),
-           String.t(), String.t()}
+          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), String.t()}
   @type logical_window_key ::
           {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), pos_integer()}
   @type additional_window_group_key ::
@@ -261,10 +259,8 @@ defmodule CodexPooler.Quotas.Evidence do
   def descriptor_key(evidence) when is_map(evidence) do
     evidence
     |> identity_key()
-    |> then(fn {scope, family, model, upstream_model, quota_key, _kind, _minutes, source,
-                raw_limit_id, raw_limit_name, raw_metered_feature} ->
-      {scope, family, model, upstream_model, quota_key, source, raw_limit_id, raw_limit_name,
-       raw_metered_feature}
+    |> then(fn {scope, family, model, upstream_model, quota_key, _kind, _minutes, source, raw_limit_id, raw_limit_name, raw_metered_feature} ->
+      {scope, family, model, upstream_model, quota_key, source, raw_limit_id, raw_limit_name, raw_metered_feature}
     end)
   end
 
@@ -272,8 +268,7 @@ defmodule CodexPooler.Quotas.Evidence do
   def logical_window_key(evidence) when is_map(evidence) do
     evidence
     |> identity_key()
-    |> then(fn {scope, family, model, upstream_model, quota_key, kind, minutes, _source,
-                _raw_limit_id, _raw_limit_name, _raw_metered_feature} ->
+    |> then(fn {scope, family, model, upstream_model, quota_key, kind, minutes, _source, _raw_limit_id, _raw_limit_name, _raw_metered_feature} ->
       {scope, family, model, upstream_model, quota_key, kind, minutes}
     end)
   end
@@ -350,9 +345,7 @@ defmodule CodexPooler.Quotas.Evidence do
     |> put(:source_precision, normalize_token(fetch(attrs, :source_precision) || "observed"))
     |> put(
       :quota_scope,
-      normalize_token(
-        fetch(attrs, :quota_scope) || Descriptors.infer_scope(model, upstream_model, quota_key)
-      )
+      normalize_token(fetch(attrs, :quota_scope) || Descriptors.infer_scope(model, upstream_model, quota_key))
     )
     |> put(
       :quota_family,

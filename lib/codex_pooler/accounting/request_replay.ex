@@ -720,9 +720,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
         )
 
       {:consumed, error_code} ->
-        finalize_close!({session, turn, request, attempt, entitlement}, nil, error_code, now,
-          preserve_attempt?: false
-        )
+        finalize_close!({session, turn, request, attempt, entitlement}, nil, error_code, now, preserve_attempt?: false)
 
       :noop ->
         :noop
@@ -999,9 +997,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   defp cleanup_close_reason(request_id, :abandoned) do
     case started_owner_witness(request_id) do
       %{session: session, reference: reference} ->
-        case WebsocketOwnerForwarder.touch_replay_liveness(session, reference,
-               timeout: @owner_witness_timeout_ms
-             ) do
+        case WebsocketOwnerForwarder.touch_replay_liveness(session, reference, timeout: @owner_witness_timeout_ms) do
           :ok -> :abandoned
           {:error, _reason} -> :owner_unavailable
         end
@@ -1908,8 +1904,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
       )
 
   defp lock_ledger!(request_id),
-    do:
-      Repo.all(from row in LedgerEntry, where: row.request_id == ^request_id, lock: "FOR UPDATE")
+    do: Repo.all(from row in LedgerEntry, where: row.request_id == ^request_id, lock: "FOR UPDATE")
 
   defp no_terminal_ledger?(request_id) do
     not Repo.exists?(
@@ -1919,8 +1914,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   end
 
   defp lock_pool!(pool_id),
-    do:
-      Repo.one!(from row in CodexPooler.Pools.Pool, where: row.id == ^pool_id, lock: "FOR UPDATE")
+    do: Repo.one!(from row in CodexPooler.Pools.Pool, where: row.id == ^pool_id, lock: "FOR UPDATE")
 
   defp lock_api_key_policy_bindings!(api_key_id),
     do:

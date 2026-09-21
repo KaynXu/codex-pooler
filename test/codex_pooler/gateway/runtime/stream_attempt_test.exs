@@ -31,9 +31,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert {{:write, ^oversized}, state} = StreamAttempt.classify_first_event(oversized, state)
       assert_classified_state(state)
 
-      assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
-                      %{bytes: bytes, count: 1, max_bytes: 8_388_608},
-                      %{buffer: "first_event", endpoint: "unknown", route_class: "unknown"}}
+      assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized], %{bytes: bytes, count: 1, max_bytes: 8_388_608}, %{buffer: "first_event", endpoint: "unknown", route_class: "unknown"}}
 
       assert bytes > 8_388_608
     end
@@ -258,8 +256,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
           "code" => "websocket_connection_limit_reached"
         })
 
-      assert {{:write_terminal_failure, ^terminal,
-               %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
+      assert {{:write_terminal_failure, ^terminal, %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
       assert_classified_state(state)
@@ -284,8 +281,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
           "code" => "websocket_connection_limit_reached"
         })
 
-      assert {{:write_terminal_failure, ^terminal,
-               %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
+      assert {{:write_terminal_failure, ^terminal, %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
       assert_classified_state(state)

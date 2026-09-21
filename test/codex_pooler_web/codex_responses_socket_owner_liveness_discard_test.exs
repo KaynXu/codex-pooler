@@ -56,8 +56,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
                owner_instance_id: "liveness-absent-instance@127.0.0.1"
              })
 
-    {:ok,
-     auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
+    {:ok, auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
   end
 
   test "an owner-liveness close answers every queued turn it discards", %{
@@ -95,8 +94,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
     # the turn.
     assert {:stop, :normal, close_detail, frames, closed_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, active_turn,
-                {:response_task_result, {:error, :owner_drained}, false}},
+               {:codex_response_done, active_turn, {:response_task_result, {:error, :owner_drained}, false}},
                queued_state
              )
 
@@ -157,8 +155,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerLivenessDiscardTest do
     # terminal, and the socket must not fabricate a second one.
     assert {:stop, :normal, {1011, "websocket owner crashed"}, closed_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, active_turn,
-                {:response_task_result, {:error, :owner_crashed}, true}},
+               {:codex_response_done, active_turn, {:response_task_result, {:error, :owner_crashed}, true}},
                state
              )
 

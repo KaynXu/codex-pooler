@@ -210,9 +210,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
     {count, _rows} =
       CodexTurn
-      |> join(:inner, [turn], attempt in CodexPooler.Accounting.Attempt,
-        on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id
-      )
+      |> join(:inner, [turn], attempt in CodexPooler.Accounting.Attempt, on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id)
       |> where(
         [turn, attempt],
         turn.request_id == ^request_id and
@@ -324,9 +322,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
   defp generation_completion_query(request_id, attempt_id, generation, status) do
     CodexTurn
-    |> join(:inner, [turn], attempt in Attempt,
-      on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id
-    )
+    |> join(:inner, [turn], attempt in Attempt, on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id)
     |> where(
       [turn, attempt],
       turn.request_id == ^request_id and attempt.replay_generation == ^generation and
@@ -591,11 +587,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     do: replay_db_now(request_id)
 
   defp lifecycle_now(request_id, nil) do
-    if Repo.exists?(
-         from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id
-       ),
-       do: replay_db_now(request_id),
-       else: now()
+    if Repo.exists?(from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id),
+      do: replay_db_now(request_id),
+      else: now()
   end
 
   defp lifecycle_now(_request_id, _attempt), do: now()

@@ -118,9 +118,7 @@ defmodule CodexPoolerWeb.CoreComponents do
   attr :class, :any, default: nil
   attr :error_class, :any, default: nil
 
-  attr :rest, :global,
-    include:
-      ~w(accept autocomplete capture cols disabled form inputmode list max maxlength min minlength
+  attr :rest, :global, include: ~w(accept autocomplete capture cols disabled form inputmode list max maxlength min minlength
                 multiple pattern placeholder readonly required rows size step)
 
   def input(%{field: %FormField{} = field} = assigns) do
@@ -252,9 +250,7 @@ defmodule CodexPoolerWeb.CoreComponents do
   attr :class, :any, default: nil
   attr :errors, :list, default: []
 
-  attr :rest, :global,
-    include:
-      ~w(autocomplete disabled form inputmode maxlength pattern placeholder readonly required)
+  attr :rest, :global, include: ~w(autocomplete disabled form inputmode maxlength pattern placeholder readonly required)
 
   def otp_input(%{field: %FormField{} = field} = assigns) do
     errors = if Phoenix.Component.used_input?(field), do: field.errors, else: []
@@ -412,10 +408,7 @@ defmodule CodexPoolerWeb.CoreComponents do
     JS.show(js,
       to: selector,
       time: 300,
-      transition:
-        {"transition-all ease-out duration-300",
-         "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95",
-         "opacity-100 translate-y-0 sm:scale-100"}
+      transition: {"transition-all ease-out duration-300", "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95", "opacity-100 translate-y-0 sm:scale-100"}
     )
   end
 
@@ -423,9 +416,7 @@ defmodule CodexPoolerWeb.CoreComponents do
     JS.hide(js,
       to: selector,
       time: 200,
-      transition:
-        {"transition-all ease-in duration-200", "opacity-100 translate-y-0 sm:scale-100",
-         "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"}
+      transition: {"transition-all ease-in duration-200", "opacity-100 translate-y-0 sm:scale-100", "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"}
     )
   end
 

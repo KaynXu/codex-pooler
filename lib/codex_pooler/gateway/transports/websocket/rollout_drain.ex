@@ -238,12 +238,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
             {:owner, drain_owner_after_turn(owner, deadline_ms, drain_policy)}
 
           {:activity, activity} ->
-            {:activity, activity.kind,
-             ActivityDrain.drain(activity, deadline_ms, drain_policy, activity_registry)}
+            {:activity, activity.kind, ActivityDrain.drain(activity, deadline_ms, drain_policy, activity_registry)}
 
           :http_streams ->
-            {:http_streams,
-             DeferredStreamDrain.drain_all(deadline_ms, drain_policy, stream_registry)}
+            {:http_streams, DeferredStreamDrain.drain_all(deadline_ms, drain_policy, stream_registry)}
         end,
         max_concurrency: max(1, length(work)),
         on_timeout: :kill_task,

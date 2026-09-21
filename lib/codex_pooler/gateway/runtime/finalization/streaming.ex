@@ -245,9 +245,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
        ) do
     response
     |> Metadata.first_event_stream_metadata(failure, error_kind, context.request_options)
-    |> merge_upstream_websocket_connection(
-      websocket_attempt_metadata.upstream_websocket_connection
-    )
+    |> merge_upstream_websocket_connection(websocket_attempt_metadata.upstream_websocket_connection)
   end
 
   @spec finalize_failure(binary(), term(), ResponseContext.t()) :: finalization_result()
@@ -268,9 +266,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       |> Metadata.response_metadata("stream_interrupted", context.request_options)
       |> Metadata.merge_stream_state_metadata(stream_state)
       |> merge_usage_observation(stream_state)
-      |> merge_upstream_websocket_connection(
-        websocket_attempt_metadata.upstream_websocket_connection
-      )
+      |> merge_upstream_websocket_connection(websocket_attempt_metadata.upstream_websocket_connection)
       |> Metadata.maybe_put_masked_error_metadata(
         terminal_failure && terminal_failure.upstream_code,
         code

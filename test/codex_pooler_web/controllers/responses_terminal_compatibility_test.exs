@@ -11,8 +11,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @terminal_shapes [
-    {:done,
-     ~s({"type":"response.done","response":{"id":"resp_terminal_done","custom":{"kept":true}}})},
+    {:done, ~s({"type":"response.done","response":{"id":"resp_terminal_done","custom":{"kept":true}}})},
     {:legacy, ~s({ "id" : "resp_terminal_legacy", "custom" : { "kept" : true } })}
   ]
 
@@ -324,17 +323,8 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
   for owner_forwarding? <- [false, true],
       {shape, payload, expected_code} <- @failure_shapes do
-    @tag terminal_shape: shape,
-         terminal_payload: payload,
-         terminal_code: expected_code,
-         owner_forwarding: owner_forwarding?
-    test "public GET websocket keeps #{shape} terminal transformation with forwarding=#{owner_forwarding?}",
-         %{
-           terminal_shape: shape,
-           terminal_payload: payload,
-           terminal_code: expected_code,
-           owner_forwarding: owner_forwarding?
-         } do
+    @tag terminal_shape: shape, terminal_payload: payload, terminal_code: expected_code, owner_forwarding: owner_forwarding?
+    test "public GET websocket keeps #{shape} terminal transformation with forwarding=#{owner_forwarding?}", %{terminal_shape: shape, terminal_payload: payload, terminal_code: expected_code, owner_forwarding: owner_forwarding?} do
       Application.put_env(
         :codex_pooler,
         :websocket_owner_forwarding_enabled,

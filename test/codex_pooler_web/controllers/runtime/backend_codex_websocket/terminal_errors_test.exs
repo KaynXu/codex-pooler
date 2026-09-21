@@ -256,9 +256,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-policy-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-policy-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -482,8 +480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,
-                 where:
-                   entry.request_id == ^failed_request.id and entry.entry_kind == "settlement"
+                 where: entry.request_id == ^failed_request.id and entry.entry_kind == "settlement"
                ),
                :count
              ) == 1
@@ -507,11 +504,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
       assert updated.metadata["probe_in_flight_count"] == 0
 
       persisted =
-        inspect(
-          {failed_request.request_metadata, failed_attempt.response_metadata,
-           succeeded_request.request_metadata, succeeded_attempt.response_metadata,
-           RequestLogs.list(setup.pool)}
-        )
+        inspect({failed_request.request_metadata, failed_attempt.response_metadata, succeeded_request.request_metadata, succeeded_attempt.response_metadata, RequestLogs.list(setup.pool)})
 
       refute persisted =~ provider_wording
       refute persisted =~ "provider.policy.param"
@@ -670,9 +663,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-status-code-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-status-code-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -770,8 +761,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
             "type" => "invalid_request_error",
             "code" => "previous_response_not_found",
             "param" => "previous_response_id",
-            "message" =>
-              "Previous response with id '#{previous_response_id}' not found for #{request_content}."
+            "message" => "Previous response with id '#{previous_response_id}' not found for #{request_content}."
           },
           "headers" => %{
             "X-Request-ID" => "ws-multiline-previous-request",
@@ -800,9 +790,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-multiline-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-multiline-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -1212,9 +1200,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
       setup = gateway_setup(upstream)
 
       fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-explicit-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-explicit-fallback", compact?: false)
 
       prime_routing_quota!(fallback.identity)
 
@@ -1316,8 +1302,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"error",
              %{
                "type" => "error",

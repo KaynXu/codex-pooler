@@ -179,10 +179,8 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # so fold them read-side: selection, routing, and operator projections then
   # see a single weekly window regardless of whether the one-shot purge
   # migration has run or been raced by an old writer.
-  defp normalize_legacy_weekly_primary(
-         %Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window
-       ),
-       do: %{window | window_kind: "secondary"}
+  defp normalize_legacy_weekly_primary(%Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window),
+    do: %{window | window_kind: "secondary"}
 
   defp normalize_legacy_weekly_primary(window), do: window
 
@@ -194,15 +192,11 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     |> Descriptors.canonical_logical_window_key()
   end
 
-  defp normalize_scope_dimensions(
-         {"model", family, model, _upstream_model, quota_key, kind, minutes}
-       ),
-       do: {"model", family, model, nil, quota_key, kind, minutes}
+  defp normalize_scope_dimensions({"model", family, model, _upstream_model, quota_key, kind, minutes}),
+    do: {"model", family, model, nil, quota_key, kind, minutes}
 
-  defp normalize_scope_dimensions(
-         {"upstream_model", family, _model, upstream_model, quota_key, kind, minutes}
-       ),
-       do: {"upstream_model", family, nil, upstream_model, quota_key, kind, minutes}
+  defp normalize_scope_dimensions({"upstream_model", family, _model, upstream_model, quota_key, kind, minutes}),
+    do: {"upstream_model", family, nil, upstream_model, quota_key, kind, minutes}
 
   defp normalize_scope_dimensions(logical_key), do: logical_key
 
@@ -264,9 +258,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   defp pressure_rank(%Quota.AccountQuotaWindow{}), do: Decimal.new(-1)
 
   defp logical_sort_key(%Quota.AccountQuotaWindow{} = window) do
-    {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope,
-     window.quota_family, window.model || "", window.upstream_model || "",
-     AdditionalMeterIdentity.token(window) || ""}
+    {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope, window.quota_family, window.model || "", window.upstream_model || "", AdditionalMeterIdentity.token(window) || ""}
   end
 
   defp usable_rank(%Quota.AccountQuotaWindow{} = window, as_of) do

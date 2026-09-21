@@ -100,8 +100,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
         {:ok, params}
 
       _params ->
-        {:error,
-         %{status: 400, code: "invalid_request", message: "request body must be a JSON object"}}
+        {:error, %{status: 400, code: "invalid_request", message: "request body must be a JSON object"}}
     end
   end
 
@@ -192,9 +191,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       |> RequestOptions.for_websocket()
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
       |> maybe_put_websocket_openai_compatibility(opts)
-      |> RequestOptions.put_continuity(
-        accepted_turn_state: websocket_continuity_turn_state(opts, turn_state)
-      )
+      |> RequestOptions.put_continuity(accepted_turn_state: websocket_continuity_turn_state(opts, turn_state))
       |> maybe_mark_websocket_openai_origin(opts)
 
     case maybe_put_websocket_models_etag(conn, auth, request_options) do

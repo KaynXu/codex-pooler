@@ -155,8 +155,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AuthJsonImportWorkflow do
         if byte_size(content) <= UpstreamAuthJsonImport.upload_limit_bytes() do
           {:ok, content, socket}
         else
-          {:error, "File must be #{UpstreamAuthJsonImport.upload_limit_label()} or smaller",
-           socket}
+          {:error, "File must be #{UpstreamAuthJsonImport.upload_limit_label()} or smaller", socket}
         end
 
       [] ->

@@ -16,8 +16,7 @@ defmodule CodexPooler.Repo.Migrations.AddSavedResetAutoRedeemThresholdPolicy do
     create constraint(
              :upstream_identities,
              :upstream_identities_saved_reset_threshold_percent_check,
-             check:
-               "saved_reset_auto_redeem_quota_threshold_percent >= 1 AND saved_reset_auto_redeem_quota_threshold_percent <= 100"
+             check: "saved_reset_auto_redeem_quota_threshold_percent >= 1 AND saved_reset_auto_redeem_quota_threshold_percent <= 100"
            )
   end
 end

@@ -168,8 +168,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDrainResendTest do
       "stream" => true,
       "client_metadata" => %{
         "session_id" => "client-metadata-session",
-        "x-codex-turn-metadata" =>
-          CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "turn"})
+        "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "turn"})
       }
     }
   end

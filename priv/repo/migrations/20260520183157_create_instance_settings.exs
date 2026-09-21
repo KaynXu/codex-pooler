@@ -18,8 +18,6 @@ defmodule CodexPooler.Repo.Migrations.CreateInstanceSettings do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create constraint(:instance_settings, :instance_settings_singleton_true_check,
-             check: "singleton = true"
-           )
+    create constraint(:instance_settings, :instance_settings_singleton_true_check, check: "singleton = true")
   end
 end

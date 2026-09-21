@@ -9,8 +9,7 @@ defmodule CodexPooler.Repo.Migrations.AddCredentialProvenanceToUpstreamIdentitie
     create constraint(
              :upstream_identities,
              :upstream_identities_credential_provenance_check,
-             check:
-               "credential_provenance IS NULL OR credential_provenance = 'codex_chatgpt_oauth'"
+             check: "credential_provenance IS NULL OR credential_provenance = 'codex_chatgpt_oauth'"
            )
   end
 end

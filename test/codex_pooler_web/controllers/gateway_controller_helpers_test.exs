@@ -174,12 +174,9 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
   # terminal class. Its expected type moves with its status now.
   test "send_error leaves unrelated error shapes without recovery fields" do
     for {error, type} <- [
-          {%{status: 503, code: "session_assignment_unavailable", message: "session unavailable"},
-           "server_error"},
-          {%{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
-           "invalid_request_error"},
-          {%{status: 400, code: "invalid_request", message: "request invalid"},
-           "invalid_request_error"}
+          {%{status: 503, code: "session_assignment_unavailable", message: "session unavailable"}, "server_error"},
+          {%{status: 400, code: "unsupported_model_capability", message: "model unsupported"}, "invalid_request_error"},
+          {%{status: 400, code: "invalid_request", message: "request invalid"}, "invalid_request_error"}
         ] do
       conn = GatewayControllerHelpers.send_error(Phoenix.ConnTest.build_conn(), error)
       body = json_response(conn, error.status)

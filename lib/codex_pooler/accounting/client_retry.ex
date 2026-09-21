@@ -81,8 +81,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
             successor_request_id: Ecto.UUID.t(),
             link_id: Ecto.UUID.t(),
             successor_claim: String.t(),
-            compaction_owner:
-              %{owner_instance_id: String.t(), downstream_epoch: pos_integer()} | nil
+            compaction_owner: %{owner_instance_id: String.t(), downstream_epoch: pos_integer()} | nil
           }
   end
 
@@ -232,8 +231,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
       with {:ok, mac} <-
              AppSecretCrypto.hmac_digest(
                :erlang.term_to_binary(
-                 {"codex_pooler.failed_predecessor_resend", 1, original_claim,
-                  predecessor_request_id},
+                 {"codex_pooler.failed_predecessor_resend", 1, original_claim, predecessor_request_id},
                  [:deterministic]
                )
              ) do
@@ -413,8 +411,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
     with {:ok, mac} <-
            AppSecretCrypto.hmac_digest(
              :erlang.term_to_binary(
-               {"codex_pooler.compaction_retry_successor", 1, request.id, request.correlation_id,
-                semantic, replay},
+               {"codex_pooler.compaction_retry_successor", 1, request.id, request.correlation_id, semantic, replay},
                [:deterministic]
              )
            ) do
@@ -512,8 +509,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
              reclaim_owner_valid?(session, owner_lease, input, db_now)
            ),
          {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input) do
-      {:ok,
-       %{request: request, turn: turn, attempt: attempt, db_now: db_now, successor: successor}}
+      {:ok, %{request: request, turn: turn, attempt: attempt, db_now: db_now, successor: successor}}
     else
       {:error, _reason} = error -> error
     end
@@ -686,8 +682,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
        when is_binary(previous_digest) and byte_size(previous_digest) == 32 do
     AppSecretCrypto.hmac_digest(
       :erlang.term_to_binary(
-        {"codex_pooler.native_http_progress", 1, previous_digest,
-         normalize_native_http_progress_item(item)},
+        {"codex_pooler.native_http_progress", 1, previous_digest, normalize_native_http_progress_item(item)},
         [:deterministic]
       )
     )
@@ -1550,8 +1545,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defp lock_lineage(request_id, _input) do
     Repo.one(
       from link in RequestClientRetryLink,
-        where:
-          link.predecessor_request_id == ^request_id or link.successor_request_id == ^request_id,
+        where: link.predecessor_request_id == ^request_id or link.successor_request_id == ^request_id,
         lock: "FOR UPDATE"
     )
   end

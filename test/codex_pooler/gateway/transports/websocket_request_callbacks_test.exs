@@ -141,10 +141,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
 
     snapshots = [
       {:timeouts, Map.put(attrs.timeouts, :unexpected_callback, function)},
-      {:reset_probe,
-       Map.put(%ResetProbe{token: Ecto.UUID.generate()}, :unexpected_callback, function)},
-      {:native_codex_response_control,
-       Map.put(%TurnSnapshot{models_etag: "etag"}, :unexpected_callback, function)}
+      {:reset_probe, Map.put(%ResetProbe{token: Ecto.UUID.generate()}, :unexpected_callback, function)},
+      {:native_codex_response_control, Map.put(%TurnSnapshot{models_etag: "etag"}, :unexpected_callback, function)}
     ]
 
     assert Enum.map(snapshots, fn {field, snapshot} ->
@@ -155,8 +153,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
              [
                {:error, {:invalid_owner_request, {:invalid_field, :timeouts}}},
                {:error, {:invalid_owner_request, {:invalid_field, :reset_probe}}},
-               {:error,
-                {:invalid_owner_request, {:invalid_field, :native_codex_response_control}}}
+               {:error, {:invalid_owner_request, {:invalid_field, :native_codex_response_control}}}
              ]
   end
 

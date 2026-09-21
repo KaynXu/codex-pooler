@@ -50,10 +50,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:auth_fresh_label) => String.t(),
           required(:auth_verified_label) => String.t(),
           required(:access_token_label) => String.t(),
-          required(:credential_expiry) =>
-            UpstreamAccountsReadModel.credential_expiry_projection(),
-          required(:secret_status) =>
-            :present | :missing | :expired | :refresh_due | :reauth_required,
+          required(:credential_expiry) => UpstreamAccountsReadModel.credential_expiry_projection(),
+          required(:secret_status) => :present | :missing | :expired | :refresh_due | :reauth_required,
           required(:token_refresh_label) => String.t(),
           required(:refresh_job_state) => String.t() | nil,
           required(:reauth_required?) => boolean(),
@@ -235,8 +233,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       cockpit
       | flags: flags,
         charts: charts,
-        sections:
-          sections(flags, cockpit.assignments, charts, cockpit.recent_events, cockpit.actions)
+        sections: sections(flags, cockpit.assignments, charts, cockpit.recent_events, cockpit.actions)
     }
   end
 
@@ -709,9 +706,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   # A pending flow past its deadline is expired in fact; present it as such
   # without waiting for the expiry sweeper to relabel the row.
-  defp normalize_oauth_flow_status(
-         %{status: "pending", expires_at: %DateTime{} = expires_at} = flow
-       ) do
+  defp normalize_oauth_flow_status(%{status: "pending", expires_at: %DateTime{} = expires_at} = flow) do
     if DateTime.after?(expires_at, DateTime.utc_now()) do
       flow
     else
@@ -797,8 +792,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     redeem_saved_reset = redeem_saved_reset_action(account, header)
 
     %{
-      rename:
-        assignment_action(account, status != "deleted", "deleted accounts cannot be renamed"),
+      rename: assignment_action(account, status != "deleted", "deleted accounts cannot be renamed"),
       pause:
         assignment_action(
           account,

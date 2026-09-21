@@ -2413,8 +2413,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       |> Ecto.Changeset.change(%{
         latency_ms: 321,
         network_error_code: Map.fetch!(attrs, :attempt_error),
-        error_message:
-          Map.get(attrs, :error_message, "raw attempt error message must stay out of MCP output"),
+        error_message: Map.get(attrs, :error_message, "raw attempt error message must stay out of MCP output"),
         response_metadata:
           Map.merge(
             %{"websocket_frame" => "raw debug websocket frame"},

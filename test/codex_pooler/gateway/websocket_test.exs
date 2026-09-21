@@ -115,9 +115,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
              downstream
            ]
 
-    assert WebsocketOwnerForwarder.remote_attach_args("session-contract", downstream,
-             reject_if_busy: true
-           ) == ["session-contract", downstream, [reject_if_busy: true]]
+    assert WebsocketOwnerForwarder.remote_attach_args("session-contract", downstream, reject_if_busy: true) == ["session-contract", downstream, [reject_if_busy: true]]
 
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 2)
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
@@ -159,9 +157,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
     Admission.reset_for_test()
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: websocket_saturation_settings()
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: websocket_saturation_settings())
 
     on_exit(fn ->
       Admission.reset_for_test()
@@ -184,12 +180,10 @@ defmodule CodexPooler.Gateway.WebsocketTest do
         "input" => []
       })
 
-    assert {:socket_response_result, :local_complete,
-            {:error, %{code: "server_is_overloaded", accounting_disposition: :zero_work}}} =
+    assert {:socket_response_result, :local_complete, {:error, %{code: "server_is_overloaded", accounting_disposition: :zero_work}}} =
              Gateway.run_websocket_response_for_socket(%{}, payload, opts, fn _frame -> :ok end)
 
-    assert {:socket_response_result, :local_complete,
-            {:error, %{code: "invalid_request", message: "websocket message must be valid JSON"}}} =
+    assert {:socket_response_result, :local_complete, {:error, %{code: "invalid_request", message: "websocket message must be valid JSON"}}} =
              Gateway.run_websocket_response_for_socket(%{}, "{invalid", opts, fn _frame -> :ok end)
 
     malformed_model =
@@ -199,8 +193,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
         "input" => []
       })
 
-    assert {:socket_response_result, :local_complete,
-            {:error, %{code: "invalid_request", param: "model"}}} =
+    assert {:socket_response_result, :local_complete, {:error, %{code: "invalid_request", param: "model"}}} =
              Gateway.run_websocket_response_for_socket(%{}, malformed_model, opts, fn _frame ->
                :ok
              end)
@@ -212,8 +205,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
         "input" => "not-an-array"
       })
 
-    assert {:socket_response_result, :local_complete,
-            {:error, %{code: "invalid_request", param: "input"}}} =
+    assert {:socket_response_result, :local_complete, {:error, %{code: "invalid_request", param: "input"}}} =
              Gateway.run_websocket_response_for_socket(%{}, malformed_schema, opts, fn _frame ->
                :ok
              end)
@@ -610,9 +602,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
 
       previous_response_id = previous_response_id("expired")
 
-      register_previous_response_alias!(target_session, api_key, previous_response_id,
-        expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
-      )
+      register_previous_response_alias!(target_session, api_key, previous_response_id, expires_at: DateTime.add(DateTime.utc_now(), -1, :second))
 
       assert_alias_miss_keeps_runtime!(auth, runtime, previous_response_id, target_session.id)
     end
@@ -1383,9 +1373,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   end
 
   defp attempt_rows(%Request{} = request) do
-    Repo.all(
-      from(a in Attempt, where: a.request_id == ^request.id, order_by: [asc: a.attempt_number])
-    )
+    Repo.all(from(a in Attempt, where: a.request_id == ^request.id, order_by: [asc: a.attempt_number]))
   end
 
   defp enable_request_compression!(pool) do

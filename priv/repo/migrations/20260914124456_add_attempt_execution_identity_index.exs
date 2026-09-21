@@ -52,9 +52,7 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptExecutionIdentityIndex do
               log: false
             ).rows
         after
-          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout],
-            log: false
-          )
+          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout], log: false)
         end
       end)
     end)
@@ -74,9 +72,7 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptExecutionIdentityIndex do
             timeout: :infinity
           )
         after
-          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout],
-            log: false
-          )
+          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout], log: false)
         end
       end)
     end)

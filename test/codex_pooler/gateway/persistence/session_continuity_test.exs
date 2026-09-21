@@ -610,8 +610,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
              contested_start_results(
                [
                  {primary_auth, %{owner_instance_id: "node-a"}},
-                 {alternate_auth,
-                  %{owner_instance_id: "node-b", authenticated_owner_attach: true}}
+                 {alternate_auth, %{owner_instance_id: "node-b", authenticated_owner_attach: true}}
                ],
                owner_attach_key,
                :first_wins

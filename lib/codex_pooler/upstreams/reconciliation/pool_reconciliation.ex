@@ -454,8 +454,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   defp reconciliation_quota_source(identity, assignment, opts, persisted_window_reuse_at) do
     cond do
       Keyword.has_key?(opts, :quota_windows) ->
-        {:windows, Keyword.get(opts, :quota_windows), Keyword.get(opts, :identity_attrs, %{}),
-         CredentialFencing.credential_epoch(identity)}
+        {:windows, Keyword.get(opts, :quota_windows), Keyword.get(opts, :identity_attrs, %{}), CredentialFencing.credential_epoch(identity)}
 
       windows = metadata_quota_windows(identity, assignment) ->
         {:windows, windows, %{}, CredentialFencing.credential_epoch(identity)}
@@ -1086,8 +1085,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     assignment
     |> PoolUpstreamAssignment.changeset(%{
       metadata: Map.put(metadata, "last_reconciliation", summary),
-      last_successful_refresh_at:
-        if(status == :succeeded, do: timestamp, else: assignment.last_successful_refresh_at),
+      last_successful_refresh_at: if(status == :succeeded, do: timestamp, else: assignment.last_successful_refresh_at),
       updated_at: timestamp
     })
     |> Repo.update!()

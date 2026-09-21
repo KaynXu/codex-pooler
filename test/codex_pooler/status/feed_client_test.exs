@@ -9,9 +9,7 @@ defmodule CodexPooler.Status.FeedClientTest do
     xml = File.read!(Path.join(__DIR__, "fixtures/incident_io.rss"))
 
     {:ok, feed} =
-      FakeUpstream.start_link(
-        {:raw_body, 200, xml, [{"content-type", "application/rss+xml; charset=utf-8"}]}
-      )
+      FakeUpstream.start_link({:raw_body, 200, xml, [{"content-type", "application/rss+xml; charset=utf-8"}]})
 
     on_exit(fn -> FakeUpstream.stop(feed) end)
 
@@ -23,10 +21,7 @@ defmodule CodexPooler.Status.FeedClientTest do
 
   test "rejects a response beyond the feed byte bound" do
     {:ok, feed} =
-      FakeUpstream.start_link(
-        {:raw_body, 200, String.duplicate("x", 1_000_001),
-         [{"content-type", "application/rss+xml"}]}
-      )
+      FakeUpstream.start_link({:raw_body, 200, String.duplicate("x", 1_000_001), [{"content-type", "application/rss+xml"}]})
 
     on_exit(fn -> FakeUpstream.stop(feed) end)
 

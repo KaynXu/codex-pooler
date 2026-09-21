@@ -655,32 +655,22 @@ defmodule CodexPooler.PoolsTest do
                [assigned_pool.id, disabled_pool.id] |> Enum.sort()
 
       assert {:ok, decision} =
-               Pools.require_capability(admin_scope, Pools.capability(:pool_api_key_manage),
-                 pool_id: assigned_pool.id
-               )
+               Pools.require_capability(admin_scope, Pools.capability(:pool_api_key_manage), pool_id: assigned_pool.id)
 
       assert decision.actor_role == "instance_admin"
       assert decision.pool_id == assigned_pool.id
 
       assert {:ok, _decision} =
-               Pools.require_capability(admin_scope, Pools.capability(:pool_operate),
-                 pool_id: assigned_pool.id
-               )
+               Pools.require_capability(admin_scope, Pools.capability(:pool_operate), pool_id: assigned_pool.id)
 
       assert {:error, %{code: :capability_denied}} =
-               Pools.require_capability(admin_scope, Pools.capability(:pool_operate),
-                 pool_id: unassigned_pool.id
-               )
+               Pools.require_capability(admin_scope, Pools.capability(:pool_operate), pool_id: unassigned_pool.id)
 
       assert {:error, %{code: :capability_denied}} =
-               Pools.require_capability(admin_scope, Pools.capability(:pool_api_key_manage),
-                 pool_id: revoked_pool.id
-               )
+               Pools.require_capability(admin_scope, Pools.capability(:pool_api_key_manage), pool_id: revoked_pool.id)
 
       assert {:error, %{code: :pool_not_found}} =
-               Pools.require_capability(admin_scope, Pools.capability(:pool_operate),
-                 pool_id: disabled_pool.id
-               )
+               Pools.require_capability(admin_scope, Pools.capability(:pool_operate), pool_id: disabled_pool.id)
 
       assert {:error, %{code: :capability_denied}} =
                Pools.require_capability(admin_scope, Pools.capability(:pool_operate))
@@ -791,9 +781,7 @@ defmodule CodexPooler.PoolsTest do
       scope = Scope.for_user(user, [])
 
       assert {:error, %{code: :capability_denied, message: message}} =
-               Pools.require_capability(scope, Pools.capability(:pool_api_key_manage),
-                 pool_id: pool.id
-               )
+               Pools.require_capability(scope, Pools.capability(:pool_api_key_manage), pool_id: pool.id)
 
       assert message =~ "node admins"
     end

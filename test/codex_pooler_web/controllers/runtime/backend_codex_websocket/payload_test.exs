@@ -515,9 +515,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     setup = gateway_setup(primary_upstream)
 
     alternate =
-      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-ws-prompt-cache-alternate",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-ws-prompt-cache-alternate", compact?: false)
 
     prime_routing_quota!(alternate.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -631,10 +629,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
   test "backend websocket routes resolve reasoning policy after upgrade" do
     cases = [
       {"/backend-api/codex/responses", [maximum_reasoning_effort: "medium"], %{}, "medium"},
-      {"/backend-api/codex/v1/responses", [maximum_reasoning_effort: "high"],
-       %{"reasoning_effort" => "low"}, "low"},
-      {"/backend-api/codex/responses", [enforced_reasoning_effort: "high"],
-       %{"reasoningEffort" => "low"}, "high"},
+      {"/backend-api/codex/v1/responses", [maximum_reasoning_effort: "high"], %{"reasoning_effort" => "low"}, "low"},
+      {"/backend-api/codex/responses", [enforced_reasoning_effort: "high"], %{"reasoningEffort" => "low"}, "high"},
       {"/backend-api/codex/v1/responses", [], %{"reasoning_effort" => "focused"}, "focused"}
     ]
 

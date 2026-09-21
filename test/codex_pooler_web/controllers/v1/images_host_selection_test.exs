@@ -38,13 +38,10 @@ defmodule CodexPoolerWeb.V1.ImagesHostSelectionTest do
   end
 
   for {label, first, second} <- [
-        {"listed before hidden", %{"visibility" => "hide", "priority" => 0},
-         %{"visibility" => "list", "priority" => 20}},
+        {"listed before hidden", %{"visibility" => "hide", "priority" => 0}, %{"visibility" => "list", "priority" => 20}},
         {"listed before unspecified", %{}, %{"visibility" => "list"}},
-        {"catalog priority before identifier", %{"visibility" => "list", "priority" => 20},
-         %{"visibility" => "list", "priority" => 1}},
-        {"integer priority before malformed priority",
-         %{"visibility" => "list", "priority" => "0"}, %{"visibility" => "list", "priority" => 1}}
+        {"catalog priority before identifier", %{"visibility" => "list", "priority" => 20}, %{"visibility" => "list", "priority" => 1}},
+        {"integer priority before malformed priority", %{"visibility" => "list", "priority" => "0"}, %{"visibility" => "list", "priority" => 1}}
       ] do
     @first first
     @second second

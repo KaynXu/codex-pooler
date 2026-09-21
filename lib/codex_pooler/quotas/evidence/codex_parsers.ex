@@ -85,8 +85,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   end
 
   defp unusable_usage_payload do
-    {:error,
-     %{code: :upstream_quota_unusable, message: "upstream quota payload had no usable windows"}}
+    {:error, %{code: :upstream_quota_unusable, message: "upstream quota payload had no usable windows"}}
   end
 
   defp account_availability(payload, account_windows) do

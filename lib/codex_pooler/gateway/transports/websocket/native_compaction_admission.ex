@@ -229,8 +229,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       case request do
         %{
           websocket_delivery_mode: :collect_full_history,
-          native_compaction_metadata:
-            %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
+          native_compaction_metadata: %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
         } ->
           admit_first_compact_result(request, result, lifecycle, metadata)
 
@@ -356,15 +355,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       do: expected == presented
 
     @spec request_identity(map()) :: tuple() | nil
-    def request_identity(
-          %{native_compaction_metadata: %NativeCodexTurnMetadata{} = metadata} = request
-        ) do
+    def request_identity(%{native_compaction_metadata: %NativeCodexTurnMetadata{} = metadata} = request) do
       with {:ok, %{"model" => model}} when is_binary(model) <-
              CodexPooler.JSON.decode(request.payload),
            {:ok, mode} <- mode(request.effective_serving_mode) do
-        {request.request_id, request.attempt_id, metadata.semantic_turn_key,
-         metadata.window_id_digest, metadata.context_window_id_digest, metadata.window_number,
-         mode, model_digest(model)}
+        {request.request_id, request.attempt_id, metadata.semantic_turn_key, metadata.window_id_digest, metadata.context_window_id_digest, metadata.window_number, mode, model_digest(model)}
       else
         _invalid -> nil
       end
@@ -376,8 +371,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
     def identity(%__MODULE__{} = receipt) do
       binding = receipt.binding
 
-      {receipt.request_id, receipt.attempt_id, binding.semantic_turn_key, binding.window_digest,
-       binding.context_digest, binding.window_number, binding.serving_mode, receipt.model_digest}
+      {receipt.request_id, receipt.attempt_id, binding.semantic_turn_key, binding.window_digest, binding.context_digest, binding.window_number, binding.serving_mode, receipt.model_digest}
     end
 
     defp mode("full"), do: {:ok, :full}

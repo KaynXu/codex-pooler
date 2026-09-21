@@ -365,9 +365,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              receipt.attempt_id == context.attempt.id,
          true <-
            receipt.model_digest ==
-             NativeCompactionAdmission.FirstCompactResult.model_digest(
-               context.model.upstream_model_id
-             ),
+             NativeCompactionAdmission.FirstCompactResult.model_digest(context.model.upstream_model_id),
          {:ok, topology, owner} <- admission_owner(request_options),
          binding <-
            ordinary_success_binding(request_options, metadata, response_id, lifecycle, topology) do
@@ -403,9 +401,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     if receipt.request_id == context.reserved.request.id and
          receipt.attempt_id == context.attempt.id and
          receipt.model_digest ==
-           NativeCompactionAdmission.FirstCompactResult.model_digest(
-             context.model.upstream_model_id
-           ) do
+           NativeCompactionAdmission.FirstCompactResult.model_digest(context.model.upstream_model_id) do
       :ok
     else
       {:error, compact_ack_error()}
@@ -589,8 +585,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         owner.downstream_epoch
       )
 
-    {:ok, topology,
-     {:forwarded, owner.session, owner.lease_token, downstream, owner.forwarder_opts}}
+    {:ok, topology, {:forwarded, owner.session, owner.lease_token, downstream, owner.forwarder_opts}}
   end
 
   defp admission_owner(%RequestOptions{}), do: {:error, :owner_unavailable}
@@ -669,8 +664,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   end
 
   defp collected_compaction?(%SelectedCandidateContext{
-         request_options:
-           %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options
+         request_options: %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options
        })
        when mode in [:native_websocket, :public_websocket],
        do: RequestOptions.connection_bound_compaction?(request_options)
@@ -1006,9 +1000,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
            reserved.request,
            attempt,
            response_usage(finalization, ""),
-           SettlementAttrs.partial_stream_failure(context, status, code, code, metadata,
-             started: started
-           ),
+           SettlementAttrs.partial_stream_failure(context, status, code, code, metadata, started: started),
            request_options.runtime.session_owner_witness
          ) do
       {:stale_generation, finalized} ->

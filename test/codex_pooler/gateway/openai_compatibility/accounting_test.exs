@@ -168,10 +168,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
 
     cases = [
       {:get, "/v1/models", nil, [], 401, "api_key_missing"},
-      {:post, "/v1/responses", rejected_payload(setup), [{"authorization", "Bearer invalid"}],
-       401, "api_key_missing"},
-      {:get, "/v1/models", nil, [{"authorization", paused.authorization}], 401,
-       "api_key_disabled"}
+      {:post, "/v1/responses", rejected_payload(setup), [{"authorization", "Bearer invalid"}], 401, "api_key_missing"},
+      {:get, "/v1/models", nil, [{"authorization", paused.authorization}], 401, "api_key_disabled"}
     ]
 
     for {method, path, body, headers, status, code} <- cases do
@@ -204,14 +202,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
     cases = [
       {:post, "/v1/embeddings", rejected_payload(setup), 404, "unsupported_endpoint"},
       {:post, "/v1/images/variations", rejected_payload(setup), 404, "unsupported_endpoint"},
-      {:post, "/v1/responses", Map.put(rejected_payload(setup), "logprobs", true), 400,
-       "unsupported_parameter"},
-      {:post, "/v1/files",
-       %{"purpose" => "fine_tuning", "file" => %{"filename" => "upload", "bytes" => 12}}, 400,
-       "invalid_request"},
-      {:post, "/v1/images/generations",
-       %{"model" => "gpt-image-2", "prompt" => @raw_prompt_sentinel, "size" => "2048x2048"}, 400,
-       "invalid_request"}
+      {:post, "/v1/responses", Map.put(rejected_payload(setup), "logprobs", true), 400, "unsupported_parameter"},
+      {:post, "/v1/files", %{"purpose" => "fine_tuning", "file" => %{"filename" => "upload", "bytes" => 12}}, 400, "invalid_request"},
+      {:post, "/v1/images/generations", %{"model" => "gpt-image-2", "prompt" => @raw_prompt_sentinel, "size" => "2048x2048"}, 400, "invalid_request"}
     ]
 
     for {method, path, body, status, code} <- cases do
@@ -401,9 +394,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
     # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
     on_exit(restore)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{gateway_debug?: true}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{gateway_debug?: true})
 
     try do
       fun.()

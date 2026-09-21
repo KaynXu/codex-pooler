@@ -240,9 +240,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
 
     test "returns pinned unavailable recovery for generic reauth_required state" do
       setup =
-        pinned_assignment_setup(
-          identity_metadata: %{"token_refresh" => %{"status" => "reauth_required"}}
-        )
+        pinned_assignment_setup(identity_metadata: %{"token_refresh" => %{"status" => "reauth_required"}})
 
       session = codex_session_fixture(setup, setup.pinned.assignment)
       opts = request_options_with_session(session)
@@ -366,9 +364,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
                  model
                )
 
-      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable",
-        pin_reason: "previous_response_id"
-      )
+      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable", pin_reason: "previous_response_id")
     end
 
     test "soft-pins proxy stream continuations with bare accepted turn state" do
@@ -452,9 +448,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
                  model
                )
 
-      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable",
-        pin_reason: "live_upstream_websocket"
-      )
+      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable", pin_reason: "live_upstream_websocket")
     end
 
     test "hard-pins opaque input backed by upstream websocket owner forwarding" do
@@ -485,9 +479,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
                  model
                )
 
-      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable",
-        pin_reason: "live_upstream_websocket"
-      )
+      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable", pin_reason: "live_upstream_websocket")
     end
 
     test "keeps a first-turn owner-forwarded websocket soft until its session is assigned" do
@@ -597,9 +589,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
                  model
                )
 
-      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable",
-        pin_reason: "file_affinity"
-      )
+      assert_pinned_continuation_unavailable(error, setup, "assignment_unavailable", pin_reason: "file_affinity")
     end
 
     test "soft-pins proxy stream sessions after a same-model successful turn" do
@@ -694,9 +684,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       opts =
         session
         |> streaming_request_options_with_session()
-        |> RequestOptions.put_continuity(
-          previous_response_id: "resp_recreation_#{System.unique_integer([:positive])}"
-        )
+        |> RequestOptions.put_continuity(previous_response_id: "resp_recreation_#{System.unique_integer([:positive])}")
 
       model =
         model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
@@ -1366,8 +1354,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       source_assignment_count: length(assignment_ids),
       metadata: %{
         "source_assignment_ids" => assignment_ids,
-        "source_assignment_models" =>
-          Map.new(assignment_ids, &{&1, %{"slug" => exposed_model_id}})
+        "source_assignment_models" => Map.new(assignment_ids, &{&1, %{"slug" => exposed_model_id}})
       }
     })
   end

@@ -266,8 +266,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
           provenance: %{
             frame: token,
             validation: %ValidationClaim{} = validation_claim,
-            capability:
-              %Capability{server: capability_server, reference: capability_reference} = capability
+            capability: %Capability{server: capability_server, reference: capability_reference} = capability
           }
         } = prepared
       )
@@ -662,9 +661,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       # No `native_compaction_reservation` here either: no validation family
       # reads it, so a deferral cannot change which validations were completed.
       RequestOptions.use_responses_lite?(request_options),
-      RequestOptions.OpenAICompatibility.translated_responses_surface?(
-        request_options.openai_compatibility
-      )
+      RequestOptions.OpenAICompatibility.translated_responses_surface?(request_options.openai_compatibility)
     })
   end
 
@@ -852,9 +849,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   defp normalize_websocket_stream_result(:ok), do: :ok
   defp normalize_websocket_stream_result({:ok, _result}), do: :ok
 
-  defp normalize_websocket_stream_result(
-         {:error, %{status: status, code: code, message: message}} = error
-       )
+  defp normalize_websocket_stream_result({:error, %{status: status, code: code, message: message}} = error)
        when is_integer(status) and status > 0 and (is_binary(code) or is_atom(code)) and
               is_binary(message),
        do: error
@@ -1308,8 +1303,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
             compaction_trigger_bridge?: true,
             compaction_result_transport: result_transport,
             compaction_result_mode: :native_websocket,
-            compaction_projection_context:
-              CompactionProjectionContext.new(downstream_payload, compact_payload)
+            compaction_projection_context: CompactionProjectionContext.new(downstream_payload, compact_payload)
           )
           |> put_validated_native_compaction_turn_state(turn_state)
 
@@ -1404,8 +1398,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
             compaction_trigger_bridge?: true,
             compaction_result_transport: :sse,
             compaction_result_mode: :public_websocket,
-            compaction_projection_context:
-              CompactionProjectionContext.new(downstream_payload, compact_payload)
+            compaction_projection_context: CompactionProjectionContext.new(downstream_payload, compact_payload)
           )
 
         {:ok,

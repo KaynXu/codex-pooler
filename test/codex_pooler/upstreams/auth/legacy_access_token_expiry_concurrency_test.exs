@@ -114,9 +114,7 @@ defmodule CodexPooler.Upstreams.Auth.LegacyAccessTokenExpiryConcurrencyTest do
       assert Repo.get!(User, other.ids.user_id)
       assert Repo.get!(UpstreamIdentity, other.identity.id)
 
-      assert Repo.exists?(
-               from row in EncryptedSecret, where: row.upstream_identity_id == ^other.identity.id
-             )
+      assert Repo.exists?(from row in EncryptedSecret, where: row.upstream_identity_id == ^other.identity.id)
 
       assert Repo.get!(PoolUpstreamAssignment, other.assignment.id)
     end)
@@ -250,9 +248,7 @@ defmodule CodexPooler.Upstreams.Auth.LegacyAccessTokenExpiryConcurrencyTest do
 
           user =
             %User{id: ids.user_id, created_at: now, updated_at: now}
-            |> User.bootstrap_changeset(
-              valid_bootstrap_attributes(%{"email" => "expiry-#{unique}@example.com"})
-            )
+            |> User.bootstrap_changeset(valid_bootstrap_attributes(%{"email" => "expiry-#{unique}@example.com"}))
             |> Repo.insert!()
 
           Repo.insert!(%Membership{
@@ -308,9 +304,7 @@ defmodule CodexPooler.Upstreams.Auth.LegacyAccessTokenExpiryConcurrencyTest do
     unboxed(fn ->
       Repo.delete_all(from pool in Pool, where: pool.slug == ^ids.pool_slug)
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^ids.account_id
-      )
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^ids.account_id)
 
       Repo.delete_all(from user in User, where: user.id == ^ids.user_id)
     end)

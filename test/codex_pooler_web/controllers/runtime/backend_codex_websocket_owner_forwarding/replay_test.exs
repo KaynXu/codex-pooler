@@ -169,8 +169,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
     assert_receive {:replay_remote_owner_call, ^remote_node, :remote_reconnect_control_v2}
 
-    assert_receive {:replay_remote_owner_call, ^remote_node,
-                    :remote_prepare_next_replay_descriptor}
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_prepare_next_replay_descriptor}
 
     assert_receive {:replay_remote_owner_call, ^remote_node, :remote_submit_request_v1}
     assert %{active_turn: %{descriptor: %{replay_generation: 0}}} = :sys.get_state(owner_pid)
@@ -200,9 +199,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
              Repo.get_by!(RequestReplayEntitlement, request_id: request.id)
 
     {:ok, replay_state} =
-      owner_socket(auth, "ws-remote-replay-retry", turn_state,
-        websocket_owner_forwarder_opts: node_client_options
-      )
+      owner_socket(auth, "ws-remote-replay-retry", turn_state, websocket_owner_forwarder_opts: node_client_options)
 
     assert {:ok, replay_state} =
              CodexResponsesSocket.handle_in({payload, [opcode: :text]}, replay_state)
@@ -213,8 +210,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert_receive {:replay_remote_owner_call, ^remote_node, :remote_validate_replay_reserve}
     assert_receive {:replay_remote_owner_call, ^remote_node, :remote_reconnect_control_v2}
 
-    assert_receive {:replay_remote_owner_call, ^remote_node,
-                    :remote_prepare_next_replay_descriptor}
+    assert_receive {:replay_remote_owner_call, ^remote_node, :remote_prepare_next_replay_descriptor}
 
     assert_receive {:replay_remote_owner_call, ^remote_node, :remote_submit_request_v4}
 
@@ -419,9 +415,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
 
     {:ok, retry_state} =
-      owner_socket(auth, "ws-remote-stream-cut-retry", turn_state,
-        websocket_owner_forwarder_opts: node_client_options
-      )
+      owner_socket(auth, "ws-remote-stream-cut-retry", turn_state, websocket_owner_forwarder_opts: node_client_options)
 
     {retry_state, log} =
       with_info_log(fn ->
@@ -532,9 +526,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert {:ok, ^owner_pid} =
              :erpc.call(remote_node, WebsocketOwnerSession, :lookup, [session.id])
 
-    assert node(
-             :erpc.call(remote_node, :erlang, :map_get, [:upstream_pid, :sys.get_state(owner_pid)])
-           ) ==
+    assert node(:erpc.call(remote_node, :erlang, :map_get, [:upstream_pid, :sys.get_state(owner_pid)])) ==
              remote_node
 
     forwarder_opts = [
@@ -831,15 +823,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
       )
     )
 
-    Repo.update!(
-      Ecto.Changeset.change(predecessor_turn, final_attempt_id: predecessor_attempt.id)
-    )
+    Repo.update!(Ecto.Changeset.change(predecessor_turn, final_attempt_id: predecessor_attempt.id))
 
     assert {:ok, current_state} =
              CodexResponsesSocket.handle_in({payload, [opcode: :text]}, second_state)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
                    @handoff_detection_timeout_ms
 
     loser_result = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, first_state)
@@ -890,9 +879,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     turn_state = "stable-ws-owner-active-reconnect"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-owner-active-reconnect-first", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-active-reconnect-first", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     first_payload =
       websocket_payload(setup, "first owner active reconnect turn", %{
@@ -1051,9 +1038,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     turn_state = "stable-ws-owner-edited-replacement"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-owner-edited-replacement-a", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-edited-replacement-a", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     first_payload =
       websocket_payload(setup, "edited replacement predecessor", %{
@@ -1084,9 +1069,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
            } = :sys.get_state(owner_pid)
 
     {:ok, replacement_state} =
-      owner_socket(auth, "ws-owner-edited-replacement-b", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-edited-replacement-b", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     cancelled_equal_payload =
       websocket_payload(setup, "cancelled equal predecessor replay", %{
@@ -1243,9 +1226,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     turn_state = "stable-ws-owner-pending-close"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-owner-pending-close-a", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-pending-close-a", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     first_payload =
       websocket_payload(setup, "pending close predecessor", %{
@@ -1274,9 +1255,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
         receive do
           :start ->
             {:ok, state} =
-              owner_socket(auth, "ws-owner-pending-close-b", turn_state,
-                websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-              )
+              owner_socket(auth, "ws-owner-pending-close-b", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
             receive do
               {:frame, payload} ->
@@ -1352,8 +1331,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
 
     send(
       owner_pid,
-      {:websocket_owner_handoff_absolute_timeout, owner_pending.control_ref,
-       owner_pending.absolute_token}
+      {:websocket_owner_handoff_absolute_timeout, owner_pending.control_ref, owner_pending.absolute_token}
     )
 
     send(
@@ -1428,9 +1406,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
              )
 
     {:ok, replacement_state} =
-      owner_socket(auth, "ws-owner-handoff-timeout-b", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-handoff-timeout-b", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     replacement_payload =
       websocket_payload(setup, private_sentinel, %{
@@ -1459,16 +1435,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     assert length(request_logs(setup.pool.id)) == 1
     assert_receive {:websocket_owner_handoff_ready, _, _, _, _, _}, @handoff_detection_timeout_ms
 
-    CodexPooler.TestDiagnostics.puts(
-      "handoff soft_timeout_to_ready_ms=#{System.monotonic_time(:millisecond) - soft_timeout_sent_at}"
-    )
+    CodexPooler.TestDiagnostics.puts("handoff soft_timeout_to_ready_ms=#{System.monotonic_time(:millisecond) - soft_timeout_sent_at}")
 
     owner_pending = :sys.get_state(owner_pid).pending_handoff
 
     send(
       owner_pid,
-      {:websocket_owner_handoff_absolute_timeout, owner_pending.control_ref,
-       owner_pending.absolute_token}
+      {:websocket_owner_handoff_absolute_timeout, owner_pending.control_ref, owner_pending.absolute_token}
     )
 
     {timeout_result, timeout_log} =
@@ -1563,9 +1536,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     turn_state = "stable-active-matrix-#{route}"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-active-matrix-#{route}-a", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-active-matrix-#{route}-a", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     first_payload =
       websocket_payload(setup, "active matrix predecessor", %{
@@ -1719,9 +1690,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
     turn_state = "stable-pending-prewarm-#{route}"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-pending-prewarm-#{route}-a", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-pending-prewarm-#{route}-a", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     first_payload =
       websocket_payload(setup, "pending prewarm predecessor", %{
@@ -1744,9 +1713,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.ReplayTest
              )
 
     {:ok, replacement_state} =
-      owner_socket(auth, "ws-pending-prewarm-#{route}-b", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-pending-prewarm-#{route}-b", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     replacement_state = maybe_proxy_owner_state(replacement_state, route)
 

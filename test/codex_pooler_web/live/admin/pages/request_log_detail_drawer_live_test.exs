@@ -674,8 +674,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
         requested_model: Map.get(attrs, :requested_model, "gpt-request-log"),
         endpoint: Map.get(attrs, :endpoint, "/backend-api/codex/responses"),
         status: Map.get(attrs, :status, "succeeded"),
-        correlation_id:
-          Map.get(attrs, :correlation_id, "req-live-#{System.unique_integer([:positive])}"),
+        correlation_id: Map.get(attrs, :correlation_id, "req-live-#{System.unique_integer([:positive])}"),
         transport: Map.get(attrs, :transport, "http_json"),
         request_metadata: Map.get(attrs, :request_metadata, %{}),
         last_error_code: Map.get(attrs, :last_error_code),
@@ -696,11 +695,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     attempt =
       attempt_fixture(request, assignment, %{
         status: Map.get(attrs, :attempt_status, "succeeded"),
-        usage_status:
-          Map.get(attrs, :attempt_usage_status, Map.get(attrs, :usage_status, "usage_known")),
+        usage_status: Map.get(attrs, :attempt_usage_status, Map.get(attrs, :usage_status, "usage_known")),
         upstream_status_code: Map.get(attrs, :response_status_code, 200),
-        network_error_code:
-          Map.get(attrs, :attempt_network_error_code, Map.get(attrs, :last_error_code)),
+        network_error_code: Map.get(attrs, :attempt_network_error_code, Map.get(attrs, :last_error_code)),
         response_metadata: Map.get(attrs, :attempt_response_metadata, %{})
       })
 
@@ -713,8 +710,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
       output_tokens: Map.get(attrs, :output_tokens, 1),
       total_tokens: Map.get(attrs, :total_tokens, 2),
       settled_cost_micros: Map.get(attrs, :settled_cost_micros, 0),
-      usage_status:
-        Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known")),
+      usage_status: Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known")),
       details: Map.get(attrs, :settlement_details, %{})
     })
 

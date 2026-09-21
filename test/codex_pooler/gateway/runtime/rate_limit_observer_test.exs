@@ -331,9 +331,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       assert [window] =
                fixture.identity
                |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(
-                 &(&1.source == "codex_rate_limit_event" and &1.window_kind == "primary")
-               )
+               |> Enum.filter(&(&1.source == "codex_rate_limit_event" and &1.window_kind == "primary"))
 
       assert Decimal.equal?(window.used_percent, Decimal.new("68.0"))
       assert %DateTime{} = Repo.reload!(current.entitlement).closed_at
@@ -386,8 +384,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
 
         assert :ok = observe.(identity)
 
-        assert_receive {^handler_id, %{count: 1},
-                        %{source: ^source, outcome: "confirmed_by_quota"}},
+        assert_receive {^handler_id, %{count: 1}, %{source: ^source, outcome: "confirmed_by_quota"}},
                        1_000
 
         redemption = persisted_redemption(identity)

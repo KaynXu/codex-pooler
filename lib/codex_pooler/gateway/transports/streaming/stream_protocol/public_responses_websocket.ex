@@ -42,9 +42,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
             normalized =
               type
               |> PublicResponses.normalize_terminal_errors(normalized)
-              |> Responses.restore_custom_tool_call_namespaces(
-                Map.get(state, :custom_tool_namespaces, %{})
-              )
+              |> Responses.restore_custom_tool_call_namespaces(Map.get(state, :custom_tool_namespaces, %{}))
               |> maybe_put_stream_id(stream_id)
 
             {:push, CodexPooler.JSON.encode!(normalized), state}

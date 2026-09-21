@@ -12,9 +12,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   attr :saved_reset_policy, :map, required: true
   attr :disabled, :boolean, default: false
 
-  def saved_reset_count_badge(
-        %{saved_resets: %{reported?: true, available_count: count}} = assigns
-      )
+  def saved_reset_count_badge(%{saved_resets: %{reported?: true, available_count: count}} = assigns)
       when is_integer(count) and count > 0 do
     assigns =
       assigns
@@ -351,8 +349,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
       routing_label: "Routing paused",
       consumed_at: "Not reported",
       deadline_at: "Not reported",
-      title:
-        "Confirmation details unavailable. Routing paused. This confirmation never consumes a second saved reset."
+      title: "Confirmation details unavailable. Routing paused. This confirmation never consumes a second saved reset."
     }
   end
 

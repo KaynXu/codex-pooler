@@ -180,8 +180,7 @@ defmodule CodexPooler.Gateway.Persistence.TurnCompletionLockOrderTest do
 
       assert {:ok, %CodexSession{} = session} =
                Gateway.start_codex_session(auth, %{
-                 accepted_turn_state:
-                   "turn-completion-lock-order-#{System.unique_integer([:positive, :monotonic])}",
+                 accepted_turn_state: "turn-completion-lock-order-#{System.unique_integer([:positive, :monotonic])}",
                  owner_instance_id: "node-a"
                })
 

@@ -473,9 +473,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     left_state = Reference.first_event_state()
     right_state = StreamAttempt.first_event_state()
 
-    Enum.reduce(Enum.with_index(chunks, 1), {left_state, right_state}, fn {chunk, index},
-                                                                          {left_state,
-                                                                           right_state} ->
+    Enum.reduce(Enum.with_index(chunks, 1), {left_state, right_state}, fn {chunk, index}, {left_state, right_state} ->
       {left_classification, left_state} = left.(chunk, left_state, assignment_advertised?)
       {right_classification, right_state} = right.(chunk, right_state, assignment_advertised?)
 
@@ -484,9 +482,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
           state_projection(left_state) == state_projection(right_state)
 
       unless equivalent? do
-        flunk(
-          "#{label} iteration=#{iteration} chunk=#{index} sizes=#{inspect(Enum.map(chunks, &byte_size/1))}"
-        )
+        flunk("#{label} iteration=#{iteration} chunk=#{index} sizes=#{inspect(Enum.map(chunks, &byte_size/1))}")
       end
 
       {left_state, right_state}

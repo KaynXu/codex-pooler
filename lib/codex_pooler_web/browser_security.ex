@@ -42,9 +42,7 @@ defmodule CodexPoolerWeb.BrowserSecurity do
     extra_sources =
       :codex_pooler
       |> Application.get_env(:browser_csp_extra_sources, [])
-      |> Keyword.merge(CodexPoolerWeb.DevFeatures.browser_csp_extra_sources(), fn _directive,
-                                                                                  left,
-                                                                                  right ->
+      |> Keyword.merge(CodexPoolerWeb.DevFeatures.browser_csp_extra_sources(), fn _directive, left, right ->
         List.wrap(left) ++ List.wrap(right)
       end)
       |> Keyword.merge(browser_annotation_csp_extra_sources(conn), fn _directive, left, right ->
@@ -93,8 +91,6 @@ defmodule CodexPoolerWeb.BrowserSecurity do
   defp chromium_browser?(%Plug.Conn{} = conn) do
     conn
     |> Plug.Conn.get_req_header("user-agent")
-    |> Enum.any?(
-      &(String.contains?(&1, [" Chrome/", " Chromium/"]) and String.contains?(&1, " Safari/"))
-    )
+    |> Enum.any?(&(String.contains?(&1, [" Chrome/", " Chromium/"]) and String.contains?(&1, " Safari/")))
   end
 end

@@ -456,17 +456,14 @@ defmodule CodexPooler.Upstreams.PreparedImportWitnessTest do
   defp future_unix, do: DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_unix()
 
   defp old_unkeyed_binding(prepared, persisted) do
-    {:import_witness, prepared.scope_user_id, prepared.pool_id, prepared.attrs, prepared.expiry,
-     prepared.policy, persisted}
+    {:import_witness, prepared.scope_user_id, prepared.pool_id, prepared.attrs, prepared.expiry, prepared.policy, persisted}
     |> :erlang.term_to_binary()
     |> then(&:crypto.hash(:sha256, &1))
   end
 
   defp public_witness_signing_attempt(prepared) do
     payload =
-      {"codex_pooler.upstreams.import_witness", 1, SecretBox.configured_key_version(),
-       prepared.scope_user_id, prepared.pool_id, prepared.attrs, prepared.expiry, prepared.policy,
-       prepared.import_witness.incoming, prepared.import_witness.persisted}
+      {"codex_pooler.upstreams.import_witness", 1, SecretBox.configured_key_version(), prepared.scope_user_id, prepared.pool_id, prepared.attrs, prepared.expiry, prepared.policy, prepared.import_witness.incoming, prepared.import_witness.persisted}
       |> :erlang.term_to_binary([:deterministic])
 
     if function_exported?(SecretBox, :hmac_digest, 1) do

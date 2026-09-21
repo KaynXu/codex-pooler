@@ -48,8 +48,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketQueuedFrameTtlTest do
                owner_instance_id: "ttl-absent-instance@127.0.0.1"
              })
 
-    {:ok,
-     auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
+    {:ok, auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
   end
 
   test "a queued frame survives its capability's reclaim timeout and re-seals at dequeue", %{

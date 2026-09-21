@@ -16,9 +16,7 @@ defmodule CodexPooler.Repo.Migrations.CreateOpenAIStatusTables do
       add :updated_at, :utc_datetime_usec, null: false, default: fragment("now()")
     end
 
-    create constraint(:openai_status_feed_states, :openai_status_feed_states_singleton_check,
-             check: "singleton = true"
-           )
+    create constraint(:openai_status_feed_states, :openai_status_feed_states_singleton_check, check: "singleton = true")
 
     create table(:openai_status_incidents, primary_key: false) do
       add :id, :binary_id, primary_key: true, default: fragment("gen_random_uuid()")
@@ -42,13 +40,9 @@ defmodule CodexPooler.Repo.Migrations.CreateOpenAIStatusTables do
 
     create unique_index(:openai_status_incidents, [:guid], name: :openai_status_incidents_guid_uq)
 
-    create index(:openai_status_incidents, [:resolved_at, :retired_at, :updated_at],
-             name: :openai_status_incidents_retention_idx
-           )
+    create index(:openai_status_incidents, [:resolved_at, :retired_at, :updated_at], name: :openai_status_incidents_retention_idx)
 
-    create index(:openai_status_incidents, [:status, :resolved_at, :retired_at],
-             name: :openai_status_incidents_active_idx
-           )
+    create index(:openai_status_incidents, [:status, :resolved_at, :retired_at], name: :openai_status_incidents_active_idx)
 
     create table(:openai_status_dismissals, primary_key: false) do
       add :id, :binary_id, primary_key: true, default: fragment("gen_random_uuid()")
@@ -68,8 +62,6 @@ defmodule CodexPooler.Repo.Migrations.CreateOpenAIStatusTables do
              name: :openai_status_dismissals_operator_incident_revision_uq
            )
 
-    create index(:openai_status_dismissals, [:operator_id, :dismissed_at],
-             name: :openai_status_dismissals_operator_idx
-           )
+    create index(:openai_status_dismissals, [:operator_id, :dismissed_at], name: :openai_status_dismissals_operator_idx)
   end
 end

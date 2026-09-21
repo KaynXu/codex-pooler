@@ -186,8 +186,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
                 %{
                   status: 502,
                   code: "invalid_compaction_response",
-                  message:
-                    "upstream compact response did not include encrypted compaction content",
+                  message: "upstream compact response did not include encrypted compaction content",
                   compaction_invalid_reason: "missing_encrypted_content"
                 }} = CompactionTrigger.adapt_gateway_result(gateway_result(source), mode)
       end

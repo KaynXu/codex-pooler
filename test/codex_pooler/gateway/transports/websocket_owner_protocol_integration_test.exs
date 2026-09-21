@@ -174,8 +174,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       send(quota_writer_pid, {quota_handler_id, :release_quota_commit})
       :telemetry.detach(quota_handler_id)
 
-      assert_receive {:websocket_owner_harness_terminal_delivery_barrier, barrier_pid,
-                      ^release_ref}
+      assert_receive {:websocket_owner_harness_terminal_delivery_barrier, barrier_pid, ^release_ref}
 
       send(barrier_pid, {:websocket_owner_harness_release_terminal_delivery, release_ref})
 
@@ -218,11 +217,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       assert identity_id == identity.id
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{function: :remote_submit_request_v1, arity: 3}}
+      assert_receive {:websocket_owner_harness_node_call, %{function: :remote_submit_request_v1, arity: 3}}
 
-      refute_received {:websocket_owner_harness_node_call,
-                       %{function: :remote_submit_request_v1, arity: 3}}
+      refute_received {:websocket_owner_harness_node_call, %{function: :remote_submit_request_v1, arity: 3}}
 
       expected_rate_limit_message =
         owner_data_message(mapper, stable_downstream, submitter.pid, expected_rate_limit)
@@ -573,24 +570,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     Task.shutdown(submitter, :brutal_kill)
 
-    assert_receive {:cancellation_node_call, watcher_pid, @remote_node,
-                    :remote_cancel_downstream_v1},
+    assert_receive {:cancellation_node_call, watcher_pid, @remote_node, :remote_cancel_downstream_v1},
                    @detection_timeout_ms
 
     refute watcher_pid == submitter.pid
 
-    assert_receive {:cancellation_node_call_complete, ^watcher_pid, @remote_node,
-                    :remote_cancel_downstream_v1, :ok},
+    assert_receive {:cancellation_node_call_complete, ^watcher_pid, @remote_node, :remote_cancel_downstream_v1, :ok},
                    @detection_timeout_ms
 
-    refute_received {:cancellation_node_call, _duplicate, @remote_node,
-                     :remote_cancel_downstream_v1}
+    refute_received {:cancellation_node_call, _duplicate, @remote_node, :remote_cancel_downstream_v1}
 
     assert_receive {:DOWN, ^owner_task_ref, :process, ^owner_task, :shutdown},
                    @detection_timeout_ms
 
-    assert_receive {:websocket_owner_frame, "corr-cancel", 1,
-                    {:error, :client_disconnected, safe_payload}},
+    assert_receive {:websocket_owner_frame, "corr-cancel", 1, {:error, :client_disconnected, safe_payload}},
                    @detection_timeout_ms
 
     assert safe_payload.code == "client_disconnected"
@@ -678,8 +671,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert_receive {:DOWN, ^first_owner_ref, :process, ^first_owner, :killed}
       send(first_worker, {:release_pre_visible_owner_submit, release_ref})
 
-      assert_receive {:websocket_owner_runtime_recovered, ^correlation_id, 1,
-                      %{websocket_owner_downstream: recovered_downstream}},
+      assert_receive {:websocket_owner_runtime_recovered, ^correlation_id, 1, %{websocket_owner_downstream: recovered_downstream}},
                      @detection_timeout_ms
 
       assert recovered_downstream.correlation_id == downstream.correlation_id
@@ -974,34 +966,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       owner_turn_id = submitter.pid
 
-      assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, 1, ^owner_turn_id,
-                      active_turn_ref, ^owner, probe_ref}
+      assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, 1, ^owner_turn_id, active_turn_ref, ^owner, probe_ref}
 
       assert Task.yield(submitter, 0) == nil
 
       send(
         owner,
-        {:websocket_owner_output_commit_ack, correlation_id, 1, owner_turn_id, active_turn_ref,
-         probe_ref, true}
+        {:websocket_owner_output_commit_ack, correlation_id, 1, owner_turn_id, active_turn_ref, probe_ref, true}
       )
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id,
-                      {:error, :upstream_stream_error, safe_payload}}
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id, {:error, :upstream_stream_error, safe_payload}}
 
       assert safe_payload.code == "server_error"
       assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id, :complete}
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id,
-                      {:data, ^expected_created}}
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id, {:data, ^expected_created}}
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id,
-                      {:data, ^expected_visible}}
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id, {:data, ^expected_visible}}
 
-      assert_receive {:owner_frame_observer_called, ^kind, _owner_upstream_pid,
-                      "response.created"}
+      assert_receive {:owner_frame_observer_called, ^kind, _owner_upstream_pid, "response.created"}
 
-      assert_receive {:owner_frame_observer_called, ^kind, _owner_upstream_pid,
-                      "response.output_text.delta"}
+      assert_receive {:owner_frame_observer_called, ^kind, _owner_upstream_pid, "response.output_text.delta"}
 
       refute_received {:owner_frame_observer_called, ^kind, _owner_upstream_pid, _duplicate}
 
@@ -1064,8 +1049,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
           with_log(fn -> finalized_websocket_request(prepared_context, request, []) end)
         end)
 
-      assert_receive {:callback_failure_interruption_ready, interruption_pid,
-                      ^interruption_release_ref}
+      assert_receive {:callback_failure_interruption_ready, interruption_pid, ^interruption_release_ref}
 
       assert {result, _log} = Task.await(finalizer, @detection_timeout_ms)
 
@@ -1079,8 +1063,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert FakeUpstream.count(upstream) == 1
       refute_received {:mandatory_callback_invoked, ^callback_kind}
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, 1,
-                      {:error, :owner_crashed, safe_payload}},
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:error, :owner_crashed, safe_payload}},
                      @detection_timeout_ms
 
       assert safe_payload.code == "owner_crashed"
@@ -1169,8 +1152,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                |> dispatch_request(identity, request_options)
                |> websocket_request()
 
-      assert_receive {:owner_frame_observer_called, ^kind, ^owner_upstream_pid,
-                      "response.completed"}
+      assert_receive {:owner_frame_observer_called, ^kind, ^owner_upstream_pid, "response.completed"}
 
       assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:data, ^terminal}}
       assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
@@ -1184,11 +1166,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
   defp mapper_cases do
     [
-      {:public_openai_responses,
-       &RequestOptions.put_openai_compatibility(&1, public_openai_responses_stream: true),
-       &StreamProtocol.normalize_public_openai_responses_json_message/1},
-      {:native_codex_responses, & &1,
-       &StreamProtocol.canonicalize_native_codex_responses_json_message/1},
+      {:public_openai_responses, &RequestOptions.put_openai_compatibility(&1, public_openai_responses_stream: true), &StreamProtocol.normalize_public_openai_responses_json_message/1},
+      {:native_codex_responses, & &1, &StreamProtocol.canonicalize_native_codex_responses_json_message/1},
       {:codex_responses,
        &RequestOptions.put_openai_compatibility(&1,
          source_endpoint: "/v1/responses",
@@ -1766,8 +1745,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
         websocket_owner_downstream_epoch: downstream.epoch,
         websocket_owner_proxy_instance_id: Atom.to_string(node()),
         websocket_owner_instance_id: session.owner_instance_id,
-        websocket_owner_forwarder_opts:
-          Keyword.get(opts, :forwarder_opts, node_client: WebsocketOwnerNodeHarness)
+        websocket_owner_forwarder_opts: Keyword.get(opts, :forwarder_opts, node_client: WebsocketOwnerNodeHarness)
       },
       payload
     )
@@ -1904,17 +1882,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     do: %{pid: self(), correlation_id: correlation_id}
 
   defp owner_data_message(:public_openai_responses, downstream, owner_turn_id, payload),
-    do:
-      {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, owner_turn_id,
-       {:data, payload}}
+    do: {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, owner_turn_id, {:data, payload}}
 
   defp owner_data_message(_mapper, downstream, _owner_turn_id, payload),
     do: {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, {:data, payload}}
 
   defp owner_complete_message(:public_openai_responses, downstream, owner_turn_id),
-    do:
-      {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, owner_turn_id,
-       :complete}
+    do: {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, owner_turn_id, :complete}
 
   defp owner_complete_message(_mapper, downstream, _owner_turn_id),
     do: {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, :complete}
@@ -2041,8 +2015,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   defp assert_product_observations do
-    assert_receive {:product_observation,
-                    %{direction: :provider_to_pooler, event_type: "response.completed"}}
+    assert_receive {:product_observation, %{direction: :provider_to_pooler, event_type: "response.completed"}}
 
     refute_received {:product_observation, %{event_type: "response.completed"}}
   end

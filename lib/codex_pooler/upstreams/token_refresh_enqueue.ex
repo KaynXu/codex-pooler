@@ -43,6 +43,5 @@ defmodule CodexPooler.Upstreams.TokenRefreshEnqueue do
   end
 
   def enqueue_for_scope(_scope, _identity_or_id, _opts),
-    do:
-      {:error, CodexPooler.Upstreams.lifecycle_error(:invalid_request, "user scope is required")}
+    do: {:error, CodexPooler.Upstreams.lifecycle_error(:invalid_request, "user scope is required")}
 end

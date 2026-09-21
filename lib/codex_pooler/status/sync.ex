@@ -116,8 +116,7 @@ defmodule CodexPooler.Status.Sync do
         last_error_code: nil,
         last_error_at: nil,
         active_count: active,
-        aggregate_revision:
-          ((previous && previous.aggregate_revision) || 0) + if(changed?, do: 1, else: 0),
+        aggregate_revision: ((previous && previous.aggregate_revision) || 0) + if(changed?, do: 1, else: 0),
         content_hash: Map.get(parsed, :content_hash),
         cap_pressure: OpenAIStatus.enforce_cap_unlocked(),
         updated_at: now
@@ -275,9 +274,7 @@ defmodule CodexPooler.Status.Sync do
 
   defp retire_omitted(existing, seen, now) do
     existing
-    |> Enum.filter(
-      &(is_nil(&1.retired_at) and is_nil(&1.resolved_at) and not MapSet.member?(seen, &1.guid))
-    )
+    |> Enum.filter(&(is_nil(&1.retired_at) and is_nil(&1.resolved_at) and not MapSet.member?(seen, &1.guid)))
     |> Enum.reduce(0, fn incident, count ->
       omission = min(incident.omission_count + 1, @retire_after)
 
@@ -310,9 +307,7 @@ defmodule CodexPooler.Status.Sync do
     do:
       :crypto.hash(
         :sha256,
-        :erlang.term_to_binary(
-          Map.take(item, [:guid, :title, :status, :summary, :component, :link, :published_at])
-        )
+        :erlang.term_to_binary(Map.take(item, [:guid, :title, :status, :summary, :component, :link, :published_at]))
       )
       |> Base.encode16(case: :lower)
 

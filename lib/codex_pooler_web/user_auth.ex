@@ -199,9 +199,7 @@ defmodule CodexPoolerWeb.UserAuth do
 
   defp attach_user_session_disconnect_hook(socket, user_id) do
     Phoenix.LiveView.attach_hook(socket, :user_session_revocation, :handle_info, fn
-      {:disconnect_user_sessions,
-       %{user_id: ^user_id, except_live_socket_id: except_live_socket_id}},
-      socket ->
+      {:disconnect_user_sessions, %{user_id: ^user_id, except_live_socket_id: except_live_socket_id}}, socket ->
         disconnect_or_keep_user_session(socket, except_live_socket_id)
 
       {:disconnect_user_sessions, %{user_id: ^user_id, session_id: session_id}}, socket ->

@@ -70,9 +70,7 @@ defmodule CodexPooler.Upstreams.Quota.CreditBalanceStore do
               is_binary(observed_at) and is_integer(epoch) and epoch > 0 do
     with true <- valid_flags?(has_credits, unlimited),
          {:ok, parsed, 0} <- DateTime.from_iso8601(observed_at) do
-      {:ok,
-       %{balance: balance, observed_at: parsed, has_credits: has_credits, unlimited: unlimited},
-       epoch}
+      {:ok, %{balance: balance, observed_at: parsed, has_credits: has_credits, unlimited: unlimited}, epoch}
     else
       _invalid -> :error
     end

@@ -192,9 +192,7 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
     }
 
     upstream =
-      start_upstream(
-        FakeUpstream.raw_response(CodexPooler.JSON.encode!(payload), status: 400, headers: [])
-      )
+      start_upstream(FakeUpstream.raw_response(CodexPooler.JSON.encode!(payload), status: 400, headers: []))
 
     setup = gateway_setup(upstream)
 
@@ -328,17 +326,11 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
 
   test "eligible response aliases and chat routes preserve their safe error shapes", %{conn: conn} do
     cases = [
-      {"/backend-api/codex/v1/responses", false,
-       %{"input" => native_text_input("synthetic alias request")}, :backend},
-      {"/backend-api/codex/responses/compact", true,
-       %{"input" => native_text_input("synthetic compact request")}, :backend},
-      {"/backend-api/codex/v1/responses/compact", true,
-       %{"input" => native_text_input("synthetic compact alias request")}, :backend},
-      {"/v1/chat/completions", false,
-       %{"messages" => [%{"role" => "user", "content" => "synthetic chat request"}]}, :public},
-      {"/backend-api/codex/v1/chat/completions", false,
-       %{"messages" => [%{"role" => "user", "content" => "synthetic backend chat request"}]},
-       :public}
+      {"/backend-api/codex/v1/responses", false, %{"input" => native_text_input("synthetic alias request")}, :backend},
+      {"/backend-api/codex/responses/compact", true, %{"input" => native_text_input("synthetic compact request")}, :backend},
+      {"/backend-api/codex/v1/responses/compact", true, %{"input" => native_text_input("synthetic compact alias request")}, :backend},
+      {"/v1/chat/completions", false, %{"messages" => [%{"role" => "user", "content" => "synthetic chat request"}]}, :public},
+      {"/backend-api/codex/v1/chat/completions", false, %{"messages" => [%{"role" => "user", "content" => "synthetic backend chat request"}]}, :public}
     ]
 
     for {path, compact?, payload, projection} <- cases do

@@ -385,8 +385,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   @spec native_compaction_admission(t()) ::
-          {:ok, CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t(),
-           NativeCompactionAdmissionContext.owner(), NativeCompactionAdmissionContext.lifecycle()}
+          {:ok, CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t(), NativeCompactionAdmissionContext.owner(), NativeCompactionAdmissionContext.lifecycle()}
           | :none
   def native_compaction_admission(%__MODULE__{
         native_compaction_admission: %NativeCompactionAdmissionContext{} = admission
@@ -484,8 +483,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp compact_confirmation_source(
          %__MODULE__{
-           first_compact_collection:
-             %NativeCompactionAdmission.FirstCompactCollection{} = provenance
+           first_compact_collection: %NativeCompactionAdmission.FirstCompactCollection{} = provenance
          } = options
        ) do
     {:ok, :first_full_history_compact, provenance.control_ref, first_compact_owner(options)}
@@ -987,8 +985,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       quota_decision: Map.get(opts, :quota_decision),
       reset_probe: reset_probe(Map.get(opts, :reset_probe)),
       reasoning_effort_decision: Map.get(opts, :reasoning_effort_decision),
-      supports_reasoning_summary_parameter?:
-        Map.get(opts, :supports_reasoning_summary_parameter?, true) != false,
+      supports_reasoning_summary_parameter?: Map.get(opts, :supports_reasoning_summary_parameter?, true) != false,
       routing_attempt_metadata: Map.get(opts, :routing_attempt_metadata),
       routing_circuit_state: Map.get(opts, :routing_circuit_state),
       model_serving_mode_configured: Map.get(opts, :model_serving_mode_configured),
@@ -1043,10 +1040,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp usage_authentication(opts) do
     %UsageAuthentication{
-      authorization_header:
-        Map.get(opts, :authorization_header) || Map.get(opts, "authorization_header"),
-      chatgpt_account_id:
-        Map.get(opts, :chatgpt_account_id) || Map.get(opts, "chatgpt_account_id")
+      authorization_header: Map.get(opts, :authorization_header) || Map.get(opts, "authorization_header"),
+      chatgpt_account_id: Map.get(opts, :chatgpt_account_id) || Map.get(opts, "chatgpt_account_id")
     }
   end
 
@@ -1128,9 +1123,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   defp reasoning_effort_metadata_envelope(snapshot) when is_map(snapshot) do
     snapshot =
       snapshot
-      |> Map.take(
-        ~w(policy_mode configured_effort requested_effort applied_effort effective_effort source rewrite)
-      )
+      |> Map.take(~w(policy_mode configured_effort requested_effort applied_effort effective_effort source rewrite))
       |> Enum.reject(fn {_key, value} ->
         is_nil(value) or (is_binary(value) and String.trim(value) == "")
       end)

@@ -68,8 +68,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
 
     assert create_response.body == %{
              "file_id" => "file_fake_protocol",
-             "upload_url" =>
-               "https://fake-upload.invalid/upload/file_fake_protocol?sig=fake-upload"
+             "upload_url" => "https://fake-upload.invalid/upload/file_fake_protocol?sig=fake-upload"
            }
 
     finalize_response =
@@ -82,8 +81,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
 
     assert finalize_response.body == %{
              "status" => "success",
-             "download_url" =>
-               "https://fake-download.invalid/download/file_fake_protocol?sig=fake-download",
+             "download_url" => "https://fake-download.invalid/download/file_fake_protocol?sig=fake-download",
              "file_name" => "contract-fixture.txt",
              "mime_type" => "text/plain"
            }
@@ -187,8 +185,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
 
     assert second_finalize.body == %{
              "status" => "success",
-             "download_url" =>
-               "https://fake-download.invalid/download/file_retry_protocol?sig=fake-download",
+             "download_url" => "https://fake-download.invalid/download/file_retry_protocol?sig=fake-download",
              "file_name" => "retry-fixture.txt",
              "mime_type" => "text/plain"
            }
@@ -205,8 +202,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
     conn: conn
   } do
     cases = [
-      {"namespaced", residency_token(:namespaced, "file-region-namespaced"),
-       "file-region-namespaced"},
+      {"namespaced", residency_token(:namespaced, "file-region-namespaced"), "file-region-namespaced"},
       {"root", residency_token(:root, "file-region-root"), "file-region-root"}
     ]
 

@@ -324,8 +324,7 @@ defmodule CodexPooler.Upstreams.OAuthFlowTest do
                Upstreams.start_browser_oauth(scope, pool,
                  metadata: %{
                    "source" => "admin-upstreams",
-                   "callback_url" =>
-                     "http://localhost:1455/auth/callback?state=drop-state&code=drop-code",
+                   "callback_url" => "http://localhost:1455/auth/callback?state=drop-state&code=drop-code",
                    "state" => "drop-state",
                    "code_verifier" => "drop-verifier",
                    "device_auth_id" => "drop-device-auth",

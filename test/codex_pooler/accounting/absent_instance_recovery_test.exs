@@ -609,10 +609,7 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
       failing_id = failing.attempt.id
 
       capture_stream_outcomes(fn ->
-        assert {:error,
-                {:absent_instance_candidates_failed,
-                 [{^failing_id, {Postgrex.Error, :raise_exception}}]},
-                %{absent_instance_attempts_recovered: 0}} = run_pass(now, 1)
+        assert {:error, {:absent_instance_candidates_failed, [{^failing_id, {Postgrex.Error, :raise_exception}}]}, %{absent_instance_attempts_recovered: 0}} = run_pass(now, 1)
 
         refute_received {:stream_outcome, _metadata}
       end)
@@ -640,10 +637,7 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
         pass_now = DateTime.add(now, pass, :second)
         failing_id = failing.attempt.id
 
-        assert {:error,
-                {:absent_instance_candidates_failed,
-                 [{^failing_id, {Postgrex.Error, :raise_exception}}]},
-                %{absent_instance_attempts_recovered: 0}} = run_pass(pass_now, 1)
+        assert {:error, {:absent_instance_candidates_failed, [{^failing_id, {Postgrex.Error, :raise_exception}}]}, %{absent_instance_attempts_recovered: 0}} = run_pass(pass_now, 1)
 
         assert examined_at(failing.attempt.id) == pass_now
       end
@@ -659,10 +653,7 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
 
       failing_id = failing.attempt.id
 
-      assert {:error,
-              {:absent_instance_candidates_failed,
-               [{^failing_id, {Postgrex.Error, :raise_exception}}]},
-              %{absent_instance_attempts_recovered: 0}} =
+      assert {:error, {:absent_instance_candidates_failed, [{^failing_id, {Postgrex.Error, :raise_exception}}]}, %{absent_instance_attempts_recovered: 0}} =
                run_pass(DateTime.add(now, 5, :second), 2)
 
       for candidate <- [second, third] do
@@ -693,28 +684,20 @@ defmodule CodexPooler.Accounting.AbsentInstanceRecoveryTest do
       install_failing_settlement!([batch_failing.attempt.id])
       batch_failing_id = batch_failing.attempt.id
 
-      assert {:error,
-              {:absent_instance_candidates_failed,
-               [{^batch_failing_id, {Postgrex.Error, :raise_exception}}]},
-              %{absent_instance_attempts_recovered: 1}} =
+      assert {:error, {:absent_instance_candidates_failed, [{^batch_failing_id, {Postgrex.Error, :raise_exception}}]}, %{absent_instance_attempts_recovered: 1}} =
                run_pass(DateTime.add(now, 6, :second), 2)
 
       assert attempt_status(batch_second.attempt.id) == "failed"
       assert attempt_status(batch_third.attempt.id) == "in_progress"
 
-      assert {:error,
-              {:absent_instance_candidates_failed,
-               [{^failing_id, {Postgrex.Error, :raise_exception}}]},
-              %{absent_instance_attempts_recovered: 1}} =
+      assert {:error, {:absent_instance_candidates_failed, [{^failing_id, {Postgrex.Error, :raise_exception}}]}, %{absent_instance_attempts_recovered: 1}} =
                run_pass(DateTime.add(now, 7, :second), 2)
 
       assert attempt_status(batch_third.attempt.id) == "failed"
       assert attempt_status(batch_failing.attempt.id) == "in_progress"
       assert attempt_status(failing.attempt.id) == "in_progress"
 
-      CodexPooler.TestDiagnostics.puts(
-        "absent_instance_fairness control_passes=3 control_recovered=0 regression_recovered=4 failing_retained=2 terminal=ok"
-      )
+      CodexPooler.TestDiagnostics.puts("absent_instance_fairness control_passes=3 control_recovered=0 regression_recovered=4 failing_retained=2 terminal=ok")
     end
   end
 

@@ -126,8 +126,7 @@ defmodule CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot do
          availability: decode_availability(metadata),
          credit_balance: credit_balance(metadata, as_of),
          credit_balance_reported?: CreditBalanceStore.reported?(metadata),
-         credential_epoch:
-           metadata |> CredentialFencing.initialize_metadata() |> Map.fetch!("credential_epoch"),
+         credential_epoch: metadata |> CredentialFencing.initialize_metadata() |> Map.fetch!("credential_epoch"),
          as_of: as_of
        }}
     end)

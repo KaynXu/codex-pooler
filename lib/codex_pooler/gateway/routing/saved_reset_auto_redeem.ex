@@ -206,8 +206,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     case SavedResetRedemption.redeem(assignment,
            trigger_kind: "gateway_auto",
            started_at: scan_timestamp,
-           gateway_auto_context:
-             gateway_auto_context(refresh_plan, assignment, identity, trigger, scan_timestamp),
+           gateway_auto_context: gateway_auto_context(refresh_plan, assignment, identity, trigger, scan_timestamp),
            receive_timeout: 15_000
          ) do
       {:ok, %{applied?: true, code: code} = redeem_result} ->
@@ -453,9 +452,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp candidate_order(_refresh_plan), do: []
 
-  defp candidate_key(
-         {%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{id: identity_id}}
-       )
+  defp candidate_key({%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{id: identity_id}})
        when is_binary(assignment_id) and is_binary(identity_id),
        do: {assignment_id, identity_id}
 
@@ -511,8 +508,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         end),
       route_class: route_class(refresh_plan),
       transient_circuit_exclusions: transient_circuit_exclusions(refresh_plan),
-      automatic_confirmation_refs:
-        AutoEligibility.confirmation_refs(trigger, identity, candidate_identity_ids, timestamp),
+      automatic_confirmation_refs: AutoEligibility.confirmation_refs(trigger, identity, candidate_identity_ids, timestamp),
       quota_scope: quota_scope(refresh_plan),
       hard_pinned_continuity?: hard_pinned_continuity?(refresh_plan)
     }

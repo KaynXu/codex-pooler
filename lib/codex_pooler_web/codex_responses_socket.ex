@@ -145,8 +145,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_socket_info(
-         {Events,
-          %Events.Event{pool_id: pool_id, topics: topics, reason: reason, payload: payload}},
+         {Events, %Events.Event{pool_id: pool_id, topics: topics, reason: reason, payload: payload}},
          state
        )
        when is_list(topics) and is_map(payload) do
@@ -225,16 +224,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_socket_info(
-         {:websocket_owner_handoff_ready, _correlation_id, _epoch, _owner_turn_id,
-          _downstream_pid, _control_ref} = message,
+         {:websocket_owner_handoff_ready, _correlation_id, _epoch, _owner_turn_id, _downstream_pid, _control_ref} = message,
          state
        ) do
     handle_owner_handoff_message(message, state)
   end
 
   defp handle_socket_info(
-         {:websocket_owner_handoff_failed, _correlation_id, _epoch, _owner_turn_id,
-          _downstream_pid, _control_ref, _reason} = message,
+         {:websocket_owner_handoff_failed, _correlation_id, _epoch, _owner_turn_id, _downstream_pid, _control_ref, _reason} = message,
          state
        ) do
     handle_owner_handoff_message(message, state)
@@ -257,8 +254,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_socket_info(
-         {:websocket_owner_output_commit_probe, _correlation_id, _epoch, _owner_turn_id,
-          _active_turn_ref, _owner_pid, _probe_ref} = message,
+         {:websocket_owner_output_commit_probe, _correlation_id, _epoch, _owner_turn_id, _active_turn_ref, _owner_pid, _probe_ref} = message,
          state
        ) do
     handle_output_commit_probe(message, state)
@@ -716,9 +712,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp initialize_api_key_revocation_state(
-         %{auth: %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}} = state
-       )
+  defp initialize_api_key_revocation_state(%{auth: %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}} = state)
        when is_binary(pool_id) and is_binary(api_key_id) do
     case Events.subscribe_pool(pool_id, "pools") do
       :ok ->
@@ -956,9 +950,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # while keeping open a socket that cannot prove its key is still usable. A
   # reread that only an event or the expiry check prompted has no frame waiting
   # on it and retries instead (`reread_api_key_authorization/1`).
-  defp refresh_api_key_authorization(
-         %{api_key_id: api_key_id, api_key_runtime_epoch: captured_epoch} = state
-       )
+  defp refresh_api_key_authorization(%{api_key_id: api_key_id, api_key_runtime_epoch: captured_epoch} = state)
        when is_binary(api_key_id) and is_integer(captured_epoch) and captured_epoch >= 0 do
     case Repo.transact(fn ->
            Access.authorize_api_key_runtime_turn_for_read(api_key_id, captured_epoch)
@@ -1135,8 +1127,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp close_revoked_socket_result({:push, messages, state}) do
     if close_revoked_socket?(state) do
-      {:stop, :normal, revocation_close_detail(state), List.wrap(messages),
-       mark_revocation_closed(state)}
+      {:stop, :normal, revocation_close_detail(state), List.wrap(messages), mark_revocation_closed(state)}
     else
       {:push, messages, state}
     end
@@ -1152,8 +1143,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp close_revoked_socket_result({:stop, reason, close_detail, messages, state}) do
     if close_revoked_socket?(state) do
-      {:stop, :normal, revocation_close_detail(state), List.wrap(messages),
-       mark_revocation_closed(state)}
+      {:stop, :normal, revocation_close_detail(state), List.wrap(messages), mark_revocation_closed(state)}
     else
       {:stop, reason, close_detail, messages, state}
     end
@@ -1281,8 +1271,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        ) do
       {:ok, state}
     else
-      {:push, {:text, encode_public_error(payload, state)},
-       record_public_downstream_terminal(state, "error")}
+      {:push, {:text, encode_public_error(payload, state)}, record_public_downstream_terminal(state, "error")}
     end
   end
 
@@ -1349,8 +1338,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         if downstream_error_terminal_pushed?(state, pid) do
           {:ok, state}
         else
-          {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))},
-           record_downstream_terminal(state, pid, "error")}
+          {:push, {:text, CodexPooler.JSON.encode!(Adapter.websocket_error(payload))}, record_downstream_terminal(state, pid, "error")}
         end
 
       nil ->
@@ -2195,8 +2183,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       topology: topology,
       lifecycle_id: lifecycle.lifecycle_id,
       generation: lifecycle.generation,
-      standalone_resolved_anchor?:
-        Map.get(prepared.request_options.extra, :standalone_compact_resolved_anchor?, false)
+      standalone_resolved_anchor?: Map.get(prepared.request_options.extra, :standalone_compact_resolved_anchor?, false)
     }
   end
 
@@ -2513,8 +2500,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
            reserve_timeout_ms: reserve_timeout_ms,
            reserve_receipt: reserve_receipt,
            reserve_receipt_digest: reserve_receipt_digest,
-           owner_forwarder_opts:
-             prepared.request_options.transport.websocket_owner.forwarder_opts,
+           owner_forwarder_opts: prepared.request_options.transport.websocket_owner.forwarder_opts,
            downstream_epoch: downstream.epoch,
            owner_process_generation: owner_process_generation
          },
@@ -2735,8 +2721,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       queued_count: state |> Map.get(:queued_response_payloads, :queue.new()) |> :queue.len(),
       public_turn_active: is_pid(Map.get(state, :public_response_task_pid)),
       owner_forwarded: owner_forwarded_socket?(state),
-      native_output_count:
-        state |> Map.get(:native_turn_output_task_pids, MapSet.new()) |> MapSet.size()
+      native_output_count: state |> Map.get(:native_turn_output_task_pids, MapSet.new()) |> MapSet.size()
     }
   end
 
@@ -3097,8 +3082,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
             {:ok, payload, state}
 
           {:ok, turn_state} ->
-            {:ok, put_frame_turn_state(payload, decoded_payload, turn_state),
-             put_frame_turn_state_options(state, turn_state)}
+            {:ok, put_frame_turn_state(payload, decoded_payload, turn_state), put_frame_turn_state_options(state, turn_state)}
 
           {:error, reason} ->
             {:error, reason, state}
@@ -4115,8 +4099,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
            ) do
       send(
         owner_pid,
-        {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id,
-         active_turn_ref, probe_ref, output_commit_probe_visible?(state, owner_turn_id)}
+        {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref, probe_ref, output_commit_probe_visible?(state, owner_turn_id)}
       )
     end
 
@@ -4137,8 +4120,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp tracked_native_owner_turn_pid(
-         {:websocket_owner_output_commit_probe, _correlation_id, _epoch, owner_turn_id,
-          _active_turn_ref, _owner_pid, _probe_ref},
+         {:websocket_owner_output_commit_probe, _correlation_id, _epoch, owner_turn_id, _active_turn_ref, _owner_pid, _probe_ref},
          state
        )
        when is_pid(owner_turn_id) do
@@ -4318,8 +4300,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     try do
       case run_prepared_response(parent, task_pid, state.auth, prepared) do
         {:socket_response_result, completion_source, {:error, _reason} = result} ->
-          {:socket_response_result, completion_source,
-           {:response_task_result, result, response_task_visible_output?()}}
+          {:socket_response_result, completion_source, {:response_task_result, result, response_task_visible_output?()}}
 
         result ->
           result

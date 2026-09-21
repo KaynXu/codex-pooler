@@ -106,9 +106,7 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     assert Classification.candidate_keys() == Classification.classified_keys()
 
     assert {:error, [:synthetic_unclassified_candidate]} =
-             Classification.validate_candidate_coverage(
-               Classification.candidate_keys() ++ [:synthetic_unclassified_candidate]
-             )
+             Classification.validate_candidate_coverage(Classification.candidate_keys() ++ [:synthetic_unclassified_candidate])
   end
 
   test "lists the plan-mandated env-only boot settings" do

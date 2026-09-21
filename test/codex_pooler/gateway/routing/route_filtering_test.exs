@@ -241,9 +241,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           candidates: filter_input.candidates,
           circuit_snapshots: %{setup.assignment.id => true}
         })
-        |> RouteState.put_quota_snapshots(
-          QuotaWindows.load_routing_quota_snapshots([identity.id], snapshot_at)
-        )
+        |> RouteState.put_quota_snapshots(QuotaWindows.load_routing_quota_snapshots([identity.id], snapshot_at))
 
       for opts <- [[], [quota_mode: :optional]] do
         assert {:error,
@@ -608,9 +606,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" =>
-               {200,
-                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+             "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -1582,9 +1578,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" =>
-               {200,
-                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+             "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -2090,8 +2084,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         FakeUpstream.start_link(
           {:path_json,
            %{
-             "/api/codex/rate-limit-reset-credits/consume" =>
-               {200, %{"code" => "nothing_to_reset"}}
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "nothing_to_reset"}}
            }}
         )
 
@@ -2590,9 +2583,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" =>
-               {200,
-                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+             "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -3298,9 +3289,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     identity = Repo.reload!(identity)
 
     identity
-    |> Ecto.Changeset.change(
-      metadata: Map.put(identity.metadata || %{}, "usage_base_url", FakeUpstream.url(fake))
-    )
+    |> Ecto.Changeset.change(metadata: Map.put(identity.metadata || %{}, "usage_base_url", FakeUpstream.url(fake)))
     |> Repo.update!()
   end
 
@@ -3308,9 +3297,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     assignment = Repo.reload!(assignment)
 
     assignment
-    |> Ecto.Changeset.change(
-      metadata: Map.put(assignment.metadata || %{}, "usage_base_url", FakeUpstream.url(fake))
-    )
+    |> Ecto.Changeset.change(metadata: Map.put(assignment.metadata || %{}, "usage_base_url", FakeUpstream.url(fake)))
     |> Repo.update!()
   end
 
@@ -3600,8 +3587,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       model_fixture(pool, %{
         exposed_model_id: "gpt-route-filtering-#{suffix}-#{System.unique_integer([:positive])}",
         metadata: %{
-          "source_assignment_ids" =>
-            Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+          "source_assignment_ids" => Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
         }
       })
 
@@ -3649,8 +3635,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       {:path_json,
        %{
          "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-         "/api/codex/usage" =>
-           {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+         "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
        }}
     )
   end
@@ -3906,8 +3891,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
     snapshots =
       Map.new(windows_by_identity_id, fn {identity_id, windows} ->
-        {identity_id,
-         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+        {identity_id, RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
       end)
 
     RouteState.put_quota_snapshots(route_state, snapshots)

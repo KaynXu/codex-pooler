@@ -132,8 +132,7 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
 
       case invite_matches(scope, selector) do
         [] ->
-          {:ok, DetailEnvelope.not_found("invite", "Invite selector did not match"),
-           ReadableText.not_found("invite metadata record")}
+          {:ok, DetailEnvelope.not_found("invite", "Invite selector did not match"), ReadableText.not_found("invite metadata record")}
 
         [invite] ->
           presented = present_invite(invite)
@@ -143,8 +142,7 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
         matches ->
           candidates = Enum.map(matches, &invite_candidate/1)
 
-          {:ok, DetailEnvelope.ambiguous("invite", candidates, "Invite selector is ambiguous"),
-           ReadableText.ambiguous("invite metadata record", candidates, invite_candidate_fields())}
+          {:ok, DetailEnvelope.ambiguous("invite", candidates, "Invite selector is ambiguous"), ReadableText.ambiguous("invite metadata record", candidates, invite_candidate_fields())}
       end
     end
   end
@@ -179,14 +177,10 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
       title: "List operators",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs bounded owner-only discovery of Codex Pooler operator accounts before selecting one for detail lookup",
-          returns:
-            "masked operator metadata, account status, password-change requirement, TOTP status, MCP gate summary, MCP key count, and timestamps",
-          never_returns:
-            "password hashes, temporary passwords, session tokens, TOTP secrets, recovery secrets, MCP tokens, or MCP token hashes",
-          filters_limits:
-            "owner-only; optional status and query filters are applied in memory to active operator rows; limit is clamped to 1..100 and defaults to 50"
+          use_when: "an MCP client needs bounded owner-only discovery of Codex Pooler operator accounts before selecting one for detail lookup",
+          returns: "masked operator metadata, account status, password-change requirement, TOTP status, MCP gate summary, MCP key count, and timestamps",
+          never_returns: "password hashes, temporary passwords, session tokens, TOTP secrets, recovery secrets, MCP tokens, or MCP token hashes",
+          filters_limits: "owner-only; optional status and query filters are applied in memory to active operator rows; limit is clamped to 1..100 and defaults to 50"
         ),
       input_schema: @list_input_schema,
       output_schema: list_output_schema("operators"),
@@ -201,14 +195,10 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
       title: "Get operator",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs one owner-only operator metadata record by id, masked email, or display-name/email selector",
-          returns:
-            "one masked operator metadata record, a not-found marker, or structured ambiguity candidates when the selector matches multiple operators",
-          never_returns:
-            "password hashes, temporary passwords, session tokens, TOTP secrets, recovery secrets, MCP tokens, or MCP token hashes",
-          filters_limits:
-            "owner-only; selector is required; ambiguity candidates are bounded to 10 and no arbitrary first match is chosen"
+          use_when: "an MCP client needs one owner-only operator metadata record by id, masked email, or display-name/email selector",
+          returns: "one masked operator metadata record, a not-found marker, or structured ambiguity candidates when the selector matches multiple operators",
+          never_returns: "password hashes, temporary passwords, session tokens, TOTP secrets, recovery secrets, MCP tokens, or MCP token hashes",
+          filters_limits: "owner-only; selector is required; ambiguity candidates are bounded to 10 and no arbitrary first match is chosen"
         ),
       input_schema: @get_input_schema,
       output_schema: get_output_schema(),
@@ -223,13 +213,10 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
       title: "List invites",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs bounded discovery of pool invite metadata visible to the authenticated operator",
-          returns:
-            "masked invite recipient metadata, pool metadata, invite status, acceptance/send/revocation timestamps, and creator id summary",
+          use_when: "an MCP client needs bounded discovery of pool invite metadata visible to the authenticated operator",
+          returns: "masked invite recipient metadata, pool metadata, invite status, acceptance/send/revocation timestamps, and creator id summary",
           never_returns: "invite tokens, invite URLs, token hashes, or Pool API keys",
-          filters_limits:
-            "optional status, pool_id, and email filters use the existing invite read model; limit is clamped to 1..100 and defaults to 50"
+          filters_limits: "optional status, pool_id, and email filters use the existing invite read model; limit is clamped to 1..100 and defaults to 50"
         ),
       input_schema: @list_invites_input_schema,
       output_schema: list_output_schema("invites"),
@@ -244,13 +231,10 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
       title: "Get invite",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs one pool invite metadata record by id, pool slug, pool name, status, or recipient selector",
-          returns:
-            "one masked invite metadata record, a not-found marker, or structured ambiguity candidates when the selector matches multiple invites",
+          use_when: "an MCP client needs one pool invite metadata record by id, pool slug, pool name, status, or recipient selector",
+          returns: "one masked invite metadata record, a not-found marker, or structured ambiguity candidates when the selector matches multiple invites",
           never_returns: "invite tokens, invite URLs, token hashes, or Pool API keys",
-          filters_limits:
-            "selector is required; visible invites are capped before matching and ambiguity candidates are bounded to 10"
+          filters_limits: "selector is required; visible invites are capped before matching and ambiguity candidates are bounded to 10"
         ),
       input_schema: @get_input_schema,
       output_schema: get_output_schema(),
@@ -330,8 +314,7 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
   end
 
   defp operator_not_found do
-    {:ok, DetailEnvelope.not_found("operator", "Operator selector did not match"),
-     ReadableText.not_found("operator metadata record")}
+    {:ok, DetailEnvelope.not_found("operator", "Operator selector did not match"), ReadableText.not_found("operator metadata record")}
   end
 
   defp invite_matches(scope, selector) do

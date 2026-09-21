@@ -88,8 +88,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
     schedule_id = schedule.id
 
     @tag upstream_membership_schedule: schedule_id
-    @tag slow:
-           "repeats ten real cross-connection accounting and credential-fencing lock schedules"
+    @tag slow: "repeats ten real cross-connection accounting and credential-fencing lock schedules"
     test "#{schedule_id} serializes accounting and credential fencing for 10 iterations" do
       summaries =
         Enum.map(1..@schedule_iterations, fn iteration ->

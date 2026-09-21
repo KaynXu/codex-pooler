@@ -94,10 +94,7 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
 
   test "model discovery carries the upstream connection idle bound from settings" do
     {:ok, upstream} =
-      FakeUpstream.start_link(
-        {:path_json,
-         %{"/backend-api/codex/models" => {200, %{"data" => [%{"id" => "gpt-example"}]}}}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/backend-api/codex/models" => {200, %{"data" => [%{"id" => "gpt-example"}]}}}})
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 

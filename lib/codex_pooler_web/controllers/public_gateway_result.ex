@@ -77,8 +77,7 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     conn
     |> put_status(404)
     |> json(%{
-      "error" =>
-        PublicResponse.normalize_error(%{}, status: status, input_file_upstream_404?: true)
+      "error" => PublicResponse.normalize_error(%{}, status: status, input_file_upstream_404?: true)
     })
   end
 

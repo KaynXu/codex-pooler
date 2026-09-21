@@ -278,8 +278,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
       upstream,
       {:path_json,
        %{
-         "/api/codex/usage" =>
-           {200, single_meter_usage_payload(observed_at, "Renamed provider label")}
+         "/api/codex/usage" => {200, single_meter_usage_payload(observed_at, "Renamed provider label")}
        }}
     )
 
@@ -298,8 +297,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
       FakeUpstream.start_link(
         {:path_json,
          %{
-           "/api/codex/usage" =>
-             {200, single_meter_usage_payload(observed_at, "Renamed provider label")}
+           "/api/codex/usage" => {200, single_meter_usage_payload(observed_at, "Renamed provider label")}
          }}
       )
 
@@ -377,8 +375,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
       {"null", Map.put(base, "additional_rate_limits", nil), []},
       {"empty", Map.put(base, "additional_rate_limits", []), []},
       {"malformed", Map.put(base, "additional_rate_limits", %{}), []},
-      {"partial", Map.put(base, "additional_rate_limits", [partial, %{"metered_feature" => 7}]),
-       ["partial_meter"]}
+      {"partial", Map.put(base, "additional_rate_limits", [partial, %{"metered_feature" => 7}]), ["partial_meter"]}
     ]
   end
 
@@ -412,8 +409,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
         pool.id
         |> CircuitHealth.active_circuits()
         |> Enum.map(&{&1.id, &1.status, &1.next_probe_at, &1.metadata}),
-      requests:
-        Repo.aggregate(from(request in Request, where: request.pool_id == ^pool.id), :count),
+      requests: Repo.aggregate(from(request in Request, where: request.pool_id == ^pool.id), :count),
       attempts:
         Repo.aggregate(
           from(attempt in Attempt,

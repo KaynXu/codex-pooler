@@ -28,8 +28,7 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
 
   @probe_path "test/support/fixtures/committed_fixture_cleanup_probe.exs"
 
-  @tag slow:
-         "boots a separate runtime to prove failure-path cleanup removes committed rows after the caller dies"
+  @tag slow: "boots a separate runtime to prove failure-path cleanup removes committed rows after the caller dies"
   test "an assertion failing inside an unboxed block still runs registered cleanup, never scoped" do
     probe = run_probe!()
 
@@ -95,9 +94,7 @@ defmodule CodexPooler.CommittedFixtureCleanupTest do
     ids = Enum.map(fixtures, & &1["pricing_snapshot_id"])
 
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.all(
-        from pricing in PricingSnapshot, where: pricing.id in ^ids, select: [:price_version]
-      )
+      Repo.all(from pricing in PricingSnapshot, where: pricing.id in ^ids, select: [:price_version])
     end)
     |> Enum.map(& &1.price_version)
   end

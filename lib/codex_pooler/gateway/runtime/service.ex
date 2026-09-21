@@ -152,8 +152,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        when is_binary(enforced_model) do
     if native_image_request?(endpoint, request_options) and
          canonical_model_identifier(requested_model) != canonical_model_identifier(enforced_model) do
-      {:error,
-       Denials.policy_error(403, "model_not_allowed", "api key is not allowed to use this model")}
+      {:error, Denials.policy_error(403, "model_not_allowed", "api key is not allowed to use this model")}
     else
       {:ok, enforced_model}
     end
@@ -270,9 +269,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
             )
 
           {:error, reason} ->
-            Denials.log_gateway(
-              denial_context(auth, nil, reason, endpoint, payload, request_options)
-            )
+            Denials.log_gateway(denial_context(auth, nil, reason, endpoint, payload, request_options))
         end
 
       {:error, %{code: _code} = reason} ->
@@ -449,9 +446,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:error, reason}
 
       {:error, %{code: _code} = reason} ->
-        log_gateway_denial(
-          denial_context(auth, model, reason, endpoint, payload, request_options)
-        )
+        log_gateway_denial(denial_context(auth, model, reason, endpoint, payload, request_options))
     end
   end
 
@@ -729,9 +724,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     request_options =
       opts
       |> request_options(endpoint, payload)
-      |> RequestOptions.put_payload_context(
-        forced_transcription_model: @backend_transcription_model
-      )
+      |> RequestOptions.put_payload_context(forced_transcription_model: @backend_transcription_model)
 
     case TranscriptionPayload.normalize(payload, request_options) do
       {:ok, safe_payload, media_opts} -> execute(auth, endpoint, safe_payload, media_opts)
@@ -773,9 +766,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   def prepare_replay_intent(_auth, _prepared),
-    do:
-      {:error,
-       log_prepared_frame_provenance_breach("replay_intent_shape", :unknown, nil, nil, nil)}
+    do: {:error, log_prepared_frame_provenance_breach("replay_intent_shape", :unknown, nil, nil, nil)}
 
   defp validate_replay_prepared_frame(%PreparedWebsocketFrame{} = prepared) do
     case WebsocketCodec.validate_prepared_frame(prepared) do
@@ -783,8 +774,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         :ok
 
       {:error, :consumed} ->
-        {:error,
-         error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
+        {:error, error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
 
       {:error, :invalid} ->
         {:error, prepared_frame_provenance_breach(prepared, "replay_frame_validation")}
@@ -860,9 +850,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp replay_preflight_context(_auth, %PreparedWebsocketFrame{request_options: request_options}) do
-    log_duplicate_turn(request_options, :invalid_replay_context,
-      stage: "runtime_replay_preflight"
-    )
+    log_duplicate_turn(request_options, :invalid_replay_context, stage: "runtime_replay_preflight")
 
     {:error, duplicate_turn_error()}
   end
@@ -969,8 +957,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp final_native_compaction_admission?(%RequestOptions{
-         native_compaction_admission:
-           %RequestOptions.NativeCompactionAdmission{capability: %{phase: :final}} = admission
+         native_compaction_admission: %RequestOptions.NativeCompactionAdmission{capability: %{phase: :final}} = admission
        }),
        do: RequestOptions.NativeCompactionAdmission.valid?(admission)
 
@@ -1249,8 +1236,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         end)
 
       {:error, :consumed} ->
-        {:error,
-         error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
+        {:error, error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
 
       {:error, :invalid} ->
         {:error, prepared_frame_provenance_breach(prepared, "prepared_dispatch_consume")}
@@ -1310,8 +1296,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   def execute_websocket_response_for_socket(_auth, _raw_payload, _opts, _push_frame) do
-    {:socket_response_result, :local_complete,
-     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
+    {:socket_response_result, :local_complete, {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
   end
 
   @spec execute_prepared_websocket_response_for_socket(
@@ -1996,8 +1981,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            owner.forwarder_opts
          ) do
       {:ok, %CompactionRetrySubmitHold{} = hold} ->
-        {:ok,
-         RequestOptions.put_runtime_context(request_options, compaction_retry_submit_hold: hold)}
+        {:ok, RequestOptions.put_runtime_context(request_options, compaction_retry_submit_hold: hold)}
 
       {:error, :owner_unavailable} ->
         {:error,
@@ -2190,9 +2174,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp register_final_window_alias(_auth, _payload, _request_options, _correlation), do: :ok
 
-  defp lock_codex_session_before_reservation(
-         %RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{}}} = request_options
-       ) do
+  defp lock_codex_session_before_reservation(%RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{}}} = request_options) do
     :ok =
       PersistenceSessionContinuity.validate_session_owner_witness_for_reservation(request_options)
 

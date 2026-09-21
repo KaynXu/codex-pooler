@@ -390,8 +390,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   defp native_http_retry_witness(
          {:ok,
           %{
-            native_client_retry_witness:
-              %CodexPooler.Accounting.ClientRetry.OriginalWitness{} = witness
+            native_client_retry_witness: %CodexPooler.Accounting.ClientRetry.OriginalWitness{} = witness
           }},
          _request_options
        ),

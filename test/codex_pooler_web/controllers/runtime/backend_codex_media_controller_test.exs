@@ -119,10 +119,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
     for shape <- [:namespaced, :root, :no_constraint, :malformed, :invalid_field_value] do
       @tag residency_shape: shape
-      test "POST /backend-api/transcribe derives residency from #{shape} selected credentials", %{
-        conn: conn,
-        residency_shape: shape
-      } do
+      test "POST /backend-api/transcribe derives residency from #{shape} selected credentials", %{conn: conn, residency_shape: shape} do
         label = Atom.to_string(shape)
 
         {token, expected_residency} = residency_credentials(shape)
@@ -527,17 +524,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
   defp generated_secret(label),
     do: "fixture-secret-#{label}-#{System.unique_integer([:positive])}"
 
-  defp residency_credentials(:namespaced),
-    do: {residency_token(:namespaced, "media-region-namespaced"), "media-region-namespaced"}
-
-  defp residency_credentials(:root),
-    do: {residency_token(:root, "media-region-root"), "media-region-root"}
-
+  defp residency_credentials(:namespaced), do: {residency_token(:namespaced, "media-region-namespaced"), "media-region-namespaced"}
+  defp residency_credentials(:root), do: {residency_token(:root, "media-region-root"), "media-region-root"}
   defp residency_credentials(:no_constraint), do: {residency_token(:root, "no_constraint"), nil}
   defp residency_credentials(:malformed), do: {"malformed-selected-credential", nil}
-
-  defp residency_credentials(:invalid_field_value),
-    do: {residency_token(:root, "invalid\r\nvalue"), nil}
+  defp residency_credentials(:invalid_field_value), do: {residency_token(:root, "invalid\r\nvalue"), nil}
 
   defp residency_token(:namespaced, value) do
     jwt(%{"https://api.openai.com/auth" => %{"chatgpt_compute_residency" => value}})

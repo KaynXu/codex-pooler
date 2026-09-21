@@ -47,15 +47,12 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
                       id: "instance-settings-upstream-token-refresh-proactive-enabled",
                       field: :upstream_token_refresh_proactive_enabled,
                       label: "Proactive credential refresh",
-                      hint:
-                        "Refresh active accounts near token expiry, including busy accounts. Disabling this leaves manual refresh, recovery, and refresh after authentication failure enabled."
+                      hint: "Refresh active accounts near token expiry, including busy accounts. Disabling this leaves manual refresh, recovery, and refresh after authentication failure enabled."
                     }
                   ]}
                 />
               </div>
-              <GatewaySettingsMatrix.matrix groups={
-                gateway_setting_groups(gateway_form, files_form, transcription_form)
-              } />
+              <GatewaySettingsMatrix.matrix groups={gateway_setting_groups(gateway_form, files_form, transcription_form)} />
               <div class="grid gap-4">
                 <BulkheadEditor.editor
                   bulkheads={bulkhead_values(@form_params, @settings.gateway.bulkheads)}
@@ -163,8 +160,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
         id: "instance-settings-gateway-debug",
         field: :gateway_debug,
         label: "Gateway debug logging",
-        hint:
-          "Adds sanitized request and routing details to gateway logs and attempt metadata for temporary troubleshooting. It increases log and stored-data volume; keep it disabled during normal production operation to minimize overhead."
+        hint: "Adds sanitized request and routing details to gateway logs and attempt metadata for temporary troubleshooting. It increases log and stored-data volume; keep it disabled during normal production operation to minimize overhead."
       }
     ]
   end
@@ -174,8 +170,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       %{
         id: "streaming",
         label: "Streaming",
-        description:
-          "Bounds heartbeat and socket lifetime independently of route-class capacity.",
+        description: "Bounds heartbeat and socket lifetime independently of route-class capacity.",
         form: gateway_form,
         settings: [
           gateway_setting(%{
@@ -199,8 +194,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
             id: "instance-settings-websocket-owner-idle-timeout-ms",
             field: :websocket_owner_idle_timeout_ms,
             label: "Websocket owner post-detach retention (ms)",
-            hint:
-              "Post-detach retention for websocket owners. Running owners keep the value captured when they were created.",
+            hint: "Post-detach retention for websocket owners. Running owners keep the value captured when they were created.",
             minimum: 60_000,
             maximum: 3_600_000,
             unit: "ms"
@@ -210,8 +204,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       %{
         id: "upstream",
         label: "Upstream timing",
-        description:
-          "Controls how long requests can acquire, connect to, and wait on upstream work.",
+        description: "Controls how long requests can acquire, connect to, and wait on upstream work.",
         form: gateway_form,
         settings: [
           gateway_setting(%{
@@ -242,8 +235,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
             id: "instance-settings-upstream-conn-max-idle-time-ms",
             field: :upstream_conn_max_idle_time_ms,
             label: "Connection idle bound (ms)",
-            hint:
-              "Pooled upstream connections idle longer than this are replaced on their next use. Checked only when a connection is taken, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT, load balancer, or proxy on the egress path.",
+            hint: "Pooled upstream connections idle longer than this are replaced on their next use. Checked only when a connection is taken, so it never interrupts an in-flight or streaming request. Keep it below the idle timeout of any NAT, load balancer, or proxy on the egress path.",
             minimum: 1_000,
             maximum: 3_600_000,
             unit: "ms"
@@ -253,16 +245,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       %{
         id: "token_refresh",
         label: "Credential refresh",
-        description:
-          "Controls how early scheduled recovery refreshes upstream credentials based on expiry, including busy accounts.",
+        description: "Controls how early scheduled recovery refreshes upstream credentials based on expiry, including busy accounts.",
         form: gateway_form,
         settings: [
           gateway_setting(%{
             id: "instance-settings-upstream-token-refresh-margin-seconds",
             field: :upstream_token_refresh_margin_seconds,
             label: "Proactive refresh margin (s)",
-            hint:
-              "Scheduled recovery refreshes an active account once its access token is this close to expiring, so an account with no traffic cannot age into required re-authentication. Accounts already inside the margin are retried on a bounded cooldown, not on every recovery pass.",
+            hint: "Scheduled recovery refreshes an active account once its access token is this close to expiring, so an account with no traffic cannot age into required re-authentication. Accounts already inside the margin are retried on a bounded cooldown, not on every recovery pass.",
             minimum: 3_600,
             maximum: 1_209_600,
             unit: "s"
@@ -272,8 +262,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       %{
         id: "continuity",
         label: "Continuity",
-        description:
-          "Keeps response aliases and bridge ownership available while work moves between requests.",
+        description: "Keeps response aliases and bridge ownership available while work moves between requests.",
         form: gateway_form,
         settings: [
           gateway_setting(%{
@@ -305,8 +294,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       %{
         id: "circuit",
         label: "Circuit recovery",
-        description:
-          "Controls when failing upstreams leave normal routing and become eligible again.",
+        description: "Controls when failing upstreams leave normal routing and become eligible again.",
         form: gateway_form,
         settings: [
           gateway_setting(%{

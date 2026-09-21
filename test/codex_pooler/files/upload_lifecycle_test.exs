@@ -267,9 +267,7 @@ defmodule CodexPooler.Files.UploadLifecycleTest do
     assert Repo.reload!(file).status == "pending_upload"
 
     assert {:error, result} =
-             UploadLifecycle.record_upload_failure(context.auth, file.file_id, failure(),
-               now: context.now
-             )
+             UploadLifecycle.record_upload_failure(context.auth, file.file_id, failure(), now: context.now)
 
     refute Map.has_key?(result, :upstream)
     assert Repo.reload!(file).status == "abandoned"

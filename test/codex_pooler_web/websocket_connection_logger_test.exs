@@ -406,9 +406,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
       assert :info == WebsocketConnectionLogger.failed_native_websocket_turn_level(:owner_drained)
 
       assert :warning ==
-               WebsocketConnectionLogger.failed_native_websocket_turn_level(
-                 "upstream_request_failed"
-               )
+               WebsocketConnectionLogger.failed_native_websocket_turn_level("upstream_request_failed")
 
       warning_log =
         capture_log([level: :warning], fn ->

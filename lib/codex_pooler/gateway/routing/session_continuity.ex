@@ -109,8 +109,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       RequestOptions.put_continuity(request_options,
-        resolved_previous_response_assignment_id:
-          ContinuityStore.previous_response_assignment_id(auth, previous_response_id, now)
+        resolved_previous_response_assignment_id: ContinuityStore.previous_response_assignment_id(auth, previous_response_id, now)
       )
     else
       _already_resolved_or_unresolvable -> request_options
@@ -148,8 +147,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         with {:ok, affinities} <- Files.response_assignment_affinities(auth, file_ids),
              {:ok, assignment_id} <- single_file_assignment_id(affinities),
              :ok <- ensure_file_affinity_matches_session(auth, request_options, assignment_id) do
-          {:ok,
-           RequestOptions.put_routing(request_options, file_affinity_assignment_id: assignment_id)}
+          {:ok, RequestOptions.put_routing(request_options, file_affinity_assignment_id: assignment_id)}
         end
     end
   end
@@ -246,8 +244,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         %RequestOptions{} = request_options,
         %Model{} = model
       ) do
-    case {recreated_session_assignment_preference(request_options),
-          classify_codex_session_pin(request_options, model)} do
+    case {recreated_session_assignment_preference(request_options), classify_codex_session_pin(request_options, model)} do
       {assignment_id, {:soft, :recreated_session_assignment}} when is_binary(assignment_id) ->
         {:ok, prefer_codex_session_assignment(candidates, assignment_id)}
 
@@ -556,8 +553,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
           pinned_reauth_continuity_metadata(assignment, identity, reason_code)
         )
 
-      {:unavailable, %PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity,
-       internal_reason} ->
+      {:unavailable, %PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity, internal_reason} ->
         Contracts.pinned_continuation_unavailable_error(
           pinned_unavailable_continuity_metadata(
             assignment,
@@ -588,8 +584,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         if revoked_refresh_token_pinned_reauth?(assignment, identity) do
           {:ok, assignment, identity, "refresh_token_revoked"}
         else
-          {:unavailable, assignment, identity,
-           pinned_unavailable_internal_reason(assignment, identity)}
+          {:unavailable, assignment, identity, pinned_unavailable_internal_reason(assignment, identity)}
         end
 
       nil ->

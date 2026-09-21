@@ -699,8 +699,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     %{
       timestamp: timestamp,
       windows: persisted_windows,
-      account_primary_usable_count:
-        Enum.count(effective_windows, &account_primary_usable_window?(&1, timestamp)),
+      account_primary_usable_count: Enum.count(effective_windows, &account_primary_usable_window?(&1, timestamp)),
       usable_count: Enum.count(effective_windows, &QuotaWindows.usable_window?(&1, timestamp)),
       reset_bearing_count: Enum.count(persisted_windows, &Evidence.reset_bearing?/1),
       stale_count:

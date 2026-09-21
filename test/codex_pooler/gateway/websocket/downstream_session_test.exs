@@ -31,8 +31,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
 
     assert {:ok, session} =
              Gateway.start_codex_session(setup.auth, %{
-               accepted_turn_state:
-                 "remote-detach-#{System.unique_integer([:positive, :monotonic])}"
+               accepted_turn_state: "remote-detach-#{System.unique_integer([:positive, :monotonic])}"
              })
 
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
@@ -68,12 +67,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
       end
     end)
 
-    {:ok,
-     setup: setup,
-     session: session,
-     owner_pid: owner_pid,
-     owner_lease: active_owner_lease(session.id),
-     state: remote_downstream_state(session, downstream)}
+    {:ok, setup: setup, session: session, owner_pid: owner_pid, owner_lease: active_owner_lease(session.id), state: remote_downstream_state(session, downstream)}
   end
 
   test "successful detach interrupts a genuinely in-progress websocket turn", fixture do
@@ -109,8 +103,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
     turn = active_turn_fixture(fixture, "websocket")
 
     before =
-      {Repo.reload!(fixture.session), Repo.reload!(turn.request), Repo.reload!(turn.attempt),
-       Repo.reload!(turn.turn),
+      {Repo.reload!(fixture.session), Repo.reload!(turn.request), Repo.reload!(turn.attempt), Repo.reload!(turn.turn),
        Repo.all(
          from entry in LedgerEntry,
            where: entry.request_id == ^turn.request.id,
@@ -121,8 +114,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
              Gateway.interrupt_codex_turn(fixture.session, %{request_id: "no-matching-request"})
 
     after_cancel =
-      {Repo.reload!(fixture.session), Repo.reload!(turn.request), Repo.reload!(turn.attempt),
-       Repo.reload!(turn.turn),
+      {Repo.reload!(fixture.session), Repo.reload!(turn.request), Repo.reload!(turn.attempt), Repo.reload!(turn.turn),
        Repo.all(
          from entry in LedgerEntry,
            where: entry.request_id == ^turn.request.id,

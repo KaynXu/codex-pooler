@@ -256,9 +256,7 @@ defmodule CodexPooler.Platform.ExecutionHTTPLifecycleTest do
 
   defp start_connection do
     server =
-      start_supervised!(
-        {Bandit, plug: {LifecyclePlug, self()}, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-      )
+      start_supervised!({Bandit, plug: {LifecyclePlug, self()}, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false])

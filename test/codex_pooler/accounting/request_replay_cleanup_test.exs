@@ -143,8 +143,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
       timeouts: %{connect: 1_000, receive: 1_000},
       message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1,
       native_replay_binding: binding,
-      native_replay_proof:
-        RuntimeAdmissionProof.new(self(), make_ref(), make_ref(), <<7::256>>, :native_replay),
+      native_replay_proof: RuntimeAdmissionProof.new(self(), make_ref(), make_ref(), <<7::256>>, :native_replay),
       provisional_token: state.suspended_replay.provisional_token
     }
 
@@ -177,9 +176,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
       duration_us = System.monotonic_time(:microsecond) - started_at
       queries = drain_query_count(ref, 0)
 
-      CodexPooler.TestDiagnostics.puts(
-        CodexPooler.JSON.encode!(%{cleanup: label, duration_us: duration_us, queries: queries})
-      )
+      CodexPooler.TestDiagnostics.puts(CodexPooler.JSON.encode!(%{cleanup: label, duration_us: duration_us, queries: queries}))
 
       result
     after

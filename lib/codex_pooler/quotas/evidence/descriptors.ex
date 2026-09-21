@@ -90,9 +90,7 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
   end
 
   @spec canonical_logical_window_key(tuple()) :: tuple()
-  def canonical_logical_window_key(
-        {scope, _family, model, upstream_model, quota_key, kind, minutes} = logical_key
-      )
+  def canonical_logical_window_key({scope, _family, model, upstream_model, quota_key, kind, minutes} = logical_key)
       when scope in ["model", "upstream_model"] and kind in ["primary", "secondary"] do
     active_dimension = if scope == "model", do: model, else: upstream_model
 
@@ -167,13 +165,11 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
   defp spark_token?(value), do: normalize_quota_key(value) in @spark_tokens
 
   defp canonical_spark_logical_key("model", kind, minutes) do
-    {"model", "codex_model", @spark_model, nil, @spark_quota_key,
-     canonical_window_kind(kind, minutes), minutes}
+    {"model", "codex_model", @spark_model, nil, @spark_quota_key, canonical_window_kind(kind, minutes), minutes}
   end
 
   defp canonical_spark_logical_key("upstream_model", kind, minutes) do
-    {"upstream_model", "codex_model", nil, @spark_model, @spark_quota_key,
-     canonical_window_kind(kind, minutes), minutes}
+    {"upstream_model", "codex_model", nil, @spark_model, @spark_quota_key, canonical_window_kind(kind, minutes), minutes}
   end
 
   defp canonical_window_kind("primary", @weekly_minutes), do: "secondary"

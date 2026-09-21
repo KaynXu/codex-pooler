@@ -172,8 +172,7 @@ defmodule CodexPooler.Jobs.ReadModel do
             job.worker == ^Query.worker_name(TokenRefreshWorker) and
               fragment("?->>?", job.args, "upstream_identity_id") == ^identity_id,
           order_by: [
-            desc:
-              fragment("COALESCE(?, ?, ?)", job.attempted_at, job.scheduled_at, job.inserted_at)
+            desc: fragment("COALESCE(?, ?, ?)", job.attempted_at, job.scheduled_at, job.inserted_at)
           ],
           limit: ^limit,
           select: %{
@@ -208,8 +207,7 @@ defmodule CodexPooler.Jobs.ReadModel do
             job.worker == ^Query.worker_name(AccountReconciliationWorker) and
               fragment("?->>?", job.args, "pool_id") == ^pool_id,
           order_by: [
-            desc:
-              fragment("COALESCE(?, ?, ?)", job.attempted_at, job.scheduled_at, job.inserted_at)
+            desc: fragment("COALESCE(?, ?, ?)", job.attempted_at, job.scheduled_at, job.inserted_at)
           ],
           limit: ^limit,
           select: %{

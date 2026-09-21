@@ -243,8 +243,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
 
     assert_receive {:websocket_response_activity, ^pid, ^token}
 
-    assert_receive {:websocket_response_activity_cancelled, ^pid, ^token, ^watcher,
-                    :owner_drained}
+    assert_receive {:websocket_response_activity_cancelled, ^pid, ^token, ^watcher, :owner_drained}
 
     assert :ok = ResponseTask.acknowledge_delivery(watcher, token)
     assert_receive {:codex_response_done, ^pid, {:error, :owner_drained}}
@@ -420,9 +419,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
     assert_receive {:proxy_cancelled, ^pid, :owner_drained}
 
-    assert_receive {:socket_received,
-                    {:websocket_response_activity_cancelled, ^pid, ^token, watcher,
-                     :owner_drained}}
+    assert_receive {:socket_received, {:websocket_response_activity_cancelled, ^pid, ^token, watcher, :owner_drained}}
 
     on_exit(fn -> if Process.alive?(watcher), do: Process.exit(watcher, :kill) end)
     watcher_monitor = Process.monitor(watcher)
@@ -462,8 +459,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     monitor = Process.monitor(pid)
     assert_receive {:websocket_response_activity, ^pid, token}
 
-    assert_receive {:codex_response_done, ^pid,
-                    {:socket_response_result, :owner_completion_pending, :ok}}
+    assert_receive {:codex_response_done, ^pid, {:socket_response_result, :owner_completion_pending, :ok}}
 
     assert :ok = ResponseTask.acknowledge_delivery(pid, token, :completed)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
@@ -492,8 +488,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     monitor = Process.monitor(pid)
     assert_receive {:websocket_response_activity, ^pid, token}
 
-    assert_receive {:codex_response_done, ^pid,
-                    {:socket_response_result, :owner_completion_pending, :ok}}
+    assert_receive {:codex_response_done, ^pid, {:socket_response_result, :owner_completion_pending, :ok}}
 
     assert Process.alive?(pid)
     assert {_epoch, []} = ActivityRegistry.begin_drain(name: registry)
@@ -575,9 +570,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
 
     monitor = Process.monitor(pid)
 
-    assert_receive {:codex_response_done, ^pid,
-                    {:socket_response_result, :owner_completion_pending,
-                     {:error, :client_disconnected}}}
+    assert_receive {:codex_response_done, ^pid, {:socket_response_result, :owner_completion_pending, {:error, :client_disconnected}}}
 
     refute_receive {:websocket_response_activity, ^pid, _token}, 0
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}

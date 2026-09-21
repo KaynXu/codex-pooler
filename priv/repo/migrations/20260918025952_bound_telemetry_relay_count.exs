@@ -26,16 +26,12 @@ defmodule CodexPooler.Repo.Migrations.BoundTelemetryRelayCount do
     execute("UPDATE telemetry_relay_events SET count = #{@max_count} WHERE count > #{@max_count}")
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT count_non_negative")
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT count_bounded CHECK (count BETWEEN 0 AND #{@max_count})"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT count_bounded CHECK (count BETWEEN 0 AND #{@max_count})")
   end
 
   def down do
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT count_bounded")
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT count_non_negative CHECK (count >= 0)"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT count_non_negative CHECK (count >= 0)")
   end
 end

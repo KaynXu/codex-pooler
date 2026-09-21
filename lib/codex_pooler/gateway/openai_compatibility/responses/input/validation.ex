@@ -265,9 +265,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_assistant_replay_content(_content),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-  defp validate_assistant_replay_content_part(
-         %{"type" => "output_text", "text" => text, "annotations" => annotations} = part
-       )
+  defp validate_assistant_replay_content_part(%{"type" => "output_text", "text" => text, "annotations" => annotations} = part)
        when is_binary(text) do
     with :ok <- validate_exact_item_keys(part, ["type", "text", "annotations", "logprobs"]),
          :ok <- validate_url_citation_annotations(annotations) do
@@ -311,8 +309,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
        when (is_integer(start_index) or is_float(start_index)) and
               (is_integer(end_index) or is_float(end_index)) and is_binary(url) and
               is_binary(title),
-       do:
-         validate_exact_item_keys(annotation, ["type", "start_index", "end_index", "url", "title"])
+       do: validate_exact_item_keys(annotation, ["type", "start_index", "end_index", "url", "title"])
 
   defp validate_url_citation_annotation(_annotation),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
@@ -376,9 +373,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     end
   end
 
-  defp validate_reasoning_replay_item(
-         %{"summary" => summary, "encrypted_content" => encrypted_content} = item
-       )
+  defp validate_reasoning_replay_item(%{"summary" => summary, "encrypted_content" => encrypted_content} = item)
        when is_binary(encrypted_content) do
     with :ok <-
            validate_exact_item_keys(item, [
@@ -425,9 +420,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_reasoning_replay_content(_content),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-  defp validate_reasoning_replay_content_part(
-         %{"type" => "reasoning_text", "text" => text} = part
-       )
+  defp validate_reasoning_replay_content_part(%{"type" => "reasoning_text", "text" => text} = part)
        when is_binary(text) do
     validate_exact_item_keys(part, ["type", "text"])
   end
@@ -497,9 +490,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_program_output_replay_item(_item),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-  defp validate_function_call_replay_item(
-         %{"call_id" => call_id, "name" => name, "arguments" => arguments} = item
-       )
+  defp validate_function_call_replay_item(%{"call_id" => call_id, "name" => name, "arguments" => arguments} = item)
        when is_binary(call_id) and is_binary(name) and is_binary(arguments) do
     with :ok <-
            validate_exact_item_keys(item, [
@@ -547,9 +538,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     end
   end
 
-  defp validate_custom_tool_call_replay_item(
-         %{"call_id" => call_id, "name" => name, "input" => input} = item
-       ) do
+  defp validate_custom_tool_call_replay_item(%{"call_id" => call_id, "name" => name, "input" => input} = item) do
     with :ok <-
            validate_exact_item_keys(item, [
              "type",

@@ -49,9 +49,7 @@ defmodule CodexPooler.Accounting.TaskExceptionArmedReplayTest do
     # The 221-07 shape: the reservation is settled and released once, both
     # rows name the terminal attempt, and no pre-attempt phase is claimed.
     entries =
-      Repo.all(
-        from e in LedgerEntry, where: e.request_id == ^fixture.request.id, order_by: e.entry_kind
-      )
+      Repo.all(from e in LedgerEntry, where: e.request_id == ^fixture.request.id, order_by: e.entry_kind)
 
     assert Enum.map(entries, & &1.entry_kind) == ["release", "reservation", "settlement"]
     release = Enum.find(entries, &(&1.entry_kind == "release"))

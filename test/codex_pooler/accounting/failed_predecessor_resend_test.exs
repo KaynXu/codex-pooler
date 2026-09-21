@@ -223,9 +223,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
         {:ok, %{request: predecessor}} =
           Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
 
-        fail_predecessor!(setup, session, predecessor, "upstream_stream_error",
-          response_metadata: metadata
-        )
+        fail_predecessor!(setup, session, predecessor, "upstream_stream_error", response_metadata: metadata)
 
         assert {:ok,
                 %{
@@ -262,16 +260,14 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
       }
 
       for {label, metadata} <- [
-            without_observation:
-              Map.delete(lifecycle_cut_metadata(), "native_client_retry_observation"),
+            without_observation: Map.delete(lifecycle_cut_metadata(), "native_client_retry_observation"),
             one_completed_output_item:
               put_in(
                 lifecycle_cut_metadata(),
                 ["native_client_retry_observation", "output_item_done_count"],
                 1
               ),
-            non_closed_transport_failure:
-              Map.put(lifecycle_cut_metadata(), "transport_failure", non_closed_transport_failure),
+            non_closed_transport_failure: Map.put(lifecycle_cut_metadata(), "transport_failure", non_closed_transport_failure),
             visible_without_reasoning:
               put_in(
                 partial_reasoning_cut_metadata(),
@@ -284,9 +280,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
         {:ok, %{request: predecessor}} =
           Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
 
-        fail_predecessor!(setup, session, predecessor, "upstream_stream_error",
-          response_metadata: metadata
-        )
+        fail_predecessor!(setup, session, predecessor, "upstream_stream_error", response_metadata: metadata)
 
         assert {:error, %{code: :duplicate_request, resend_disposition: :terminal_predecessor}} =
                  Accounting.claim_websocket_turn(setup.auth, setup.model, opts),
@@ -301,9 +295,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendTest do
         Accounting.claim_websocket_turn(setup.auth, setup.model, opts)
 
       %{attempt: attempt} =
-        fail_predecessor!(setup, session, predecessor, "upstream_stream_error",
-          response_metadata: lifecycle_cut_metadata()
-        )
+        fail_predecessor!(setup, session, predecessor, "upstream_stream_error", response_metadata: lifecycle_cut_metadata())
 
       Repo.update!(Ecto.Changeset.change(attempt, replay_generation: 1))
 

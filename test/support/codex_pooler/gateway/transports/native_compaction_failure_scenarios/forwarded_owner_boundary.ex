@@ -150,8 +150,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
     assert %{active_turn: nil, native_compaction_admission: nil} = await_cleared(fixture.owner)
     send(delayed_pid, {:websocket_owner_harness_release_delayed, release_ref})
 
-    assert_receive {:websocket_owner_harness_delayed_result, ^release_ref,
-                    {:error, :stale_downstream}},
+    assert_receive {:websocket_owner_harness_delayed_result, ^release_ref, {:error, :stale_downstream}},
                    @detection_timeout_ms
 
     assert {:ok, _status} = WebsocketOwnerSession.owner_status(fixture.owner)
@@ -225,9 +224,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
 
   defp execute(:stale_lease, context, _accounting) do
     fixture =
-      start_reserved_owner(context, :stale_lease,
-        persistence: WebsocketOwnerNodeHarness.fake_persistence_boundary()
-      )
+      start_reserved_owner(context, :stale_lease, persistence: WebsocketOwnerNodeHarness.fake_persistence_boundary())
 
     owner_monitor = Process.monitor(fixture.owner)
 
@@ -564,8 +561,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Forwar
     do: await_state(owner, &(is_nil(&1.active_turn) and is_nil(&1.native_compaction_admission)))
 
   defp await_handoff_cleared(owner),
-    do:
-      await_state(owner, &(is_nil(&1.pending_handoff) and is_nil(&1.native_compaction_admission)))
+    do: await_state(owner, &(is_nil(&1.pending_handoff) and is_nil(&1.native_compaction_admission)))
 
   defp await_downstream_cleared(owner),
     do: await_state(owner, &(is_nil(&1.downstream) and is_nil(&1.native_compaction_admission)))

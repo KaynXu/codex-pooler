@@ -37,9 +37,7 @@ defmodule CodexPoolerWeb.Observatory.StatesTest do
            |> Enum.empty?()
 
     refute empty
-           |> LazyHTML.query(
-             "#observatory-state-empty > #observatory-state-empty-anatomy.border-dashed"
-           )
+           |> LazyHTML.query("#observatory-state-empty > #observatory-state-empty-anatomy.border-dashed")
            |> Enum.empty?()
 
     refute stale

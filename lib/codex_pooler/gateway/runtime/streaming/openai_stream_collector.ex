@@ -149,8 +149,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
         {:ok, Map.put(state, :collected_response, response), ""}
 
       {:error, error} ->
-        {:failure, Map.put(state, :collection_error, error), "",
-         {:collected_response_invalid, error.status, error.code}}
+        {:failure, Map.put(state, :collection_error, error), "", {:collected_response_invalid, error.status, error.code}}
     end
   end
 

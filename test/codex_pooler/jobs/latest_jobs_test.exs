@@ -940,8 +940,7 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
 
       cases = [
         {:pool_target, %{"pool_id" => pool.id}},
-        {:assignment_target,
-         %{"pool_id" => pool.id, "pool_upstream_assignment_id" => assignment.id}},
+        {:assignment_target, %{"pool_id" => pool.id, "pool_upstream_assignment_id" => assignment.id}},
         {:upstream_identity_target, %{"upstream_identity_id" => direct_identity.id}},
         {:api_key_target, %{"pool_id" => pool.id, "api_key_id" => api_key.id}},
         {:rollup_target, %{"rollup_date" => "2026-05-03"}}
@@ -978,8 +977,7 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
       states = [
         {"available", []},
         {"scheduled", [scheduled_at: DateTime.add(base_time, 1_800, :second)]},
-        {"completed",
-         [attempted_at: base_time, completed_at: DateTime.add(base_time, 30, :second)]},
+        {"completed", [attempted_at: base_time, completed_at: DateTime.add(base_time, 30, :second)]},
         {"retryable", [attempted_at: base_time]},
         {"discarded", [discarded_at: DateTime.add(base_time, 60, :second)]},
         {"cancelled", [cancelled_at: DateTime.add(base_time, 90, :second)]},

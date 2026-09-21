@@ -86,8 +86,7 @@ defmodule CodexPoolerWeb.V1.ResponsesCollectionOutcomeTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "synthetic output"}}
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic output"}}
         ])
       )
 

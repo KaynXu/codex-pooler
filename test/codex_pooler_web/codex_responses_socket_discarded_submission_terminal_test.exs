@@ -59,8 +59,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketDiscardedSubmissionTerminalTest do
                owner_instance_id: "discard-absent-instance@127.0.0.1"
              })
 
-    {:ok,
-     auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
+    {:ok, auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
   end
 
   test "aborting a public turn answers every prepared turn it discards, exactly once", %{

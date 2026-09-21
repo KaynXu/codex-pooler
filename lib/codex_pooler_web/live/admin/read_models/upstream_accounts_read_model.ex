@@ -104,8 +104,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:auth_fresh_label) => String.t(),
           required(:auth_verified_label) => String.t(),
           required(:access_token_label) => String.t(),
-          required(:secret_status) =>
-            :present | :missing | :expired | :refresh_due | :reauth_required,
+          required(:secret_status) => :present | :missing | :expired | :refresh_due | :reauth_required,
           required(:reauth_required?) => boolean(),
           required(:reauth_reason_code) => String.t() | nil,
           required(:reauth_reason_message) => String.t() | nil,
@@ -452,8 +451,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           identity.auth_verified_at,
           datetime_preferences
         ),
-      access_token_label:
-        access_token_label(identity_observability.credential_expiry, datetime_preferences),
+      access_token_label: access_token_label(identity_observability.credential_expiry, datetime_preferences),
       secret_status: Secrets.secret_status(identity),
       reauth_required?: reauth_required?(identity),
       reauth_reason_code: reauth_reason_code(identity),

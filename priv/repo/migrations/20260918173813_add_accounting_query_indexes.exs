@@ -9,15 +9,13 @@ defmodule CodexPooler.Repo.Migrations.AddAccountingQueryIndexes do
      CREATE INDEX CONCURRENTLY ledger_entries_api_key_known_settlement_occurred_idx
      ON public.ledger_entries (api_key_id, occurred_at)
      WHERE entry_kind = 'settlement' AND usage_status = 'usage_known'
-     """,
-     "CREATE INDEX ledger_entries_api_key_known_settlement_occurred_idx ON public.ledger_entries USING btree (api_key_id, occurred_at) WHERE ((entry_kind = 'settlement'::text) AND (usage_status = 'usage_known'::text))"},
+     """, "CREATE INDEX ledger_entries_api_key_known_settlement_occurred_idx ON public.ledger_entries USING btree (api_key_id, occurred_at) WHERE ((entry_kind = 'settlement'::text) AND (usage_status = 'usage_known'::text))"},
     {"attempts_open_started_idx",
      """
      CREATE INDEX CONCURRENTLY attempts_open_started_idx
      ON public.attempts (started_at, id)
      WHERE status IN ('queued', 'in_progress')
-     """,
-     "CREATE INDEX attempts_open_started_idx ON public.attempts USING btree (started_at, id) WHERE (status = ANY (ARRAY['queued'::text, 'in_progress'::text]))"}
+     """, "CREATE INDEX attempts_open_started_idx ON public.attempts USING btree (started_at, id) WHERE (status = ANY (ARRAY['queued'::text, 'in_progress'::text]))"}
   ]
 
   def up do
@@ -87,9 +85,7 @@ defmodule CodexPooler.Repo.Migrations.AddAccountingQueryIndexes do
         try do
           fun.()
         after
-          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout],
-            log: false
-          )
+          repo().query!("SELECT set_config('lock_timeout', $1, false)", [previous_timeout], log: false)
         end
       end)
     end)

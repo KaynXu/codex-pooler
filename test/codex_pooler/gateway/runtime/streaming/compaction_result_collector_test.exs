@@ -110,8 +110,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
 
     cases = [
       {"response.failed", "invalid_request_error", "input", "invalid_request_error"},
-      {"response.failed", "misalignment_policy_violation", "input",
-       "misalignment_policy_violation"},
+      {"response.failed", "misalignment_policy_violation", "input", "misalignment_policy_violation"},
       {"error", "previous_response_not_found", "previous_response_id", "stream_incomplete"},
       {"error", "invalid_previous_response_id", "previous_response_id", "stream_incomplete"}
     ]
@@ -154,8 +153,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     raw_sentinel = "private-incomplete-message-sentinel"
 
     cases = [
-      {provider_failure_event("response.incomplete", "server_error", "input", raw_sentinel),
-       "server_error", "server_error", "input"},
+      {provider_failure_event("response.incomplete", "server_error", "input", raw_sentinel), "server_error", "server_error", "input"},
       {incomplete_event("max_output_tokens"), "max_output_tokens", "max_output_tokens", nil}
     ]
 
@@ -181,9 +179,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
              CompactionResultCollector.collect_websocket_body(websocket_body([provider]))
 
     assert {:ok, %{status: 200}} =
-             CompactionResultCollector.collect_websocket_body(
-               websocket_body([item_event("compaction", "fresh"), completed_event()])
-             )
+             CompactionResultCollector.collect_websocket_body(websocket_body([item_event("compaction", "fresh"), completed_event()]))
 
     assert {:error, %{status: 502, code: "invalid_compaction_response"}} =
              CompactionResultCollector.collect_websocket_body("data: not-json\n\n")
@@ -287,9 +283,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
     log =
       capture_log([level: :warning], fn ->
         assert {:error, %{compaction_invalid_reason: "invalid_after_provider_failure"}} =
-                 CompactionResultCollector.collect_websocket_body(
-                   websocket_body([provider]) <> unrelated
-                 )
+                 CompactionResultCollector.collect_websocket_body(websocket_body([provider]) <> unrelated)
       end)
 
     assert log =~ "source_stage=collector_invalid"

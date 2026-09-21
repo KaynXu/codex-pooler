@@ -19,8 +19,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     {:get, "/v1/models", nil},
     {:get, "/v1/responses", nil},
     {:post, "/v1/responses", %{"model" => "gpt-fixture-text", "input" => "synthetic text"}},
-    {:post, "/v1/responses/compact",
-     %{"model" => "gpt-fixture-text", "input" => "synthetic text"}},
+    {:post, "/v1/responses/compact", %{"model" => "gpt-fixture-text", "input" => "synthetic text"}},
     {:post, "/v1/chat/completions",
      %{
        "model" => "gpt-fixture-text",
@@ -30,8 +29,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     {:get, "/v1/files", nil},
     {:post, "/v1/files", %{"purpose" => "user_data"}},
     {:post, "/v1/audio/transcriptions", %{"model" => "gpt-4o-transcribe"}},
-    {:post, "/v1/images/generations",
-     %{"model" => "gpt-image-2", "prompt" => "synthetic image request"}},
+    {:post, "/v1/images/generations", %{"model" => "gpt-image-2", "prompt" => "synthetic image request"}},
     {:post, "/v1/images/edits", %{"model" => "gpt-image-2", "prompt" => "synthetic edit request"}}
   ]
 

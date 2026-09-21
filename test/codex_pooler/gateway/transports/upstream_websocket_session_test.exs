@@ -1100,8 +1100,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         assert {:error, %{reason: :upstream_websocket_session_unavailable}} =
                  UpstreamWebsocketSession.request(session, request)
 
-        assert_receive {:DOWN, ^monitor, :process, ^session,
-                        {%RuntimeError{}, callback_stacktrace}},
+        assert_receive {:DOWN, ^monitor, :process, ^session, {%RuntimeError{}, callback_stacktrace}},
                        @detection_timeout_ms
 
         {expected_function, expected_arity} =
@@ -1167,8 +1166,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         assert {:ok, %{terminal: "response.completed", status: 200}} = result
         assert_receive {:observer_called, ^failure_kind}
 
-        assert_receive {:observer_failure_writer, ^failure_kind, ^terminal,
-                        %{terminal: "response.completed"}}
+        assert_receive {:observer_failure_writer, ^failure_kind, ^terminal, %{terminal: "response.completed"}}
 
         refute_received {:observer_called, ^failure_kind}
         refute_received {:observer_failure_writer, ^failure_kind, _frame, _discriminator}
@@ -1730,8 +1728,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid,
-                    ^terminal_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid, ^terminal_ref},
                    @detection_timeout_ms
 
     assert FakeUpstream.websocket_connection_alive?(upstream, 1)
@@ -1747,8 +1744,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive :findings116_next_request_task_started, @detection_timeout_ms
     send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
 
-    assert {:error,
-            %{reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}}} =
+    assert {:error, %{reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}}} =
              Task.await(terminal_task, @detection_timeout_ms)
 
     assert {:ok, %{terminal: "response.completed"}} = Task.await(next_task, @detection_timeout_ms)
@@ -1810,8 +1806,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       old_socket = session_socket(session)
       terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid,
-                      ^terminal_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid, ^terminal_ref},
                      @detection_timeout_ms
 
       assert FakeUpstream.websocket_connection_alive?(upstream, 1)
@@ -2071,8 +2066,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         UpstreamWebsocketSession.request(session, request)
       end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                    1_000
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -2083,8 +2077,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              Task.await(request_task, 1_000)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
                    1_000
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -2571,14 +2564,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     writer = fn frame -> send(parent, {:controlled_owner_frame, frame}) end
     send_task = Task.async(fn -> upstream.send.(upstream_pid, "request", writer) end)
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :task_result, task_barrier,
-                    task_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :task_result, task_barrier, task_ref},
                    1_000
 
     assert task_ref == controls.task_result
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :nonterminal_frames,
-                    nonterminal_barrier, nonterminal_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :nonterminal_frames, nonterminal_barrier, nonterminal_ref},
                    1_000
 
     assert nonterminal_ref == controls.nonterminal_frames
@@ -2592,8 +2583,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert_receive {:controlled_owner_frame, "nonterminal"}, 1_000
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :terminal_frames,
-                    terminal_barrier, terminal_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :terminal_frames, terminal_barrier, terminal_ref},
                    1_000
 
     assert terminal_ref == controls.terminal_frames
@@ -2615,8 +2605,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
           WebsocketOwnerNodeHarness.controlled_result(parent, controls, stage, expected)
         end)
 
-      assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
-                      release_ref},
+      assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid, release_ref},
                      1_000
 
       assert release_ref == Map.fetch!(controls, stage)
@@ -2636,8 +2625,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         )
       end)
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :timer_message, timer_barrier,
-                    timer_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :timer_message, timer_barrier, timer_ref},
                    1_000
 
     assert timer_ref == controls.timer_message
@@ -5089,9 +5077,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     ForwardedOwnerRequestHandoff.new(owner, witness)
   end
 
-  defp status_state(
-         {:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}
-       ) do
+  defp status_state({:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}) do
     status
     |> Keyword.get_values(:data)
     |> Enum.flat_map(& &1)
@@ -5101,9 +5087,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end)
   end
 
-  defp status_logged_events(
-         {:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}
-       ) do
+  defp status_logged_events({:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}) do
     status
     |> Keyword.get_values(:data)
     |> Enum.flat_map(& &1)
@@ -5287,8 +5271,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       )
 
     peer = %{
-      url:
-        "#{Keyword.get(opts, :scheme, "http")}://127.0.0.1:#{port}/backend-api/codex/responses",
+      url: "#{Keyword.get(opts, :scheme, "http")}://127.0.0.1:#{port}/backend-api/codex/responses",
       state: state,
       supervisor: supervisor
     }

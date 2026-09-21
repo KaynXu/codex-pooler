@@ -645,8 +645,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
       true ->
         [
-          bulkheads:
-            "must contain positive max_concurrency, non-negative queue_limit, and positive queue_timeout_ms"
+          bulkheads: "must contain positive max_concurrency, non-negative queue_limit, and positive queue_timeout_ms"
         ]
     end
   end

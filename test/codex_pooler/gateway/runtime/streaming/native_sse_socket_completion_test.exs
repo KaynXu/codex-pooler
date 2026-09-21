@@ -15,9 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSESocketCompletionTest do
   test "real HTTP client closes after native completion while upstream EOF is held" do
     previous = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 20}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 20})
 
     on_exit(fn ->
       if previous,

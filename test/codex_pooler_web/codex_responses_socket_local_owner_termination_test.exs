@@ -142,12 +142,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
       |> put_delivery_receipt_context(task, request, attempt)
 
     owner =
-      start_supervised!(
-        {WebsocketOwnerSession,
-         codex_session_id: state.codex_session.id,
-         owner_lease_token: state.websocket_owner_lease_token,
-         owner_instance_id: state.codex_session.owner_instance_id}
-      )
+      start_supervised!({WebsocketOwnerSession, codex_session_id: state.codex_session.id, owner_lease_token: state.websocket_owner_lease_token, owner_instance_id: state.codex_session.owner_instance_id})
 
     assert {:ok, downstream} =
              WebsocketOwnerSession.attach_downstream(owner, %{
@@ -200,8 +195,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
 
         send(
           socket,
-          {:codex_response_done, self(),
-           {:socket_response_result, :owner_completion_pending, :ok}}
+          {:codex_response_done, self(), {:socket_response_result, :owner_completion_pending, :ok}}
         )
 
         receive do
@@ -233,8 +227,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketLocalOwnerTerminationTest do
 
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
-               accepted_turn_state:
-                 "local-owner-termination-#{System.unique_integer([:positive])}",
+               accepted_turn_state: "local-owner-termination-#{System.unique_integer([:positive])}",
                owner_instance_id: local_node_string
              })
 

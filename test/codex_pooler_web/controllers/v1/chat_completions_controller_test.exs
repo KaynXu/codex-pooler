@@ -257,9 +257,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
 
-    refute inspect(
-             {request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)}
-           ) =~ "compute_units"
+    refute inspect({request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)}) =~ "compute_units"
   end
 
   test "POST /v1/chat/completions derives the Codex routing hint from the effective model and tier",
@@ -683,10 +681,8 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
              "type" => "response.created",
              "response" => %{"id" => "resp_chat_delta_collect", "status" => "in_progress"}
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "delta"}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => " answer"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "delta"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => " answer"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -829,8 +825,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
                "service_tier" => "fast"
              }
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "streamed answer"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "streamed answer"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -1362,8 +1357,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "partial chat text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial chat text"}},
           {"response.failed",
            %{
              "type" => "response.failed",
@@ -1925,8 +1919,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
              "type" => "response.created",
              "response" => %{"id" => "resp_fallback_chat_stream", "status" => "in_progress"}
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "synthetic fallback answer"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic fallback answer"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -2106,8 +2099,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
            }
          ]
        }, "invalid_request", "input", "remote MCP tools are not supported"},
-      {%{"input" => "synthetic fallback input", "additional_tools" => []},
-       "unsupported_parameter", "additional_tools", "Unsupported parameter: additional_tools"}
+      {%{"input" => "synthetic fallback input", "additional_tools" => []}, "unsupported_parameter", "additional_tools", "Unsupported parameter: additional_tools"}
     ]
 
     Enum.each(invalid_cases, fn {payload_update, expected_code, expected_param, expected_message} ->
@@ -2279,11 +2271,8 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     setup = gateway_setup(upstream)
 
     invalid_cases = [
-      {input_audio_part("ogg", malformed_data),
-       public_audio_error("input_audio data must be base64"), [malformed_data]},
-      {input_audio_part("flac", flac_data),
-       public_audio_error("message content part is not translatable"),
-       [flac_source, flac_data, "flac"]}
+      {input_audio_part("ogg", malformed_data), public_audio_error("input_audio data must be base64"), [malformed_data]},
+      {input_audio_part("flac", flac_data), public_audio_error("message content part is not translatable"), [flac_source, flac_data, "flac"]}
     ]
 
     Enum.each(invalid_cases, fn {audio_part, expected_error, forbidden_values} ->

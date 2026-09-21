@@ -1407,9 +1407,7 @@ defmodule CodexPooler.AccountingTest do
                0
 
       identity_row =
-        rollup_row(actual_rows, "upstream_identity",
-          upstream_identity_id: fixture.primary.identity.id
-        )
+        rollup_row(actual_rows, "upstream_identity", upstream_identity_id: fixture.primary.identity.id)
 
       assert identity_row.pool_id == fixture.secondary.pool.id
       assert identity_row.request_count == 2

@@ -159,10 +159,7 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     {:ok, reader_calls} = Agent.start_link(fn -> 0 end)
 
     {:ok, sampler} =
-      start_supervised(
-        {AdmissionSampler,
-         name: sampler_name, interval_ms: 5, snapshot_reader: reader(reader_calls, self())}
-      )
+      start_supervised({AdmissionSampler, name: sampler_name, interval_ms: 5, snapshot_reader: reader(reader_calls, self())})
 
     assert_receive {:reader_called, :timeout}
     sync_sampler(sampler)
@@ -183,10 +180,7 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     {:ok, delayed} = start_supervised({DelayedAdmission, name: delayed_name, test_pid: self()})
 
     {:ok, sampler} =
-      start_supervised(
-        {AdmissionSampler,
-         name: sampler_name, admission_server: delayed_name, timeout_ms: 1, interval_ms: 60_000}
-      )
+      start_supervised({AdmissionSampler, name: sampler_name, admission_server: delayed_name, timeout_ms: 1, interval_ms: 60_000})
 
     sync_sampler(sampler)
     assert_receive {:delayed_saturation_call, _from}
@@ -203,10 +197,7 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     {:ok, foreign} =
       start_supervised(
         Supervisor.child_spec(
-          {AdmissionSampler,
-           name: foreign_name,
-           interval_ms: 60_000,
-           snapshot_reader: fn -> {:ok, snapshot(0, 0)} end},
+          {AdmissionSampler, name: foreign_name, interval_ms: 60_000, snapshot_reader: fn -> {:ok, snapshot(0, 0)} end},
           id: foreign_name
         )
       )
@@ -214,20 +205,14 @@ defmodule CodexPoolerWeb.Telemetry.AdmissionSamplerTest do
     sync_sampler(foreign)
 
     {:ok, sampler} =
-      start_supervised(
-        {AdmissionSampler,
-         name: sampler_name, interval_ms: 60_000, snapshot_reader: fn -> {:ok, snapshot(3, 2)} end}
-      )
+      start_supervised({AdmissionSampler, name: sampler_name, interval_ms: 60_000, snapshot_reader: fn -> {:ok, snapshot(3, 2)} end})
 
     sync_sampler(sampler)
     assert_saturation(snapshot(3, 2))
   end
 
   defp start_sampler(name, admission_name) do
-    start_supervised(
-      {AdmissionSampler,
-       name: name, admission_server: admission_name, interval_ms: 60_000, timeout_ms: 50}
-    )
+    start_supervised({AdmissionSampler, name: name, admission_server: admission_name, interval_ms: 60_000, timeout_ms: 50})
   end
 
   defp acquire(server, settings),

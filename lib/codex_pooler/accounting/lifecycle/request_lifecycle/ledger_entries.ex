@@ -15,8 +15,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @amount_recorded "recorded"
   @amount_voided "voided"
   @usage_pending "usage_pending"
-  @source_event_conflict_target {:unsafe_fragment,
-                                 "(source_event_id) WHERE source_event_id IS NOT NULL"}
+  @source_event_conflict_target {:unsafe_fragment, "(source_event_id) WHERE source_event_id IS NOT NULL"}
 
   @type cost :: Decimal.t() | nil
   @type estimate :: %{

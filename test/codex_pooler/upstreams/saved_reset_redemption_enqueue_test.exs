@@ -129,8 +129,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
       identity =
         update_identity_metadata!(identity, %{
           "credential_epoch" => 2,
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.to_iso8601(),
           "token_refresh" => nil
         })
 
@@ -145,9 +144,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
       pool = pool_fixture()
 
       %{identity: identity} =
-        assignment_with_saved_resets(pool, 1, %{},
-          redemption: redemption_metadata(DateTime.utc_now())
-        )
+        assignment_with_saved_resets(pool, 1, %{}, redemption: redemption_metadata(DateTime.utc_now()))
 
       assert {:error, %{code: :saved_reset_redemption_in_progress}} =
                Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
@@ -186,9 +183,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
         |> DateTime.truncate(:microsecond)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_saved_resets(pool, 1, %{},
-          redemption: redemption_metadata(stale_started_at)
-        )
+        assignment_with_saved_resets(pool, 1, %{}, redemption: redemption_metadata(stale_started_at))
 
       assert {:ok, %{status: :queued, job: job}} =
                Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
@@ -319,8 +314,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
         "available_count" => available_count,
         "source" => "codex_usage_api",
         "path_style" => "codex_api",
-        "observed_at" =>
-          DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+        "observed_at" => DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
         "usage_path" => "/api/codex/usage",
         "reason" => nil
       }

@@ -50,10 +50,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   @overload_repeat_demotion_seconds 120
   @overload_reason_code "provider_overloaded"
   @prompt_cache_affinity_kind "prompt_cache"
-  @affinity_conflict_target {:unsafe_fragment,
-                             "(pool_id, api_key_id, model_identifier, affinity_kind, affinity_key_hash) WHERE status = 'active'"}
-  @demotion_conflict_target {:unsafe_fragment,
-                             "(pool_id, api_key_id, model_identifier, pool_upstream_assignment_id) WHERE status = 'active'"}
+  @affinity_conflict_target {:unsafe_fragment, "(pool_id, api_key_id, model_identifier, affinity_kind, affinity_key_hash) WHERE status = 'active'"}
+  @demotion_conflict_target {:unsafe_fragment, "(pool_id, api_key_id, model_identifier, pool_upstream_assignment_id) WHERE status = 'active'"}
 
   @type candidate :: {PoolUpstreamAssignment.t(), UpstreamIdentity.t()}
   @type routing_auth :: Access.auth_context()
@@ -605,9 +603,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Map.put(:seed, seed)
     |> Map.put(:seed_basis_class, seed_basis_class(seed))
     |> Map.put(:seed_fingerprint, fingerprint(seed))
-    |> Map.merge(
-      prompt_cache_locality_status(settings, affinity, prompt_cache_key, candidate_count)
-    )
+    |> Map.merge(prompt_cache_locality_status(settings, affinity, prompt_cache_key, candidate_count))
   end
 
   defp prompt_cache_locality_status(_settings, _affinity, prompt_cache_key, _candidate_count)
@@ -1087,9 +1083,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
     snapshot
     |> RoutingQuotaSnapshot.time_visible_raw_windows()
-    |> QuotaWindows.quota_window_selection_data_from_windows(
-      Keyword.put(quota_scope_opts(model), :at, snapshot.as_of)
-    )
+    |> QuotaWindows.quota_window_selection_data_from_windows(Keyword.put(quota_scope_opts(model), :at, snapshot.as_of))
     |> Map.get(:routing_windows, [])
     |> quota_capacity_score_for_windows(snapshot.as_of)
   end

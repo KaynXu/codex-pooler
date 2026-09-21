@@ -13,15 +13,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatValidationParamTest do
       {"text.verbosity", %{"verbosity" => "low"}, "verbosity"},
       {"text.format", %{"response_format" => %{"type" => "json_object"}}, "response_format"},
       {"text.format.type", %{"response_format" => %{"type" => "text"}}, "response_format.type"},
-      {"text.format.schema.properties.a",
-       %{"response_format" => %{"type" => "json_schema", "json_schema" => %{"name" => "x"}}},
-       "response_format.json_schema.schema.properties.a"},
-      {"tool_choice.name",
-       %{"tool_choice" => %{"type" => "function", "function" => %{"name" => "f"}}},
-       "tool_choice.function.name"},
-      {"tool_choice.name",
-       %{"tool_choice" => %{"type" => "custom", "custom" => %{"name" => "c"}}},
-       "tool_choice.custom.name"},
+      {"text.format.schema.properties.a", %{"response_format" => %{"type" => "json_schema", "json_schema" => %{"name" => "x"}}}, "response_format.json_schema.schema.properties.a"},
+      {"tool_choice.name", %{"tool_choice" => %{"type" => "function", "function" => %{"name" => "f"}}}, "tool_choice.function.name"},
+      {"tool_choice.name", %{"tool_choice" => %{"type" => "custom", "custom" => %{"name" => "c"}}}, "tool_choice.custom.name"},
       {"tools[1].parameters.properties",
        %{
          "tools" => [
@@ -29,8 +23,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatValidationParamTest do
            %{"type" => "function", "function" => %{"name" => "f", "parameters" => %{}}}
          ]
        }, "tools[1].function.parameters.properties"},
-      {"tools[0].format", %{"tools" => [%{"type" => "custom", "custom" => %{"name" => "c"}}]},
-       "tools[0].custom.format"}
+      {"tools[0].format", %{"tools" => [%{"type" => "custom", "custom" => %{"name" => "c"}}]}, "tools[0].custom.format"}
     ]
 
     for {upstream, chat_fields, expected} <- cases do

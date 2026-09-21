@@ -31,8 +31,7 @@ defmodule CodexPooler.Alerts.Evaluation.CircuitTerm do
           boolean()
         ) :: tuple()
   def evidence_cache_key(pool_id, model, context, circuit_term?) do
-    {:circuit_evidence, pool_id, model, context.route_class, context.circuit_observed_at,
-     circuit_term?}
+    {:circuit_evidence, pool_id, model, context.route_class, context.circuit_observed_at, circuit_term?}
   end
 
   @spec apply([map()], Ecto.UUID.t() | nil, String.t() | nil, map(), projection_cache()) ::
@@ -119,8 +118,7 @@ defmodule CodexPooler.Alerts.Evaluation.CircuitTerm do
            normalize_model(resolved.exposed_model_id),
          upstream_model_id when is_binary(upstream_model_id) <-
            normalize_model(resolved.upstream_model_id) do
-      {:resolved,
-       [%{resolved | exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id}]}
+      {:resolved, [%{resolved | exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id}]}
     else
       _invalid_or_unresolved -> {:unresolved, []}
     end

@@ -36,8 +36,7 @@ defmodule CodexPooler.Accounting.LedgerReads do
 
     Repo.all(
       from attempt in Attempt,
-        where:
-          attempt.pool_upstream_assignment_id in ^assignment_ids and attempt.status == "succeeded",
+        where: attempt.pool_upstream_assignment_id in ^assignment_ids and attempt.status == "succeeded",
         group_by: attempt.pool_upstream_assignment_id,
         select: {attempt.pool_upstream_assignment_id, max(attempt.completed_at)}
     )

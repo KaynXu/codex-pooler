@@ -27,9 +27,7 @@ defmodule CodexPooler.Gateway.Transports.OwnerCleanupPeer do
 
     Process.unlink(pubsub)
 
-    WebsocketOwnerNodeHarness.start_repo(
-      Keyword.put(repo_config, :pool, DBConnection.ConnectionPool)
-    )
+    WebsocketOwnerNodeHarness.start_repo(Keyword.put(repo_config, :pool, DBConnection.ConnectionPool))
 
     {:ok, _} = WebsocketOwnerNodeHarness.start_owner_runtime()
     :ok
@@ -204,9 +202,7 @@ defmodule CodexPooler.Gateway.Transports.OwnerCleanupPeer do
     session = Repo.get!(CodexSession, turn.turn.codex_session_id)
 
     session
-    |> Ecto.Changeset.change(
-      owner_lease_expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
-    )
+    |> Ecto.Changeset.change(owner_lease_expires_at: DateTime.add(DateTime.utc_now(), -1, :second))
     |> Repo.update!()
 
     :ok

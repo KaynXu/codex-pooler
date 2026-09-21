@@ -334,8 +334,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   end
 
   defp canonical_pair(
-         {%PoolUpstreamAssignment{id: assignment_id, created_at: %DateTime{} = created_at},
-          _identity},
+         {%PoolUpstreamAssignment{id: assignment_id, created_at: %DateTime{} = created_at}, _identity},
          %Model{} = model,
          source_models
        )

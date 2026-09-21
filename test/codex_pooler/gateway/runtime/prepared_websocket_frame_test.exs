@@ -97,8 +97,7 @@ defmodule CodexPooler.Gateway.Runtime.PreparedWebsocketFrameTest do
     mutated = %{
       prepared
       | replay_claim_digest: <<9::256>>,
-        request_options:
-          RequestOptions.put_continuity(prepared.request_options, replay_claim_digest: <<9::256>>)
+        request_options: RequestOptions.put_continuity(prepared.request_options, replay_claim_digest: <<9::256>>)
     }
 
     assert {:error, :invalid} = WebsocketCodec.validate_prepared_frame(mutated)

@@ -198,24 +198,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
     # they cannot fence one another.
     driven = [
       {:turn, post_turn(conn, setup, session, "shape_turn", where: :body)},
-      {:tool_result_continuation,
-       post_turn(conn, setup, session, "shape_tool", where: :body, input: tool_round())},
-      {:post_compaction_resume,
-       post_turn(conn, setup, session, "shape_resume", where: :body, input: compacted_history())},
+      {:tool_result_continuation, post_turn(conn, setup, session, "shape_tool", where: :body, input: tool_round())},
+      {:post_compaction_resume, post_turn(conn, setup, session, "shape_resume", where: :body, input: compacted_history())},
       {:compaction,
        post_turn(conn, setup, session, "shape_compaction",
          where: :body,
          document: kind_metadata("compaction"),
          input: native_text_input("h") ++ [%{"type" => "compaction_trigger"}]
        )},
-      {:prewarm,
-       post_turn(conn, setup, session, "shape_prewarm",
-         document: kind_metadata("prewarm", "shape_prewarm")
-       )},
-      {:memory,
-       post_turn(conn, setup, session, "shape_memory",
-         document: kind_metadata("memory", "shape_memory")
-       )}
+      {:prewarm, post_turn(conn, setup, session, "shape_prewarm", document: kind_metadata("prewarm", "shape_prewarm"))},
+      {:memory, post_turn(conn, setup, session, "shape_memory", document: kind_metadata("memory", "shape_memory"))}
     ]
 
     for {_kind, conn} <- driven, do: assert(json_response(conn, 200))
@@ -516,8 +508,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # The routing circuit is cleared between attempts so the chain is the only
   # thing under test: an open circuit would end the run with `no_eligible_backend`
   # long before the depth bound is reached.
-  @tag slow:
-         "dispatches and accounts twenty real HTTP turns to cross the durable retry-chain depth bound"
+  @tag slow: "dispatches and accounts twenty real HTTP turns to cross the durable retry-chain depth bound"
   test "a turn past the chain depth bound is still served, not refused", %{conn: conn} do
     upstream = start_upstream(first_event_terminal_sse("response.failed", "rate_limit_exceeded"))
     setup = gateway_setup(upstream)
@@ -1016,10 +1007,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
           FakeUpstream.json_response(%{"id" => "resp_resume_progress_open"}),
           FakeUpstream.sse_stream(
             [
-              {"response.output_item.done",
-               %{"type" => "response.output_item.done", "item" => delivered_item}},
-              {"response.output_text.delta",
-               %{"type" => "response.output_text.delta", "delta" => "not delivered"}}
+              {"response.output_item.done", %{"type" => "response.output_item.done", "item" => delivered_item}},
+              {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "not delivered"}}
             ],
             done: false
           ),
@@ -1030,8 +1019,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
                  "type" => "response.output_item.done",
                  "item" => second_delivered_item
                }},
-              {"response.reasoning_text.delta",
-               %{"type" => "response.reasoning_text.delta", "delta" => "not delivered"}}
+              {"response.reasoning_text.delta", %{"type" => "response.reasoning_text.delta", "delta" => "not delivered"}}
             ],
             done: false
           ),
@@ -1351,8 +1339,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
   # at by nobody: they keep the generated correlation id and today's behaviour,
   # per kind rather than by reading the selector.
   for {label, document} <- [
-        {"an unknown kind",
-         CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "surprise"})},
+        {"an unknown kind", CodexPooler.JSON.encode!(%{"turn_id" => @turn_id, "request_kind" => "surprise"})},
         {"no request_kind at all", CodexPooler.JSON.encode!(%{"turn_id" => @turn_id})}
       ] do
     test "#{label} keeps today's behaviour and a generated correlation id", %{conn: conn} do
@@ -1881,10 +1868,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpDuplicateTurnTest do
 
     %{
       requests: length(request_ids),
-      attempts:
-        Repo.aggregate(from(a in Attempt, where: a.request_id in ^request_ids), :count, :id),
-      ledger:
-        Repo.aggregate(from(l in LedgerEntry, where: l.request_id in ^request_ids), :count, :id)
+      attempts: Repo.aggregate(from(a in Attempt, where: a.request_id in ^request_ids), :count, :id),
+      ledger: Repo.aggregate(from(l in LedgerEntry, where: l.request_id in ^request_ids), :count, :id)
     }
   end
 

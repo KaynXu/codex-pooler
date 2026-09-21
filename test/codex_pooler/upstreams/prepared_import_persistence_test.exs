@@ -78,8 +78,7 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
         else
           %{
             code: :stale_import,
-            message:
-              "credentials changed after import preparation; submit the current auth data again"
+            message: "credentials changed after import preparation; submit the current auth data again"
           }
         end
 
@@ -194,8 +193,7 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
              result: %{
                outcome: "error",
                code: :stale_import,
-               message:
-                 "credentials changed after import preparation; submit the current auth data again"
+               message: "credentials changed after import preparation; submit the current auth data again"
              }
            } = sanitized_result(stale_task_result)
 
@@ -242,8 +240,7 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
     fresh_snapshot = persistence_snapshot(identity.id)
 
     evidence("fresh_resubmit", %{
-      identity_continuity:
-        fresh_snapshot.identity_id_fingerprint == b_snapshot.identity_id_fingerprint,
+      identity_continuity: fresh_snapshot.identity_id_fingerprint == b_snapshot.identity_id_fingerprint,
       before_epoch: b_snapshot.credential_epoch,
       after_epoch: fresh_snapshot.credential_epoch,
       before_generation: b_snapshot.token_refresh_generation,
@@ -637,9 +634,7 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
     account_id = "acct_prepared_persistence_#{suffix}"
     slug = "prepared-persistence-#{suffix}"
 
-    Repo.delete_all(
-      from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id
-    )
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id)
 
     Repo.delete_all(from pool in Pool, where: pool.slug == ^slug)
     :ok
@@ -839,9 +834,7 @@ defmodule CodexPooler.Upstreams.PreparedImportPersistenceTest do
 
   defp evidence(label, data) do
     if System.get_env("PR366_T3_EVIDENCE_MODE") in ["RED", "GREEN"] do
-      CodexPooler.TestDiagnostics.puts(
-        "PR366_T3_EVIDENCE " <> Jason.encode!(%{label: label, data: data})
-      )
+      CodexPooler.TestDiagnostics.puts("PR366_T3_EVIDENCE " <> Jason.encode!(%{label: label, data: data}))
     end
   end
 

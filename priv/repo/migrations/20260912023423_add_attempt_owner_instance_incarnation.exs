@@ -26,9 +26,7 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptOwnerInstanceIncarnation do
       add :boot_id, :string
     end
 
-    create unique_index(:instance_presences, [:node_name, :boot_id],
-             name: :instance_presences_incarnation_idx
-           )
+    create unique_index(:instance_presences, [:node_name, :boot_id], name: :instance_presences_incarnation_idx)
 
     # Do not scan attempts here while the column DDL holds an exclusive lock.
   end
@@ -38,13 +36,9 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptOwnerInstanceIncarnation do
 
     # The convergence migration intentionally retains inherited indexes on down.
     # Remove the dependent index explicitly before removing its ownership column.
-    drop_if_exists index(:attempts, [:owner_instance_id, :owner_instance_boot_id, :started_at],
-                     name: :attempts_open_owner_incarnation_idx
-                   )
+    drop_if_exists index(:attempts, [:owner_instance_id, :owner_instance_boot_id, :started_at], name: :attempts_open_owner_incarnation_idx)
 
-    drop index(:instance_presences, [:node_name, :boot_id],
-           name: :instance_presences_incarnation_idx
-         )
+    drop index(:instance_presences, [:node_name, :boot_id], name: :instance_presences_incarnation_idx)
 
     alter table(:instance_presences) do
       remove :boot_id

@@ -254,8 +254,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessedTest do
           path: @endpoint,
           websocket_connection_ordinal: 1,
           json: [valid: true, equals: %{"type" => "response.processed"}],
-          respond:
-            FakeUpstream.barrier_websocket_frames([], notify: observer, release_ref: ack_ref)
+          respond: FakeUpstream.barrier_websocket_frames([], notify: observer, release_ref: ack_ref)
         )
       end
 

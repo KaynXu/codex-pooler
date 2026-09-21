@@ -162,8 +162,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       policy: SavedResets.auto_policy(identity),
       snapshot: snapshot,
       latch: latch,
-      latched_identity_ids:
-        latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp),
+      latched_identity_ids: latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp),
       windows_by_identity_id: windows_by_identity_id,
       identity_windows: Map.get(windows_by_identity_id, identity.id, [])
     }
@@ -190,8 +189,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp bank_result(snapshot, policy, :reservation) do
     if scheduled_saved_reset_state(snapshot, policy) == :available,
       do: :ok,
-      else:
-        unavailable_snapshot_result(%{snapshot | in_progress?: false, redemption_stale?: false})
+      else: unavailable_snapshot_result(%{snapshot | in_progress?: false, redemption_stale?: false})
   end
 
   @doc """
@@ -979,8 +977,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           future_expiration? and not provider_available?,
           comparison_timestamp
         ),
-      threshold:
-        threshold_burn_windows(windows, policy, future_expiration?, comparison_timestamp),
+      threshold: threshold_burn_windows(windows, policy, future_expiration?, comparison_timestamp),
       last_call:
         last_call_burn_windows(
           windows,

@@ -181,13 +181,9 @@ defmodule CodexPooler.ReliabilityComposedFixture do
   def cleanup!(setup) do
     CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
 
-    Repo.delete_all(
-      from i in UpstreamIdentity, where: i.id in ^[setup.identity.id, setup.sibling.id]
-    )
+    Repo.delete_all(from i in UpstreamIdentity, where: i.id in ^[setup.identity.id, setup.sibling.id])
 
-    Repo.delete_all(
-      from pricing in CodexPooler.Catalog.PricingSnapshot, where: pricing.id == ^setup.pricing.id
-    )
+    Repo.delete_all(from pricing in CodexPooler.Catalog.PricingSnapshot, where: pricing.id == ^setup.pricing.id)
   end
 
   defp enable_target!(identity, fake) do

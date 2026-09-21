@@ -584,14 +584,12 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       message: "upstream file upload failed with status #{status}"
     )
 
-    assert_receive {:upload_redirect, ^file_id, "PUT", :https, "upload.example.invalid",
-                    ^upload_path, ^file_contents, headers},
+    assert_receive {:upload_redirect, ^file_id, "PUT", :https, "upload.example.invalid", ^upload_path, ^file_contents, headers},
                    1_000
 
     assert_exact_safe_upload_headers(headers, "text/plain")
 
-    refute_received {:upload_private_target, ^file_id, _method, _scheme, _host, _path, _body,
-                     _headers}
+    refute_received {:upload_private_target, ^file_id, _method, _scheme, _host, _path, _body, _headers}
 
     assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(upstream)
 

@@ -722,8 +722,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
         case resolution do
           {:ok, resolution} ->
-            {:ok, RequestOptions.put_model_serving_mode(request_options, resolution),
-             effective_modes}
+            {:ok, RequestOptions.put_model_serving_mode(request_options, resolution), effective_modes}
 
           :no_runtime_model ->
             CandidateEligibility.routable_candidates(visible_model_context, effective_model)
@@ -846,18 +845,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   defp ensure_model_supports(%Model{} = model, _endpoint, payload, opts, has_input_image?) do
     cond do
       not model.supports_responses ->
-        {:error,
-         error(400, "unsupported_model_capability", "model does not support responses", "model")}
+        {:error, error(400, "unsupported_model_capability", "model does not support responses", "model")}
 
       RequestOptions.upstream_streaming?(opts, payload) and not model.supports_streaming ->
-        {:error,
-         error(400, "unsupported_model_capability", "model does not support streaming", "stream")}
+        {:error, error(400, "unsupported_model_capability", "model does not support streaming", "stream")}
 
       has_input_image? and
         ModelMetadata.has_capability_evidence?(model) and
           not ModelMetadata.supports_image_input?(ModelMetadata.metadata(model)) ->
-        {:error,
-         error(400, "unsupported_model_capability", "model does not support image input", "input")}
+        {:error, error(400, "unsupported_model_capability", "model does not support image input", "input")}
 
       true ->
         :ok

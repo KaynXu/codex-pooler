@@ -18,9 +18,7 @@ defmodule CodexPooler.Repo.Migrations.TightenTelemetryRelayStorageBounds do
 
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT event_allowed")
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT event_allowed CHECK (event IN (#{@replayable}))"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT event_allowed CHECK (event IN (#{@replayable}))")
 
     # `labels_bounded` bounds the number of keys and nothing else. A raw writer
     # could still store a non-string value or an unbounded string, which is
@@ -56,16 +54,12 @@ defmodule CodexPooler.Repo.Migrations.TightenTelemetryRelayStorageBounds do
   end
 
   def down do
-    execute(
-      "ALTER TABLE telemetry_relay_events DROP CONSTRAINT measurements_non_negative_integers"
-    )
+    execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT measurements_non_negative_integers")
 
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT labels_values_bounded")
     execute("DROP FUNCTION telemetry_relay_labels_bounded(jsonb)")
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT event_allowed")
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT event_allowed CHECK (event IN (#{@previous}))"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT event_allowed CHECK (event IN (#{@previous}))")
   end
 end

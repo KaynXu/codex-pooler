@@ -272,9 +272,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
     Task.Supervisor.async_nolink(supervisor, fn ->
       Sandbox.allow(Repo, owner, self())
 
-      UsageProbe.fetch_from_identity(identity, assignment, observed_at,
-        receive_timeout: receive_timeout
-      )
+      UsageProbe.fetch_from_identity(identity, assignment, observed_at, receive_timeout: receive_timeout)
     end)
   end
 

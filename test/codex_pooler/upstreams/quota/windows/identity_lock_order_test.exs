@@ -231,8 +231,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
 
       assert %{
                row: {:ok, %UpstreamIdentity{id: row_id}, %{usage_probe_sequence: first}},
-               advisory:
-                 {:ok, %UpstreamIdentity{id: advisory_id}, %{usage_probe_sequence: second}}
+               advisory: {:ok, %UpstreamIdentity{id: advisory_id}, %{usage_probe_sequence: second}}
              } = results
 
       assert row_id == identity.id
@@ -452,9 +451,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
       current = Repo.reload!(identity)
 
       current
-      |> Ecto.Changeset.change(
-        metadata: Map.put(current.metadata || %{}, "saved_reset_redemption", redemption)
-      )
+      |> Ecto.Changeset.change(metadata: Map.put(current.metadata || %{}, "saved_reset_redemption", redemption))
       |> Repo.update!()
     end)
 
@@ -736,9 +733,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.IdentityLockOrderTest do
   defp delete_import_fixture!(slug, account_id) do
     delete_committed_pool_by_slug!(slug)
 
-    Repo.delete_all(
-      from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id
-    )
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id)
 
     :ok
   end

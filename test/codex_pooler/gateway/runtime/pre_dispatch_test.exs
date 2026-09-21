@@ -507,9 +507,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       preloaded = Task.await(task)
       after_preload = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      assert_receive {:trace, pid, :call,
-                      {QuotaWindows, :load_routing_quota_snapshots,
-                       [[identity_id], %DateTime{} = read_at]}}
+      assert_receive {:trace, pid, :call, {QuotaWindows, :load_routing_quota_snapshots, [[identity_id], %DateTime{} = read_at]}}
                      when pid == task.pid and identity_id == setup.identity.id
 
       assert RouteState.quota_snapshot_for_identity(preloaded, setup.identity).as_of == read_at
@@ -809,8 +807,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert is_binary(dispatch_etag) and dispatch_etag != ""
     assert is_binary(restricted_get_etag) and restricted_get_etag != ""
 
-    assert {dispatch_etag,
-            prepared.route_state.visible_model_context.selected_partition_assignment_ids} ==
+    assert {dispatch_etag, prepared.route_state.visible_model_context.selected_partition_assignment_ids} ==
              {restricted_get_etag, [alternate.assignment.id]}
   end
 
@@ -844,9 +841,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     api_key =
       setup.api_key
-      |> Ecto.Changeset.change(
-        allowed_model_identifiers: [setup.model.exposed_model_id, "gpt-policy-visible-etag"]
-      )
+      |> Ecto.Changeset.change(allowed_model_identifiers: [setup.model.exposed_model_id, "gpt-policy-visible-etag"])
       |> Repo.update!()
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -860,8 +855,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     base_options = request_options(auth, payload, [])
 
     cases = [
-      {"websocket", RequestOptions.for_websocket(base_options, payload),
-       [setup.identity.id, policy_visible.identity.id], true},
+      {"websocket", RequestOptions.for_websocket(base_options, payload), [setup.identity.id, policy_visible.identity.id], true},
       {"/v1/responses",
        RequestOptions.mark_openai_compatibility_origin(
          base_options,
@@ -931,9 +925,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     backend_alias_websocket =
       native_websocket
-      |> RequestOptions.put_openai_compatibility(
-        source_endpoint: "/backend-api/codex/v1/responses"
-      )
+      |> RequestOptions.put_openai_compatibility(source_endpoint: "/backend-api/codex/v1/responses")
 
     public_websocket =
       native_websocket
@@ -945,18 +937,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     ineligible = [
       {"public websocket", @endpoint_path, public_websocket},
-      {"compact", "/backend-api/codex/responses/compact",
-       RequestOptions.build(base_options, "/backend-api/codex/responses/compact", payload)},
+      {"compact", "/backend-api/codex/responses/compact", RequestOptions.build(base_options, "/backend-api/codex/responses/compact", payload)},
       {"translated chat", @endpoint_path,
        RequestOptions.mark_openai_compatibility_origin(
          base_options,
          "/v1/chat/completions",
          @endpoint_path
        )},
-      {"usage", "/api/codex/usage",
-       RequestOptions.build(base_options, "/api/codex/usage", payload)},
-      {"unrelated", "/backend-api/codex/images/generations",
-       RequestOptions.build(base_options, "/backend-api/codex/images/generations", payload)}
+      {"usage", "/api/codex/usage", RequestOptions.build(base_options, "/api/codex/usage", payload)},
+      {"unrelated", "/backend-api/codex/images/generations", RequestOptions.build(base_options, "/backend-api/codex/images/generations", payload)}
     ]
 
     etags =
@@ -1409,13 +1398,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert candidate_ids(prepared.route_state.candidates) == [setup.assignment.id]
     assert candidate_ids(prepared.candidates) == [setup.assignment.id]
 
-    refute incompatible.identity.id in candidate_identity_ids(
-             prepared.route_state.saved_reset_auto_cohort
-           )
+    refute incompatible.identity.id in candidate_identity_ids(prepared.route_state.saved_reset_auto_cohort)
 
-    assert divergent.identity.id in candidate_identity_ids(
-             prepared.route_state.saved_reset_auto_cohort
-           )
+    assert divergent.identity.id in candidate_identity_ids(prepared.route_state.saved_reset_auto_cohort)
   end
 
   @tag :external_issues_229_231
@@ -1486,8 +1471,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         metadata: %{
           model.metadata
           | "source_assignment_models" => %{
-              setup.assignment.id =>
-                get_in(model.metadata, ["source_assignment_models", setup.assignment.id]),
+              setup.assignment.id => get_in(model.metadata, ["source_assignment_models", setup.assignment.id]),
               divergent.assignment.id => "malformed"
             }
         }
@@ -2093,8 +2077,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     request_options =
       request_options(auth, payload,
-        request_id:
-          "pre-dispatch-route-state-default-settings-#{System.unique_integer([:positive])}",
+        request_id: "pre-dispatch-route-state-default-settings-#{System.unique_integer([:positive])}",
         requested_model: setup.model.exposed_model_id,
         effective_model: setup.model.exposed_model_id
       )
@@ -2595,14 +2578,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     for {api_key, payload, expected} <- [
-          {auth.api_key,
-           %{"model" => setup.model.exposed_model_id, "reasoning" => %{"effort" => "custom"}},
-           {:unrestricted, "custom"}},
-          {%{auth.api_key | maximum_reasoning_effort: "high"},
-           %{"model" => setup.model.exposed_model_id}, {:allow_up_to, "medium"}},
-          {%{auth.api_key | enforced_reasoning_effort: "ultra"},
-           %{"model" => setup.model.exposed_model_id, "reasoning" => %{"effort" => "low"}},
-           {:always_use, "ultra"}}
+          {auth.api_key, %{"model" => setup.model.exposed_model_id, "reasoning" => %{"effort" => "custom"}}, {:unrestricted, "custom"}},
+          {%{auth.api_key | maximum_reasoning_effort: "high"}, %{"model" => setup.model.exposed_model_id}, {:allow_up_to, "medium"}},
+          {%{auth.api_key | enforced_reasoning_effort: "ultra"}, %{"model" => setup.model.exposed_model_id, "reasoning" => %{"effort" => "low"}}, {:always_use, "ultra"}}
         ] do
       scoped_auth = %{auth | api_key: api_key}
 

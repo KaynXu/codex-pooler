@@ -158,8 +158,7 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
          %{
            api_key: api_key,
            runtime_revocation_epoch: runtime_revocation_epoch,
-           effective_disabling_transition?:
-             runtime_revocation_epoch > api_key.runtime_revocation_epoch
+           effective_disabling_transition?: runtime_revocation_epoch > api_key.runtime_revocation_epoch
          }}
 
       nil ->
@@ -181,8 +180,7 @@ defmodule CodexPooler.Access.APIKeys.RuntimeAuthorization do
   def advance_epoch_for_pool_move(%{api_key: %APIKey{} = api_key} = transition, _target_pool_id) do
     %{
       transition
-      | runtime_revocation_epoch:
-          max(transition.runtime_revocation_epoch, api_key.runtime_revocation_epoch + 1)
+      | runtime_revocation_epoch: max(transition.runtime_revocation_epoch, api_key.runtime_revocation_epoch + 1)
     }
   end
 

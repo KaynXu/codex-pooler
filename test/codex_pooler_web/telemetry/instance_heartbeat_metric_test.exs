@@ -15,9 +15,7 @@ defmodule CodexPoolerWeb.Telemetry.InstanceHeartbeatMetricTest do
     assert metric.tags == []
     registry = :heartbeat_failure_metric_test
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     logs =
       ExUnit.CaptureLog.capture_log(fn ->

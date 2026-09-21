@@ -50,8 +50,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
        filter_errors: [],
-       datetime_preferences:
-         DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user),
+       datetime_preferences: DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user),
        pool_filter_options: [],
        model_filter_options: [],
        upstream_account_options: [],
@@ -105,51 +104,44 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   def handle_event("clear_request_id_filter", _params, socket) do
     params = Map.put(socket.assigns.filter_values, "request_id", "")
 
-    {:noreply,
-     push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
   end
 
   def handle_event("select_pool_filter", %{"pool-id" => pool_id}, socket) do
     params = Map.put(socket.assigns.filter_values, "pool_id", pool_id)
 
-    {:noreply,
-     push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
   end
 
   def handle_event("select_status_filter", %{"status" => status}, socket) do
     params = Map.put(socket.assigns.filter_values, "status", status)
 
-    {:noreply,
-     push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
   end
 
   def handle_event("select_upstream_filter", %{"upstream-id" => upstream_id}, socket) do
     params = Map.put(socket.assigns.filter_values, "upstream_identity_id", upstream_id)
 
-    {:noreply,
-     push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
   end
 
   def handle_event("select_model_filter", %{"model" => model}, socket) do
     params = Map.put(socket.assigns.filter_values, "model", model)
 
-    {:noreply,
-     push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/request-logs?#{RequestLogFilterForm.query_params(params)}")}
   end
 
   def handle_event("open_request_log", %{"request-id" => request_id}, socket) do
     {:noreply,
      push_patch(socket,
-       to:
-         ~p"/admin/request-logs?#{open_request_log_query_params(socket.assigns.current_params, request_id)}"
+       to: ~p"/admin/request-logs?#{open_request_log_query_params(socket.assigns.current_params, request_id)}"
      )}
   end
 
   def handle_event("close_request_log", _params, socket) do
     {:noreply,
      push_patch(socket,
-       to:
-         ~p"/admin/request-logs?#{close_request_log_query_params(socket.assigns.current_params)}"
+       to: ~p"/admin/request-logs?#{close_request_log_query_params(socket.assigns.current_params)}"
      )}
   end
 
@@ -532,10 +524,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           preparation.visible_pool_ids,
           preparation.snapshot_at
         ),
-      model_filter_models:
-        request_log_models(preparation.selected_pool, preparation.visible_pool_ids),
-      selected_request_log:
-        selected_request_log(preparation.scope, preparation.selected_request_id)
+      model_filter_models: request_log_models(preparation.selected_pool, preparation.visible_pool_ids),
+      selected_request_log: selected_request_log(preparation.scope, preparation.selected_request_id)
     }
   end
 
@@ -549,8 +539,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         request_logs: result.request_logs,
         request_log_pin_at: result.pin_at,
         request_log_newer_count: result.newer_count,
-        model_filter_options:
-          model_filter_options(result.model_filter_models, socket.assigns.filter_values["model"]),
+        model_filter_options: model_filter_options(result.model_filter_models, socket.assigns.filter_values["model"]),
         request_logs_loading?: false,
         request_logs_loaded?: true,
         request_logs_rerun?: false
@@ -655,9 +644,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         assign(
           socket,
           :selected_request_log,
-          Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id,
-            surface: :admin
-          )
+          Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id, surface: :admin)
         )
     end
   end
@@ -672,8 +659,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     if selected_request_id(socket.assigns.current_params) &&
          is_nil(socket.assigns.selected_request_log) do
       push_patch(socket,
-        to:
-          ~p"/admin/request-logs?#{close_request_log_query_params(socket.assigns.current_params)}"
+        to: ~p"/admin/request-logs?#{close_request_log_query_params(socket.assigns.current_params)}"
       )
     else
       socket

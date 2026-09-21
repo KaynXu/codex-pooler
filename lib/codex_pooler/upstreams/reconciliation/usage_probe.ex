@@ -269,9 +269,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
     end
   end
 
-  defp maybe_enqueue_account_reconciliation_token_refresh_recovery(
-         %UpstreamIdentity{} = failed_identity
-       ) do
+  defp maybe_enqueue_account_reconciliation_token_refresh_recovery(%UpstreamIdentity{} = failed_identity) do
     if account_reconciliation_refresh_failure?(failed_identity) do
       # Best-effort recovery nudge: the foreground reconciliation result stays
       # auth-unavailable whether the follow-up Oban enqueue wins a unique lock,
@@ -549,8 +547,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
            windows: windows,
            account_availability: account_availability,
            observed_at: observed_at,
-           covered_descriptors:
-             covered_descriptors(body, windows, account_availability, observed_at)
+           covered_descriptors: covered_descriptors(body, windows, account_availability, observed_at)
          }}
 
       {:ok, %{windows: [], account_availability: nil}} ->
@@ -715,8 +712,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
       selected
       | windows: windows,
         account_availability: account_availability,
-        covered_descriptors:
-          merge_covered_descriptors(previous, current, windows, account_availability)
+        covered_descriptors: merge_covered_descriptors(previous, current, windows, account_availability)
     }
   end
 
@@ -797,11 +793,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
 
   defp account_absence_covered?(_observation), do: false
 
-  defp account_descriptor?(
-         {"account", "account", _model, _upstream_model, @account_quota_key, _source,
-          _raw_limit_id, _raw_limit_name, _raw_metered_feature}
-       ),
-       do: true
+  defp account_descriptor?({"account", "account", _model, _upstream_model, @account_quota_key, _source, _raw_limit_id, _raw_limit_name, _raw_metered_feature}),
+    do: true
 
   defp account_descriptor?(_descriptor), do: false
 

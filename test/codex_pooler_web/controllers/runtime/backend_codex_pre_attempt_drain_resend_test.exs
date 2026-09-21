@@ -93,9 +93,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexPreAttemptDrainResendTest do
     assert ledger_kinds(request) == ["release", "reservation"]
 
     release =
-      Repo.one!(
-        from e in LedgerEntry, where: e.request_id == ^request.id and e.entry_kind == "release"
-      )
+      Repo.one!(from e in LedgerEntry, where: e.request_id == ^request.id and e.entry_kind == "release")
 
     assert release.details["release_reason"] == "owner_drained"
     assert release.usage_status == "usage_unknown"

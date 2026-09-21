@@ -32,9 +32,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   @type handler_map :: %{
           required(:finalize_success) => finalize_success() | finalize_success_with_state(),
           required(:finalize_failure) => finalize_failure() | finalize_failure_with_state(),
-          required(:first_event_retry) => (relay_state(),
-                                           binary(),
-                                           StreamProtocol.terminal_failure() ->
+          required(:first_event_retry) => (relay_state(), binary(), StreamProtocol.terminal_failure() ->
                                              first_event_retry_result()),
           required(:write_chunk) => (relay_state(), binary() -> stream_write_result()),
           required(:write_keepalive) => (relay_state() -> {:ok, relay_state()} | {:error, term()}),

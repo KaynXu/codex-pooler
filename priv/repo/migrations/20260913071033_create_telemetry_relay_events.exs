@@ -12,16 +12,11 @@ defmodule CodexPooler.Repo.Migrations.CreateTelemetryRelayEvents do
       add :claimed_by, :string
     end
 
-    create constraint(:telemetry_relay_events, :event_allowed,
-             check:
-               "event IN ('stale_sweep','quota_cycle_decision','saved_reset_convergence','pre_attempt_release','stream_outcome','interrupted')"
-           )
+    create constraint(:telemetry_relay_events, :event_allowed, check: "event IN ('stale_sweep','quota_cycle_decision','saved_reset_convergence','pre_attempt_release','stream_outcome','interrupted')")
 
     create constraint(:telemetry_relay_events, :count_non_negative, check: "count >= 0")
 
-    create constraint(:telemetry_relay_events, :labels_bounded,
-             check: "jsonb_array_length(jsonb_path_query_array(labels, '$.*')) <= 16"
-           )
+    create constraint(:telemetry_relay_events, :labels_bounded, check: "jsonb_array_length(jsonb_path_query_array(labels, '$.*')) <= 16")
 
     create index(:telemetry_relay_events, [:inserted_at])
     create index(:telemetry_relay_events, [:claimed_at])

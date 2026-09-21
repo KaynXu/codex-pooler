@@ -152,8 +152,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       for {path, content_type, body} <- [
             {"/%62ackend-api/codex/responses", "application/json", ~s({"model":)},
             {"/backend-api/%66iles", "application/json", ~s({"file_name":)},
-            {"/backend-api/%74ranscribe", "multipart/form-data; boundary=example",
-             "invalid multipart fixture"}
+            {"/backend-api/%74ranscribe", "multipart/form-data; boundary=example", "invalid multipart fixture"}
           ] do
         conn =
           conn
@@ -409,8 +408,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                }
              }
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "settings_unavailable"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "settings_unavailable"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -513,8 +511,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert json_response(denied, 403)["error"]["code"] == "access_denied"
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "invalid_allowlist_rules"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "invalid_allowlist_rules"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -915,8 +912,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert_pruned_helper_side_effects_absent(conn, upstream)
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "not_allowed"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "not_allowed"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -946,8 +942,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert_pruned_helper_side_effects_absent(conn, upstream)
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "settings_unavailable"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "settings_unavailable"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -996,8 +991,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
             {"POST", "/backend-api/codex/analytics-events/events", "application/json", "{}"},
             {"POST", "/backend-api/codex/memories/trace_summarize", "application/json", "{}"},
             {"POST", "/backend-api/codex/alpha/search", "application/json", "{}"},
-            {"POST", "/backend-api/codex/realtime/calls", "application/sdp",
-             "v=0\r\ns=codex-pooler-test\r\n"},
+            {"POST", "/backend-api/codex/realtime/calls", "application/sdp", "v=0\r\ns=codex-pooler-test\r\n"},
             {"POST", "/backend-api/codex/safety/arc", "application/json", "{}"}
           ] do
         conn =

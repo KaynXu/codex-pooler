@@ -242,8 +242,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
               {turn, request,
                %{
                  attempt
-                 | response_metadata:
-                     Map.delete(attempt.response_metadata, "native_client_retry_observation")
+                 | response_metadata: Map.delete(attempt.response_metadata, "native_client_retry_observation")
                }},
             missing_transport_failure:
               {turn, request,
@@ -251,9 +250,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
                  attempt
                  | response_metadata: Map.delete(attempt.response_metadata, "transport_failure")
                }},
-            non_closed_transport_failure:
-              {turn, request,
-               update_transport_failure(attempt, &Map.put(&1, "reason", "timeout"))},
+            non_closed_transport_failure: {turn, request, update_transport_failure(attempt, &Map.put(&1, "reason", "timeout"))},
             receive_timeout:
               {turn, request,
                update_transport_failure(attempt, fn _failure ->
@@ -600,11 +597,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
                 Map.put(observation, "output_item_done_count", 1)
               end
             )
-            |> then(
-              &Repo.update!(
-                Ecto.Changeset.change(attempt, response_metadata: &1.response_metadata)
-              )
-            )
+            |> then(&Repo.update!(Ecto.Changeset.change(attempt, response_metadata: &1.response_metadata)))
 
           :entitlement ->
             insert_entitlement!(
@@ -643,9 +636,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
 
           :epoch ->
             setup.api_key
-            |> Ecto.Changeset.change(
-              runtime_revocation_epoch: setup.api_key.runtime_revocation_epoch + 1
-            )
+            |> Ecto.Changeset.change(runtime_revocation_epoch: setup.api_key.runtime_revocation_epoch + 1)
             |> Repo.update!()
 
           _other ->
@@ -822,8 +813,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
       assert {:ok, %{stale_generation?: true}} =
                Accounting.finalize_failure(finalized.request, stale, %{
                  attempt_metadata: %{
-                   "native_client_retry_observation" =>
-                     Map.put(observation, "partial_reasoning_seen", false)
+                   "native_client_retry_observation" => Map.put(observation, "partial_reasoning_seen", false)
                  }
                })
 
@@ -894,9 +884,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
         witness = ClientRetry.original_witness!(digest, setup.api_key.runtime_revocation_epoch)
         failed = claim_request!(setup, witness)
 
-        provider_terminal_turn!(setup, session, failed, 1, semantic_digest, now, code,
-          replay_generation: replay_generation
-        )
+        provider_terminal_turn!(setup, session, failed, 1, semantic_digest, now, code, replay_generation: replay_generation)
 
         opts = successor_opts(setup, session, digest, semantic_digest, now)
 
@@ -956,9 +944,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
     test "keeps the partial-reasoning contract and fences near misses of the lifecycle-only cut" do
       for {label, update, expected} <- [
             {"reasoning-kept", &Function.identity/1, :ok},
-            {"visible-without-reasoning",
-             &put_in(&1, ["native_client_retry_observation", "partial_reasoning_seen"], false),
-             :terminal_predecessor},
+            {"visible-without-reasoning", &put_in(&1, ["native_client_retry_observation", "partial_reasoning_seen"], false), :terminal_predecessor},
             {"lifecycle-with-item",
              fn _metadata ->
                put_in(
@@ -984,9 +970,7 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
         {session, _predecessor, attempt} =
           eligible_predecessor!(setup, digest, semantic_digest, now)
 
-        Repo.update!(
-          Ecto.Changeset.change(attempt, response_metadata: update.(attempt.response_metadata))
-        )
+        Repo.update!(Ecto.Changeset.change(attempt, response_metadata: update.(attempt.response_metadata)))
 
         result =
           Accounting.claim_client_retry_successor(

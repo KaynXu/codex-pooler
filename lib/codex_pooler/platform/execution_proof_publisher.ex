@@ -17,10 +17,7 @@ defmodule CodexPooler.Platform.ExecutionProofPublisher do
 
   @impl true
   def init(opts),
-    do:
-      {:ok,
-       %{registry: Keyword.get(opts, :registry, ExecutionRegistry), timer: nil, failed: false},
-       {:continue, :publish}}
+    do: {:ok, %{registry: Keyword.get(opts, :registry, ExecutionRegistry), timer: nil, failed: false}, {:continue, :publish}}
 
   @impl true
   def handle_continue(:publish, state), do: {:noreply, publish(state)}
@@ -33,10 +30,7 @@ defmodule CodexPooler.Platform.ExecutionProofPublisher do
     result = publish_pending(state.registry)
 
     if result == :error and not state.failed,
-      do:
-        Logger.warning(
-          "execution terminal proof publication unavailable; pending proofs retained"
-        )
+      do: Logger.warning("execution terminal proof publication unavailable; pending proofs retained")
 
     %{state | timer: Process.send_after(self(), :publish, @interval_ms), failed: result == :error}
   end

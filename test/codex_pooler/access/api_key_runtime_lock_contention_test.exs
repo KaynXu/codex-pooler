@@ -257,15 +257,12 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
       assert_receive {:cap_update_started, ^ref, backend}, @detection_budget_ms
       assert await_waiting_on!(backend, holder.backend) == "api_keys"
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap writer_backend=#{backend} reader_backend=#{holder.backend} blocked_relation=api_keys"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap writer_backend=#{backend} reader_backend=#{holder.backend} blocked_relation=api_keys")
 
       assert release!(holder) == {:ok, :released}
       assert {:ok, _} = Task.await(task, @detection_budget_ms)
 
-      assert_receive {CodexPooler.Events,
-                      %{reason: "api_key_updated", payload: %{"api_key_id" => ^key_id}}},
+      assert_receive {CodexPooler.Events, %{reason: "api_key_updated", payload: %{"api_key_id" => ^key_id}}},
                      @detection_budget_ms
 
       assert Map.get(committed_api_key(fixture), :max_active_requests) == 2
@@ -279,9 +276,7 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
         assert Map.get(reloaded, :max_active_requests) == 2
       end
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap committed=2 stale_struct=nil reloaded_reservation=2 reloaded_reader=2"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap committed=2 stale_struct=nil reloaded_reservation=2 reloaded_reader=2")
 
       assert {:ok, _} =
                CodexPooler.UnboxedFixture.run_unboxed(fn ->
@@ -291,15 +286,12 @@ defmodule CodexPooler.Access.APIKeyRuntimeLockContentionTest do
                  })
                end)
 
-      assert_receive {CodexPooler.Events,
-                      %{reason: "api_key_updated", payload: %{"api_key_id" => ^key_id}}},
+      assert_receive {CodexPooler.Events, %{reason: "api_key_updated", payload: %{"api_key_id" => ^key_id}}},
                      @detection_budget_ms
 
       assert committed_api_key(fixture).max_active_requests == 3
 
-      CodexPooler.TestDiagnostics.puts(
-        "active_request_cap policy_update_notification=true ordinary_update_notification=true unchanged_status=active"
-      )
+      CodexPooler.TestDiagnostics.puts("active_request_cap policy_update_notification=true ordinary_update_notification=true unchanged_status=active")
     after
       shutdown_participants()
     end

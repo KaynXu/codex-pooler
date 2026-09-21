@@ -67,8 +67,6 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionAliasTest do
 
     Repo.update!(Ecto.Changeset.change(alias_row, status: "expired"))
 
-    assert is_nil(
-             SessionContinuity.previous_response_session_id(auth, "resp_synthetic_alias", now)
-           )
+    assert is_nil(SessionContinuity.previous_response_session_id(auth, "resp_synthetic_alias", now))
   end
 end

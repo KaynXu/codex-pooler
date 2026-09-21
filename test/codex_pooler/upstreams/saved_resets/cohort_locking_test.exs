@@ -45,8 +45,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
       assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
                SavedResetRedemption.redeem(assignment,
                  trigger_kind: "gateway_auto",
-                 gateway_auto_context:
-                   gateway_context(assignment, target, [sibling.id, target.id, sibling.id]),
+                 gateway_auto_context: gateway_context(assignment, target, [sibling.id, target.id, sibling.id]),
                  started_at: as_of
                )
 
@@ -73,8 +72,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
     assert {:ok, %{status: :noop, code: "gateway_auto_context_mismatch"}} =
              SavedResetRedemption.redeem(assignment,
                trigger_kind: "gateway_auto",
-               gateway_auto_context:
-                 gateway_context(assignment, target, [target.id, Ecto.UUID.generate()]),
+               gateway_auto_context: gateway_context(assignment, target, [target.id, Ecto.UUID.generate()]),
                started_at: as_of
              )
 

@@ -82,8 +82,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     window_keys = Enum.map(windows, &Evidence.identity_key/1)
 
     if Enum.uniq(window_keys) != window_keys do
-      {:error,
-       lifecycle_error(:duplicate_quota_window_kind, "quota window identities must be unique")}
+      {:error, lifecycle_error(:duplicate_quota_window_kind, "quota window identities must be unique")}
     else
       Enum.reduce(windows, Multi.new(), fn attrs, multi ->
         Multi.run(multi, {:quota_window, Evidence.identity_key(attrs)}, fn _repo, _changes ->

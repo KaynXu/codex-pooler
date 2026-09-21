@@ -179,9 +179,7 @@ defmodule CodexPooler.Access.APIKey do
         not metadata_labels_valid?(Map.get(metadata, "labels", Map.get(metadata, :labels, []))) ->
           [metadata: "labels must be a list of strings"]
 
-        not metadata_notes_valid?(
-          Map.get(metadata, "operator_notes", Map.get(metadata, :operator_notes))
-        ) ->
+        not metadata_notes_valid?(Map.get(metadata, "operator_notes", Map.get(metadata, :operator_notes))) ->
           [metadata: "operator_notes must be a string"]
 
         true ->

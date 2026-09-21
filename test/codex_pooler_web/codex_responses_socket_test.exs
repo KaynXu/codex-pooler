@@ -101,9 +101,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                runtime_revocation_epoch: 1
              })
 
-    assert_receive {:socket_result,
-                    {:stop, :normal, @api_key_revocation_close,
-                     %{api_key_close_sent?: true, api_key_disabling_epoch: 1}}}
+    assert_receive {:socket_result, {:stop, :normal, @api_key_revocation_close, %{api_key_close_sent?: true, api_key_disabling_epoch: 1}}}
 
     assert_receive {:DOWN, ^monitor, :process, ^socket_pid, :normal}
   end
@@ -411,8 +409,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert revoked_state.firewall_revoked?
     assert revoked_state.firewall_close_sent?
 
-    assert_receive {:firewall_denied, %{count: 1},
-                    %{scope: "runtime", reason: "websocket_revoked"}}
+    assert_receive {:firewall_denied, %{count: 1}, %{scope: "runtime", reason: "websocket_revoked"}}
 
     assert length(Regex.scan(~r/ingress firewall denied/, logs)) == 1
     refute logs =~ "127.0.0.1"
@@ -1161,8 +1158,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, next_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                state
              )
 
@@ -1193,8 +1189,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, waiting_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, first_task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, first_task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                state
              )
 
@@ -1574,14 +1569,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       end)
 
     probe =
-      {:websocket_owner_output_commit_probe, "corr-probe", 21, task_pid, active_turn_ref,
-       owner_pid, probe_ref}
+      {:websocket_owner_output_commit_probe, "corr-probe", 21, task_pid, active_turn_ref, owner_pid, probe_ref}
 
     assert {:ok, ^state} = CodexResponsesSocket.handle_info(probe, state)
 
-    assert_receive {:carried_owner_ack,
-                    {:websocket_owner_output_commit_ack, "corr-probe", 21, ^task_pid,
-                     ^active_turn_ref, ^probe_ref, true}}
+    assert_receive {:carried_owner_ack, {:websocket_owner_output_commit_ack, "corr-probe", 21, ^task_pid, ^active_turn_ref, ^probe_ref, true}}
   end
 
   test "native owner-forwarded socket acknowledges a probe for the exact tracked task" do
@@ -1613,13 +1605,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       }
 
       probe =
-        {:websocket_owner_output_commit_probe, "corr-native-probe", 31, task_pid, active_turn_ref,
-         owner_pid, probe_ref}
+        {:websocket_owner_output_commit_probe, "corr-native-probe", 31, task_pid, active_turn_ref, owner_pid, probe_ref}
 
       assert {:ok, ^state} = CodexResponsesSocket.handle_info(probe, state)
 
-      assert_receive {:websocket_owner_output_commit_ack, "corr-native-probe", 31, ^task_pid,
-                      ^active_turn_ref, ^probe_ref, ^expected_visible?}
+      assert_receive {:websocket_owner_output_commit_ack, "corr-native-probe", 31, ^task_pid, ^active_turn_ref, ^probe_ref, ^expected_visible?}
     end
   end
 
@@ -1648,8 +1638,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     }
 
     probe = fn correlation_id, epoch, owner_turn_id, carried_owner_pid ->
-      {:websocket_owner_output_commit_probe, correlation_id, epoch, owner_turn_id,
-       active_turn_ref, carried_owner_pid, probe_ref}
+      {:websocket_owner_output_commit_probe, correlation_id, epoch, owner_turn_id, active_turn_ref, carried_owner_pid, probe_ref}
     end
 
     for state <- [
@@ -1691,8 +1680,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       })
 
     probe = fn owner_turn_id ->
-      {:websocket_owner_output_commit_probe, "corr-probe-refuse", 22, owner_turn_id,
-       active_turn_ref, self(), probe_ref}
+      {:websocket_owner_output_commit_probe, "corr-probe-refuse", 22, owner_turn_id, active_turn_ref, self(), probe_ref}
     end
 
     assert {:ok, ^base} =
@@ -1735,8 +1723,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              WebsocketOwnerContract.safe_error_payload(:upstream_stream_error, nil)
 
     owner_error =
-      {:websocket_owner_frame, "corr-upstream-interruption", 23, task_pid,
-       {:error, :upstream_stream_error, safe_payload}}
+      {:websocket_owner_frame, "corr-upstream-interruption", 23, task_pid, {:error, :upstream_stream_error, safe_payload}}
 
     {_result, logs} =
       with_native_turn_log(:info, fn ->
@@ -1752,16 +1739,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                    # `invalid_request_error` told an SDK never to retry it.
                    "type" => "server_error",
                    "code" => "server_error",
-                   "message" =>
-                     "upstream request failed: stream interrupted before terminal response event",
+                   "message" => "upstream request failed: stream interrupted before terminal response event",
                    "param" => nil
                  }
                }
 
         assert {:ok, _done_state} =
                  CodexResponsesSocket.handle_info(
-                   {:codex_response_done, task_pid,
-                    {:response_task_result, {:error, :upstream_stream_error}, true}},
+                   {:codex_response_done, task_pid, {:response_task_result, {:error, :upstream_stream_error}, true}},
                    pushed_state
                  )
       end)
@@ -1787,8 +1772,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              WebsocketOwnerContract.safe_error_payload(:owner_unavailable, nil)
 
     frame =
-      {:websocket_owner_frame, "corr-owner-generic", 25, task_pid,
-       {:error, :owner_unavailable, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-generic", 25, task_pid, {:error, :owner_unavailable, safe_payload}}
 
     assert {:push, {:text, payload}, ^state} =
              CodexResponsesSocket.handle_info(frame, state)
@@ -1842,8 +1826,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:stop, :normal, {1011, "websocket owner crashed"}, closed_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:response_task_result, {:error, :owner_crashed}, true}},
+               {:codex_response_done, task_pid, {:response_task_result, {:error, :owner_crashed}, true}},
                state
              )
 
@@ -1888,8 +1871,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
           state
         end
 
-      assert {:stop, :normal, {1011, "websocket response task failed"}, [{:text, answer}],
-              aborted_state} =
+      assert {:stop, :normal, {1011, "websocket response task failed"}, [{:text, answer}], aborted_state} =
                CodexResponsesSocket.handle_info(
                  {:DOWN, monitor, :process, task_pid, :shutdown},
                  state
@@ -2013,8 +1995,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
 
     drain_frame =
-      {:websocket_owner_frame, "corr-drain-native-log", 19, task_pid,
-       {:error, :owner_drained, safe_payload}}
+      {:websocket_owner_frame, "corr-drain-native-log", 19, task_pid, {:error, :owner_drained, safe_payload}}
 
     {_result, logs} =
       with_native_turn_log(:info, fn ->
@@ -2061,8 +2042,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
 
     drain_frame =
-      {:websocket_owner_frame, "corr-drain-late-native-log", 20,
-       {:error, :owner_drained, safe_payload}}
+      {:websocket_owner_frame, "corr-drain-late-native-log", 20, {:error, :owner_drained, safe_payload}}
 
     {_result, logs} =
       with_native_turn_log(:info, fn ->
@@ -2101,8 +2081,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert_receive {:websocket_response_activity, ^task_pid, activity_token}
 
-    assert_receive {:codex_response_done, ^task_pid,
-                    {:socket_response_result, :owner_completion_pending, :ok}}
+    assert_receive {:codex_response_done, ^task_pid, {:socket_response_result, :owner_completion_pending, :ok}}
 
     state = %{
       opts: RequestOptions.for_websocket(%{}),
@@ -2126,8 +2105,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, result_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                activity_state
              )
 
@@ -2146,8 +2124,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:push, {:text, ^terminal}, terminal_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid,
-                {:data, terminal}},
+               {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid, {:data, terminal}},
                result_state
              )
 
@@ -2155,8 +2132,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, completed_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid,
-                :complete},
+               {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid, :complete},
                terminal_state
              )
 
@@ -2205,15 +2181,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:push, {:text, ^terminal}, terminal_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid,
-                {:data, terminal}},
+               {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid, {:data, terminal}},
                state
              )
 
     assert {:ok, owner_complete_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid,
-                :complete},
+               {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid, :complete},
                terminal_state
              )
 
@@ -2223,8 +2197,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, finalized_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                owner_complete_state
              )
 
@@ -2258,8 +2231,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, finalized_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                state
              )
 
@@ -2294,15 +2266,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:push, {:text, ^terminal}, terminal_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-local-owner-late-activity", 26, task_pid,
-                {:data, terminal}},
+               {:websocket_owner_frame, "corr-local-owner-late-activity", 26, task_pid, {:data, terminal}},
                state
              )
 
     assert {:ok, finalized_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                terminal_state
              )
 
@@ -2348,8 +2318,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:push, {:text, ^terminal}, terminal_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid,
-                {:data, terminal}},
+               {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid, {:data, terminal}},
                state
              )
 
@@ -2358,8 +2327,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, finalized_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                terminal_state
              )
 
@@ -2367,8 +2335,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, owner_complete_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid,
-                :complete},
+               {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid, :complete},
                finalized_state
              )
 
@@ -2395,8 +2362,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     observer_monitor = Process.monitor(task_pid)
     assert_receive {:websocket_response_activity, ^task_pid, activity_token}
 
-    assert_receive {:codex_response_done, ^task_pid,
-                    {:socket_response_result, :owner_completion_pending, :ok}} = done_message
+    assert_receive {:codex_response_done, ^task_pid, {:socket_response_result, :owner_completion_pending, :ok}} = done_message
 
     state = %{
       opts: RequestOptions.for_websocket(%{}),
@@ -2424,15 +2390,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:push, {:text, ^terminal}, terminal_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid,
-                {:data, terminal}},
+               {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid, {:data, terminal}},
                result_state
              )
 
     assert {:ok, completed_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid,
-                :complete},
+               {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid, :complete},
                terminal_state
              )
 
@@ -2455,8 +2419,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
     assert_receive {:scheduled_terminal_cancel_started, ^task_pid, :owner_drained}
 
-    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^activity_token,
-                    :owner_drained} = cancellation
+    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^activity_token, :owner_drained} = cancellation
 
     assert {:ok, cancellation_state} =
              CodexResponsesSocket.handle_info(cancellation, completed_state)
@@ -2489,8 +2452,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     task_monitor = Process.monitor(task_pid)
     assert_receive {:websocket_response_activity, ^task_pid, activity_token}
 
-    assert_receive {:codex_response_done, ^task_pid,
-                    {:socket_response_result, :owner_completion_pending, :ok}}
+    assert_receive {:codex_response_done, ^task_pid, {:socket_response_result, :owner_completion_pending, :ok}}
 
     state = %{
       opts: RequestOptions.for_websocket(%{}),
@@ -2514,8 +2476,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert {:ok, result_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid,
-                {:socket_response_result, :owner_completion_pending, :ok}},
+               {:codex_response_done, task_pid, {:socket_response_result, :owner_completion_pending, :ok}},
                activity_state
              )
 
@@ -2535,8 +2496,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
     assert_receive {:terminal_wait_cancelled, ^task_pid, :owner_drained}
 
-    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^activity_token,
-                    :owner_drained} = cancellation
+    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^activity_token, :owner_drained} = cancellation
 
     assert {:push, {:text, terminal}, cancelled_state} =
              CodexResponsesSocket.handle_info(cancellation, result_state)
@@ -2627,8 +2587,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert_receive {:termination_race_cancelled, ^task_pid, :owner_drained}
     assert_receive {:websocket_response_activity, ^task_pid, ^token}
 
-    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^token, watcher,
-                    :owner_drained}
+    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^token, watcher, :owner_drained}
 
     watcher_monitor = Process.monitor(watcher)
 
@@ -2686,8 +2645,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
 
       drain_frame =
-        {:websocket_owner_frame, "corr-drain-down", 16, task_pid,
-         {:error, :owner_drained, safe_payload}}
+        {:websocket_owner_frame, "corr-drain-down", 16, task_pid, {:error, :owner_drained, safe_payload}}
 
       complete =
         {:websocket_owner_frame, "corr-drain-down", 16, task_pid, :complete}
@@ -2850,10 +2808,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  code: "session_assignment_unavailable",
                  message: "session unavailable"
                }, "server_error"},
-              {%{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
-               "invalid_request_error"},
-              {%{status: 400, code: "invalid_request", message: "request invalid"},
-               "invalid_request_error"}
+              {%{status: 400, code: "unsupported_model_capability", message: "model unsupported"}, "invalid_request_error"},
+              {%{status: 400, code: "invalid_request", message: "request invalid"}, "invalid_request_error"}
             ] do
           assert {:push, {:text, payload}, _state} =
                    CodexResponsesSocket.handle_info(

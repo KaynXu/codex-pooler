@@ -402,8 +402,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
 
     metadata_cases = [
       {%{"turn_id" => "abc"}, "ba7816bf8f01cfea"},
-      {%{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => "abc"})},
-       "ba7816bf8f01cfea"},
+      {%{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => "abc"})}, "ba7816bf8f01cfea"},
       {%{
          "turn_id" => "xyz",
          "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => "abc"})

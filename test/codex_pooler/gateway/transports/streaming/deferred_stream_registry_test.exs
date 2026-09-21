@@ -124,9 +124,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistryTest do
              name: :deferred_stream_registry_not_started
            ) == nil
 
-    assert DeferredStreamRegistry.finish(nil, :completed,
-             name: :deferred_stream_registry_not_started
-           ) == :ok
+    assert DeferredStreamRegistry.finish(nil, :completed, name: :deferred_stream_registry_not_started) == :ok
   end
 
   defp eventually_finished(registry, token, attempts_left \\ 100)

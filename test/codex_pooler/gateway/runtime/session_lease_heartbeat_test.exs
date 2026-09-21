@@ -31,8 +31,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
   # bound is the only way the synchronous renewal can end.
   @parked_renewal_call_timeout_ms 50
 
-  @tag slow:
-         "two real PostgreSQL triggers take 600ms each to exceed the former one-second call limit"
+  @tag slow: "two real PostgreSQL triggers take 600ms each to exceed the former one-second call limit"
   test "a healthy owner survives cumulative PostgreSQL renewal latency beyond one second" do
     %{session: session, token: token} = owner_session_fixture()
     request_options = http_request_options(session, token, ttl_seconds: 90)
@@ -109,14 +108,10 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     request_options = http_request_options(session, token)
 
     assert :ignore =
-             SessionLeaseHeartbeat.start(
-               RequestOptions.put_transport(request_options, transport: "websocket")
-             )
+             SessionLeaseHeartbeat.start(RequestOptions.put_transport(request_options, transport: "websocket"))
 
     assert :ignore =
-             SessionLeaseHeartbeat.start(
-               RequestOptions.put_continuity(request_options, codex_session: nil)
-             )
+             SessionLeaseHeartbeat.start(RequestOptions.put_continuity(request_options, codex_session: nil))
 
     assert :ignore = SessionLeaseHeartbeat.start(request_options_without_witness(request_options))
 
@@ -175,10 +170,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     request_options = http_request_options(session, token)
     parent = self()
 
-    Process.put({SessionLeaseHeartbeat, :renew}, fn _session_id,
-                                                    _owner_token,
-                                                    _renewal_options,
-                                                    renewal_opts ->
+    Process.put({SessionLeaseHeartbeat, :renew}, fn _session_id, _owner_token, _renewal_options, renewal_opts ->
       send(parent, {:synchronous_renewal_options, renewal_opts})
 
       {:error,
@@ -228,10 +220,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
 
     Process.put({SessionLeaseHeartbeat, :renew_call_timeout_ms}, @parked_renewal_call_timeout_ms)
 
-    Process.put({SessionLeaseHeartbeat, :renew}, fn _session_id,
-                                                    _owner_token,
-                                                    _renewal_options,
-                                                    _renewal_opts ->
+    Process.put({SessionLeaseHeartbeat, :renew}, fn _session_id, _owner_token, _renewal_options, _renewal_opts ->
       receive do
         :release_parked_renewal -> {:ok, session}
       end
@@ -296,8 +285,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeatTest do
     renew = fn session_id, owner_token, renewal_options ->
       send(
         parent,
-        {:renewed, session_id, owner_token,
-         renewal_options.continuity.bridge_owner_lease_ttl_seconds}
+        {:renewed, session_id, owner_token, renewal_options.continuity.bridge_owner_lease_ttl_seconds}
       )
 
       {:ok, session}

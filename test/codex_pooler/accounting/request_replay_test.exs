@@ -275,10 +275,8 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
 
     _entitlement =
       insert_entitlement!(expired, %{
-        armed_at:
-          DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond),
-        expires_at:
-          DateTime.utc_now() |> DateTime.add(-30, :second) |> DateTime.truncate(:microsecond)
+        armed_at: DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond),
+        expires_at: DateTime.utc_now() |> DateTime.add(-30, :second) |> DateTime.truncate(:microsecond)
       })
 
     assert {:error, :lifecycle_conflict} =
@@ -646,8 +644,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
 
     cancelled_consumer_monitor = Process.monitor(cancelled_consumer)
 
-    assert_receive {:request_replay_owner_reserve_redeemed, ^cancelled_consumer,
-                    ^cancelled_barrier_ref}
+    assert_receive {:request_replay_owner_reserve_redeemed, ^cancelled_consumer, ^cancelled_barrier_ref}
 
     %{suspended_replay: cancelled_redeemed} = :sys.get_state(cancelled_owner)
     consume_monitor = cancelled_redeemed.consume_monitor
@@ -955,9 +952,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     {consumed_owner, consumed_arm} = start_suspended_replay_owner(consumed_fixture)
 
     assert {:ok, consumed} =
-             RequestReplay.consume(
-               suspended_consume_input(consumed_fixture, consumed_owner, consumed_arm)
-             )
+             RequestReplay.consume(suspended_consume_input(consumed_fixture, consumed_owner, consumed_arm))
 
     stop_replay_owner(consumed_fixture.session.id)
 
@@ -1243,9 +1238,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert {:ok, abandoned_arm} = RequestReplay.arm(arm_input(abandoned))
 
     assert {:ok, abandoned_consume} =
-             RequestReplay.consume(
-               consume_input(abandoned, abandoned_arm, :crypto.strong_rand_bytes(32))
-             )
+             RequestReplay.consume(consume_input(abandoned, abandoned_arm, :crypto.strong_rand_bytes(32)))
 
     assert {:ok, _closed} = RequestReplay.compensate_no_send(abandoned_consume.consume_binding)
     assert {:ok, :noop} = RequestReplay.close(abandoned.request.id, :owner_unavailable)

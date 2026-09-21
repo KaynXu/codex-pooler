@@ -71,9 +71,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
     <section id="admin-incidents-active-section" class="order-1 grid gap-3">
       <div class="flex items-baseline justify-between gap-3">
         <h2 class="text-xl font-semibold">Active incidents</h2>
-        <span id="admin-incidents-active-count" class="text-sm text-base-content/60">{length(
-          @page.active
-        )}</span>
+        <span id="admin-incidents-active-count" class="text-sm text-base-content/60">{length(@page.active)}</span>
       </div>
       <AdminComponents.empty_state
         :if={@page.active == []}
@@ -315,6 +313,5 @@ defmodule CodexPoolerWeb.Admin.IncidentsPageComponents do
     do: "Status data may be out of date. No successful refresh has been recorded yet."
 
   defp stale_copy(timestamp, preferences),
-    do:
-      "Status data may be out of date. The last successful fetch was #{format_datetime(timestamp, preferences)}."
+    do: "Status data may be out of date. The last successful fetch was #{format_datetime(timestamp, preferences)}."
 end

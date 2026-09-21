@@ -558,8 +558,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.canonical_partition.reasoning_variants == %{
                stable_catalog_projection: "routable_capability_family_reasoning_union",
                canonical_allowance: "all_reasoning_variants_in_quota_selected_capability_family",
-               native_turn_selection:
-                 "post_eligibility_assignment_advertising_effective_known_effort",
+               native_turn_selection: "post_eligibility_assignment_advertising_effective_known_effort",
                non_reasoning_capability_boundary: "never_crossed",
                no_advertiser_fallback: "quota_selected_partition",
                circuit_state_input: false
@@ -788,8 +787,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                  "type" => "invalid_request_error",
                  "code" => "unsupported_value",
                  "param" => "reasoning.effort",
-                 "message" =>
-                   "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+                 "message" => "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
                }
              }
 

@@ -191,8 +191,7 @@ defmodule CodexPooler.Accounting.FailedPredecessorResendLockOrderTest do
 
       opts = %{
         endpoint: @endpoint,
-        correlation_id:
-          "codex-request:" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false),
+        correlation_id: "codex-request:" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false),
         codex_session: session,
         request_metadata: %{"request_id" => "resend-lock-order-#{suffix}"}
       }

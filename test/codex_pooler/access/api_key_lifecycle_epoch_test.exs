@@ -81,8 +81,7 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
 
     inserted_session_ids =
       for attempts_left <- [3, 2, 1] do
-        assert_receive {:api_key_delete_session_snapshot, ^barrier, delete_pid, ^attempts_left,
-                        _session_ids}
+        assert_receive {:api_key_delete_session_snapshot, ^barrier, delete_pid, ^attempts_left, _session_ids}
 
         assert {:ok, session} =
                  Websocket.start_codex_session(auth, %{
@@ -331,8 +330,7 @@ defmodule CodexPooler.Access.APIKeyLifecycleEpochTest do
         assert :ok = Events.subscribe_pool(target_pool.id, "pools")
 
         scenarios = [
-          {"generic pure move",
-           fn api_key -> Access.update_api_key(scope, api_key, %{pool_id: target_pool.id}) end},
+          {"generic pure move", fn api_key -> Access.update_api_key(scope, api_key, %{pool_id: target_pool.id}) end},
           {"policy pure move",
            fn api_key ->
              Access.update_api_key_with_policy(scope, api_key, %{pool_id: target_pool.id})

@@ -178,28 +178,22 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
   end
 
   defp chip_class(:primary),
-    do:
-      "inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium leading-none text-primary"
+    do: "inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium leading-none text-primary"
 
   defp chip_class(:success),
-    do:
-      "inline-flex items-center rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-xs font-medium leading-none text-success"
+    do: "inline-flex items-center rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-xs font-medium leading-none text-success"
 
   defp chip_class(:warning),
-    do:
-      "inline-flex items-center rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-medium leading-none text-warning"
+    do: "inline-flex items-center rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-medium leading-none text-warning"
 
   defp chip_class(:error),
-    do:
-      "inline-flex items-center rounded-full border border-error/20 bg-error/10 px-2.5 py-1 text-xs font-medium leading-none text-error"
+    do: "inline-flex items-center rounded-full border border-error/20 bg-error/10 px-2.5 py-1 text-xs font-medium leading-none text-error"
 
   defp chip_class(:info),
-    do:
-      "inline-flex items-center rounded-full border border-info/20 bg-info/10 px-2.5 py-1 text-xs font-medium leading-none text-info"
+    do: "inline-flex items-center rounded-full border border-info/20 bg-info/10 px-2.5 py-1 text-xs font-medium leading-none text-info"
 
   defp chip_class(_tone),
-    do:
-      "inline-flex items-center rounded-full border border-base-300 bg-base-200 px-2.5 py-1 text-xs font-medium leading-none text-base-content/70"
+    do: "inline-flex items-center rounded-full border border-base-300 bg-base-200 px-2.5 py-1 text-xs font-medium leading-none text-base-content/70"
 
   defp plan_badge_label(plan_label, plan_family, placeholder) do
     label = plan_badge_text(plan_label || plan_family, placeholder)

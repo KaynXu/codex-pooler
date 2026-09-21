@@ -144,9 +144,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFileConflictTest do
       assert length(FakeUpstream.requests(upstream)) == prior_sends
 
       assert [denied] =
-               Repo.all(
-                 from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "rejected")
-               )
+               Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "rejected"))
 
       assert denied.response_status_code == 409
       assert denied.last_error_code == expected

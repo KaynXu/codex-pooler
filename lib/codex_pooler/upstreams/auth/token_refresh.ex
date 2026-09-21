@@ -173,9 +173,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
          _stale_after_ms,
          _expected_credential_epoch
        ) do
-    Repo.rollback(
-      lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")
-    )
+    Repo.rollback(lifecycle_error(:upstream_identity_not_found, "upstream identity was not found"))
   end
 
   # A caller carrying an expected credential epoch observed its auth failure
@@ -421,9 +419,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
   end
 
   defp finalize_token_refresh_from_lock(nil, _refresh_result, _trigger_kind, _attempt) do
-    Repo.rollback(
-      lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")
-    )
+    Repo.rollback(lifecycle_error(:upstream_identity_not_found, "upstream identity was not found"))
   end
 
   defp do_finalize_token_refresh(

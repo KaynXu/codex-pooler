@@ -28,8 +28,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
       windows: windows,
       routing_windows: routing_windows,
       primary: WindowSelector.best_account_primary_variant(routing_windows, timestamp),
-      secondary:
-        WindowSelector.best_account_window(routing_windows, :weekly_secondary, timestamp),
+      secondary: WindowSelector.best_account_window(routing_windows, :weekly_secondary, timestamp),
       fresh_windows: Enum.filter(routing_windows, &fresh_window?(&1, timestamp)),
       blocked_windows: Enum.reject(routing_windows, &usable_window?(&1, timestamp)),
       usable?: Enum.any?(routing_windows, &usable_window?(&1, timestamp))
@@ -645,8 +644,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     [
       %{
         code: "quota_account_primary_unknown",
-        message:
-          "weekly quota is usable, but upstream has not supplied account primary 5h quota evidence",
+        message: "weekly quota is usable, but upstream has not supplied account primary 5h quota evidence",
         quota_key: secondary.quota_key,
         window_kind: secondary.window_kind,
         quota_scope: secondary.quota_scope,

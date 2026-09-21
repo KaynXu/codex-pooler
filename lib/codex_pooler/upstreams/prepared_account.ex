@@ -182,14 +182,11 @@ defmodule CodexPooler.Upstreams.PreparedAccount do
       access_token_expires_at: value(attrs, :access_token_expires_at),
       expires_in: value(attrs, :expires_in),
       received_at: value(attrs, :received_at),
-      identity_metadata:
-        value(attrs, :import_metadata) || value(attrs, :identity_metadata) || %{},
+      identity_metadata: value(attrs, :import_metadata) || value(attrs, :identity_metadata) || %{},
       credential_provenance: credential_provenance(opts),
-      onboarding_method:
-        Keyword.get(opts, :onboarding_method, value(attrs, :onboarding_method) || "import"),
+      onboarding_method: Keyword.get(opts, :onboarding_method, value(attrs, :onboarding_method) || "import"),
       actor_metadata_key: Keyword.get(opts, :actor_metadata_key, "imported_by_user_id"),
-      token_refresh_trigger_kind:
-        Keyword.get(opts, :token_refresh_trigger_kind, "auth_json_import"),
+      token_refresh_trigger_kind: Keyword.get(opts, :token_refresh_trigger_kind, "auth_json_import"),
       target_identity_id: Keyword.get(opts, :target_identity_id)
     }
   end
@@ -286,9 +283,7 @@ defmodule CodexPooler.Upstreams.PreparedAccount do
   end
 
   defp import_binding_payload(%__MODULE__{} = prepared, import_witness) do
-    {@import_witness_purpose, @import_witness_version, prepared.scope_user_id, prepared.pool_id,
-     prepared.attrs, prepared.expiry, prepared.policy, import_witness.incoming,
-     import_witness.persisted}
+    {@import_witness_purpose, @import_witness_version, prepared.scope_user_id, prepared.pool_id, prepared.attrs, prepared.expiry, prepared.policy, import_witness.incoming, import_witness.persisted}
     |> :erlang.term_to_binary([:deterministic])
   end
 

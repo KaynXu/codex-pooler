@@ -139,8 +139,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Coherence do
     %{
       "version" => @version,
       "count" => count,
-      "used_percent" =>
-        evidence.used_percent |> Decimal.normalize() |> Decimal.to_string(:normal),
+      "used_percent" => evidence.used_percent |> Decimal.normalize() |> Decimal.to_string(:normal),
       "reset_at" => DateTime.to_iso8601(evidence.reset_at),
       "first_observed_at" => DateTime.to_iso8601(first_observed_at),
       "last_observed_at" => DateTime.to_iso8601(evidence.observed_at),

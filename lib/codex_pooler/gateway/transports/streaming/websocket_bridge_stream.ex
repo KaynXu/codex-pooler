@@ -839,8 +839,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           text: text,
           event_type: event_type(decoded),
           terminal?: terminal?,
-          preflight_class:
-            if(terminal?, do: :terminal, else: nonterminal_preflight_class(decoded))
+          preflight_class: if(terminal?, do: :terminal, else: nonterminal_preflight_class(decoded))
         }
 
       _other ->

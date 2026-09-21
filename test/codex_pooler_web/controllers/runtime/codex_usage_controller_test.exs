@@ -114,8 +114,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       upstream_assignment_fixture(pool, %{
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -1462,8 +1461,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       active_limit: Keyword.get(opts, :active_limit),
       credits: Keyword.get(opts, :credits),
       freshness_state: "fresh",
-      metadata:
-        Map.put(status, "reset_after_seconds", DateTime.diff(reset_at, provider_at, :second))
+      metadata: Map.put(status, "reset_after_seconds", DateTime.diff(reset_at, provider_at, :second))
     }
   end
 

@@ -105,9 +105,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   def public_openai_responses_passthrough_terminal_kind(state),
     do: PublicResponses.passthrough_terminal_kind(state)
 
-  @spec public_openai_responses_passthrough_terminal_failure(
-          public_openai_responses_stream_state()
-        ) ::
+  @spec public_openai_responses_passthrough_terminal_failure(public_openai_responses_stream_state()) ::
           terminal_failure() | nil
   def public_openai_responses_passthrough_terminal_failure(state),
     do: PublicResponses.passthrough_terminal_failure(state)

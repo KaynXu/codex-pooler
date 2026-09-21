@@ -217,10 +217,7 @@ defmodule CodexPooler.Accounting.QuotaRejectionResendTest do
   end
 
   defp mutate(seed, :expired),
-    do:
-      update_row(seed, :request,
-        completed_at: DateTime.add(seed.request.completed_at, -31, :second)
-      )
+    do: update_row(seed, :request, completed_at: DateTime.add(seed.request.completed_at, -31, :second))
 
   defp mutate(seed, :anchor) do
     %{
@@ -236,8 +233,6 @@ defmodule CodexPooler.Accounting.QuotaRejectionResendTest do
   end
 
   defp counts do
-    {Repo.aggregate(Request, :count), Repo.aggregate(CodexTurn, :count),
-     Repo.aggregate(RequestClientRetryLink, :count),
-     Repo.aggregate(Accounting.LedgerEntry, :count)}
+    {Repo.aggregate(Request, :count), Repo.aggregate(CodexTurn, :count), Repo.aggregate(RequestClientRetryLink, :count), Repo.aggregate(Accounting.LedgerEntry, :count)}
   end
 end

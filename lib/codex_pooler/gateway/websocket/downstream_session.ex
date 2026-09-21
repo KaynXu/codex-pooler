@@ -283,8 +283,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   def accept_handoff_message(
-        {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid,
-         control_ref} = message,
+        {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid, control_ref} = message,
         %{
           websocket_owner_downstream: %{
             pid: downstream_pid,
@@ -312,8 +311,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   def accept_handoff_message(
-        {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid,
-         control_ref, reason} = message,
+        {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid, control_ref, reason} = message,
         %{
           websocket_owner_downstream: %{
             pid: downstream_pid,
@@ -572,8 +570,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
       codex_session: Map.get(state, :codex_session),
       websocket_owner_lease_token: Map.get(state, :websocket_owner_lease_token),
       websocket_owner_downstream: Map.get(state, :websocket_owner_downstream),
-      websocket_owner_active_turn_reconnect?:
-        Map.get(state, :websocket_owner_active_turn_reconnect?, false)
+      websocket_owner_active_turn_reconnect?: Map.get(state, :websocket_owner_active_turn_reconnect?, false)
     }
   end
 
@@ -666,9 +663,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     |> RequestOptions.for_websocket()
     |> RequestOptions.put_runtime_context(interrupt_reason: interrupt_reason)
     |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
-    |> RequestOptions.put_transport(
-      websocket_owner_lease_token: Map.get(state, :websocket_owner_lease_token)
-    )
+    |> RequestOptions.put_transport(websocket_owner_lease_token: Map.get(state, :websocket_owner_lease_token))
     |> OwnerCleanup.put_options(Map.get(state, :websocket_owner_cleanup_witness))
   end
 

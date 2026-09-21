@@ -33,18 +33,14 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
       )
 
     _turn =
-      turn_fixture(active_session, request, stale_started_at,
-        status: CodexTurn.in_progress_status()
-      )
+      turn_fixture(active_session, request, stale_started_at, status: CodexTurn.in_progress_status())
 
     expired_request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
     _expired_attempt = attempt_fixture(expired_request, assignment, %{status: "in_progress"})
     expired_session = session_fixture(pool, api_key, assignment, stale_started_at)
 
     _expired_turn =
-      turn_fixture(expired_session, expired_request, stale_started_at,
-        status: CodexTurn.in_progress_status()
-      )
+      turn_fixture(expired_session, expired_request, stale_started_at, status: CodexTurn.in_progress_status())
 
     assert RuntimeCleanup.active_runtime_request?(request, now)
     refute RuntimeCleanup.active_runtime_request?(expired_request.id, now)

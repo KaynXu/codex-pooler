@@ -104,9 +104,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           admitted_at: timestamp,
           retry_count: 0
         }
-        |> Ecto.Changeset.change(
-          ClientRetry.request_attrs(attr(opts, :native_client_retry_witness))
-        )
+        |> Ecto.Changeset.change(ClientRetry.request_attrs(attr(opts, :native_client_retry_witness)))
         |> Repo.insert!()
 
       RequestLogFacts.record_request_created!(request)
@@ -891,9 +889,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       )
       |> Repo.update!()
     else
-      Repo.rollback(
-        Metadata.accounting_error(:request_already_finalized, "request was already finalized")
-      )
+      Repo.rollback(Metadata.accounting_error(:request_already_finalized, "request was already finalized"))
     end
   end
 

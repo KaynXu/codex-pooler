@@ -344,12 +344,10 @@ defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuation do
     end)
   end
 
-  defp ordinary_turn_continuation?(
-         %{"client_metadata" => %{@canonical_metadata_key => metadata}} = payload
-       ),
-       do:
-         match?(%{"request_kind" => "turn"}, canonical_metadata_map(metadata)) or
-           previous_response_present?(payload)
+  defp ordinary_turn_continuation?(%{"client_metadata" => %{@canonical_metadata_key => metadata}} = payload),
+    do:
+      match?(%{"request_kind" => "turn"}, canonical_metadata_map(metadata)) or
+        previous_response_present?(payload)
 
   defp ordinary_turn_continuation?(payload), do: previous_response_present?(payload)
 

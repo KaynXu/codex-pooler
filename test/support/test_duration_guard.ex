@@ -36,9 +36,7 @@ defmodule CodexPooler.TestDurationGuard do
 
     # ExUnit drains/stops formatter servers before after_suite callbacks. The
     # receipt therefore outlives its server without leaving a process behind.
-    report_only? =
-      Enum.any?(~w(CI DRONE GITHUB_ACTIONS), &(System.get_env(&1) in ["1", "true", "TRUE"]))
-
+    report_only? = Enum.any?(~w(CI DRONE GITHUB_ACTIONS), &(System.get_env(&1) in ["1", "true", "TRUE"]))
     ExUnit.after_suite(fn _stats -> finish(key, report_only?) end)
     :ok
   end
@@ -115,10 +113,7 @@ defmodule CodexPooler.TestDurationGuard do
       end
 
     if failures != [] do
-      heading =
-        if report_only?,
-          do: "test duration report (CI; non-blocking):",
-          else: "test duration guard failed:"
+      heading = if report_only?, do: "test duration report (CI; non-blocking):", else: "test duration guard failed:"
 
       IO.puts(
         :stderr,

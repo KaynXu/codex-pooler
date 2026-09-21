@@ -313,10 +313,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.AuthTest d
       assert second_attempt.status == "succeeded"
 
       metadata_text =
-        inspect(
-          {request.request_metadata, first_attempt.response_metadata,
-           second_attempt.response_metadata}
-        )
+        inspect({request.request_metadata, first_attempt.response_metadata, second_attempt.response_metadata})
 
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ "refresh-token-owner-ws-handshake-do-not-leak"

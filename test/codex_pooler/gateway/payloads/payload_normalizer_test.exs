@@ -281,10 +281,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       cases = [
-        {"regular", "/backend-api/codex/responses",
-         RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
-        {"compact", "/backend-api/codex/responses/compact",
-         RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+        {"regular", "/backend-api/codex/responses", RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+        {"compact", "/backend-api/codex/responses/compact", RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
         {"websocket", "/backend-api/codex/responses",
          %{}
          |> RequestOptions.build("/backend-api/codex/responses", payload)
@@ -613,10 +611,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for {endpoint, request_options} <- [
-            {"/backend-api/codex/responses",
-             RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
-            {"/backend-api/codex/responses/compact",
-             RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+            {"/backend-api/codex/responses", RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+            {"/backend-api/codex/responses/compact", RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
             {"/backend-api/codex/responses",
              %{}
              |> RequestOptions.build("/backend-api/codex/responses", payload)
@@ -1091,8 +1087,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "content" => [
               %{
                 "type" => "input_text",
-                "text" =>
-                  "Message Type: NEW_TASK\nTask name: /root/../worker\nSender: /root\nPayload:\n"
+                "text" => "Message Type: NEW_TASK\nTask name: /root/../worker\nSender: /root\nPayload:\n"
               },
               %{"type" => "encrypted_content", "encrypted_content" => "invalid-agent-path"}
             ]
@@ -1104,8 +1099,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "content" => [
               %{
                 "type" => "input_text",
-                "text" =>
-                  "Message Type: NEW_TASK\nTask name: /root/other\nSender: /root\nPayload:\n"
+                "text" => "Message Type: NEW_TASK\nTask name: /root/other\nSender: /root\nPayload:\n"
               },
               %{"type" => "encrypted_content", "encrypted_content" => "mismatched-binding"}
             ]
@@ -1200,10 +1194,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for {endpoint, request_options} <- [
-            {"/backend-api/codex/responses",
-             RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
-            {"/backend-api/codex/responses/compact",
-             RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+            {"/backend-api/codex/responses", RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+            {"/backend-api/codex/responses/compact", RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
             {"/backend-api/codex/responses",
              %{}
              |> RequestOptions.build("/backend-api/codex/responses", payload)
@@ -1360,8 +1352,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         {:non_binary_websocket, 42, :websocket, ordinary_input(), true, false},
         {:stripped_http, "response-fixture", :http, ordinary_input(), false, false},
         {:retained_semantic_http, "response-fixture", :http, tool_result_input(), true, true},
-        {:retained_standalone_http, "response-fixture", :http, standalone_tool_result_input(),
-         true, true}
+        {:retained_standalone_http, "response-fixture", :http, standalone_tool_result_input(), true, true}
       ]
 
       for {label, previous_response_id, transport, input, final_id_present?, expected_marker} <-
@@ -1438,9 +1429,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "carries gateway debug metadata on request options instead of process state" do
       previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-      Application.put_env(:codex_pooler, OperationalSettings,
-        settings: %OperationalSettings{gateway_debug?: true}
-      )
+      Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{gateway_debug?: true})
 
       on_exit(fn ->
         if previous_env,
@@ -1503,12 +1492,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-text-model"}
 
       for {endpoint, options} <- [
-            {"/backend-api/codex/responses",
-             %{native_image_request?: true, effective_model: "gpt-image-2"}},
+            {"/backend-api/codex/responses", %{native_image_request?: true, effective_model: "gpt-image-2"}},
             {"/backend-api/codex/images/generations", %{effective_model: "gpt-image-2"}},
             {"/backend-api/codex/images/generations", %{native_image_request?: true}},
-            {"/backend-api/codex/images/edits",
-             %{native_image_request?: true, effective_model: ""}}
+            {"/backend-api/codex/images/edits", %{native_image_request?: true, effective_model: ""}}
           ] do
         payload = %{"model" => "client-controlled-model", "input" => native_text_input("hello")}
         request_options = RequestOptions.build(options, endpoint, payload)
@@ -1593,8 +1580,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert {:file,
-              {%File.Stream{}, [filename: "audio.wav", content_type: "audio/wav", size: 15]}} =
+      assert {:file, {%File.Stream{}, [filename: "audio.wav", content_type: "audio/wav", size: 15]}} =
                file_part
 
       assert fields == [
@@ -1898,8 +1884,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
            "source" => "client",
            "rewrite" => "ultra_to_xhigh"
          }},
-        {%{"reasoning" => %{"effort" => "low"}},
-         %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
+        {%{"reasoning" => %{"effort" => "low"}}, %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
          %{
            "requested_effort" => "low",
            "applied_effort" => "ultra",
@@ -2197,8 +2182,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       include_cases = [
         {"missing include", %{}, ["reasoning.encrypted_content"]},
         {"non-list include", %{"include" => "unsupported"}, ["reasoning.encrypted_content"]},
-        {"absent encrypted include", %{"include" => ["output_text.logprobs"]},
-         ["output_text.logprobs", "reasoning.encrypted_content"]},
+        {"absent encrypted include", %{"include" => ["output_text.logprobs"]}, ["output_text.logprobs", "reasoning.encrypted_content"]},
         {"duplicate encrypted include",
          %{
            "include" => [
@@ -2405,12 +2389,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       }
 
       cases = [
-        {"absent tools reuses canonical prefix", %{"input" => [existing_prefix, user_message]}, 2,
-         existing_prefix["tools"]},
-        {"absent tools creates empty prefix",
-         %{"instructions" => "  ", "input" => [user_message]}, 2, []},
-        {"empty tools creates prefix before existing prefix",
-         %{"tools" => [], "input" => [existing_prefix, request_item, user_message]}, 4, []},
+        {"absent tools reuses canonical prefix", %{"input" => [existing_prefix, user_message]}, 2, existing_prefix["tools"]},
+        {"absent tools creates empty prefix", %{"instructions" => "  ", "input" => [user_message]}, 2, []},
+        {"empty tools creates prefix before existing prefix", %{"tools" => [], "input" => [existing_prefix, request_item, user_message]}, 4, []},
         {"populated tools creates lowered prefix before existing prefix",
          %{
            "tools" => [populated_tool],
@@ -2780,11 +2761,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       trigger = %{"type" => "compaction_trigger"}
 
       for {name, input, expected_input} <- [
-            {"function output", [function_output, trigger],
-             [strip_image_detail(function_output), trigger]},
+            {"function output", [function_output, trigger], [strip_image_detail(function_output), trigger]},
             {"trigger only", [trigger], [trigger]},
-            {"future custom output", [custom_output, trigger],
-             [strip_image_detail(custom_output), trigger]}
+            {"future custom output", [custom_output, trigger], [strip_image_detail(custom_output), trigger]}
           ] do
         source_payload = %{
           "model" => "gpt-5.6-terra",

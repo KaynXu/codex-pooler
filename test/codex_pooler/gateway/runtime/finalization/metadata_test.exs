@@ -218,9 +218,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
 
     frame_headers = %{"openai-request-id" => "frame-request-legacy"}
 
-    assert :erlang.term_to_binary(
-             Metadata.websocket_response_metadata([], nil, opts, frame_headers)
-           ) ==
+    assert :erlang.term_to_binary(Metadata.websocket_response_metadata([], nil, opts, frame_headers)) ==
              :erlang.term_to_binary(Map.put(expected, "websocket_frame_headers", frame_headers))
   end
 

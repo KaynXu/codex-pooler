@@ -386,10 +386,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     fact = Repo.get(RequestLogFact, request_id)
 
     case {request, request_attempts, turns, settlements, fact} do
-      {%Request{status: ^status, completed_at: %DateTime{}} = request,
-       [%Attempt{status: ^status, completed_at: %DateTime{}} = attempt],
-       [%CodexTurn{status: ^status, completed_at: %DateTime{}} = turn],
-       [%LedgerEntry{} = settlement], %RequestLogFact{} = fact}
+      {%Request{status: ^status, completed_at: %DateTime{}} = request, [%Attempt{status: ^status, completed_at: %DateTime{}} = attempt], [%CodexTurn{status: ^status, completed_at: %DateTime{}} = turn], [%LedgerEntry{} = settlement], %RequestLogFact{} = fact}
       when settlement.attempt_id == attempt.id and turn.final_attempt_id == attempt.id and
              fact.latest_attempt_id == attempt.id and
              fact.latest_settlement_entry_id == settlement.id ->
@@ -421,10 +418,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
       request_rows: rows,
       ledger_entries: Repo.all(from(e in LedgerEntry, where: e.request_id == ^request.id)),
       sessions: Repo.all(from(s in CodexSession, where: s.id in ^session_ids)),
-      owner_leases:
-        Repo.all(from(l in BridgeOwnerLease, where: l.codex_session_id in ^session_ids)),
-      session_aliases:
-        Repo.all(from(a in BridgeSessionAlias, where: a.codex_session_id in ^session_ids)),
+      owner_leases: Repo.all(from(l in BridgeOwnerLease, where: l.codex_session_id in ^session_ids)),
+      session_aliases: Repo.all(from(a in BridgeSessionAlias, where: a.codex_session_id in ^session_ids)),
       demotions: Repo.all(from(d in BridgeDemotion, where: d.pool_id == ^pool_id)),
       circuits: Repo.all(from(c in RoutingCircuitState, where: c.pool_id == ^pool_id)),
       request_log: Accounting.list_request_logs(pool_id, filters: %{request_id: request.id})
@@ -597,8 +592,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
     if mode, do: assert(call.mode == mode)
 
-    assert_receive {:websocket_owner_harness_request,
-                    %WebsocketOwnerRequest{version: 1} = owner_request},
+    assert_receive {:websocket_owner_harness_request, %WebsocketOwnerRequest{version: 1} = owner_request},
                    timeout
 
     assert :ok = WebsocketOwnerRequest.validate(owner_request)

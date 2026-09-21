@@ -77,9 +77,7 @@ defmodule CodexPoolerWeb.Browser.ObservatoryLoginTimingTest do
         %{
           label: label,
           lookups: lookups,
-          public_result:
-            {failed.status, String.contains?(html, @invalid_copy), flash_error(failed),
-             empty_api_key_input?(html)}
+          public_result: {failed.status, String.contains?(html, @invalid_copy), flash_error(failed), empty_api_key_input?(html)}
         }
       end)
 

@@ -8,9 +8,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
 
     application_routes =
       routes
-      |> Enum.reject(
-        &(String.starts_with?(&1.path, "/dev") or String.starts_with?(&1.path, "/live"))
-      )
+      |> Enum.reject(&(String.starts_with?(&1.path, "/dev") or String.starts_with?(&1.path, "/live")))
       |> Enum.map(&{&1.verb, &1.path})
       |> Enum.sort()
 

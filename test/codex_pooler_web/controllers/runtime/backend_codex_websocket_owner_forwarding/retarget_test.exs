@@ -849,8 +849,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RetargetTe
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,
-                 where:
-                   entry.request_id == ^guarded_request.id and entry.entry_kind == "settlement"
+                 where: entry.request_id == ^guarded_request.id and entry.entry_kind == "settlement"
                ),
                :count
              ) == 1
@@ -972,8 +971,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RetargetTe
     stale_payload = CodexPooler.JSON.encode!(%{"id" => "resp_owner_retarget_stale_origin_frame"})
 
     stale_message =
-      {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch,
-       {:data, stale_payload}}
+      {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch, {:data, stale_payload}}
 
     case WebsocketOwnerSession.push_downstream(owner_pid, {:data, stale_payload}) do
       :ok ->

@@ -109,8 +109,7 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
       {
         "expired key",
         %{
-          expires_at:
-            DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+          expires_at: DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
         }
       }
     ]

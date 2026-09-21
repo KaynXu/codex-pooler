@@ -32,8 +32,7 @@ defmodule CodexPooler.Gateway.Routing.AffinityTelemetryTest do
 
     assert :ok = AffinityTelemetry.emit_stale_write(:miss_update, :codex_session)
 
-    assert_receive {@event, %{count: 1},
-                    %{operation: "miss_update", affinity_kind: "codex_session"}}
+    assert_receive {@event, %{count: 1}, %{operation: "miss_update", affinity_kind: "codex_session"}}
 
     assert :ok = AffinityTelemetry.emit_stale_write("pool-4711", <<0xFF>>)
     assert_receive {@event, %{count: 1}, %{operation: "unknown", affinity_kind: "unknown"}}

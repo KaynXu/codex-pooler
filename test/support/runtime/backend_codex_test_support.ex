@@ -49,9 +49,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     setup = gateway_setup(first_upstream)
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-stream-retry",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-stream-retry", compact?: false)
 
     prime_routing_quota!(second.identity)
     use_deterministic_rotation!(setup.pool, 2)
@@ -354,8 +352,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def assert_request_reserved! do
-    assert_receive {CodexPooler.Events,
-                    %{reason: "request_reserved", payload: %{"request_id" => request_id}}},
+    assert_receive {CodexPooler.Events, %{reason: "request_reserved", payload: %{"request_id" => request_id}}},
                    5_000
 
     request_id
@@ -466,13 +463,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       )
     )
 
-    Repo.delete_all(
-      from(rollup in CodexPooler.Accounting.DailyRollup, where: rollup.pool_id == ^pool_id)
-    )
+    Repo.delete_all(from(rollup in CodexPooler.Accounting.DailyRollup, where: rollup.pool_id == ^pool_id))
 
-    Repo.delete_all(
-      from(entitlement in RequestReplayEntitlement, where: entitlement.request_id in ^request_ids)
-    )
+    Repo.delete_all(from(entitlement in RequestReplayEntitlement, where: entitlement.request_id in ^request_ids))
 
     Repo.delete_all(from(turn in CodexTurn, where: turn.request_id in ^request_ids))
     Repo.delete_all(from(attempt in Attempt, where: attempt.request_id in ^request_ids))
@@ -525,13 +518,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       )
     )
 
-    Repo.delete_all(
-      from(api_key in CodexPooler.Access.APIKey, where: api_key.pool_id == ^pool_id)
-    )
+    Repo.delete_all(from(api_key in CodexPooler.Access.APIKey, where: api_key.pool_id == ^pool_id))
 
-    Repo.delete_all(
-      from(settings in CodexPooler.Pools.RoutingSettings, where: settings.pool_id == ^pool_id)
-    )
+    Repo.delete_all(from(settings in CodexPooler.Pools.RoutingSettings, where: settings.pool_id == ^pool_id))
 
     CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id], owner_ids)
   end
@@ -561,8 +550,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       %{
         "source_assignment_ids" => [upstream.assignment.id],
         "source_assignment_models" => %{
-          upstream.assignment.id =>
-            default_codex_source(exposed_model_id, upstream_model_id, display_name)
+          upstream.assignment.id => default_codex_source(exposed_model_id, upstream_model_id, display_name)
         }
       }
       |> Map.merge(requested_metadata)
@@ -711,9 +699,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     assert {:ok, [_window]} =
              QuotaWindows.upsert_quota_windows(identity, [
-               primary_quota_window_attrs(
-                 Map.merge(%{reset_at: reset_at, used_percent: Decimal.new("100")}, overrides)
-               )
+               primary_quota_window_attrs(Map.merge(%{reset_at: reset_at, used_percent: Decimal.new("100")}, overrides))
              ])
   end
 
@@ -975,9 +961,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     identity =
       identity
       |> Ecto.Changeset.change()
-      |> UpstreamIdentity.put_credential_provenance(
-        Keyword.get(opts, :credential_provenance, :codex_chatgpt)
-      )
+      |> UpstreamIdentity.put_credential_provenance(Keyword.get(opts, :credential_provenance, :codex_chatgpt))
       |> Repo.update!()
 
     assert {:ok, _secret} =

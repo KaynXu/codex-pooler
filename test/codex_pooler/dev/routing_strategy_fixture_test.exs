@@ -110,9 +110,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixtureTest do
                Enum.reverse(least_recent_success_expected_order(fixture))
 
       assert {:error, "routing strategy fixture is leased with another routing strategy"} =
-               RoutingStrategyFixture.acquire(
-                 Keyword.put(context.options, :routing_strategy, "bridge_ring")
-               )
+               RoutingStrategyFixture.acquire(Keyword.put(context.options, :routing_strategy, "bridge_ring"))
 
       assert {:ok, second} = RoutingStrategyFixture.acquire(options)
       assert second.leases == 2
@@ -415,8 +413,7 @@ defmodule CodexPooler.Dev.RoutingStrategyFixtureTest do
 
     Repo.all(
       from attempt in Attempt,
-        where:
-          attempt.pool_upstream_assignment_id in ^assignment_ids and attempt.status == "succeeded",
+        where: attempt.pool_upstream_assignment_id in ^assignment_ids and attempt.status == "succeeded",
         select: {attempt.pool_upstream_assignment_id, max(attempt.completed_at)},
         group_by: attempt.pool_upstream_assignment_id
     )

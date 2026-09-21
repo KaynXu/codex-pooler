@@ -607,12 +607,10 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
       expected_inactive_key =
         case scope do
           "model" ->
-            {"model", "unrelated-family", "unrelated-model", nil, "unrelated-quota", "secondary",
-             10_080}
+            {"model", "unrelated-family", "unrelated-model", nil, "unrelated-quota", "secondary", 10_080}
 
           "upstream_model" ->
-            {"upstream_model", "unrelated-family", nil, "unrelated-upstream-model",
-             "unrelated-quota", "secondary", 10_080}
+            {"upstream_model", "unrelated-family", nil, "unrelated-upstream-model", "unrelated-quota", "secondary", 10_080}
         end
 
       assert WindowSelector.logical_key(inactive_alias) == expected_inactive_key
@@ -952,8 +950,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
   end
 
   defp canonical_spark_key("upstream_model") do
-    {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark", "secondary",
-     10_080}
+    {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark", "secondary", 10_080}
   end
 
   defp qf001_explicit_floating(attrs \\ []) do

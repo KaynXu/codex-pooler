@@ -423,13 +423,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     sampler_name = {:global, {:metrics_admission_sampler, System.unique_integer([:positive])}}
 
     {:ok, sampler} =
-      start_supervised(
-        {AdmissionSampler,
-         name: sampler_name,
-         enabled?: true,
-         interval_ms: 60_000,
-         snapshot_reader: fn -> {:ok, snapshot} end}
-      )
+      start_supervised({AdmissionSampler, name: sampler_name, enabled?: true, interval_ms: 60_000, snapshot_reader: fn -> {:ok, snapshot} end})
 
     _state = :sys.get_state(sampler)
 
@@ -621,9 +615,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     metric_lines =
       conn.resp_body
       |> String.split("\n", trim: true)
-      |> Enum.filter(
-        &String.contains?(&1, "codex_pooler_gateway_routing_circuit_transition_count")
-      )
+      |> Enum.filter(&String.contains?(&1, "codex_pooler_gateway_routing_circuit_transition_count"))
 
     assert Enum.any?(metric_lines, &String.contains?(&1, ~s(transition="closed_to_open")))
     assert Enum.any?(metric_lines, &String.contains?(&1, ~s(route_class="proxy_stream")))

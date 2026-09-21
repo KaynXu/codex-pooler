@@ -144,8 +144,7 @@ defmodule CodexPooler.Gateway.RequestCompression.AstraFailOpenLifecycleTest do
       {:ok, session} =
         Websocket.start_codex_session(
           auth,
-          accepted_turn_state:
-            "astra-websocket-turn-#{mode}-#{System.unique_integer([:positive])}"
+          accepted_turn_state: "astra-websocket-turn-#{mode}-#{System.unique_integer([:positive])}"
         )
 
       request_options =
@@ -311,9 +310,7 @@ defmodule CodexPooler.Gateway.RequestCompression.AstraFailOpenLifecycleTest do
   end
 
   defp settlement_entry_kinds(request_id) do
-    Repo.all(
-      from(entry in LedgerEntry, where: entry.request_id == ^request_id, select: entry.entry_kind)
-    )
+    Repo.all(from(entry in LedgerEntry, where: entry.request_id == ^request_id, select: entry.entry_kind))
   end
 
   defp receive_provider_frame! do

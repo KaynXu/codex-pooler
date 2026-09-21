@@ -116,8 +116,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContex
         {count + 1, Map.update(classes, class, 1, &(&1 + 1))}
       end)
 
-    {min(count, @count_cap), count > @count_cap,
-     Map.new(classes, fn {class, class_count} -> {class, min(class_count, @count_cap)} end)}
+    {min(count, @count_cap), count > @count_cap, Map.new(classes, fn {class, class_count} -> {class, min(class_count, @count_cap)} end)}
   end
 
   defp item_counts(nil), do: {0, false, %{}}

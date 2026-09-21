@@ -187,9 +187,7 @@ defmodule CodexPoolerWeb.Layouts do
   """
   attr :id, :string, default: nil
 
-  attr :class, :any,
-    default:
-      "card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full"
+  attr :class, :any, default: "card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full"
 
   def theme_toggle(assigns) do
     ~H"""

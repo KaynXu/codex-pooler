@@ -25,8 +25,7 @@ defmodule CodexPooler.Accounting.RequestLogs.PayloadCompressionProjection do
       candidate_count: non_negative_integer(Map.get(compression, "candidate_count")),
       compressed_count: non_negative_integer(Map.get(compression, "compressed_count")),
       skipped_count: non_negative_integer(Map.get(compression, "skipped_count")),
-      tokenizer_input_skipped_count:
-        non_negative_integer(Map.get(compression, "tokenizer_input_skipped_count")),
+      tokenizer_input_skipped_count: non_negative_integer(Map.get(compression, "tokenizer_input_skipped_count")),
       original_bytes: non_negative_integer(Map.get(compression, "original_bytes")),
       compressed_bytes: non_negative_integer(Map.get(compression, "compressed_bytes")),
       saved_bytes: non_negative_integer(Map.get(compression, "saved_bytes")),

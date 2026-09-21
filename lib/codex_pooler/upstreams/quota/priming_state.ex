@@ -42,8 +42,7 @@ defmodule CodexPooler.Upstreams.Quota.PrimingState do
         |> tap_priming_change(pool_id)
 
       nil ->
-        {:error,
-         lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
+        {:error, lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
     end
   end
 

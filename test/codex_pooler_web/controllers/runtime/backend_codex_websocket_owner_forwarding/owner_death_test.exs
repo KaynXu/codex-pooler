@@ -102,8 +102,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
             [remote_node],
             [
               calls: %{
-                remote_node =>
-                  {:barrier_return, parent, release_ref, {:error, :owner_unavailable}}
+                remote_node => {:barrier_return, parent, release_ref, {:error, :owner_unavailable}}
               },
               notify: parent,
               capture_request_to: parent
@@ -121,8 +120,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
-      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
-                      :remote_submit_request_v1},
+      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref, :remote_submit_request_v1},
                      1_000
 
       try do
@@ -136,8 +134,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       original_downstream = remote_state.websocket_owner_downstream
 
-      assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch,
-                      {:data, recovered_metadata_frame}},
+      assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch, {:data, recovered_metadata_frame}},
                      1_000
 
       assert correlation_id == original_downstream.correlation_id
@@ -148,8 +145,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
                "headers" => %{"x-models-etag" => _models_etag}
              } = CodexPooler.JSON.decode!(recovered_metadata_frame)
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch,
-                      {:data, recovered_frame}},
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch, {:data, recovered_frame}},
                      1_000
 
       assert owner_response_id(recovered_frame) == "resp_owner_mode_loss_recovered"
@@ -251,8 +247,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
     assert {:ok, ^remote_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch,
-                {:data, stale_frame}},
+               {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch, {:data, stale_frame}},
                remote_state
              )
 
@@ -279,8 +274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
                      1_000
 
       try do
@@ -454,9 +448,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-visible-kill", "owner-visible-kill",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-visible-kill", "owner-visible-kill", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     remote_node = :"codex_pooler@visible-killed-owner.example"
 
@@ -618,9 +610,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     assert attempt.status == "failed"
 
     assert [turn] =
-             Repo.all(
-               from(t in CodexTurn, where: t.codex_session_id == ^remote_state.codex_session.id)
-             )
+             Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^remote_state.codex_session.id))
 
     assert turn.status == "failed"
 
@@ -877,8 +867,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       Repo.delete_all(
         from(l in RequestClientRetryLink,
-          where:
-            l.predecessor_request_id in ^request_ids or l.successor_request_id in ^request_ids
+          where: l.predecessor_request_id in ^request_ids or l.successor_request_id in ^request_ids
         )
       )
 

@@ -36,9 +36,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
   describe "the row a relay event is allowed to be" do
     test "the table carries no identifier column and no free-text column" do
       rows =
-        Repo.query!(
-          "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'telemetry_relay_events' ORDER BY column_name"
-        ).rows
+        Repo.query!("SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = 'telemetry_relay_events' ORDER BY column_name").rows
 
       columns = Map.new(rows, fn [name, type, _nullable] -> {name, type} end)
       nullability = Map.new(rows, fn [name, _type, nullable] -> {name, nullable} end)
@@ -286,9 +284,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       assert {:error, changeset} =
                Relay.insert("pre_attempt_release", %{}, RelayEvent.max_count() + 1)
 
-      assert {:count,
-              {"must be less than or equal to %{number}",
-               [validation: :number, kind: :less_than_or_equal_to, number: max]}} =
+      assert {:count, {"must be less than or equal to %{number}", [validation: :number, kind: :less_than_or_equal_to, number: max]}} =
                List.keyfind(changeset.errors, :count, 0)
 
       assert max == RelayEvent.max_count()
@@ -589,9 +585,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       assert Relay.health().fresh_consumers == baseline.fresh_consumers + 1
 
       # A stale consumer heartbeat is not liveness either.
-      Repo.query!(
-        "UPDATE telemetry_relay_consumers SET heartbeat_at = clock_timestamp() - interval '120 seconds' WHERE owner = 'contract-live'"
-      )
+      Repo.query!("UPDATE telemetry_relay_consumers SET heartbeat_at = clock_timestamp() - interval '120 seconds' WHERE owner = 'contract-live'")
 
       assert Relay.health().fresh_consumers == baseline.fresh_consumers
 
@@ -633,15 +627,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
       owner = self()
 
       runtime =
-        start_supervised!(
-          {RelayRuntime,
-           enabled: true,
-           role: "worker",
-           start_paused: true,
-           name: {:global, {__MODULE__, make_ref()}},
-           flush_ms: 60_000,
-           drain_ms: 60_000}
-        )
+        start_supervised!({RelayRuntime, enabled: true, role: "worker", start_paused: true, name: {:global, {__MODULE__, make_ref()}}, flush_ms: 60_000, drain_ms: 60_000})
 
       Sandbox.allow(Repo, owner, runtime)
       :ok = GenServer.call(runtime, :activate)
@@ -714,9 +700,7 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
 
   defp database_event_constraint_definition do
     %{rows: [[definition]]} =
-      Repo.query!(
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'telemetry_relay_events'::regclass AND conname = 'event_allowed'"
-      )
+      Repo.query!("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'telemetry_relay_events'::regclass AND conname = 'event_allowed'")
 
     definition
   end
@@ -730,14 +714,10 @@ defmodule CodexPooler.Telemetry.RelayContractTest do
 
     Repo.query!("CREATE TEMP TABLE #{table} (event varchar(255)) ON COMMIT DROP")
 
-    Repo.query!(
-      "ALTER TABLE #{table} ADD CONSTRAINT expected_event_allowed CHECK (event IN (#{events}))"
-    )
+    Repo.query!("ALTER TABLE #{table} ADD CONSTRAINT expected_event_allowed CHECK (event IN (#{events}))")
 
     %{rows: [[definition]]} =
-      Repo.query!(
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = '#{table}'::regclass AND conname = 'expected_event_allowed'"
-      )
+      Repo.query!("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = '#{table}'::regclass AND conname = 'expected_event_allowed'")
 
     definition
   end

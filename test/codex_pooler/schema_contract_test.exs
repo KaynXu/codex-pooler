@@ -1261,8 +1261,7 @@ defmodule CodexPooler.SchemaContractTest do
              """).rows
 
     assert replay_function_contracts() == %{
-             "enforce_request_replay_entitlement_update" =>
-               {"v", "u", ["search_path=pg_catalog"]},
+             "enforce_request_replay_entitlement_update" => {"v", "u", ["search_path=pg_catalog"]},
              "enforce_request_replay_request_storage" => {"v", "u", ["search_path=pg_catalog"]},
              "enforce_request_replay_turn_snapshot" => {"v", "u", ["search_path=pg_catalog"]},
              "request_replay_db_now" => {"v", "s", ["search_path=pg_catalog"]}

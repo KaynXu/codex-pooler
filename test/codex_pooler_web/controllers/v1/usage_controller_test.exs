@@ -71,9 +71,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     File.chmod!(config, 0o600)
 
     server =
-      start_supervised!(
-        {Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-      )
+      start_supervised!({Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 

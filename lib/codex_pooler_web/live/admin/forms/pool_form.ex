@@ -133,8 +133,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     %{
       "query" => normalize_query(value_for(attrs, "query", "")),
       "status" => if(status in ["all" | @pool_statuses], do: status, else: "all"),
-      "traffic_window" =>
-        attrs |> value_for("traffic_window", "24h") |> normalize_traffic_window()
+      "traffic_window" => attrs |> value_for("traffic_window", "24h") |> normalize_traffic_window()
     }
   end
 
@@ -482,9 +481,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     |> submitted_rows()
     |> Enum.reduce(%{}, fn submitted_row, modes ->
       with exposed_model_id when is_binary(exposed_model_id) <-
-             ModelServingOverride.canonical_exposed_model_id(
-               submitted_value(submitted_row, "exposed_model_id")
-             ),
+             ModelServingOverride.canonical_exposed_model_id(submitted_value(submitted_row, "exposed_model_id")),
            mode when mode in ["auto", "lite", "full"] <-
              normalize_submitted_mode(submitted_value(submitted_row, "mode")),
            true <- MapSet.member?(known_ids, exposed_model_id) do

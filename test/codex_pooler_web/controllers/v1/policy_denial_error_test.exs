@@ -31,8 +31,7 @@ defmodule CodexPoolerWeb.V1.PolicyDenialErrorTest do
         conn
         |> Phoenix.ConnTest.recycle()
         |> PublicGatewayResult.send(
-          {:error,
-           %{status: status, code: code, message: "synthetic provider wording", param: nil}},
+          {:error, %{status: status, code: code, message: "synthetic provider wording", param: nil}},
           &Function.identity/1
         )
 

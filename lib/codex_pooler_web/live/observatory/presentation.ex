@@ -143,10 +143,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
 
     Map.new(
       categories: CodexPooler.JSON.encode!(Enum.map(rows, & &1.label)),
-      series:
-        CodexPooler.JSON.encode!(
-          column_series ++ [%{"name" => "Cost", "type" => "line", "data" => cost_values}]
-        ),
+      series: CodexPooler.JSON.encode!(column_series ++ [%{"name" => "Cost", "type" => "line", "data" => cost_values}]),
       units: CodexPooler.JSON.encode!(token_kinds ++ ["USD"]),
       value_kinds: CodexPooler.JSON.encode!(token_kinds ++ ["usd"]),
       yaxis:

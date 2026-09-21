@@ -191,9 +191,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
       rule = alert_rule_fixture(fixture.pool)
       events = capture!(@quota_decision, :quota)
 
-      assert perform_job(AlertEvaluationWorker, alert_args(rule, fixture.as_of),
-               attempted_at: fixture.as_of
-             ) == :ok
+      assert perform_job(AlertEvaluationWorker, alert_args(rule, fixture.as_of), attempted_at: fixture.as_of) == :ok
 
       decisions = drain(events)
       assert decisions != []
@@ -268,9 +266,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
       rule = alert_rule_fixture(fixture.pool)
       events = capture!(@quota_decision, :quota)
 
-      assert perform_job(AlertEvaluationWorker, alert_args(rule, fixture.as_of),
-               attempted_at: fixture.as_of
-             ) == :ok
+      assert perform_job(AlertEvaluationWorker, alert_args(rule, fixture.as_of), attempted_at: fixture.as_of) == :ok
 
       assert length(drain(events)) == 3
     end
@@ -343,9 +339,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
     registry
     |> Core.scrape()
     |> String.split("\n")
-    |> Enum.filter(
-      &(String.starts_with?(&1, metric_prefix) and String.contains?(&1, ~s(via="#{via}")))
-    )
+    |> Enum.filter(&(String.starts_with?(&1, metric_prefix) and String.contains?(&1, ~s(via="#{via}"))))
     |> Enum.map(&String.replace(&1, ~s(via="#{via}"), ~s(via="normalized")))
     |> Enum.sort()
   end
@@ -378,10 +372,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
   defp reporter do
     registry = Module.concat(__MODULE__, "Registry#{System.unique_integer([:positive])}")
 
-    start_supervised!(
-      {Core,
-       metrics: CodexPoolerWeb.Telemetry.prometheus_metrics(), name: registry, start_async: false}
-    )
+    start_supervised!({Core, metrics: CodexPoolerWeb.Telemetry.prometheus_metrics(), name: registry, start_async: false})
 
     registry
   end
@@ -501,8 +492,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
     fixture =
       assignment_fixture!(%{
         "base_url" => FakeUpstream.url(upstream),
-        "access_token_expires_at" =>
-          DateTime.utc_now() |> DateTime.add(10, :day) |> DateTime.to_iso8601(),
+        "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(10, :day) |> DateTime.to_iso8601(),
         "saved_reset_redemption" => pending_redemption(consumed_at)
       })
 
@@ -547,8 +537,7 @@ defmodule CodexPooler.Telemetry.RelayJobEmissionTest do
     fixture =
       assignment_fixture!(%{
         "base_url" => FakeUpstream.url(upstream),
-        "access_token_expires_at" =>
-          DateTime.utc_now() |> DateTime.add(10, :day) |> DateTime.to_iso8601()
+        "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(10, :day) |> DateTime.to_iso8601()
       })
 
     # A weekly window already carrying real usage: the incoming zero is the

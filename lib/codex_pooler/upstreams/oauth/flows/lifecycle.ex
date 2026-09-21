@@ -50,8 +50,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Lifecycle do
         state_token: state_token,
         redirect_uri: CodexAuth.browser_redirect_uri(),
         code_verifier: pkce.code_verifier,
-        expires_at:
-          Keyword.get(opts, :expires_at, DateTime.add(timestamp, @browser_flow_ttl_seconds)),
+        expires_at: Keyword.get(opts, :expires_at, DateTime.add(timestamp, @browser_flow_ttl_seconds)),
         metadata: safe_start_metadata(scope, opts)
       }
 
@@ -59,8 +58,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Lifecycle do
         {:ok,
          %{
            flow: flow,
-           authorization_url:
-             CodexAuth.build_browser_authorization_url(state_token, pkce.code_challenge)
+           authorization_url: CodexAuth.build_browser_authorization_url(state_token, pkce.code_challenge)
          }}
       end
     end

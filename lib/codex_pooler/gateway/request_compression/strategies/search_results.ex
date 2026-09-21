@@ -67,8 +67,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
                 @default_max_matches_per_file,
                 1
               ),
-            max_total_match_count:
-              Strategies.integer_option(opts, :max_matches, @default_max_matches, 1)
+            max_total_match_count: Strategies.integer_option(opts, :max_matches, @default_max_matches, 1)
           },
           opts
         )

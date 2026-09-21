@@ -243,9 +243,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
   defp validate_email_channel(changeset) do
     changeset
     |> validate_required([:email_to])
-    |> validate_format(:email_to, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-      message: "must be a valid email address"
-    )
+    |> validate_format(:email_to, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "must be a valid email address")
     |> validate_absent([
       :endpoint_scheme,
       :endpoint_host,

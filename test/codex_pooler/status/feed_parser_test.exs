@@ -49,18 +49,14 @@ defmodule CodexPooler.Status.FeedParserTest do
 
     for n <- 1..200 do
       assert {:ok, _} =
-               FeedParser.parse(
-                 "<rss><channel><warm_name_#{n} warm_attribute_#{n}='value'/></channel></rss>"
-               )
+               FeedParser.parse("<rss><channel><warm_name_#{n} warm_attribute_#{n}='value'/></channel></rss>")
     end
 
     before_count = :erlang.system_info(:atom_count)
 
     for n <- 1..200 do
       assert {:ok, _} =
-               FeedParser.parse(
-                 "<rss><channel><external_name_#{n} external_attribute_#{n}='value'/></channel></rss>"
-               )
+               FeedParser.parse("<rss><channel><external_name_#{n} external_attribute_#{n}='value'/></channel></rss>")
     end
 
     assert :erlang.system_info(:atom_count) == before_count

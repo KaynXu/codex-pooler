@@ -184,8 +184,7 @@ defmodule CodexPooler.AccountsFixtures do
     granted =
       Repo.all(
         from membership in Membership,
-          where:
-            membership.created_by_user_id in ^user_ids and membership.user_id not in ^user_ids,
+          where: membership.created_by_user_id in ^user_ids and membership.user_id not in ^user_ids,
           distinct: true,
           select: membership.user_id
       )
@@ -200,9 +199,7 @@ defmodule CodexPooler.AccountsFixtures do
     dumped_user_ids = Enum.map(user_ids, &Ecto.UUID.dump!/1)
 
     pool_ids =
-      Repo.all(
-        from pool in "pools", where: pool.created_by_user_id in ^dumped_user_ids, select: pool.id
-      )
+      Repo.all(from pool in "pools", where: pool.created_by_user_id in ^dumped_user_ids, select: pool.id)
 
     identity_ids =
       Repo.all(

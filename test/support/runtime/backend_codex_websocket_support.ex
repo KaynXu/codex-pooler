@@ -249,9 +249,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport do
           5 -> await_succeeded_pool_requests!(pool_id, expected_count, deadline)
         end
       else
-        flunk(
-          "expected #{expected_count} succeeded websocket requests, got #{inspect(Enum.map(requests, & &1.status))}"
-        )
+        flunk("expected #{expected_count} succeeded websocket requests, got #{inspect(Enum.map(requests, & &1.status))}")
       end
     end
   end

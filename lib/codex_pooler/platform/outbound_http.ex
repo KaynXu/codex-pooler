@@ -338,8 +338,7 @@ defmodule CodexPooler.Platform.OutboundHTTP do
   defp host_matches?(host, entry_host, false), do: host == entry_host
 
   defp host_matches?(host, entry_host, true),
-    do:
-      host == entry_host or (not ip_address?(host) and String.ends_with?(host, "." <> entry_host))
+    do: host == entry_host or (not ip_address?(host) and String.ends_with?(host, "." <> entry_host))
 
   defp cidr_match?(host, entry) do
     with [network, prefix] <- String.split(entry, "/", parts: 2),

@@ -569,9 +569,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     if session_key_unique_constraint?(changeset) do
       case active_session_for_update(auth, opts, session_key, now) do
         %CodexSession{} = session ->
-          Logger.info(
-            "session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session"
-          )
+          Logger.info("session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session")
 
           update_existing_session!(session, auth, opts, owner, now)
 

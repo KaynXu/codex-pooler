@@ -65,8 +65,7 @@ defmodule CodexPooler.Accounting.PreAttemptReleaseTest do
       assert release.details["release_reason"] == "stale_reservation_recovered"
       assert release.details[PreAttemptRelease.detail_key()] == PreAttemptRelease.stale_sweep()
 
-      assert_receive {^events, %{count: 1},
-                      %{phase: "stale_sweep", transport: "http_sse", release_reason: reason}}
+      assert_receive {^events, %{count: 1}, %{phase: "stale_sweep", transport: "http_sse", release_reason: reason}}
 
       assert reason == "stale_reservation_recovered"
 

@@ -139,8 +139,7 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
             {line_ending, rng} = rand_pick(rng, ["\n", "\r", "\r\n"])
             label = "event: response.output_text.delta"
 
-            {[label, line_ending | Enum.intersperse(data_lines, line_ending)],
-             [label | data_lines], rng}
+            {[label, line_ending | Enum.intersperse(data_lines, line_ending)], [label | data_lines], rng}
           else
             {line_ending, rng} = rand_pick(rng, ["\n", "\r", "\r\n"])
             {Enum.intersperse(data_lines, line_ending), data_lines, rng}
@@ -377,12 +376,10 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
           {"", rng}
 
         :separator_terminal ->
-          {~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_prop","status":"completed"}}\n\n),
-           rng}
+          {~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_prop","status":"completed"}}\n\n), rng}
 
         :bare_terminal ->
-          {~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_prop","status":"completed"}}),
-           rng}
+          {~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_prop","status":"completed"}}), rng}
 
         :partial ->
           {partial_size, rng} = rand_range(rng, 1, 300)
@@ -395,8 +392,7 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
 
   defp fold_public_normalizer(chunks) do
     {outputs, state} =
-      Enum.map_reduce(chunks, StreamProtocol.public_openai_responses_stream_state(), fn chunk,
-                                                                                        state ->
+      Enum.map_reduce(chunks, StreamProtocol.public_openai_responses_stream_state(), fn chunk, state ->
         StreamProtocol.normalize_public_openai_responses_sse_data(chunk, state)
       end)
 

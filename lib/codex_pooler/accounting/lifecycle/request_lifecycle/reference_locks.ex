@@ -67,9 +67,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
     do: {:error, error(:upstream_identity_not_found, "upstream identity was not found")}
 
   defp lock_pair(_upstream_identity_id, nil),
-    do:
-      {:error,
-       error(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")}
+    do: {:error, error(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")}
 
   defp lock_pair(upstream_identity_id, pool_upstream_assignment_id) do
     identity =
@@ -91,8 +89,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
         {:error, error(:upstream_identity_not_found, "upstream identity was not found")}
 
       is_nil(assignment) ->
-        {:error,
-         error(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")}
+        {:error, error(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")}
 
       assignment.upstream_identity_id != identity.id ->
         {:error,

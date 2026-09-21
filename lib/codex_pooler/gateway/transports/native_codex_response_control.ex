@@ -52,9 +52,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
   # headers intact, but a provider x-models-etag must never reach the client
   # (compatibility matrix backend_responses_etag.upstream_etag_relay).
   @spec strip_untrusted_models_etag(term()) :: sanitization_result()
-  def strip_untrusted_models_etag(
-        %{"type" => "codex.response.metadata", "headers" => headers} = event
-      )
+  def strip_untrusted_models_etag(%{"type" => "codex.response.metadata", "headers" => headers} = event)
       when is_map(headers) do
     kept = Map.reject(headers, fn {name, _value} -> models_etag_header_name?(name) end)
 
@@ -65,10 +63,8 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
     end
   end
 
-  def strip_untrusted_models_etag(
-        %{"type" => "codex.response.metadata", "headers" => _invalid} = event
-      ),
-      do: {:changed, Map.delete(event, "headers")}
+  def strip_untrusted_models_etag(%{"type" => "codex.response.metadata", "headers" => _invalid} = event),
+    do: {:changed, Map.delete(event, "headers")}
 
   def strip_untrusted_models_etag(event) when is_map(event), do: :unchanged
   def strip_untrusted_models_etag(_event), do: {:error, :invalid_event}

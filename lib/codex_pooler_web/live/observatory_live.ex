@@ -58,8 +58,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   def handle_event("select-traffic-mode", _params, socket), do: {:noreply, socket}
 
   def handle_event("pause-refresh", _params, socket) do
-    {:noreply,
-     assign(socket, paused: true, observatory_state: :stale, freshness: "Updates paused")}
+    {:noreply, assign(socket, paused: true, observatory_state: :stale, freshness: "Updates paused")}
   end
 
   def handle_event("resume-refresh", _params, socket) do

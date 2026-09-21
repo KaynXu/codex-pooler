@@ -49,10 +49,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
           | :duplicate_compaction
           | :invalid_compaction
           | :missing_terminal
-          | {:provider_failure, StreamProtocol.terminal_failure(),
-             StreamProtocol.terminal_failure(), String.t()}
-          | {:invalid_after_provider_failure, StreamProtocol.terminal_failure(),
-             StreamProtocol.terminal_failure(), String.t()}
+          | {:provider_failure, StreamProtocol.terminal_failure(), StreamProtocol.terminal_failure(), String.t()}
+          | {:invalid_after_provider_failure, StreamProtocol.terminal_failure(), StreamProtocol.terminal_failure(), String.t()}
 
   @type websocket_collection_result ::
           {:ok, map()}
@@ -373,8 +371,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
       {:error, {:provider_failure, terminal_failure, provider_failure, param_state}}
       when blocks != [] ->
-        {:error,
-         {:invalid_after_provider_failure, terminal_failure, provider_failure, param_state}}
+        {:error, {:invalid_after_provider_failure, terminal_failure, provider_failure, param_state}}
 
       {:error, _reason} = error ->
         error
@@ -469,17 +466,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
     case StreamProtocol.terminal_outcome_event(event_summary) do
       {:ok, %{kind: :failed} = outcome} ->
-        {:error,
-         {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome),
-          param_state}}
+        {:error, {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome), param_state}}
 
       {:ok, %{kind: :incomplete, incomplete_reason: reason} = outcome} when is_binary(reason) ->
         if String.trim(reason) == "" do
           {:error, :invalid_compaction}
         else
-          {:error,
-           {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome),
-            param_state}}
+          {:error, {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome), param_state}}
         end
 
       _outcome ->

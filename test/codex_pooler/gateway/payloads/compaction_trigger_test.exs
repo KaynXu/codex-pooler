@@ -379,8 +379,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
             %{"client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{})}},
             %{
               "client_metadata" => %{
-                "x-codex-turn-metadata" =>
-                  CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
+                "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
               }
             },
             %{"client_metadata" => ["not", "a", "map"]},

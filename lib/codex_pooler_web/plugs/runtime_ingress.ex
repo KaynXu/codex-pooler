@@ -367,9 +367,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   defp enforce_image_generation_permission(%Plug.Conn{halted: true} = conn), do: conn
 
-  defp enforce_image_generation_permission(
-         %Plug.Conn{private: %{runtime_api_auth: %{pool: pool}}} = conn
-       ) do
+  defp enforce_image_generation_permission(%Plug.Conn{private: %{runtime_api_auth: %{pool: pool}}} = conn) do
     if image_generation_request?(conn) and not PoolRouting.allow_image_generation?(pool) do
       send_runtime_error(conn, %{
         status: 403,

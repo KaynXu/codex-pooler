@@ -278,8 +278,7 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
       "OPENAI_API_KEY" => nil,
       "tokens" => %{
         "id_token" => id_token,
-        "access_token" =>
-          jwt_token(%{"exp" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()}),
+        "access_token" => jwt_token(%{"exp" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_unix()}),
         "refresh_token" => fixture.attrs.refresh_token,
         "account_id" => fixture.attrs.chatgpt_account_id
       },
@@ -347,16 +346,12 @@ defmodule CodexPooler.Upstreams.PostCommitPublicationTest do
     pool_ids =
       Repo.all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^slug, select: pool.id)
 
-    Repo.delete_all(
-      from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id
-    )
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.chatgpt_account_id == ^account_id)
 
     Repo.delete_all(from event in AuditEvent, where: event.pool_id in ^pool_ids)
 
     for pool_id <- pool_ids do
-      Repo.delete_all(
-        from job in Oban.Job, where: fragment("?->>'pool_id' = ?", job.args, ^pool_id)
-      )
+      Repo.delete_all(from job in Oban.Job, where: fragment("?->>'pool_id' = ?", job.args, ^pool_id))
     end
 
     Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id in ^pool_ids)

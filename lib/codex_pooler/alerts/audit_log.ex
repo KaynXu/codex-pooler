@@ -218,8 +218,7 @@ defmodule CodexPooler.Alerts.AuditLog do
       endpoint_host: field(channel, :endpoint_host),
       endpoint_path_prefix: field(channel, :endpoint_path_prefix),
       endpoint_fingerprint: field(channel, :endpoint_fingerprint),
-      webhook_signing_secret_configured:
-        configured?(field(channel, :webhook_signing_secret_key_version))
+      webhook_signing_secret_configured: configured?(field(channel, :webhook_signing_secret_key_version))
     }
   end
 

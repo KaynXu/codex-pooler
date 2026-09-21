@@ -243,8 +243,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       end
     else
       false ->
-        {add_error(state, :invalid_model_name, "model names must be strings", "models"),
-         identities}
+        {add_error(state, :invalid_model_name, "model names must be strings", "models"), identities}
 
       {:error, state} ->
         {state, identities}
@@ -532,8 +531,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       categories: Enum.map(model["categories"], &String.trim/1),
       availability: availability,
       input: decimal(values["input"]),
-      cached_input:
-        decimal(values["cached_input"]) || if(availability == "priced", do: Decimal.new(0)),
+      cached_input: decimal(values["cached_input"]) || if(availability == "priced", do: Decimal.new(0)),
       cache_write: decimal(values["cache_write"]),
       output: output,
       reasoning: reasoning,

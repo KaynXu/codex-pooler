@@ -705,9 +705,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     request_options =
       request_options(auth, request_payload, setup)
-      |> RequestOptions.put_transport(
-        websocket_writer: fn _frame -> send(self(), :stale_frame) end
-      )
+      |> RequestOptions.put_transport(websocket_writer: fn _frame -> send(self(), :stale_frame) end)
 
     assert {:ok, reserved} =
              Accounting.reserve(auth, setup.model, request_payload, %{
@@ -821,8 +819,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                Accounting.reserve(auth, setup.model, request_payload, %{
                  endpoint: @endpoint_path,
                  transport: "websocket",
-                 correlation_id:
-                   "stale-http-route-#{status}-#{System.unique_integer([:positive])}",
+                 correlation_id: "stale-http-route-#{status}-#{System.unique_integer([:positive])}",
                  request_metadata: %{}
                })
 
@@ -947,8 +944,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                Accounting.reserve(auth, setup.model, payload, %{
                  endpoint: @endpoint_path,
                  transport: "http_sse",
-                 correlation_id:
-                   "stream-outcome-interrupted-#{System.unique_integer([:positive])}",
+                 correlation_id: "stream-outcome-interrupted-#{System.unique_integer([:positive])}",
                  request_metadata: %{}
                })
 
@@ -989,8 +985,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @endpoint_path,
                transport: "http_sse",
-               correlation_id:
-                 "stream-outcome-request-finalized-#{System.unique_integer([:positive])}",
+               correlation_id: "stream-outcome-request-finalized-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -1040,8 +1035,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @endpoint_path,
                transport: "http_sse",
-               correlation_id:
-                 "stream-outcome-attempt-finalized-#{System.unique_integer([:positive])}",
+               correlation_id: "stream-outcome-attempt-finalized-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -1141,8 +1135,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                Accounting.reserve(auth, setup.model, payload, %{
                  endpoint: @endpoint_path,
                  transport: "http_sse",
-                 correlation_id:
-                   "stream-outcome-first-event-#{System.unique_integer([:positive])}",
+                 correlation_id: "stream-outcome-first-event-#{System.unique_integer([:positive])}",
                  request_metadata: %{}
                })
 
@@ -1176,8 +1169,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                Accounting.reserve(auth, setup.model, payload, %{
                  endpoint: @endpoint_path,
                  transport: "http_sse",
-                 correlation_id:
-                   "stream-outcome-health-failure-#{System.unique_integer([:positive])}",
+                 correlation_id: "stream-outcome-health-failure-#{System.unique_integer([:positive])}",
                  request_metadata: %{}
                })
 
@@ -1269,8 +1261,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     assert Repo.aggregate(
              from(entry in CodexPooler.Accounting.LedgerEntry,
-               where:
-                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+               where: entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
              ),
              :count,
              :id
@@ -1404,8 +1395,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                  state
                )
 
-      assert_received {:stream_outcome,
-                       %{outcome: "interrupted", downstream_transport: "http_sse"}}
+      assert_received {:stream_outcome, %{outcome: "interrupted", downstream_transport: "http_sse"}}
     end)
 
     request = Repo.reload!(reserved.request)
@@ -1703,8 +1693,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @endpoint_path,
                transport: "websocket",
-               correlation_id:
-                 "websocket-connection-limit-exhausted-#{System.unique_integer([:positive])}",
+               correlation_id: "websocket-connection-limit-exhausted-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -1974,8 +1963,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @endpoint_path,
                transport: "http_sse",
-               correlation_id:
-                 "upstream-stream-interrupted-#{System.unique_integer([:positive])}",
+               correlation_id: "upstream-stream-interrupted-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -2029,8 +2017,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @public_responses_endpoint,
                transport: "http_sse",
-               correlation_id:
-                 "tagged-upstream-stream-interrupted-#{System.unique_integer([:positive])}",
+               correlation_id: "tagged-upstream-stream-interrupted-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -2107,8 +2094,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @public_responses_endpoint,
                transport: "http_sse",
-               correlation_id:
-                 "websocket-terminal-delivery-timeout-#{System.unique_integer([:positive])}",
+               correlation_id: "websocket-terminal-delivery-timeout-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -2138,8 +2124,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     send(
       stream.relay,
-      {:websocket_owner_frame, stream.correlation_id, nil,
-       {:data, ~s({"type":"response.output_text.delta","delta":"visible"})}}
+      {:websocket_owner_frame, stream.correlation_id, nil, {:data, ~s({"type":"response.output_text.delta","delta":"visible"})}}
     )
 
     assert_receive {^stream_ref, {:preflight, :stream}}, 2_000
@@ -2300,8 +2285,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @public_responses_endpoint,
                transport: "http_sse",
-               correlation_id:
-                 "untagged-upstream-stream-interrupted-#{System.unique_integer([:positive])}",
+               correlation_id: "untagged-upstream-stream-interrupted-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -2372,8 +2356,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @endpoint_path,
                transport: "http_sse",
-               correlation_id:
-                 "upstream-stream-neutral-probe-#{System.unique_integer([:positive])}",
+               correlation_id: "upstream-stream-neutral-probe-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -2430,8 +2413,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
              Accounting.reserve(auth, setup.model, payload, %{
                endpoint: @endpoint_path,
                transport: "http_sse",
-               correlation_id:
-                 "terminal-request-attempt-fence-#{System.unique_integer([:positive])}",
+               correlation_id: "terminal-request-attempt-fence-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -2553,8 +2535,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                Accounting.reserve(auth, setup.model, payload, %{
                  endpoint: @endpoint_path,
                  transport: "http_sse",
-                 correlation_id:
-                   "terminal-#{health_neutral_code}-probe-#{System.unique_integer([:positive])}",
+                 correlation_id: "terminal-#{health_neutral_code}-probe-#{System.unique_integer([:positive])}",
                  request_metadata: %{}
                })
 
@@ -2847,8 +2828,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   end
 
   defp stale_invalid_response(:invalid_json, context) do
-    {%Req.Response{status: 200, headers: [{"content-type", ["application/json"]}], body: "{"},
-     Map.put(context, :payload, Map.put(context.payload, "stream", false))}
+    {%Req.Response{status: 200, headers: [{"content-type", ["application/json"]}], body: "{"}, Map.put(context, :payload, Map.put(context.payload, "stream", false))}
   end
 
   defp stale_invalid_response(:invalid_compaction, context) do
@@ -2996,8 +2976,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                  %{
                    request_id: deterministic_rotation_seed(2, 0),
                    upstream_endpoint: @endpoint_path,
-                   correlation_id:
-                     "misalignment-#{request_suffix}-#{System.unique_integer([:positive])}"
+                   correlation_id: "misalignment-#{request_suffix}-#{System.unique_integer([:positive])}"
                  },
                  @endpoint_path,
                  request_payload

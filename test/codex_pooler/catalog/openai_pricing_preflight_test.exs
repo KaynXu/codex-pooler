@@ -48,9 +48,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
           Map.put(tool, "rates", [hd(tool["rates"]), %{"amounts" => ["2"]}])
         ] do
       result =
-        OpenAIPricingPreflight.validate_payload(
-          put_in(payload, ["tools", "file-search"], changed)
-        )
+        OpenAIPricingPreflight.validate_payload(put_in(payload, ["tools", "file-search"], changed))
 
       refute result.compatible?
       assert Enum.any?(result.errors, &(&1.code == :invalid_tool_rates))
@@ -552,9 +550,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
         ],
         value <- values do
       result =
-        OpenAIPricingPreflight.validate_payload(
-          put_in(payload, ["models", "future-model", key], value)
-        )
+        OpenAIPricingPreflight.validate_payload(put_in(payload, ["models", "future-model", key], value))
 
       refute result.compatible?
       assert result.errors != []

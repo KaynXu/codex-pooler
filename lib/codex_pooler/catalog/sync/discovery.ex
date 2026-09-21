@@ -72,8 +72,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
              retry: false,
              receive_timeout: 30_000,
              finch: OutboundHTTP.pool_options_for_url(url),
-             headers:
-               CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
+             headers: CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
            )
            |> store_cloudflare_cookies(url) do
         {:ok, %{status: 200, body: %{"data" => models}}} when is_list(models) ->
@@ -150,8 +149,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
       upstream_model_id: upstream_model_id,
       exposed_model_id: exposed_model_id,
       display_name: display_name,
-      supports_responses:
-        bool_attr(attrs, "supports_responses", bool_default(capabilities, "responses", true)),
+      supports_responses: bool_attr(attrs, "supports_responses", bool_default(capabilities, "responses", true)),
       supports_streaming:
         bool_attr(
           attrs,

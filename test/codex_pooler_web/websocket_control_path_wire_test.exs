@@ -62,9 +62,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     }
 
     server =
-      start_supervised!(
-        {Bandit, plug: {Endpoint, state}, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-      )
+      start_supervised!({Bandit, plug: {Endpoint, state}, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_, port}} = ThousandIsland.listener_info(server)
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1], mode: :passive)
@@ -113,8 +111,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
           assert [{:close, 1000, _}] = frames
           Mint.HTTP.close(conn)
 
-          assert_receive {:socket_cleanup_failure, ^handler,
-                          %{phase: :terminate, reason: :cleanup_deferred}},
+          assert_receive {:socket_cleanup_failure, ^handler, %{phase: :terminate, reason: :cleanup_deferred}},
                          @shutdown_budget
 
           assert Process.alive?(owner)
@@ -137,9 +134,7 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     assert lease.released_at
     assert Repo.aggregate(CodexPooler.Accounting.Request, :count) == 0
 
-    CodexPooler.TestDiagnostics.puts(
-      "wire_cleanup caller_down=true task_down=true owner_down=true registry_absent=true lease_released=true requests=0 expected_deferral=1"
-    )
+    CodexPooler.TestDiagnostics.puts("wire_cleanup caller_down=true task_down=true owner_down=true registry_absent=true lease_released=true requests=0 expected_deferral=1")
   end
 
   @tag capture_log: true
@@ -151,16 +146,12 @@ defmodule CodexPoolerWeb.WebsocketControlPathWireTest do
     BEGIN RAISE EXCEPTION 'synthetic socket database failure'; END $$
     """)
 
-    Repo.query!(
-      "CREATE TRIGGER reject_socket_start BEFORE INSERT ON codex_sessions FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_socket_start()"
-    )
+    Repo.query!("CREATE TRIGGER reject_socket_start BEFORE INSERT ON codex_sessions FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_socket_start()")
 
     state = %{auth: %{api_key: key, pool: pool}, opts: RequestOptions.for_websocket(%{})}
 
     server =
-      start_supervised!(
-        {Bandit, plug: {Endpoint, state}, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-      )
+      start_supervised!({Bandit, plug: {Endpoint, state}, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_, port}} = ThousandIsland.listener_info(server)
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1], mode: :passive)

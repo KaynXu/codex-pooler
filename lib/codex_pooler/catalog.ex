@@ -132,9 +132,7 @@ defmodule CodexPooler.Catalog do
 
       _ ->
         PoolUpstreamAssignment
-        |> join(:inner, [assignment], identity in UpstreamIdentity,
-          on: identity.id == assignment.upstream_identity_id
-        )
+        |> join(:inner, [assignment], identity in UpstreamIdentity, on: identity.id == assignment.upstream_identity_id)
         |> where(
           [assignment, identity],
           assignment.id in ^assignment_ids and assignment.status == ^@assignment_active and
@@ -381,9 +379,7 @@ defmodule CodexPooler.Catalog do
     assignment_ids = models |> Enum.flat_map(&source_assignment_ids/1) |> Enum.uniq()
 
     PoolUpstreamAssignment
-    |> join(:inner, [assignment], identity in UpstreamIdentity,
-      on: identity.id == assignment.upstream_identity_id
-    )
+    |> join(:inner, [assignment], identity in UpstreamIdentity, on: identity.id == assignment.upstream_identity_id)
     |> where(
       [assignment, identity],
       assignment.id in ^assignment_ids and assignment.status == ^@assignment_active and

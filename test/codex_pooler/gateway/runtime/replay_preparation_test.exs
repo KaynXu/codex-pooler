@@ -37,8 +37,7 @@ defmodule CodexPooler.Gateway.Runtime.ReplayPreparationTest do
 
     sanitized =
       Accounting.sanitize_metadata(%{
-        "native_replay_preparation" =>
-          Map.merge(snapshot, %{"unknown" => "synthetic", "instructions" => "synthetic"})
+        "native_replay_preparation" => Map.merge(snapshot, %{"unknown" => "synthetic", "instructions" => "synthetic"})
       })
 
     assert sanitized == metadata

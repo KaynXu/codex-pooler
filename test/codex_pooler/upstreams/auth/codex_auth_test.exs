@@ -108,8 +108,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
              }}
         })
 
-      assert {:error,
-              %{code: :codex_oauth_exchange_failed, message: message, status: 502} = error} =
+      assert {:error, %{code: :codex_oauth_exchange_failed, message: message, status: 502} = error} =
                CodexAuth.exchange_authorization_code(
                  "authorization-code-example",
                  "code-verifier-example"
@@ -463,8 +462,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
 
       provider =
         start_provider!(%{
-          "/api/accounts/deviceauth/token" =>
-            {404, %{"error" => %{"message" => raw_provider_value}}}
+          "/api/accounts/deviceauth/token" => {404, %{"error" => %{"message" => raw_provider_value}}}
         })
 
       assert {:error,
@@ -489,10 +487,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
     test "device-code, token exchange, and refresh POSTs carry the upstream connection idle bound from settings" do
       provider =
         start_provider!(%{
-          "/api/accounts/deviceauth/usercode" =>
-            {200, FakeOpenAIAuthProvider.device_code_response()},
-          "/api/accounts/deviceauth/token" =>
-            {200, FakeOpenAIAuthProvider.authorization_code_response()},
+          "/api/accounts/deviceauth/usercode" => {200, FakeOpenAIAuthProvider.device_code_response()},
+          "/api/accounts/deviceauth/token" => {200, FakeOpenAIAuthProvider.authorization_code_response()},
           "/oauth/token" => {200, FakeOpenAIAuthProvider.token_response()}
         })
 
@@ -526,8 +522,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
     test "refresh token exchange posts the refresh grant and client id" do
       provider =
         start_provider!(%{
-          "/oauth/token" =>
-            {200, %{"access_token" => "new-access-token-example", "expires_in" => 3600}}
+          "/oauth/token" => {200, %{"access_token" => "new-access-token-example", "expires_in" => 3600}}
         })
 
       assert {:ok,

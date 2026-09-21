@@ -28,16 +28,10 @@ defmodule CodexPooler.Repo.Migrations.AddApiKeyDashboardPersistence do
              check: "octet_length(token_hash) = 32"
            )
 
-    create unique_index(:api_key_dashboard_sessions, [:token_hash],
-             name: :api_key_dashboard_sessions_token_hash_uq
-           )
+    create unique_index(:api_key_dashboard_sessions, [:token_hash], name: :api_key_dashboard_sessions_token_hash_uq)
 
-    create index(:api_key_dashboard_sessions, [:api_key_id, :expires_at],
-             name: :api_key_dashboard_sessions_api_key_expires_idx
-           )
+    create index(:api_key_dashboard_sessions, [:api_key_id, :expires_at], name: :api_key_dashboard_sessions_api_key_expires_idx)
 
-    create index(:api_key_dashboard_sessions, [:expires_at],
-             name: :api_key_dashboard_sessions_expires_idx
-           )
+    create index(:api_key_dashboard_sessions, [:expires_at], name: :api_key_dashboard_sessions_expires_idx)
   end
 end

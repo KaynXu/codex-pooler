@@ -142,10 +142,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       FakeUpstream.set_mode(fixture.fake, {
         :path_json,
         %{
-          "/backend-api/wham/rate-limit-reset-credits" =>
-            {200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
-          "/backend-api/wham/rate-limit-reset-credits/consume" =>
-            {200, %{"code" => "already_redeemed"}},
+          "/backend-api/wham/rate-limit-reset-credits" => {200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
+          "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "already_redeemed"}},
           "/backend-api/wham/usage" => {200, usage_payload(0)}
         }
       })
@@ -196,8 +194,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           SavedResetRedemption.redeem(assignment)
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                      5_000
 
       reserved = Repo.reload!(identity).metadata
@@ -399,8 +396,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           SavedResetRedemption.redeem(assignment)
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                      5_000
 
       update_assignment!(assignment, %{status: PoolUpstreamAssignment.paused_status()})
@@ -450,8 +446,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           SavedResetRedemption.redeem(assignment)
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                      5_000
 
       update_assignment!(assignment, %{upstream_identity_id: foreign_identity.id})
@@ -513,8 +508,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                   ],
                   "available_count" => 2
                 }},
-             "/backend-api/wham/rate-limit-reset-credits/consume" =>
-               {503, %{"code" => "provider_rejected"}}
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {503, %{"code" => "provider_rejected"}}
            }}
         )
 
@@ -566,8 +560,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                   ],
                   "available_count" => 2
                 }},
-             "/backend-api/wham/rate-limit-reset-credits/consume" =>
-               {503, %{"code" => "provider_failed"}},
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {503, %{"code" => "provider_failed"}},
              "/backend-api/wham/usage" => {200, usage_payload(0)}
            }}
         )
@@ -606,8 +599,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                ],
                "available_count" => 2
              }},
-          "/backend-api/wham/rate-limit-reset-credits/consume" =>
-            {200, %{"code" => "already_redeemed"}},
+          "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "already_redeemed"}},
           "/backend-api/wham/usage" => {200, usage_payload(0)}
         }
       })
@@ -756,9 +748,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 31, :minute)
 
       fixture =
-        make_recovery_due!(fixture, recovery_now,
-          started_at: DateTime.add(recovery_now, -40, :minute)
-        )
+        make_recovery_due!(fixture, recovery_now, started_at: DateTime.add(recovery_now, -40, :minute))
 
       FakeUpstream.set_mode(fixture.fake, {
         :path_json,
@@ -771,8 +761,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                  %{"id" => "credit_retarget_forbidden", "status" => "available"}
                ]
              }},
-          "/backend-api/wham/rate-limit-reset-credits/consume" =>
-            {503, %{"code" => "provider_failed"}}
+          "/backend-api/wham/rate-limit-reset-credits/consume" => {503, %{"code" => "provider_failed"}}
         }
       })
 
@@ -912,9 +901,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       cutoff_now = DateTime.add(cutoff_fixture.last_provider_dispatched_at, 60, :second)
 
       cutoff_fixture =
-        make_recovery_due!(cutoff_fixture, cutoff_now,
-          started_at: DateTime.add(cutoff_now, -6, :hour)
-        )
+        make_recovery_due!(cutoff_fixture, cutoff_now, started_at: DateTime.add(cutoff_now, -6, :hour))
 
       assert {:snooze, 1_740} = resume_recovery(cutoff_fixture, cutoff_now)
 
@@ -1093,16 +1080,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                 }}}
 
             :list_failure ->
-              {persisted.metadata, persisted.chatgpt_account_id,
-               {503, %{"error" => "synthetic list failure"}}}
+              {persisted.metadata, persisted.chatgpt_account_id, {503, %{"error" => "synthetic list failure"}}}
 
             :target_invalid ->
-              {Map.put(persisted.metadata, "saved_reset_redemption_target", "tampered"),
-               persisted.chatgpt_account_id, nil}
+              {Map.put(persisted.metadata, "saved_reset_redemption_target", "tampered"), persisted.chatgpt_account_id, nil}
 
             :target_missing ->
-              {Map.delete(persisted.metadata, "saved_reset_redemption_target"),
-               persisted.chatgpt_account_id, nil}
+              {Map.delete(persisted.metadata, "saved_reset_redemption_target"), persisted.chatgpt_account_id, nil}
 
             :scope_changed ->
               {persisted.metadata, "acct_changed_observe_only_scope", nil}
@@ -1226,8 +1210,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, first_pid, ^first_release},
                      5_000
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid,
-                      ^second_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid, ^second_release},
                      5_000
 
       send(first_pid, {:fake_upstream_release_timeout, first_release})
@@ -1302,8 +1285,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           end)
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid,
-                      ^consume_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid, ^consume_release},
                      5_000
 
       reserved =
@@ -1415,8 +1397,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {:recovery_replica_ready, :recovery}, 5_000
       send(recovery_task.pid, :start_recovery)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid,
-                      ^consume_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid, ^consume_release},
                      5_000
 
       reserved =
@@ -1482,16 +1463,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {:recovery_replica_ready, :stale}, 5_000
       send(stale_task.pid, :start_recovery)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_list_pid,
-                      ^stale_list_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_list_pid, ^stale_list_release},
                      5_000
 
       current_task = start_recovery_replica_task(parent, :current, fixture)
       assert_receive {:recovery_replica_ready, :current}, 5_000
       send(current_task.pid, :start_recovery)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_consume_pid,
-                      ^current_consume_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_consume_pid, ^current_consume_release},
                      5_000
 
       reserved =
@@ -1774,8 +1753,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, first_pid, ^first_release},
                      5_000
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid,
-                      ^second_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid, ^second_release},
                      5_000
 
       send(first_pid, {:fake_upstream_release_timeout, first_release})
@@ -1834,8 +1812,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {:recovery_replica_ready, :current}, 5_000
       send(current_task.pid, :start_recovery)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_pid,
-                      ^second_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_pid, ^second_release},
                      5_000
 
       redemption_keys = ["saved_reset_redemption", "saved_reset_redemption_target"]
@@ -1934,8 +1911,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert_receive {:recovery_replica_ready, :reserving}, 5_000
       send(reserving_task.pid, :start_recovery)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, reserving_pid,
-                      ^consume_release},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, reserving_pid, ^consume_release},
                      5_000
 
       redemption_keys = ["saved_reset_redemption", "saved_reset_redemption_target"]
@@ -2037,9 +2013,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       for {scenario, response} <- scenarios do
         {:ok, fake} =
-          FakeUpstream.start_link(
-            {:path_json, %{"/api/codex/rate-limit-reset-credits/consume" => response}}
-          )
+          FakeUpstream.start_link({:path_json, %{"/api/codex/rate-limit-reset-credits/consume" => response}})
 
         on_exit(fn -> FakeUpstream.stop(fake) end)
 
@@ -2074,8 +2048,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           FakeUpstream.start_link(
             {:path_json,
              %{
-               "/api/codex/rate-limit-reset-credits/consume" =>
-                 {200, %{"code" => code, "windows_reset" => 1}},
+               "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => code, "windows_reset" => 1}},
                "/api/codex/usage" => {500, %{}}
              }}
           )
@@ -2107,8 +2080,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     @tag :saved_reset_redemption_cause
     test "gateway cause is derived from normalized trigger and survives claimed noops and ambiguity" do
       for {trigger, detail, provider_status, provider_code, expected_result} <- [
-            {:blocked_weekly_exhaustion, "exhausted", 200, "nothing_to_reset",
-             {:settled, :noop, "nothing_to_reset"}},
+            {:blocked_weekly_exhaustion, "exhausted", 200, "nothing_to_reset", {:settled, :noop, "nothing_to_reset"}},
             {:threshold_pressure, "threshold", 502, "provider_rejected", :ambiguous}
           ] do
         parent = self()
@@ -2157,8 +2129,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             )
           end)
 
-        assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                        ^release_ref},
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                        5_000
 
         claim = Repo.reload!(identity).metadata["saved_reset_redemption"]
@@ -2422,9 +2393,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
-          saved_resets: saved_resets_with_expirations()
-        )
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: saved_resets_with_expirations())
 
       ledger = %{
         "version" => 1,
@@ -2477,8 +2446,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         FakeUpstream.start_link(
           {:path_json,
            %{
-             "/backend-api/wham/rate-limit-reset-credits" =>
-               {200, %{"credits" => [], "available_count" => 0}}
+             "/backend-api/wham/rate-limit-reset-credits" => {200, %{"credits" => [], "available_count" => 0}}
            }}
         )
 
@@ -2487,9 +2455,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         |> Map.put("observed_at", "2026-07-24T04:00:00Z")
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
-          saved_resets: newer_saved_resets
-        )
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: newer_saved_resets)
 
       opaque_ledger = %{"version" => 99, "payload" => %{"future" => true}}
 
@@ -2515,8 +2481,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         FakeUpstream.start_link(
           {:path_json,
            %{
-             "/backend-api/wham/rate-limit-reset-credits" =>
-               {200, %{"credits" => [], "available_count" => 0}}
+             "/backend-api/wham/rate-limit-reset-credits" => {200, %{"credits" => [], "available_count" => 0}}
            }}
         )
 
@@ -2567,9 +2532,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
-          saved_resets: saved_resets_with_expirations()
-        )
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api", saved_resets: saved_resets_with_expirations())
 
       task =
         Task.async(fn ->
@@ -2580,8 +2543,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           )
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                      5_000
 
       superseded = %{
@@ -2655,8 +2617,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           )
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                      5_000
 
       newer_saved_resets =
@@ -2705,8 +2666,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         FakeUpstream.start_link(
           {:path_json,
            %{
-             "/backend-api/wham/rate-limit-reset-credits" =>
-               {200, %{"credits" => [], "available_count" => 0}},
+             "/backend-api/wham/rate-limit-reset-credits" => {200, %{"credits" => [], "available_count" => 0}},
              "/backend-api/wham/usage" => {200, usage_payload(9)}
            }}
         )
@@ -3490,15 +3450,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       snapshot = scheduled_burn_snapshot(as_of, 60 * 60)
 
       scenarios = [
-        {"exhausted alone", [scheduled_burn_window(as_of, "100", 2 * 60 * 60)],
-         scheduled_burn_policy(), "exhausted"},
-        {"threshold over last call", [scheduled_burn_window(as_of, "95", 2 * 60 * 60)],
-         scheduled_burn_policy(%{trigger_mode: "threshold"}), "threshold"},
-        {"last call alone", [scheduled_burn_window(as_of, "25", 2 * 60 * 60)],
-         scheduled_burn_policy(), "last_call"},
-        {"exhausted over threshold and last call",
-         [scheduled_burn_window(as_of, "100", 2 * 60 * 60)],
-         scheduled_burn_policy(%{trigger_mode: "threshold"}), "exhausted"}
+        {"exhausted alone", [scheduled_burn_window(as_of, "100", 2 * 60 * 60)], scheduled_burn_policy(), "exhausted"},
+        {"threshold over last call", [scheduled_burn_window(as_of, "95", 2 * 60 * 60)], scheduled_burn_policy(%{trigger_mode: "threshold"}), "threshold"},
+        {"last call alone", [scheduled_burn_window(as_of, "25", 2 * 60 * 60)], scheduled_burn_policy(), "last_call"},
+        {"exhausted over threshold and last call", [scheduled_burn_window(as_of, "100", 2 * 60 * 60)], scheduled_burn_policy(%{trigger_mode: "threshold"}), "exhausted"}
       ]
 
       for {label, windows, policy, expected_detail} <- scenarios do
@@ -3590,9 +3545,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       for {expires_in_seconds, observed_age_seconds, fresh?} <- scenarios do
         snapshot =
-          scheduled_burn_snapshot(as_of, expires_in_seconds,
-            observed_age_seconds: observed_age_seconds
-          )
+          scheduled_burn_snapshot(as_of, expires_in_seconds, observed_age_seconds: observed_age_seconds)
 
         assert SavedResets.expiration_observation_fresh?(snapshot, as_of) == fresh?
 
@@ -3769,15 +3722,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       scenarios = [
         {[], scheduled_burn_snapshot(as_of, 60 * 60), :burn_condition_absent},
-        {[scheduled_burn_window(as_of, "0", 2 * 60 * 60)],
-         scheduled_burn_snapshot(as_of, 60 * 60), :burn_condition_absent},
-        {[scheduled_burn_window(as_of, "25", 2 * 60 * 60)],
-         scheduled_burn_snapshot(as_of, 60 * 60, observed_at: "invalid"), :expiration_stale},
-        {[scheduled_burn_window(as_of, "25", 30 * 60)], scheduled_burn_snapshot(as_of, 60 * 60),
-         :natural_reset_buffer},
-        {[scheduled_burn_window(as_of, "100", 30 * 60)],
-         scheduled_burn_snapshot(as_of, 60 * 60, observed_age_seconds: 30 * 60),
-         :natural_reset_buffer}
+        {[scheduled_burn_window(as_of, "0", 2 * 60 * 60)], scheduled_burn_snapshot(as_of, 60 * 60), :burn_condition_absent},
+        {[scheduled_burn_window(as_of, "25", 2 * 60 * 60)], scheduled_burn_snapshot(as_of, 60 * 60, observed_at: "invalid"), :expiration_stale},
+        {[scheduled_burn_window(as_of, "25", 30 * 60)], scheduled_burn_snapshot(as_of, 60 * 60), :natural_reset_buffer},
+        {[scheduled_burn_window(as_of, "100", 30 * 60)], scheduled_burn_snapshot(as_of, 60 * 60, observed_age_seconds: 30 * 60), :natural_reset_buffer}
       ]
 
       for {windows, snapshot, reason} <- scenarios do
@@ -3799,8 +3747,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           ],
           {window, policy} <- [
             {scheduled_burn_window(as_of, "100", 2 * 60 * 60), scheduled_burn_policy()},
-            {scheduled_burn_window(as_of, "95", 2 * 60 * 60),
-             scheduled_burn_policy(%{trigger_mode: "threshold"})},
+            {scheduled_burn_window(as_of, "95", 2 * 60 * 60), scheduled_burn_policy(%{trigger_mode: "threshold"})},
             {scheduled_burn_window(as_of, "25", 2 * 60 * 60), scheduled_burn_policy()}
           ] do
         assert {:not_ready, :burn_condition_absent} =
@@ -3907,9 +3854,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
 
       assert {:ok, %{applied?: true}} =
-               SavedResetRedemption.redeem_scheduled_expiry(assignment, identity.id,
-                 started_at: as_of
-               )
+               SavedResetRedemption.redeem_scheduled_expiry(assignment, identity.id, started_at: as_of)
 
       assert provider_consume_count(fake) == 1
     end
@@ -3944,8 +3889,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert Map.take(redemption, scheduled_decision_metadata_keys()) == %{
                "trigger_detail" => "last_call",
                "used_percent_at_decision" => "25",
-               "credit_expires_at_at_decision" =>
-                 DateTime.to_iso8601(DateTime.add(as_of, 1, :hour)),
+               "credit_expires_at_at_decision" => DateTime.to_iso8601(DateTime.add(as_of, 1, :hour)),
                "natural_reset_at_decision" => DateTime.to_iso8601(DateTime.add(as_of, 2, :hour)),
                "decided_at" => DateTime.to_iso8601(as_of)
              }
@@ -3956,9 +3900,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     @tag :monthly_saved_reset
     test "monthly expiry rescue rejects an independent exhausted five-hour window" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
-        scheduled_expiry_fixture(
-          quota_overrides: %{window_kind: "primary", window_minutes: 43_200}
-        )
+        scheduled_expiry_fixture(quota_overrides: %{window_kind: "primary", window_minutes: 43_200})
 
       attrs =
         scheduled_weekly_quota_attrs(as_of, Decimal.new("100"),
@@ -3971,9 +3913,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       refute AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
 
       assert {:ok, %{applied?: false}} =
-               SavedResetRedemption.redeem_scheduled_expiry(assignment, identity.id,
-                 started_at: as_of
-               )
+               SavedResetRedemption.redeem_scheduled_expiry(assignment, identity.id, started_at: as_of)
 
       assert provider_consume_count(fake) == 0
     end
@@ -4004,8 +3944,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           )
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                      5_000
 
       consuming = Repo.reload!(identity).metadata["saved_reset_redemption"]
@@ -4467,11 +4406,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       as_of = ~U[2026-07-29 12:00:00Z]
 
       scenarios = [
-        {:burn_condition_absent, "scheduled_expiry_burn_not_ready",
-         [quota_used_percent: Decimal.new("0")]},
+        {:burn_condition_absent, "scheduled_expiry_burn_not_ready", [quota_used_percent: Decimal.new("0")]},
         {:expiration_stale, "scheduled_expiry_expiration_stale", [stale_expiration?: true]},
-        {:natural_reset_buffer, "scheduled_expiry_natural_reset_buffer",
-         [quota_overrides: %{reset_at: DateTime.add(as_of, 30, :minute)}]}
+        {:natural_reset_buffer, "scheduled_expiry_natural_reset_buffer", [quota_overrides: %{reset_at: DateTime.add(as_of, 30, :minute)}]}
       ]
 
       for {expected_reason, expected_code, opts} <- scenarios do
@@ -4746,8 +4683,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture(redemption: redemption)
 
-      assert {:ok,
-              %{status: :noop, applied?: false, code: "scheduled_expiry_lifecycle_unavailable"}} =
+      assert {:ok, %{status: :noop, applied?: false, code: "scheduled_expiry_lifecycle_unavailable"}} =
                SavedResetRedemption.redeem_scheduled_expiry(
                  assignment,
                  identity.id,
@@ -4759,9 +4695,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     test "automatic consume latch noops before provider HTTP" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
-        scheduled_expiry_fixture(
-          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5)
-        )
+        scheduled_expiry_fixture(redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5))
 
       assert {:ok, %{status: :noop, applied?: false, code: "scheduled_expiry_consume_latched"}} =
                SavedResetRedemption.redeem_scheduled_expiry(
@@ -4779,8 +4713,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       update_identity!(identity, %{status: UpstreamIdentity.paused_status()})
 
-      assert {:ok,
-              %{status: :noop, applied?: false, code: "scheduled_expiry_identity_unavailable"}} =
+      assert {:ok, %{status: :noop, applied?: false, code: "scheduled_expiry_identity_unavailable"}} =
                SavedResetRedemption.redeem_scheduled_expiry(
                  assignment,
                  identity.id,
@@ -4796,8 +4729,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       update_assignment!(assignment, %{status: PoolUpstreamAssignment.paused_status()})
 
-      assert {:ok,
-              %{status: :noop, applied?: false, code: "scheduled_expiry_assignment_unavailable"}} =
+      assert {:ok, %{status: :noop, applied?: false, code: "scheduled_expiry_assignment_unavailable"}} =
                SavedResetRedemption.redeem_scheduled_expiry(
                  assignment,
                  identity.id,
@@ -4841,8 +4773,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     test "scheduled rescue safely rejects a malformed expected identity id" do
       %{as_of: as_of, fake: fake, assignment: assignment} = scheduled_expiry_fixture()
 
-      assert {:ok,
-              %{status: :noop, applied?: false, code: "scheduled_expiry_identity_unavailable"}} =
+      assert {:ok, %{status: :noop, applied?: false, code: "scheduled_expiry_identity_unavailable"}} =
                SavedResetRedemption.redeem_scheduled_expiry(
                  assignment,
                  "not-a-uuid",
@@ -5177,8 +5108,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                  redeem_gateway_auto_target!(fixture, 0, fixture.identity_ids)
                end)
 
-      assert {:ok,
-              %{status: :noop, applied?: false, code: "gateway_auto_sibling_consume_barrier"}} =
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_consume_barrier"}} =
                run_unboxed(fn ->
                  redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids)
                end)
@@ -5450,8 +5380,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
             SavedResetRedemption.redeem(assignment,
               trigger_kind: "gateway_auto",
-              gateway_auto_context:
-                gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion),
+              gateway_auto_context: gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion),
               started_at: fixture.as_of,
               receive_timeout: 15_000
             )
@@ -5676,9 +5605,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           end
         ),
         start_multi_node_convergence_actor(parent, barrier, :reconciliation, fixture, fn _stale ->
-          PoolReconciliation.reconcile_pool_account(fixture.pool_id, fixture.assignment_id,
-            quota_windows: [fixture.canonical_window]
-          )
+          PoolReconciliation.reconcile_pool_account(fixture.pool_id, fixture.assignment_id, quota_windows: [fixture.canonical_window])
         end)
       ]
 
@@ -5809,8 +5736,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                "convergence_outcome" => "confirmed_by_quota"
              }
 
-      assert_receive {^handler_id, %{count: 1},
-                      %{source: "finalizer", outcome: "confirmed_by_quota"}}
+      assert_receive {^handler_id, %{count: 1}, %{source: "finalizer", outcome: "confirmed_by_quota"}}
 
       refute_receive {^handler_id, _measurements, _metadata}
 
@@ -6117,9 +6043,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5))
 
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
@@ -6148,9 +6072,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5))
 
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
@@ -6169,9 +6091,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 40)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("confirmed_by_quota", 40))
 
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
@@ -6191,9 +6111,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5))
 
       assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
                SavedResetRedemption.redeem(assignment)
@@ -6206,9 +6124,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: legacy_applied_gateway_auto_redemption(5)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: legacy_applied_gateway_auto_redemption(5))
 
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
@@ -6228,9 +6144,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5))
 
       identity =
         enable_saved_reset_auto_redeem!(identity, %{
@@ -6266,9 +6180,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5))
 
       assert {:error, :saved_reset_consume_outcome_ambiguous} =
                SavedResetRedemption.redeem(assignment)
@@ -6292,9 +6204,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: latched_identity, assignment: latched_assignment} =
-        assignment_with_fake(latched_fake, "/api/codex/usage", "codex_api",
-          redemption: applied_gateway_auto_redemption("reblocked", 5)
-        )
+        assignment_with_fake(latched_fake, "/api/codex/usage", "codex_api", redemption: applied_gateway_auto_redemption("reblocked", 5))
 
       %{identity: identity, assignment: assignment} =
         assignment_with_fake(fake, "/api/codex/usage", "codex_api")
@@ -6746,8 +6656,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              }
            }
          ], :noop},
-        {:malformed_marker, true,
-         [circuit_metadata: %{"saved_reset_recovery" => %{"attempted" => true}}], :noop},
+        {:malformed_marker, true, [circuit_metadata: %{"saved_reset_recovery" => %{"attempted" => true}}], :noop},
         {:future_marker_version, true,
          [
            circuit_metadata: %{
@@ -6849,8 +6758,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
          ]},
         {:malformed_missing_reset, Decimal.new("20"), [reset_at: nil]},
         {:unknown_precision, Decimal.new("20"), [source_precision: "unknown"]},
-        {:incompatible_model, Decimal.new("20"),
-         [quota_key: "other-model", quota_scope: "model", quota_family: "codex_model"]},
+        {:incompatible_model, Decimal.new("20"), [quota_key: "other-model", quota_scope: "model", quota_family: "codex_model"]},
         {:model_only, Decimal.new("20"),
          [
            quota_key: "test-model",
@@ -7082,8 +6990,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assert_receive {:claim_lock, :cohort}, 1_000
         assert_receive {:claim_lock, :assignment}, 1_000
 
-        assert_receive {:claim_lock, :circuits, query,
-                        [_pool_id, locked_ids, "test-model", "proxy_http"]},
+        assert_receive {:claim_lock, :circuits, query, [_pool_id, locked_ids, "test-model", "proxy_http"]},
                        1_000
 
         assert query =~
@@ -7096,8 +7003,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assert_receive {:claim_lock, :cohort}, 1_000
         assert_receive {:claim_lock, :assignment}, 1_000
 
-        assert_receive {:claim_lock, :circuits, reservation_query,
-                        [_pool_id, reservation_locked_ids, "test-model", "proxy_http"]},
+        assert_receive {:claim_lock, :circuits, reservation_query, [_pool_id, reservation_locked_ids, "test-model", "proxy_http"]},
                        1_000
 
         assert reservation_query == query
@@ -7147,9 +7053,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          redemption: legacy_applied_gateway_auto_redemption(40)
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: legacy_applied_gateway_auto_redemption(40))
 
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
@@ -7235,8 +7139,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             FakeUpstream.start_link(
               {:path_json,
                %{
-                 "/api/codex/rate-limit-reset-credits/consume" =>
-                   Keyword.get(opts, :consume_response, {200, %{"code" => "reset"}}),
+                 "/api/codex/rate-limit-reset-credits/consume" => Keyword.get(opts, :consume_response, {200, %{"code" => "reset"}}),
                  "/api/codex/usage" => Keyword.get(opts, :usage_response, {200, usage_payload(0)})
                }}
             )
@@ -7328,9 +7231,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           observed_at
 
         :error ->
-          DateTime.to_iso8601(
-            DateTime.add(as_of, -Keyword.get(opts, :observed_age_seconds, 0), :second)
-          )
+          DateTime.to_iso8601(DateTime.add(as_of, -Keyword.get(opts, :observed_age_seconds, 0), :second))
       end
 
     saved_resets = Map.put(saved_resets, "expires_observed_at", observed_at)
@@ -7371,8 +7272,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         "available_count" => 1,
         "source" => "codex_usage_api",
         "path_style" => path_style,
-        "observed_at" =>
-          DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+        "observed_at" => DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
         "usage_path" => usage_path,
         "reason" => nil
       })
@@ -7402,10 +7302,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       FakeUpstream.start_link(
         {:path_json,
          %{
-           "/backend-api/wham/rate-limit-reset-credits" =>
-             {200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
-           "/backend-api/wham/rate-limit-reset-credits/consume" =>
-             {503, %{"code" => "provider_failed"}}
+           "/backend-api/wham/rate-limit-reset-credits" => {200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
+           "/backend-api/wham/rate-limit-reset-credits/consume" => {503, %{"code" => "provider_failed"}}
          }}
       )
 
@@ -7437,9 +7335,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp ambiguous_codex_recovery_fixture! do
     {:ok, fake} =
-      FakeUpstream.start_link(
-        {:path_json, %{"/api/codex/rate-limit-reset-credits/consume" => :close_before_headers}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/api/codex/rate-limit-reset-credits/consume" => :close_before_headers}})
 
     on_exit(fn -> FakeUpstream.stop(fake) end)
 
@@ -7526,10 +7422,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       FakeUpstream.set_mode(fake, {
         :path_json,
         %{
-          "/backend-api/wham/rate-limit-reset-credits" =>
-            {200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
-          "/backend-api/wham/rate-limit-reset-credits/consume" =>
-            {503, %{"code" => "provider_failed"}}
+          "/backend-api/wham/rate-limit-reset-credits" => {200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
+          "/backend-api/wham/rate-limit-reset-credits/consume" => {503, %{"code" => "provider_failed"}}
         }
       })
 
@@ -7569,9 +7463,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     run_unboxed(fn ->
       CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id])
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.id == ^fixture.identity_id
-      )
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity_id)
     end)
   end
 
@@ -7708,8 +7600,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     {auth, model} =
       run_unboxed(fn ->
-        {routing_auth!(fixture.pool),
-         model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
+        {routing_auth!(fixture.pool), model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
       end)
 
     run_unboxed(fn ->
@@ -7902,8 +7793,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
           send(parent, {barrier, :insert_started, backend_pid})
 
-          {backend_pid,
-           CircuitState.record_failure(auth, model, assignment, "proxy_http", :first)}
+          {backend_pid, CircuitState.record_failure(auth, model, assignment, "proxy_http", :first)}
         end)
       end)
 
@@ -8269,9 +8159,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp update_assignment!(%PoolUpstreamAssignment{} = assignment, attrs) do
     assignment
     |> Repo.reload!()
-    |> PoolUpstreamAssignment.changeset(
-      Map.put(attrs, :updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond))
-    )
+    |> PoolUpstreamAssignment.changeset(Map.put(attrs, :updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond)))
     |> Repo.update!()
   end
 
@@ -8769,9 +8657,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp cleanup_owned_cohort_fixture!(account_ids, pool_slugs) do
     run_unboxed(fn ->
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.chatgpt_account_id in ^account_ids
-      )
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.chatgpt_account_id in ^account_ids)
 
       Repo.delete_all(from pool in Pool, where: pool.slug in ^pool_slugs)
     end)
@@ -8857,9 +8743,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                    @cohort_fixture_task_timeout
 
     run_unboxed(fn ->
-      refute Repo.exists?(
-               from identity in UpstreamIdentity, where: identity.id == ^partial.identity_id
-             )
+      refute Repo.exists?(from identity in UpstreamIdentity, where: identity.id == ^partial.identity_id)
 
       refute Repo.exists?(
                from assignment in PoolUpstreamAssignment,
@@ -9276,8 +9160,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     {auth, model} =
       run_unboxed(fn ->
-        {routing_auth!(fixture.pool),
-         model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
+        {routing_auth!(fixture.pool), model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
       end)
 
     failure_tasks =
@@ -9459,8 +9342,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     {auth, model} =
       run_unboxed(fn ->
-        {routing_auth!(fixture.pool),
-         model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
+        {routing_auth!(fixture.pool), model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
       end)
 
     evidence = run_first_circuit_insert_behind_claim!(fixture, auth, model, sibling.assignment)
@@ -10058,8 +9940,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
        ) do
     assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, 5_000
 
-    assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid, ^release_ref},
                    5_000
 
     Process.put({__MODULE__, handler_id, :fake_request_pid}, fake_request_pid)

@@ -476,8 +476,7 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
     end
   end
 
-  @tag slow:
-         "creates 128 finalized reservations plus unrelated history to prove scoped index access"
+  @tag slow: "creates 128 finalized reservations plus unrelated history to prove scoped index access"
   test "active count excludes retained terminals regardless of amount status", context do
     fixture = fixture(context, 2)
     unrelated = fixture(context, nil)
@@ -633,8 +632,7 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
 
   defp counts(fixture) do
     %{
-      requests:
-        Repo.aggregate(from(r in Request, where: r.api_key_id == ^fixture.api_key.id), :count),
+      requests: Repo.aggregate(from(r in Request, where: r.api_key_id == ^fixture.api_key.id), :count),
       reservations:
         Repo.aggregate(
           from(e in LedgerEntry,

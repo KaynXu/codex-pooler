@@ -57,8 +57,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TokenCostChart do
           "var(--color-success)"
         ]),
       points: points,
-      total_label:
-        "#{Format.token_count(token_total)} tokens / #{Format.money_from_micros(cost_total)}"
+      total_label: "#{Format.token_count(token_total)} tokens / #{Format.money_from_micros(cost_total)}"
     }
   end
 

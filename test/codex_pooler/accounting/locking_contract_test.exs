@@ -875,8 +875,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
         result: "exact_fixture_cleanup",
         deleted: result,
         pool_id_sha256: sha256(fixture.pool.id),
-        identity_id_sha256:
-          Enum.map([fixture.identity.id, fixture.alternate_identity.id], &sha256/1),
+        identity_id_sha256: Enum.map([fixture.identity.id, fixture.alternate_identity.id], &sha256/1),
         pricing_snapshot_id_sha256: sha256(fixture.pricing.id)
       })
     end

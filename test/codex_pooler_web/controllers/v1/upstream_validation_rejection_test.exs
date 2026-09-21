@@ -16,8 +16,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
   @prompt_sentinel "private-validation-prompt-sentinel"
 
   @expected_error %{
-    "message" =>
-      "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high",
+    "message" => "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high",
     "type" => "invalid_request_error",
     "code" => "unsupported_value",
     "param" => "reasoning.effort"
@@ -93,8 +92,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
 
     assert json_response(response, 400) == %{
              "error" => %{
-               "message" =>
-                 "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high",
+               "message" => "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high",
                "type" => "invalid_request_error",
                "code" => "unsupported_value",
                "param" => "reasoning_effort"
@@ -146,8 +144,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
       # the provider-form leak this test pins.
       assert json_response(response, 400) == %{
                "error" => %{
-                 "message" =>
-                   "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high",
+                 "message" => "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high",
                  "type" => "invalid_request_error",
                  "code" => "unsupported_value",
                  "param" => "reasoning_effort"
@@ -180,10 +177,8 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
 
   test "POST /v1/responses keeps non-allowlisted and non-400 rejections redacted", %{conn: conn} do
     cases = [
-      {"unknown code", validation_rejection(400, "provider_specific_code", "reasoning.effort"),
-       400},
-      {"api_error type",
-       validation_rejection(400, "unsupported_value", "reasoning.effort", "api_error"), 400},
+      {"unknown code", validation_rejection(400, "provider_specific_code", "reasoning.effort"), 400},
+      {"api_error type", validation_rejection(400, "unsupported_value", "reasoning.effort", "api_error"), 400},
       {"403", validation_rejection(403, "unsupported_value", "reasoning.effort"), 403}
     ]
 
@@ -516,8 +511,7 @@ defmodule CodexPoolerWeb.V1.UpstreamValidationRejectionTest do
      %{
        "error" => %{
          "code" => code,
-         "message" =>
-           "Unsupported value: '#{@provider_sentinel}' is not supported with this model. Supported values are: 'low', 'medium', and 'high'.",
+         "message" => "Unsupported value: '#{@provider_sentinel}' is not supported with this model. Supported values are: 'low', 'medium', and 'high'.",
          "param" => param,
          "type" => type
        }

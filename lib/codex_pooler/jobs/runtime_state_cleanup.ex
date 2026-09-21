@@ -97,9 +97,7 @@ defmodule CodexPooler.Jobs.RuntimeStateCleanup do
   # metadata: the configured metadata allowlist is deliberately small, and two
   # bookkeeping log lines are not a reason to widen it.
   defp log_failed_step({name, result}) do
-    Logger.warning(
-      "runtime state cleanup step #{name} failed: #{inspect(bounded_failure(result))}"
-    )
+    Logger.warning("runtime state cleanup step #{name} failed: #{inspect(bounded_failure(result))}")
   end
 
   # Failure payloads are bounded before they reach the log: a step returns

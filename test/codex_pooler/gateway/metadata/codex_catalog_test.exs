@@ -102,9 +102,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert CodexCatalog.etag(atom_body) == CodexCatalog.etag(string_body)
 
     refute CodexCatalog.etag(string_body) ==
-             CodexCatalog.etag(
-               put_in(string_body, ["models", Access.at(0), "values"], [1.0, 1, nil])
-             )
+             CodexCatalog.etag(put_in(string_body, ["models", Access.at(0), "values"], [1.0, 1, nil]))
   end
 
   test "rejects unsupported values and ambiguous equivalent object keys" do
@@ -553,10 +551,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
       model =
         put_source_models(context.model, %{
-          context.anchor_id =>
-            context.model.metadata["source_assignment_models"][context.anchor_id],
-          context.sibling_id =>
-            context.model.metadata["source_assignment_models"][context.sibling_id],
+          context.anchor_id => context.model.metadata["source_assignment_models"][context.anchor_id],
+          context.sibling_id => context.model.metadata["source_assignment_models"][context.sibling_id],
           context.alternate_id => max_source
         })
 
@@ -1230,8 +1226,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
   defp reasoning_projection(result) do
     [model] = result.body["models"]
 
-    {Enum.map(model["supported_reasoning_levels"], & &1["effort"]),
-     model["default_reasoning_level"]}
+    {Enum.map(model["supported_reasoning_levels"], & &1["effort"]), model["default_reasoning_level"]}
   end
 
   defp context_model do

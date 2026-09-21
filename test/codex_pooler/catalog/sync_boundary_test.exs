@@ -158,8 +158,7 @@ defmodule CodexPooler.Catalog.SyncBoundaryTest do
     assert {:error, run, %{code: :catalog_sync_failed}} =
              Sync.sync_pool_catalog(pool,
                fetcher: fn _ ->
-                 {:ok,
-                  [%{"id" => "sample-new"}, %{"id" => "sample-invalid", "exposed_model_id" => ""}]}
+                 {:ok, [%{"id" => "sample-new"}, %{"id" => "sample-invalid", "exposed_model_id" => ""}]}
                end
              )
 

@@ -130,14 +130,12 @@ defmodule CodexPooler.Access.APIKeys.Policy do
        %{
          api_key_id: input(source, [:id, "id", :api_key_id, "api_key_id"]),
          status: status,
-         max_active_requests:
-           Map.get(source, :max_active_requests, Map.get(source, "max_active_requests")),
+         max_active_requests: Map.get(source, :max_active_requests, Map.get(source, "max_active_requests")),
          allowed_model_identifiers: allowed_model_identifiers,
          enforced_model_identifier: enforced_model_identifier,
          enforced_reasoning_effort: enforced_reasoning_effort,
          maximum_reasoning_effort: maximum_reasoning_effort,
-         reasoning_policy_mode:
-           reasoning_policy_mode(enforced_reasoning_effort, maximum_reasoning_effort),
+         reasoning_policy_mode: reasoning_policy_mode(enforced_reasoning_effort, maximum_reasoning_effort),
          enforced_service_tier: enforced_service_tier,
          metadata: metadata
        }}
@@ -239,8 +237,7 @@ defmodule CodexPooler.Access.APIKeys.Policy do
     case normalizer.(values) do
       {:ok, normalized} ->
         if normalized in [nil, []] do
-          {:error,
-           access_error(:invalid_policy, "#{mode_name} requires at least one selected value")}
+          {:error, access_error(:invalid_policy, "#{mode_name} requires at least one selected value")}
         else
           {:ok, normalized}
         end
@@ -363,16 +360,14 @@ defmodule CodexPooler.Access.APIKeys.Policy do
 
   defp validate_enforced_model_mode([], enforced_model_identifier)
        when is_binary(enforced_model_identifier),
-       do:
-         {:error, access_error(:invalid_policy, "enforced model is not allowed in deny-all mode")}
+       do: {:error, access_error(:invalid_policy, "enforced model is not allowed in deny-all mode")}
 
   defp validate_enforced_model_mode(allowed_model_identifiers, enforced_model_identifier)
        when is_list(allowed_model_identifiers) and is_binary(enforced_model_identifier) do
     if enforced_model_identifier in allowed_model_identifiers do
       :ok
     else
-      {:error,
-       access_error(:invalid_policy, "enforced model must be included in selected models")}
+      {:error, access_error(:invalid_policy, "enforced model must be included in selected models")}
     end
   end
 
@@ -396,8 +391,7 @@ defmodule CodexPooler.Access.APIKeys.Policy do
       true ->
         {:ok,
          %{
-           "labels" =>
-             Enum.map(labels, &String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq(),
+           "labels" => Enum.map(labels, &String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq(),
            "operator_notes" => operator_notes
          }}
     end
@@ -452,8 +446,7 @@ defmodule CodexPooler.Access.APIKeys.Policy do
 
     cond do
       scope != "model" ->
-        {:error,
-         access_error(:invalid_scope, "model_policies[#{index}].binding_scope must be model")}
+        {:error, access_error(:invalid_scope, "model_policies[#{index}].binding_scope must be model")}
 
       not present?(model_identifier) ->
         {:error,
@@ -475,12 +468,9 @@ defmodule CodexPooler.Access.APIKeys.Policy do
       binding_scope: scope,
       model_identifier: Map.get(policy, :model_identifier) || Map.get(policy, "model_identifier"),
       status: Map.get(policy, :status) || Map.get(policy, "status") || @status_active,
-      max_requests_per_minute:
-        Map.get(policy, :max_requests_per_minute) || Map.get(policy, "max_requests_per_minute"),
-      max_tokens_per_day:
-        Map.get(policy, :max_tokens_per_day) || Map.get(policy, "max_tokens_per_day"),
-      max_tokens_per_week:
-        Map.get(policy, :max_tokens_per_week) || Map.get(policy, "max_tokens_per_week"),
+      max_requests_per_minute: Map.get(policy, :max_requests_per_minute) || Map.get(policy, "max_requests_per_minute"),
+      max_tokens_per_day: Map.get(policy, :max_tokens_per_day) || Map.get(policy, "max_tokens_per_day"),
+      max_tokens_per_week: Map.get(policy, :max_tokens_per_week) || Map.get(policy, "max_tokens_per_week"),
       max_input_tokens_per_request:
         Map.get(policy, :max_input_tokens_per_request) ||
           Map.get(policy, "max_input_tokens_per_request"),

@@ -473,9 +473,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     setup = gateway_setup(pinned_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-pinned-reauth-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-pinned-reauth-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -775,9 +773,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     setup = gateway_setup(first_stale_upstream, quota?: false)
 
     second_stale =
-      gateway_upstream(setup.pool, second_stale_upstream, "upstream-token-second-stale",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_stale_upstream, "upstream-token-second-stale", compact?: false)
 
     sticky =
       gateway_upstream(setup.pool, sticky_upstream, "upstream-token-sticky", compact?: false)
@@ -855,9 +851,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     }
 
     sticky_upstream =
-      start_upstream(
-        {:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}}
-      )
+      start_upstream({:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}})
 
     fallback_upstream =
       start_upstream(
@@ -871,9 +865,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     setup = gateway_setup(sticky_upstream, quota?: false)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-live-anchor-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-live-anchor-fallback", compact?: false)
 
     prime_stale_routing_quota!(setup.identity)
     prime_routing_quota!(fallback.identity)
@@ -1179,9 +1171,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
       setup = gateway_setup(sticky_upstream, quota?: false)
 
       fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-soft-alias-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-soft-alias-fallback", compact?: false)
 
       prime_exhausted_routing_quota!(setup.identity)
       prime_routing_quota!(fallback.identity)
@@ -1282,9 +1272,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
     setup = gateway_setup(sticky_upstream, quota?: false)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-live-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-live-fallback", compact?: false)
 
     prime_exhausted_routing_quota!(setup.identity)
     prime_routing_quota!(fallback.identity)
@@ -1388,9 +1376,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
       })
 
     assert [%BridgeOwnerLease{id: old_lease_id}] =
-             Repo.all(
-               from lease in BridgeOwnerLease, where: lease.codex_session_id == ^session.id
-             )
+             Repo.all(from lease in BridgeOwnerLease, where: lease.codex_session_id == ^session.id)
 
     Gateway.interrupt_codex_session(session, %{reconnect_window_seconds: 300})
 
@@ -1427,9 +1413,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SessionContinuityTest do
              )
 
     assert [%BridgeOwnerLease{owner_instance_id: "node-b", status: "active"}] =
-             Repo.all(
-               from lease in BridgeOwnerLease, where: lease.codex_session_id == ^replacement.id
-             )
+             Repo.all(from lease in BridgeOwnerLease, where: lease.codex_session_id == ^replacement.id)
   end
 
   defp mark_pinned_assignment_reauth_required!(setup) do

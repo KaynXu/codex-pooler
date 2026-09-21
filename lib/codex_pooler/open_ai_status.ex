@@ -50,8 +50,7 @@ defmodule CodexPooler.OpenAIStatus do
       last_attempt_at: state && state.last_attempt_at,
       last_error_code: state && state.last_error_code,
       stale?: Freshness.stale?(state && state.last_success_at),
-      polling_enabled?:
-        CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled,
+      polling_enabled?: CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled,
       cap_pressure: (state && state.cap_pressure) || "none"
     }
   end

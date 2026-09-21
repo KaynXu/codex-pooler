@@ -42,9 +42,7 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
       analyze_tables()
 
       assert [[tuples, pages]] =
-               Repo.query!(
-                 "SELECT reltuples,relpages FROM pg_class WHERE oid='ledger_entries'::regclass"
-               ).rows
+               Repo.query!("SELECT reltuples,relpages FROM pg_class WHERE oid='ledger_entries'::regclass").rows
 
       assert tuples == 0
       assert pages > 0
@@ -57,14 +55,10 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
   defp stats(stage) do
     if TestDiagnostics.enabled?() do
       rows =
-        Repo.query!(
-          "SELECT c.relname,c.reltuples,c.relpages,s.n_live_tup,s.n_dead_tup,s.n_mod_since_analyze,s.analyze_count,s.autoanalyze_count FROM pg_class c JOIN pg_stat_all_tables s ON s.relid=c.oid WHERE c.oid IN ('ledger_entries'::regclass,'api_key_usage_buckets'::regclass)"
-        ).rows
+        Repo.query!("SELECT c.relname,c.reltuples,c.relpages,s.n_live_tup,s.n_dead_tup,s.n_mod_since_analyze,s.analyze_count,s.autoanalyze_count FROM pg_class c JOIN pg_stat_all_tables s ON s.relid=c.oid WHERE c.oid IN ('ledger_entries'::regclass,'api_key_usage_buckets'::regclass)").rows
 
       attributes =
-        Repo.query!(
-          "SELECT tablename,attname,null_frac,n_distinct,array_length(most_common_freqs,1) FROM pg_stats WHERE schemaname='public' AND tablename IN ('ledger_entries','api_key_usage_buckets') AND attname IN ('api_key_id','request_id','entry_kind','occurred_at','bucket_started_at') ORDER BY tablename,attname"
-        ).rows
+        Repo.query!("SELECT tablename,attname,null_frac,n_distinct,array_length(most_common_freqs,1) FROM pg_stats WHERE schemaname='public' AND tablename IN ('ledger_entries','api_key_usage_buckets') AND attname IN ('api_key_id','request_id','entry_kind','occurred_at','bucket_started_at') ORDER BY tablename,attname").rows
 
       TestDiagnostics.puts(
         CodexPooler.JSON.encode!(%{
@@ -142,9 +136,7 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
 
         function_nodes = Enum.filter(nodes, &(&1["Function Name"] == "api_key_usage_events"))
 
-        TestDiagnostics.puts(
-          "edge_plan histories=1000 event_function_nodes=#{length(function_nodes)} execution_ms=#{explain["Execution Time"]}"
-        )
+        TestDiagnostics.puts("edge_plan histories=1000 event_function_nodes=#{length(function_nodes)} execution_ms=#{explain["Execution Time"]}")
 
         assert function_nodes == [],
                "edge projection must not invoke the event function once per retained request"
@@ -167,9 +159,7 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
 
   def capture(_event, measurements, metadata, owner) do
     if self() == owner and String.starts_with?(metadata.query, "WITH bounds") do
-      TestDiagnostics.puts(
-        CodexPooler.JSON.encode!(%{scenario: "window_query_timing", measurements: measurements})
-      )
+      TestDiagnostics.puts(CodexPooler.JSON.encode!(%{scenario: "window_query_timing", measurements: measurements}))
 
       send(owner, {:window_query, metadata.query, metadata.params})
     end

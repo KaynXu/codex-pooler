@@ -50,13 +50,7 @@ defmodule CodexPooler.Platform.InstancePresenceTest do
     logs =
       ExUnit.CaptureLog.capture_log(fn ->
         pid =
-          start_supervised!(
-            {InstanceHeartbeat,
-             enabled: true,
-             interval_ms: :timer.minutes(5),
-             name: :heartbeat_invalid_row,
-             identity: %Identity{instance_id: nil, node_name: "sample", boot_id: "sample"}}
-          )
+          start_supervised!({InstanceHeartbeat, enabled: true, interval_ms: :timer.minutes(5), name: :heartbeat_invalid_row, identity: %Identity{instance_id: nil, node_name: "sample", boot_id: "sample"}})
 
         :sys.get_state(pid)
         stop_supervised!(InstanceHeartbeat)

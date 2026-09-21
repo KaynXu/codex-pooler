@@ -398,8 +398,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
 
     assert Repo.aggregate(
              from(request in Request,
-               where:
-                 request.pool_id == ^setup.pool.id and request.api_key_id == ^setup.api_key.id
+               where: request.pool_id == ^setup.pool.id and request.api_key_id == ^setup.api_key.id
              ),
              :count
            ) == 2

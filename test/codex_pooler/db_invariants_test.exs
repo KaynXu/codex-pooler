@@ -77,8 +77,7 @@ defmodule CodexPooler.DBInvariantsTest do
           {"owner_process_id", "malformed", "execution_terminal_proofs_process_check"},
           {"owner_instance_boot_id", "", "execution_terminal_proofs_owner_check"}
         ] do
-      assert {:error,
-              %Postgrex.Error{postgres: %{code: :check_violation, constraint: ^constraint}}} =
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: ^constraint}}} =
                Repo.query(
                  "UPDATE execution_terminal_proofs SET #{column}=$1 WHERE execution_id=$2",
                  [value, id],
@@ -107,12 +106,9 @@ defmodule CodexPooler.DBInvariantsTest do
 
   test "telemetry loss storage rejects unknown reasons" do
     assert %{num_rows: 1} =
-             Repo.query!(
-               "INSERT INTO telemetry_relay_losses(reason,rows,samples) VALUES('expired_unclaimed',2,9)"
-             )
+             Repo.query!("INSERT INTO telemetry_relay_losses(reason,rows,samples) VALUES('expired_unclaimed',2,9)")
 
-    assert {:error,
-            %Postgrex.Error{postgres: %{code: :check_violation, constraint: "relay_loss_reason"}}} =
+    assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: "relay_loss_reason"}}} =
              Repo.query(
                "INSERT INTO telemetry_relay_losses(reason,rows,samples) VALUES('invalid',0,0)",
                [],
@@ -451,11 +447,8 @@ defmodule CodexPooler.DBInvariantsTest do
     base = replay_entitlement_params(fixture, turn_id, eligible_attempt_id)
 
     for {field, constraint, extras} <- [
-          {:replay_claim_digest, "request_replay_entitlements_replay_claim_digest_shape_check",
-           %{}},
-          {:provisional_binding_digest,
-           "request_replay_entitlements_provisional_digest_shape_check",
-           consumed_tuple(%{replay_attempt_id: eligible_attempt_id})},
+          {:replay_claim_digest, "request_replay_entitlements_replay_claim_digest_shape_check", %{}},
+          {:provisional_binding_digest, "request_replay_entitlements_provisional_digest_shape_check", consumed_tuple(%{replay_attempt_id: eligible_attempt_id})},
           {:owner_lease_digest, "request_replay_entitlements_owner_lease_digest_shape_check", %{}}
         ] do
       assert_db_constraint(:check_violation, constraint, fn ->
@@ -474,8 +467,7 @@ defmodule CodexPooler.DBInvariantsTest do
 
     for {field, constraint} <- [
           {:model_identifier, "request_replay_entitlements_model_identifier_present_check"},
-          {:owner_lease_key_version,
-           "request_replay_entitlements_lease_key_version_present_check"}
+          {:owner_lease_key_version, "request_replay_entitlements_lease_key_version_present_check"}
         ] do
       assert_db_constraint(:check_violation, constraint, fn ->
         insert_replay_entitlement!(Map.put(base, field, "  \t"))
@@ -515,9 +507,7 @@ defmodule CodexPooler.DBInvariantsTest do
   test "database rejects malformed replay lifecycle tuples and timestamp orderings" do
     for {suffix, attrs} <- replay_illegal_tuple_matrix() do
       fixture =
-        replay_execution_fixture!(
-          "replay-illegal-#{suffix}-#{System.unique_integer([:positive])}"
-        )
+        replay_execution_fixture!("replay-illegal-#{suffix}-#{System.unique_integer([:positive])}")
 
       eligible_attempt_id = create_attempt!(fixture)
       replay_attempt_id = create_attempt!(%{fixture | request_id: fixture.request_id}, 2)
@@ -1390,8 +1380,7 @@ defmodule CodexPooler.DBInvariantsTest do
     [
       {"armed", %{replay_attempt_id: nil}},
       {"consumed-open", consumed_tuple()},
-      {"consumed-open-started",
-       consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 3})},
+      {"consumed-open-started", consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 3})},
       {"consumed-closed", consumed_tuple(%{closed_offset_seconds: 11})},
       {"consumed-closed-started",
        consumed_tuple(%{
@@ -1426,12 +1415,9 @@ defmodule CodexPooler.DBInvariantsTest do
       {"consumed-abandon-not-after", consumed_tuple(%{abandon_offset_seconds: 1})},
       {"consumed-start-only", consumed_tuple(%{started_offset_seconds: 2})},
       {"consumed-liveness-only", consumed_tuple(%{last_liveness_offset_seconds: 2})},
-      {"consumed-start-before",
-       consumed_tuple(%{started_offset_seconds: 0, last_liveness_offset_seconds: 2})},
-      {"consumed-liveness-before-start",
-       consumed_tuple(%{started_offset_seconds: 3, last_liveness_offset_seconds: 2})},
-      {"consumed-liveness-at-abandon",
-       consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 10})},
+      {"consumed-start-before", consumed_tuple(%{started_offset_seconds: 0, last_liveness_offset_seconds: 2})},
+      {"consumed-liveness-before-start", consumed_tuple(%{started_offset_seconds: 3, last_liveness_offset_seconds: 2})},
+      {"consumed-liveness-at-abandon", consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 10})},
       {"consumed-closed-too-early", consumed_tuple(%{closed_offset_seconds: 1})},
       {"consumed-terminal", consumed_tuple(%{terminal_offset_seconds: 4})},
       {"expired-too-early",
@@ -1450,8 +1436,7 @@ defmodule CodexPooler.DBInvariantsTest do
          terminal_offset_seconds: 30,
          closed_offset_seconds: 31
        }},
-      {"revoked-missing-close",
-       %{status: "revoked", replay_attempt_id: nil, terminal_offset_seconds: 1}},
+      {"revoked-missing-close", %{status: "revoked", replay_attempt_id: nil, terminal_offset_seconds: 1}},
       {"revoked-close-at-terminal",
        %{
          status: "revoked",

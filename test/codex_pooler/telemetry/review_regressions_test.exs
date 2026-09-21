@@ -187,9 +187,7 @@ defmodule CodexPooler.Telemetry.ReviewRegressionsTest do
     assert Decimal.equal?(Repo.aggregate(RelayEvent, :sum, :count), RelayEvent.max_count())
 
     assert %{rows: [[7]]} =
-             Repo.query!(
-               "SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'"
-             )
+             Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='shutdown_unflushed'")
 
     assert rejected_samples() == 0
   end
@@ -256,9 +254,7 @@ defmodule CodexPooler.Telemetry.ReviewRegressionsTest do
 
   defp rejected_samples do
     %{rows: [[count]]} =
-      Repo.query!(
-        "SELECT COALESCE(sum(samples), 0)::bigint FROM telemetry_relay_losses WHERE reason='rejected_sample'"
-      )
+      Repo.query!("SELECT COALESCE(sum(samples), 0)::bigint FROM telemetry_relay_losses WHERE reason='rejected_sample'")
 
     count
   end

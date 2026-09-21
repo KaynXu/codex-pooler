@@ -237,8 +237,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
               token: refreshed_token
           }
 
-          {:ok, retry_prepared_context,
-           retry_dispatch_request(retry_prepared_context, dispatch_request)}
+          {:ok, retry_prepared_context, retry_dispatch_request(retry_prepared_context, dispatch_request)}
         end
 
       {:error, _reason} = error ->
@@ -539,11 +538,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           "websocket_auth_refresh_first_event",
           context.request_options
         )
-        |> Map.merge(
-          Metadata.upstream_websocket_connection_attempt_metadata(
-            response_context.upstream_websocket_connection
-          )
-        )
+        |> Map.merge(Metadata.upstream_websocket_connection_attempt_metadata(response_context.upstream_websocket_connection))
         |> Map.put("auth_refresh_trigger", AuthRefresh.trigger_kind(:websocket)),
       retry_count: context.retry_count,
       before_finalize: fn ->

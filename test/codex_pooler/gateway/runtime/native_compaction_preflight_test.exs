@@ -369,9 +369,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
         effective_mode: "full",
         source: "override"
       })
-      |> RequestOptions.put_runtime_context(
-        api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch
-      )
+      |> RequestOptions.put_runtime_context(api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch)
 
     {:ok, metadata} =
       NativeCodexTurnMetadata.parse(payload, session.id)

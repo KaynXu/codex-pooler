@@ -59,8 +59,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
              do: decimal_micros_to_usd(cost_summary.priced_settled_cost_micros),
              else: nil
            ),
-         total_cost_status:
-           if(cost_summary.priced_settlement_count > 0, do: "priced", else: "unpriced"),
+         total_cost_status: if(cost_summary.priced_settlement_count > 0, do: "priced", else: "unpriced"),
          limits:
            UsageResponses.self_usage_limits(
              bindings,

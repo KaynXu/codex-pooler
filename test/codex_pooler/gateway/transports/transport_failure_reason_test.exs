@@ -29,10 +29,8 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
          reason: {:proxy, {:unexpected_status, 503}},
          source: %Mint.HTTPError{module: Mint.HTTP1, reason: {:proxy, {:unexpected_status, 503}}}
        }, "Finch.HTTPError", "proxy_unexpected_status_503"},
-      {%Mint.TransportError{reason: {:bad_alpn_protocol, "h3"}}, "Mint.TransportError",
-       "bad_alpn_protocol"},
-      {%Mint.HTTPError{module: Mint.HTTP1, reason: {:proxy, :tunnel_timeout}}, "Mint.HTTPError",
-       "proxy_tunnel_timeout"}
+      {%Mint.TransportError{reason: {:bad_alpn_protocol, "h3"}}, "Mint.TransportError", "bad_alpn_protocol"},
+      {%Mint.HTTPError{module: Mint.HTTP1, reason: {:proxy, :tunnel_timeout}}, "Mint.HTTPError", "proxy_tunnel_timeout"}
     ]
 
     for {exception, exception_name, reason} <- cases do

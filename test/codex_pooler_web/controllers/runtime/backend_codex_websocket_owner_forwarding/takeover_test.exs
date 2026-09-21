@@ -283,8 +283,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
                websocket_owner_forwarder_opts: Keyword.put(opts, :timeout, 25)
              })
 
-    assert_receive {:websocket_owner_harness_node_call,
-                    %{function: :remote_attach_downstream, timeout: 25}}
+    assert_receive {:websocket_owner_harness_node_call, %{function: :remote_attach_downstream, timeout: 25}}
 
     assert active_owner_lease(session.id).owner_instance_id == remote_node_string
     assert FakeUpstream.count(upstream) == 0
@@ -507,11 +506,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
                opts
              )
 
-    assert_receive {:websocket_owner_harness_app_node_check,
-                    %{node: ^remote_worker, role: "worker", app_node?: false}}
+    assert_receive {:websocket_owner_harness_app_node_check, %{node: ^remote_worker, role: "worker", app_node?: false}}
 
-    assert_receive {:websocket_owner_harness_app_node_check,
-                    %{node: ^remote_scheduler, role: "scheduler", app_node?: false}}
+    assert_receive {:websocket_owner_harness_app_node_check, %{node: ^remote_scheduler, role: "scheduler", app_node?: false}}
 
     refute_received {:websocket_owner_harness_node_call, %{node: ^remote_worker}}
     refute_received {:websocket_owner_harness_node_call, %{node: ^remote_scheduler}}

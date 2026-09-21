@@ -137,8 +137,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   def connection_lifecycle_snapshot(_pid), do: {:error, :invalid_input}
 
   @spec compaction_reservation_snapshot(pid()) ::
-          {:ok,
-           %{lifecycle_id: Ecto.UUID.t(), generation: pos_integer(), serving_mode: :full | :lite}}
+          {:ok, %{lifecycle_id: Ecto.UUID.t(), generation: pos_integer(), serving_mode: :full | :lite}}
           | {:error, atom()}
   def compaction_reservation_snapshot(pid) when is_pid(pid),
     do: admission_call(pid, :compaction_reservation_snapshot)
@@ -347,8 +346,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   else
     def handle_call(
-          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization,
-           _restorer},
+          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization, _restorer},
           _from,
           state
         ),
@@ -429,8 +427,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:reply, {:error, :invalid_input}, state}
 
   def handle_call(
-        {:authorize_first_compact_collection, %Binding{} = binding,
-         %FirstCompactResult{} = receipt},
+        {:authorize_first_compact_collection, %Binding{} = binding, %FirstCompactResult{} = receipt},
         _from,
         state
       ) do
@@ -450,8 +447,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, admission, provenance} ->
         admission = %{admission | compaction_item_digest: receipt.item_digest}
 
-        {:reply, {:ok, provenance},
-         state |> Map.delete(:first_compact_result) |> put_admission(admission)}
+        {:reply, {:ok, provenance}, state |> Map.delete(:first_compact_result) |> put_admission(admission)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -553,8 +549,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:reply, :ok, clear_admission(state, :compact_failure)}
 
   def handle_call(
-        {:acknowledge_compact_finalization,
-         {:success, digest, %Confirmation{} = confirmation, expires_at_ms}},
+        {:acknowledge_compact_finalization, {:success, digest, %Confirmation{} = confirmation, expires_at_ms}},
         _from,
         state
       ) do
@@ -923,9 +918,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp guard_connection_bound_continuation(state, receive_state, connection_usage) do
     terminal =
-      StreamProtocol.canonicalize_native_codex_responses_json_message(
-        ~s({"type":"error","error":{"code":"previous_response_not_found"}})
-      )
+      StreamProtocol.canonicalize_native_codex_responses_json_message(~s({"type":"error","error":{"code":"previous_response_not_found"}}))
 
     decoded = decode_text_frame(terminal)
 
@@ -1003,8 +996,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp retain_first_compact_result({:ok, result} = response, state, request) do
     case FirstCompactResult.from_collection(request, result, connection_lifecycle_state(state)) do
       {:ok, receipt} ->
-        {{:ok, Map.put(result, :first_compact_result, receipt)},
-         Map.put(state, :first_compact_result, receipt)}
+        {{:ok, Map.put(result, :first_compact_result, receipt)}, Map.put(state, :first_compact_result, receipt)}
 
       :error ->
         {response, state}
@@ -1018,8 +1010,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, receipt} ->
         {:ok, response} = result
 
-        {{:ok, Map.put(response, :ordinary_success_result, receipt)},
-         Map.put(state, :ordinary_success_result, receipt)}
+        {{:ok, Map.put(response, :ordinary_success_result, receipt)}, Map.put(state, :ordinary_success_result, receipt)}
 
       :error ->
         {result, state}
@@ -1259,8 +1250,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     attrs =
       %{
         phase: phase,
-        termination_source:
-          Map.get(state, :transport_failure_source) || request_failure_source(reason),
+        termination_source: Map.get(state, :transport_failure_source) || request_failure_source(reason),
         pre_visible_output: true,
         terminal_seen: false,
         text_frame_count: 0
@@ -1635,10 +1625,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             headers: Map.get(state, :headers, []),
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers,
-            transport_failure:
-              transport_failure_metadata(reason, state, receive_state,
-                phase: failure_phase(reason)
-              ),
+            transport_failure: transport_failure_metadata(reason, state, receive_state, phase: failure_phase(reason)),
             native_client_retry_observation: final_client_retry_observation(receive_state)
           }}, next_state}
     end
@@ -2140,8 +2127,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           | terminal_upstream_error_code:
               receive_state.terminal_upstream_error_code ||
                 StreamProtocol.upstream_error_code(decoded),
-            terminal_upstream_error_param:
-              receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
+            terminal_upstream_error_param: receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
         }
 
       _other ->
@@ -2236,8 +2222,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     %{
       receive_state
-      | native_client_retry_observation:
-          ClientRetry.observe_frame(observation, decoded, observed_at)
+      | native_client_retry_observation: ClientRetry.observe_frame(observation, decoded, observed_at)
     }
   end
 

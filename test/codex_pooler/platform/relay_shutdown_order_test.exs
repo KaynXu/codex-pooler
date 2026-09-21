@@ -77,13 +77,7 @@ defmodule CodexPooler.Platform.RelayShutdownOrderTest do
     start_supervised!({ActivityRegistry, name: activity_registry})
     start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
-    start_supervised!(
-      {RolloutDrain,
-       name: drain_name,
-       activity_registry: activity_registry,
-       stream_registry: stream_registry,
-       relay: runtime}
-    )
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry, relay: runtime})
 
     %{result: :ok} = RolloutDrain.start_drain(name: drain_name, timeout_ms: 1_000)
     refute :sys.get_state(runtime).quiesced?
@@ -210,14 +204,7 @@ defmodule CodexPooler.Platform.RelayShutdownOrderTest do
 
   defp start_paused_runtime(context) do
     runtime =
-      start_supervised!(
-        {RelayRuntime,
-         enabled: true,
-         role: "web",
-         name: nil,
-         start_paused: true,
-         claim_fun: fn _, _ -> {:ok, []} end}
-      )
+      start_supervised!({RelayRuntime, enabled: true, role: "web", name: nil, start_paused: true, claim_fun: fn _, _ -> {:ok, []} end})
 
     Sandbox.allow(Repo, context.sandbox_owner, runtime)
     runtime

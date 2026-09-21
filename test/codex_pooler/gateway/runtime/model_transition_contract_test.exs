@@ -85,11 +85,7 @@ defmodule CodexPooler.Gateway.Runtime.ModelTransitionContractTest do
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^failed.id), :count) == 1
     assert failed.usage_status == "usage_unknown"
 
-    assert Enum.sort(
-             Repo.all(
-               from l in LedgerEntry, where: l.request_id == ^failed.id, select: l.entry_kind
-             )
-           ) == ["release", "reservation", "settlement"]
+    assert Enum.sort(Repo.all(from l in LedgerEntry, where: l.request_id == ^failed.id, select: l.entry_kind)) == ["release", "reservation", "settlement"]
 
     assert :ok = FakeUpstream.verify!(upstream)
   end

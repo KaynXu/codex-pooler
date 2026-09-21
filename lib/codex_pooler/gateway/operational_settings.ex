@@ -160,8 +160,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       secrets_available?: settings.secrets_available?,
       file_max_size_bytes: settings.files.max_size_bytes,
       upload_ttl_seconds: settings.files.upload_ttl_seconds,
-      abandoned_upload_cleanup_interval_seconds:
-        settings.files.abandoned_upload_cleanup_interval_seconds,
+      abandoned_upload_cleanup_interval_seconds: settings.files.abandoned_upload_cleanup_interval_seconds,
       bridge_owner_lease_ttl_seconds: settings.gateway.bridge_owner_lease_ttl_seconds,
       bridge_owner_lease_renewal_seconds: settings.gateway.bridge_owner_lease_renewal_seconds,
       expired_alias_ttl_seconds: settings.gateway.expired_alias_ttl_seconds,
@@ -188,12 +187,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       upstream_pool_timeout_ms: settings.gateway.upstream_pool_timeout_ms,
       upstream_receive_timeout_ms: settings.gateway.upstream_receive_timeout_ms,
       upstream_conn_max_idle_time_ms: OutboundHTTP.conn_max_idle_time_ms(settings),
-      upstream_token_refresh_margin_seconds:
-        settings.gateway.upstream_token_refresh_margin_seconds,
-      websocket_idle_timeout_ms:
-        clamp_websocket_idle_timeout(settings.gateway.websocket_idle_timeout_ms),
-      websocket_owner_idle_timeout_ms:
-        clamp_websocket_owner_idle_timeout(settings.gateway.websocket_owner_idle_timeout_ms),
+      upstream_token_refresh_margin_seconds: settings.gateway.upstream_token_refresh_margin_seconds,
+      websocket_idle_timeout_ms: clamp_websocket_idle_timeout(settings.gateway.websocket_idle_timeout_ms),
+      websocket_owner_idle_timeout_ms: clamp_websocket_owner_idle_timeout(settings.gateway.websocket_owner_idle_timeout_ms),
       model_context_window_overrides: settings.gateway.model_context_window_overrides
     }
   end

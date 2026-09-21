@@ -442,8 +442,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp withhold_preamble(state, _preamble), do: state
 
   defp take_withheld_preamble(%{target: %Plug.Conn{} = target} = state) do
-    {withheld_preamble(state),
-     %{state | target: %{target | private: Map.delete(target.private, @withheld_preamble)}}}
+    {withheld_preamble(state), %{state | target: %{target | private: Map.delete(target.private, @withheld_preamble)}}}
   end
 
   defp take_withheld_preamble(state), do: {"", state}

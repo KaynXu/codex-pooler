@@ -66,9 +66,7 @@ defmodule CodexPooler.Repo.Migrations.AddAttemptsUpstreamIdentityRequestIndex do
         try do
           fun.()
         after
-          repo().query!("SELECT set_config('lock_timeout',$1,false)", [previous_timeout],
-            log: false
-          )
+          repo().query!("SELECT set_config('lock_timeout',$1,false)", [previous_timeout], log: false)
         end
       end,
       timeout: :infinity

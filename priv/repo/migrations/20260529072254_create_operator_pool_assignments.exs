@@ -13,9 +13,7 @@ defmodule CodexPooler.Repo.Migrations.CreateOperatorPoolAssignments do
       add :revoked_at, :utc_datetime_usec
     end
 
-    create constraint(:operator_pool_assignments, :operator_pool_assignments_status_check,
-             check: "status = ANY (ARRAY['active'::text, 'revoked'::text])"
-           )
+    create constraint(:operator_pool_assignments, :operator_pool_assignments_status_check, check: "status = ANY (ARRAY['active'::text, 'revoked'::text])")
 
     create unique_index(:operator_pool_assignments, [:user_id, :pool_id],
              name: :operator_pool_assignments_user_pool_active_uq,

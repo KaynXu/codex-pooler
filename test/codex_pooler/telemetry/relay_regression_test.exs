@@ -454,16 +454,12 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
     assert Repo.aggregate(RelayEvent, :count) == 2
 
     assert %{rows: [[18]]} =
-             Repo.query!(
-               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
-             )
+             Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'")
 
     refute ExUnit.CaptureLog.capture_log(fn -> sync(worker, :flush) end) =~ "buffer full"
 
     assert %{rows: [[18]]} =
-             Repo.query!(
-               "SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
-             )
+             Repo.query!("SELECT samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'")
 
     :telemetry.execute(@quota, %{count: 1}, quota_labels())
     sync(worker, :flush)
@@ -523,10 +519,7 @@ defmodule CodexPooler.Telemetry.RelayRegressionTest do
   defp reporter do
     registry = Module.concat(__MODULE__, "Registry#{System.unique_integer([:positive])}")
 
-    start_supervised!(
-      {Core,
-       metrics: CodexPoolerWeb.Telemetry.prometheus_metrics(), name: registry, start_async: false}
-    )
+    start_supervised!({Core, metrics: CodexPoolerWeb.Telemetry.prometheus_metrics(), name: registry, start_async: false})
 
     registry
   end

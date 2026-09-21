@@ -15,17 +15,11 @@ defmodule CodexPooler.Repo.Migrations.CreateExecutionTerminalProofs do
         default: fragment("(clock_timestamp() AT TIME ZONE 'UTC')")
     end
 
-    create constraint(:execution_terminal_proofs, :execution_terminal_proofs_owner_check,
-             check: "owner_instance_id <> '' AND owner_instance_boot_id <> ''"
-           )
+    create constraint(:execution_terminal_proofs, :execution_terminal_proofs_owner_check, check: "owner_instance_id <> '' AND owner_instance_boot_id <> ''")
 
-    create constraint(:execution_terminal_proofs, :execution_terminal_proofs_process_check,
-             check: "owner_process_id ~ '^<0\\.[0-9]+\\.[0-9]+>$'"
-           )
+    create constraint(:execution_terminal_proofs, :execution_terminal_proofs_process_check, check: "owner_process_id ~ '^<0\\.[0-9]+\\.[0-9]+>$'")
 
-    create constraint(:execution_terminal_proofs, :execution_terminal_proofs_end_kind_check,
-             check: "end_kind IN ('completed', 'process_down')"
-           )
+    create constraint(:execution_terminal_proofs, :execution_terminal_proofs_end_kind_check, check: "end_kind IN ('completed', 'process_down')")
 
     create index(:execution_terminal_proofs, [:published_at, :execution_id])
   end

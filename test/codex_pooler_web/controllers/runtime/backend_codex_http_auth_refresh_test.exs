@@ -157,8 +157,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHttpAuthRefreshTest do
           fallback = start_upstream(stream_success_sse())
           {setup, second} = second_candidate!(setup, fallback)
 
-          {setup, put_req_header(conn, "x-request-id", prefer_first_candidate(setup, second)),
-           fallback}
+          {setup, put_req_header(conn, "x-request-id", prefer_first_candidate(setup, second)), fallback}
         else
           {setup, conn, nil}
         end

@@ -440,9 +440,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
               "settlement-only-source"
             )
 
-          Repo.delete_all(
-            from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-          )
+          Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date)
 
           request
         end)
@@ -556,9 +554,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
           "concurrent-rebuild-source"
         )
 
-        Repo.delete_all(
-          from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-        )
+        Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date)
       end)
 
       parent = self()
@@ -1368,9 +1364,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       # writes the coverage row back for the date.
       Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
 
-      Repo.delete_all(
-        from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-      )
+      Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date)
     end)
   end
 

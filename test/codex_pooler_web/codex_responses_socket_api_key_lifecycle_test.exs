@@ -299,8 +299,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketAPIKeyLifecycleTest do
   end
 
   describe "time-based expiry of an idle socket" do
-    @tag slow:
-           "observes actual key-expiry timer and database-clock reread with a one-second retry floor"
+    @tag slow: "observes actual key-expiry timer and database-clock reread with a one-second retry floor"
     test "a socket opened with an expiring key closes at the expiry without a client frame" do
       upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
       setup = gateway_setup(upstream)
@@ -329,8 +328,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketAPIKeyLifecycleTest do
       end
     end
 
-    @tag slow:
-           "observes rearmed key-expiry timer and database-clock reread with a one-second retry floor"
+    @tag slow: "observes rearmed key-expiry timer and database-clock reread with a one-second retry floor"
     test "an operator update that brings the expiry forward re-arms the check from the durable row" do
       setup = active_api_key_fixture()
       state = api_key_socket_state(setup.api_key.id, setup.pool.id, 0)

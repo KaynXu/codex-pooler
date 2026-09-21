@@ -260,8 +260,7 @@ defmodule CodexPooler.Gateway.Runtime.WebsocketQuotaDenialTest do
       "x-codex-primary-reset-at" => Integer.to_string(DateTime.to_unix(reset_at))
     }
 
-    {%SelectedCandidateContext{identity: identity, model: %{upstream_model_id: "sample-model"}},
-     headers, reset_at}
+    {%SelectedCandidateContext{identity: identity, model: %{upstream_model_id: "sample-model"}}, headers, reset_at}
   end
 
   defp eligibility(context) do

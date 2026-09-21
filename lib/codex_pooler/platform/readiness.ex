@@ -171,8 +171,7 @@ defmodule CodexPooler.Platform.Readiness do
   # migrations, which are normal mid-rollout and must not unready the pods that
   # are still serving the old one, so the check is containment, not equality.
   defp probe_statement(versions) do
-    {"SELECT count(*) FROM #{@migrations_table} WHERE version = ANY($1)", [versions],
-     length(versions)}
+    {"SELECT count(*) FROM #{@migrations_table} WHERE version = ANY($1)", [versions], length(versions)}
   end
 
   defp classify(%DBConnection.ConnectionError{} = reason),

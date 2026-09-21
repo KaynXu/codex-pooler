@@ -278,8 +278,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
   test "Responses rejects non-text system and developer content before instruction lifting" do
     for {role, part} <- [
-          {"developer",
-           %{"type" => "input_image", "image_url" => "https://example.com/image.png"}},
+          {"developer", %{"type" => "input_image", "image_url" => "https://example.com/image.png"}},
           {"system", %{"type" => "input_file", "file_id" => "file_fixture"}}
         ] do
       assert {:error,
@@ -1491,8 +1490,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     invalid_payloads = [
       {%{"moderation" => %{}}, "moderation.model"},
       {%{"moderation" => %{"model" => " "}}, "moderation.model"},
-      {%{"moderation" => %{"model" => "omni-moderation-latest", "extra" => true}},
-       "moderation.extra"},
+      {%{"moderation" => %{"model" => "omni-moderation-latest", "extra" => true}}, "moderation.extra"},
       {%{"moderation" => "omni-moderation-latest"}, "moderation"},
       {%{"reasoning" => %{"context" => "recent_turns"}}, "reasoning.context"},
       {%{"reasoning" => %{"effort" => " "}}, "reasoning.effort"},
@@ -4115,24 +4113,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         {"missing name", %{"type" => "custom"}},
         {"blank name", %{"type" => "custom", "name" => "   "}},
         {"non-string name", %{"type" => "custom", "name" => true}},
-        {"non-string description",
-         %{"type" => "custom", "name" => "custom_fixture", "description" => false}},
-        {"non-boolean defer_loading",
-         %{"type" => "custom", "name" => "custom_fixture", "defer_loading" => "true"}},
-        {"null defer_loading",
-         %{"type" => "custom", "name" => "custom_fixture", "defer_loading" => nil}},
-        {"scalar allowed_callers",
-         %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => "direct"}},
-        {"boolean allowed_callers",
-         %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => true}},
+        {"non-string description", %{"type" => "custom", "name" => "custom_fixture", "description" => false}},
+        {"non-boolean defer_loading", %{"type" => "custom", "name" => "custom_fixture", "defer_loading" => "true"}},
+        {"null defer_loading", %{"type" => "custom", "name" => "custom_fixture", "defer_loading" => nil}},
+        {"scalar allowed_callers", %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => "direct"}},
+        {"boolean allowed_callers", %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => true}},
         {"invalid caller token",
          %{
            "type" => "custom",
            "name" => "custom_fixture",
            "allowed_callers" => ["direct", "unknown"]
          }},
-        {"invalid caller member type",
-         %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => [false]}},
+        {"invalid caller member type", %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => [false]}},
         {"null format", %{"type" => "custom", "name" => "custom_fixture", "format" => nil}},
         {"boolean format", %{"type" => "custom", "name" => "custom_fixture", "format" => true}},
         {"text format with extra key",
@@ -4186,8 +4178,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              "extra" => true
            }
          }},
-        {"unknown custom field",
-         %{"type" => "custom", "name" => "custom_fixture", "parameters" => %{}}}
+        {"unknown custom field", %{"type" => "custom", "name" => "custom_fixture", "parameters" => %{}}}
       ]
 
       Enum.each(invalid_tools, fn {_label, custom_tool} ->
@@ -4215,16 +4206,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         {"blank custom choice name", %{"type" => "custom", "name" => "   "}},
         {"non-string custom choice name", %{"type" => "custom", "name" => true}},
         {"unknown custom choice", %{"type" => "custom", "name" => "missing_fixture"}},
-        {"case-mismatched custom choice",
-         %{"type" => "custom", "name" => "custom_choice_fixture"}},
-        {"whitespace-mismatched custom choice",
-         %{"type" => "custom", "name" => " Custom_Choice_Fixture "}},
-        {"function name used as custom choice",
-         %{"type" => "custom", "name" => "function_choice_fixture"}},
-        {"custom choice with extra key",
-         %{"type" => "custom", "name" => "Custom_Choice_Fixture", "extra" => true}},
-        {"custom name used as function choice",
-         %{"type" => "function", "name" => "Custom_Choice_Fixture"}}
+        {"case-mismatched custom choice", %{"type" => "custom", "name" => "custom_choice_fixture"}},
+        {"whitespace-mismatched custom choice", %{"type" => "custom", "name" => " Custom_Choice_Fixture "}},
+        {"function name used as custom choice", %{"type" => "custom", "name" => "function_choice_fixture"}},
+        {"custom choice with extra key", %{"type" => "custom", "name" => "Custom_Choice_Fixture", "extra" => true}},
+        {"custom name used as function choice", %{"type" => "function", "name" => "Custom_Choice_Fixture"}}
       ]
 
       Enum.each(invalid_choices, fn {_label, choice} ->
@@ -4275,17 +4261,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       collision_cases = [
         {"duplicate top-level functions", [function.("shared"), function.("shared")]},
         {"duplicate custom tools", [custom.("shared"), custom.("shared")]},
-        {"duplicate namespace containers",
-         [namespace.("shared_namespace", ["first"]), namespace.("shared_namespace", ["second"])]},
-        {"duplicate children in one namespace",
-         [namespace.("first_namespace", ["shared", "shared"])]},
-        {"duplicate children across namespaces",
-         [namespace.("first_namespace", ["shared"]), namespace.("second_namespace", ["shared"])]},
+        {"duplicate namespace containers", [namespace.("shared_namespace", ["first"]), namespace.("shared_namespace", ["second"])]},
+        {"duplicate children in one namespace", [namespace.("first_namespace", ["shared", "shared"])]},
+        {"duplicate children across namespaces", [namespace.("first_namespace", ["shared"]), namespace.("second_namespace", ["shared"])]},
         {"function and custom", [function.("shared"), custom.("shared")]},
-        {"function and namespace child",
-         [function.("shared"), namespace.("fixture_namespace", ["shared"])]},
-        {"custom and namespace child",
-         [custom.("shared"), namespace.("fixture_namespace", ["shared"])]}
+        {"function and namespace child", [function.("shared"), namespace.("fixture_namespace", ["shared"])]},
+        {"custom and namespace child", [custom.("shared"), namespace.("fixture_namespace", ["shared"])]}
       ]
 
       Enum.each(collision_cases, fn {_label, tools} ->
@@ -4429,8 +4410,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         {%{"type" => "function", "name" => "", "parameters" => %{}}, "tools"},
         {%{"type" => "function", "name" => "   ", "parameters" => %{}}, "tools"},
         {%{"type" => "function", "name" => "lookup_fixture", "parameters" => []}, "tools"},
-        {%{"type" => "unsupported_tool", "name" => "lookup_fixture", "parameters" => %{}},
-         "tools"},
+        {%{"type" => "unsupported_tool", "name" => "lookup_fixture", "parameters" => %{}}, "tools"},
         {function_tool("chat_only_nested", %{"type" => "object", "properties" => %{}}), "tools"}
       ]
 
@@ -4609,8 +4589,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
          ]), "tools"},
         {base_payload
          |> Map.put("tools", [valid_custom_tool])
-         |> Map.put("tool_choice", %{"type" => "custom", "name" => "custom_fixture"}),
-         "tool_choice"},
+         |> Map.put("tool_choice", %{"type" => "custom", "name" => "custom_fixture"}), "tool_choice"},
         {base_payload
          |> Map.put("tools", [valid_custom_tool])
          |> Map.put("tool_choice", %{
@@ -4670,8 +4649,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
            "name" => "lookup_fixture",
            "parameters" => %{"type" => "object", "properties" => %{}}
          }, %{"type" => "function", "name" => "lookup_fixture"}},
-        {%{"type" => "custom", "name" => "custom_fixture"},
-         %{"type" => "custom", "name" => "custom_fixture"}},
+        {%{"type" => "custom", "name" => "custom_fixture"}, %{"type" => "custom", "name" => "custom_fixture"}},
         {%{"type" => "programmatic_tool_calling"}, %{"type" => "programmatic_tool_calling"}},
         {%{"type" => "image_generation"}, %{"type" => "image_generation"}}
       ]
@@ -4760,8 +4738,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       invalid_cases = [
         {"missing envelope type", %{"mode" => "auto", "tools" => [valid_entry]}, base_tools, nil},
-        {"wrong envelope type", %{"type" => "other", "mode" => "auto", "tools" => [valid_entry]},
-         base_tools, nil},
+        {"wrong envelope type", %{"type" => "other", "mode" => "auto", "tools" => [valid_entry]}, base_tools, nil},
         {"missing mode", %{"type" => "allowed_tools", "tools" => [valid_entry]}, base_tools, nil},
         {"missing tools", %{"type" => "allowed_tools", "mode" => "auto"}, base_tools, nil},
         {"extra root key",
@@ -4771,25 +4748,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
            "tools" => [valid_entry],
            "extra" => true
          }, base_tools, nil},
-        {"unsupported mode",
-         %{"type" => "allowed_tools", "mode" => "none", "tools" => [valid_entry]}, base_tools,
-         nil},
-        {"empty tools", %{"type" => "allowed_tools", "mode" => "auto", "tools" => []}, base_tools,
-         nil},
-        {"non-list tools", %{"type" => "allowed_tools", "mode" => "auto", "tools" => %{}},
-         base_tools, nil},
-        {"non-map entry",
-         %{"type" => "allowed_tools", "mode" => "auto", "tools" => ["lookup_fixture"]},
-         base_tools, nil},
+        {"unsupported mode", %{"type" => "allowed_tools", "mode" => "none", "tools" => [valid_entry]}, base_tools, nil},
+        {"empty tools", %{"type" => "allowed_tools", "mode" => "auto", "tools" => []}, base_tools, nil},
+        {"non-list tools", %{"type" => "allowed_tools", "mode" => "auto", "tools" => %{}}, base_tools, nil},
+        {"non-map entry", %{"type" => "allowed_tools", "mode" => "auto", "tools" => ["lookup_fixture"]}, base_tools, nil},
         {"entry missing type",
          %{
            "type" => "allowed_tools",
            "mode" => "auto",
            "tools" => [%{"name" => "lookup_fixture"}]
          }, base_tools, nil},
-        {"entry missing name",
-         %{"type" => "allowed_tools", "mode" => "auto", "tools" => [%{"type" => "function"}]},
-         base_tools, nil},
+        {"entry missing name", %{"type" => "allowed_tools", "mode" => "auto", "tools" => [%{"type" => "function"}]}, base_tools, nil},
         {"entry blank name",
          %{
            "type" => "allowed_tools",
@@ -4826,9 +4795,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
            "mode" => "auto",
            "tools" => [%{"type" => "custom", "name" => "lookup_fixture"}]
          }, base_tools, nil},
-        {"deferred function",
-         %{"type" => "allowed_tools", "mode" => "auto", "tools" => [valid_entry]},
-         [Map.put(direct_function, "defer_loading", true)], nil},
+        {"deferred function", %{"type" => "allowed_tools", "mode" => "auto", "tools" => [valid_entry]}, [Map.put(direct_function, "defer_loading", true)], nil},
         {"deferred custom",
          %{
            "type" => "allowed_tools",
@@ -4897,9 +4864,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           Enum.map(
             ~w(code_interpreter file_search computer apply_patch shell local_shell),
             fn type ->
-              {"unsupported built-in #{type}",
-               %{"type" => "allowed_tools", "mode" => "auto", "tools" => [%{"type" => type}]},
-               base_tools, nil}
+              {"unsupported built-in #{type}", %{"type" => "allowed_tools", "mode" => "auto", "tools" => [%{"type" => type}]}, base_tools, nil}
             end
           )
 
@@ -5946,8 +5911,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert reason == %{
              status: 400,
              code: "invalid_function_parameters",
-             message:
-               "Invalid schema for function 'lookup_missing_additional_properties': strict json_schema object schemas must set additionalProperties to false",
+             message: "Invalid schema for function 'lookup_missing_additional_properties': strict json_schema object schemas must set additionalProperties to false",
              param: "tools.0.parameters"
            }
   end
@@ -5971,8 +5935,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert reason == %{
              status: 400,
              code: "invalid_function_parameters",
-             message:
-               "Invalid schema for function 'lookup_additional_properties_true': strict json_schema object schemas must set additionalProperties to false",
+             message: "Invalid schema for function 'lookup_additional_properties_true': strict json_schema object schemas must set additionalProperties to false",
              param: "tools.0.parameters"
            }
   end
@@ -5995,8 +5958,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert reason == %{
              status: 400,
              code: "invalid_function_parameters",
-             message:
-               "Invalid schema for function 'lookup_omitted_required': strict json_schema object schemas must list every property in required (missing ok)",
+             message: "Invalid schema for function 'lookup_omitted_required': strict json_schema object schemas must list every property in required (missing ok)",
              param: "tools.0.parameters.required"
            }
 
@@ -6020,8 +5982,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert reason == %{
              status: 400,
              code: "invalid_function_parameters",
-             message:
-               "Invalid schema for function 'lookup_missing_required_property': strict json_schema object schemas must list every property in required (missing extra)",
+             message: "Invalid schema for function 'lookup_missing_required_property': strict json_schema object schemas must list every property in required (missing extra)",
              param: "tools.0.parameters.required"
            }
   end
@@ -6052,8 +6013,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert reason == %{
              status: 400,
              code: "invalid_function_parameters",
-             message:
-               "Invalid schema for function 'lookup_nested_object': strict json_schema object schemas must set additionalProperties to false",
+             message: "Invalid schema for function 'lookup_nested_object': strict json_schema object schemas must set additionalProperties to false",
              param: "tools.1.parameters.properties.settings"
            }
   end
@@ -6357,8 +6317,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         ),
         "tools.0.parameters.properties.profile.$ref"
       },
-      {"ref_only_cycle", ref_only_cycle_function_parameters(),
-       "tools.0.parameters.properties.profile.$ref"},
+      {"ref_only_cycle", ref_only_cycle_function_parameters(), "tools.0.parameters.properties.profile.$ref"},
       {
         "non_map_target",
         invalid_local_ref_function_parameters(
@@ -6932,10 +6891,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                "file_fixture"
 
       invalid_payloads = [
-        {%{"type" => "input_image", "image_url" => "sediment://file_fixture"},
-         "unsupported_input_image_format"},
-        {%{"type" => "input_image", "image_url" => "http://example.com/sample.png"},
-         "unsupported_input_image_format"},
+        {%{"type" => "input_image", "image_url" => "sediment://file_fixture"}, "unsupported_input_image_format"},
+        {%{"type" => "input_image", "image_url" => "http://example.com/sample.png"}, "unsupported_input_image_format"},
         {%{
            "type" => "input_image",
            "image_url" => "data:text/html;base64," <> Base.encode64("html fixture")

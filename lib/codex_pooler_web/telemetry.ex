@@ -174,8 +174,7 @@ defmodule CodexPoolerWeb.Telemetry do
       ),
       summary("codex_pooler.repo.query.idle_time",
         unit: {:native, :millisecond},
-        description:
-          "The time the connection spent waiting before being checked out for the query"
+        description: "The time the connection spent waiting before being checked out for the query"
       ),
 
       # VM Metrics
@@ -194,16 +193,14 @@ defmodule CodexPoolerWeb.Telemetry do
       last_value("codex_pooler.telemetry_relay.backlog.rows",
         event_name: [:codex_pooler, :telemetry_relay, :health],
         measurement: :backlog_rows,
-        description:
-          "Shared unclaimed relay rows, including expired backlog. Read once per web observer; use max across replicas, never sum."
+        description: "Shared unclaimed relay rows, including expired backlog. Read once per web observer; use max across replicas, never sum."
       ),
       counter("codex_pooler.gateway.websocket_control.failure.count",
         event_name: [:codex_pooler, :gateway, :websocket_control, :failure],
         measurement: :count,
         tags: [:phase, :reason],
         tag_values: &websocket_control_tag_values/1,
-        description:
-          "Websocket control-path failures and deferred cleanup on serving nodes, including failures before request reservation. This measures observed callback failures, not inferred TCP resets."
+        description: "Websocket control-path failures and deferred cleanup on serving nodes, including failures before request reservation. This measures observed callback failures, not inferred TCP resets."
       ),
       last_value("codex_pooler.telemetry_relay.backlog.samples",
         event_name: [:codex_pooler, :telemetry_relay, :health],
@@ -213,22 +210,19 @@ defmodule CodexPoolerWeb.Telemetry do
       last_value("codex_pooler.telemetry_relay.consumers.fresh",
         event_name: [:codex_pooler, :telemetry_relay, :health],
         measurement: :fresh_consumers,
-        description:
-          "Shared count of non-quiesced consumers reporting within 60 seconds. Consumer health does not gate producer insertion."
+        description: "Shared count of non-quiesced consumers reporting within 60 seconds. Consumer health does not gate producer insertion."
       ),
       last_value("codex_pooler.telemetry_relay.loss.rows",
         event_name: [:codex_pooler, :telemetry_relay, :loss],
         measurement: :rows,
         tags: [:reason],
-        description:
-          "Durable shared cumulative known lost rows by fixed reason. Use max across replicas, never sum; database-unavailable hard-stop loss remains unknown."
+        description: "Durable shared cumulative known lost rows by fixed reason. Use max across replicas, never sum; database-unavailable hard-stop loss remains unknown."
       ),
       last_value("codex_pooler.telemetry_relay.loss.samples",
         event_name: [:codex_pooler, :telemetry_relay, :loss],
         measurement: :samples,
         tags: [:reason],
-        description:
-          "Durable shared cumulative known lost samples by fixed reason. Use max across replicas, never sum; post-claim pre-scrape loss remains unquantified."
+        description: "Durable shared cumulative known lost samples by fixed reason. Use max across replicas, never sum; post-claim pre-scrape loss remains unquantified."
       ),
       counter("phoenix.endpoint.stop.count",
         event_name: [:phoenix, :endpoint, :stop],
@@ -649,8 +643,7 @@ defmodule CodexPoolerWeb.Telemetry do
         measurement: :count,
         tags: [:operation, :affinity_kind],
         tag_values: &affinity_stale_write_tag_values/1,
-        description:
-          "Affinity writes the updated_at fence refused, by bounded operation and affinity kind."
+        description: "Affinity writes the updated_at fence refused, by bounded operation and affinity kind."
       )
     ]
   end
@@ -847,8 +840,7 @@ defmodule CodexPoolerWeb.Telemetry do
   @spec stream_finalization_tag_values(map()) :: stream_finalization_tags()
   defp websocket_control_tag_values(metadata) do
     %{
-      phase:
-        if(metadata[:phase] in [:init, :serve, :terminate], do: metadata[:phase], else: :unknown),
+      phase: if(metadata[:phase] in [:init, :serve, :terminate], do: metadata[:phase], else: :unknown),
       reason:
         if(metadata[:reason] in [:database_error, :exception, :process_exit, :cleanup_deferred],
           do: metadata[:reason],
@@ -861,10 +853,8 @@ defmodule CodexPoolerWeb.Telemetry do
     %{
       usage_status: admin_stats_enum_value(metadata[:usage_status], @stream_usage_statuses),
       usage_source: admin_stats_enum_value(metadata[:usage_source], @stream_usage_sources),
-      downstream_transport:
-        admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
-      upstream_transport:
-        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports),
+      downstream_transport: admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
+      upstream_transport: admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports),
       via: via_tag(metadata[:via])
     }
   end
@@ -873,10 +863,8 @@ defmodule CodexPoolerWeb.Telemetry do
   defp stream_outcome_tag_values(metadata) do
     %{
       outcome: admin_stats_enum_value(metadata[:outcome], @stream_outcomes),
-      downstream_transport:
-        admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
-      upstream_transport:
-        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports),
+      downstream_transport: admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
+      upstream_transport: admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports),
       via: via_tag(metadata[:via])
     }
   end
@@ -924,8 +912,7 @@ defmodule CodexPoolerWeb.Telemetry do
     %{
       transition: admin_stats_enum_value(metadata[:transition], CircuitTelemetry.transitions()),
       route_class: admin_stats_enum_value(metadata[:route_class], RouteClass.all()),
-      reason_class:
-        admin_stats_enum_value(metadata[:reason_class], CircuitTelemetry.reason_classes())
+      reason_class: admin_stats_enum_value(metadata[:reason_class], CircuitTelemetry.reason_classes())
     }
   end
 
@@ -933,8 +920,7 @@ defmodule CodexPoolerWeb.Telemetry do
   defp affinity_stale_write_tag_values(metadata) do
     %{
       operation: admin_stats_enum_value(metadata[:operation], AffinityTelemetry.operations()),
-      affinity_kind:
-        admin_stats_enum_value(metadata[:affinity_kind], AffinityTelemetry.affinity_kinds())
+      affinity_kind: admin_stats_enum_value(metadata[:affinity_kind], AffinityTelemetry.affinity_kinds())
     }
   end
 

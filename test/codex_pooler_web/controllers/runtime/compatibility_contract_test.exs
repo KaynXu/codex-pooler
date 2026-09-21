@@ -85,8 +85,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     cross_id_concurrency: "unspecified; different IDs remain per-connection serialized",
     previous_response_id: "independent_conversation_lineage",
     upstream: "stripped_before_coercion_request_options_continuity_and_upstream_dispatch",
-    privacy:
-      "transient_queue_and_active_socket_turn_only; excluded_from_persistence_accounting_logs_telemetry_metadata_and_owner_contracts",
+    privacy: "transient_queue_and_active_socket_turn_only; excluded_from_persistence_accounting_logs_telemetry_metadata_and_owner_contracts",
     exclusions: [
       "POST /v1/responses",
       "native backend HTTP and WebSockets",
@@ -277,13 +276,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert row == %{
                source: "Vercel AI SDK OpenAI provider `@ai-sdk/openai`",
                version: "`4.0.43`, commit `a062795bbe22ecc96a38d114bf8b8ea4af070914`",
-               endpoint:
-                 "`POST /v1/responses` and `GET /v1/responses` websocket `response.create`",
+               endpoint: "`POST /v1/responses` and `GET /v1/responses` websocket `response.create`",
                decision: "accept",
-               observed_shape:
-                 "`tool_choice` is `type=allowed_tools` with mode `auto` or `required`; direct function/custom entries are named, while supported built-ins are type-only `programmatic_tool_calling`, `web_search_preview`, `web_search`, or `image_generation`; order and duplicates remain significant",
-               notes:
-                 "Vercel client provenance only. Pooler accepts this deliberately narrow, declaration-backed vocabulary on public Responses HTTP and the narrow public WebSocket `response.create` surface. MCP, namespace, deferred, tool-search, and unknown entries remain excluded. This does not claim broad OpenAI compatibility, Realtime compatibility, or availability of any declared tool on every model or account"
+               observed_shape: "`tool_choice` is `type=allowed_tools` with mode `auto` or `required`; direct function/custom entries are named, while supported built-ins are type-only `programmatic_tool_calling`, `web_search_preview`, `web_search`, or `image_generation`; order and duplicates remain significant",
+               notes: "Vercel client provenance only. Pooler accepts this deliberately narrow, declaration-backed vocabulary on public Responses HTTP and the narrow public WebSocket `response.create` surface. MCP, namespace, deferred, tool-search, and unknown entries remain excluded. This does not claim broad OpenAI compatibility, Realtime compatibility, or availability of any declared tool on every model or account"
              }
     end
 
@@ -430,14 +426,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "byte_length" => [1, 256],
                  "pattern" => "^[A-Za-z0-9_.-]+$"
                },
-               "conditional_echo" =>
-                 "every attributable Open Responses server event when the accepted response.create supplied stream_id",
+               "conditional_echo" => "every attributable Open Responses server event when the accepted response.create supplied stream_id",
                "same_stream_id_ordering" => "FIFO",
                "cross_stream_id_concurrency" => "unspecified",
                "previous_response_id_relation" => "independent conversation lineage",
                "upstream_handling" => "stripped before upstream dispatch",
-               "privacy" =>
-                 "transient socket-turn state only; excluded from request options, persistence, accounting, logs, telemetry, and metadata",
+               "privacy" => "transient socket-turn state only; excluded from request options, persistence, accounting, logs, telemetry, and metadata",
                "raw_payload_stored" => false,
                "placeholder_values_only" => true
              }
@@ -861,8 +855,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "param" => "tools.defer_loading",
                  "type" => "invalid_request_error"
                },
-               client_error_message_source:
-                 :relayed_code_and_param_and_persisted_supported_values,
+               client_error_message_source: :relayed_code_and_param_and_persisted_supported_values,
                client_error_message_matches_non_full_relay: true,
                supported_values_suffix_relayed: true,
                supported_values_source: :persisted_bounded_attempt_metadata,
@@ -951,8 +944,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert models_etag.canonical_partition.reasoning_variants == %{
                stable_catalog_projection: "routable_capability_family_reasoning_union",
                canonical_allowance: "all_reasoning_variants_in_quota_selected_capability_family",
-               native_turn_selection:
-                 "post_eligibility_assignment_advertising_effective_known_effort",
+               native_turn_selection: "post_eligibility_assignment_advertising_effective_known_effort",
                non_reasoning_capability_boundary: "never_crossed",
                no_advertiser_fallback: "quota_selected_partition",
                circuit_state_input: false
@@ -997,8 +989,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert terminal_failure_diagnostics.contract =~ "raw provider messages, bodies, and frames"
 
       assert CompatibilityMatrix.fixture!(:terminal_failure_diagnostics) == %{
-               fields:
-                 ~w(upstream_error_code stream_terminal_type compaction_invalid_reason upstream_error_param),
+               fields: ~w(upstream_error_code stream_terminal_type compaction_invalid_reason upstream_error_param),
                projection: "failed_and_retryable_failed_attempt_detail_only",
                readable_identifier: "strict_ascii_80_bytes_or_less_cleartext",
                malformed_identifier: "sha256_12",
@@ -1337,8 +1328,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert fixture.response_namespace_restoration == %{
                transports: ["http", "sse", "websocket_direct", "websocket_owner_forwarded"],
-               when:
-                 "missing_or_null_provider_namespace_with_one_exact_namespaced_custom_declaration",
+               when: "missing_or_null_provider_namespace_with_one_exact_namespaced_custom_declaration",
                preserves: "explicit_provider_namespace",
                unchanged: ["flat", "unknown", "non_unique"]
              }
@@ -1387,8 +1377,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                source: "OpenAI Python `openai`",
                version: "`2.52.0`",
                decision: "accept",
-               observed_shape:
-                 "Custom tool requires `type=custom` and nonblank `name`; optional description, boolean `defer_loading`, nullable direct/programmatic `allowed_callers`, and omitted/text/lark/regex format; typed choice has exact `type` and `name`"
+               observed_shape: "Custom tool requires `type=custom` and nonblank `name`; optional description, boolean `defer_loading`, nullable direct/programmatic `allowed_callers`, and omitted/text/lark/regex format; typed choice has exact `type` and `name`"
              } = sdk_shape_row!("openai-python.responses.executable_custom_tool.v1")
 
       assert %{
@@ -1396,29 +1385,23 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                version: "commit `6fa9152eb97b7a36e3c555fbdeaaa241423ae91e`",
                endpoint: "`POST /v1/chat/completions`",
                decision: "translate",
-               observed_shape:
-                 "Request tools use exact outer `type=custom` and nested `custom` with required nonblank `name` plus optional `description` and `format`; named choice nests the custom name; output calls use `type=custom` with nested `custom.name` and free-form `custom.input`"
+               observed_shape: "Request tools use exact outer `type=custom` and nested `custom` with required nonblank `name` plus optional `description` and `format`; named choice nests the custom name; output calls use `type=custom` with nested `custom.name` and free-form `custom.input`"
              } = sdk_shape_row!("openai-node.chat.custom_tool.v1")
 
       assert %{
                source: "Vercel OpenAI provider `@ai-sdk/openai`",
                version: "`3.0.65+`",
                decision: "accept",
-               observed_shape:
-                 "Top-level `tools` entry has `type=namespace`, nonblank `name`, nonblank `description`, and nested function tools with flat `type`, `name`, `description`, `parameters`, optional `strict`, and optional `defer_loading`"
+               observed_shape: "Top-level `tools` entry has `type=namespace`, nonblank `name`, nonblank `description`, and nested function tools with flat `type`, `name`, `description`, `parameters`, optional `strict`, and optional `defer_loading`"
              } = sdk_shape_row!("vercel-ai-sdk-openai.responses.namespace_function_tool.v1")
 
       assert sdk_shape_row!("codex.responses.namespace_custom_tool.v1") == %{
                source: "Codex native Responses shape",
-               version:
-                 "Codex commits `f21dc4638803f40046c9e294b0349782928f6b36` and `d4fb78bfc59009a2bbc3245d125bf8ba92a8e33e`",
-               endpoint:
-                 "`POST /v1/responses` and `GET /v1/responses` websocket `response.create`",
+               version: "Codex commits `f21dc4638803f40046c9e294b0349782928f6b36` and `d4fb78bfc59009a2bbc3245d125bf8ba92a8e33e`",
+               endpoint: "`POST /v1/responses` and `GET /v1/responses` websocket `response.create`",
                decision: "accept",
-               observed_shape:
-                 "Top-level `tools` entry has exact `type=namespace`, nonblank `name` and `description`, and a nonempty `tools` list whose children are exact flat `function` or exact executable `custom` definitions; typed custom choice has exact `type` and `name`",
-               notes:
-                 "Direct public Responses HTTP and websocket preserve valid namespace custom definitions and exact typed custom choices in Full mode. HTTP, SSE, direct websocket, and owner-forwarded websocket output restore a missing or null custom_tool_call namespace only when one exact namespaced custom declaration matches, while explicit, flat, unknown, and non-unique namespaces remain unchanged. Lite keeps the existing pre-dispatch `unsupported_parameter` rejection for map-shaped `tool_choice`; hosted/MCP/tool_search/nested namespace children, blank namespace names, malformed custom fields, and global executable-name collisions remain excluded. Chat uses a separate official nested wrapper and does not add namespace support. This Codex provenance is separate from the OpenAI Python direct-custom, OpenAI Node Chat-custom, and Vercel namespace-function rows."
+               observed_shape: "Top-level `tools` entry has exact `type=namespace`, nonblank `name` and `description`, and a nonempty `tools` list whose children are exact flat `function` or exact executable `custom` definitions; typed custom choice has exact `type` and `name`",
+               notes: "Direct public Responses HTTP and websocket preserve valid namespace custom definitions and exact typed custom choices in Full mode. HTTP, SSE, direct websocket, and owner-forwarded websocket output restore a missing or null custom_tool_call namespace only when one exact namespaced custom declaration matches, while explicit, flat, unknown, and non-unique namespaces remain unchanged. Lite keeps the existing pre-dispatch `unsupported_parameter` rejection for map-shaped `tool_choice`; hosted/MCP/tool_search/nested namespace children, blank namespace names, malformed custom fields, and global executable-name collisions remain excluded. Chat uses a separate official nested wrapper and does not add namespace support. This Codex provenance is separate from the OpenAI Python direct-custom, OpenAI Node Chat-custom, and Vercel namespace-function rows."
              }
     end
 
@@ -2433,18 +2416,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    source: "authenticated_downstream_native_websocket_upgrade_headers",
                    value_contract: "ascii_identifier_max_128_bytes",
                    duplicate_headers: "first_valid_value_per_name",
-                   upstream_connection_reuse_key:
-                     "included_differing_or_absent_values_open_a_new_connection",
-                   owner_forwarded_turns:
-                     "carried_in_owner_request_headers_built_on_the_proxy_node",
+                   upstream_connection_reuse_key: "included_differing_or_absent_values_open_a_new_connection",
+                   owner_forwarded_turns: "carried_in_owner_request_headers_built_on_the_proxy_node",
                    public_v1_origins: "caller_values_never_forwarded_derived_session_id_only"
                  },
                  public_v1: %{
                    client_headers: "local_only_never_forwarded",
                    synthesized_header: "session-id",
                    derived_from: "prompt_cache_key",
-                   derivation:
-                     "uuid_v5_fixed_pooler_namespace_over_pool_id_api_key_id_and_raw_key",
+                   derivation: "uuid_v5_fixed_pooler_namespace_over_pool_id_api_key_id_and_raw_key",
                    name_encoding: "netstring_pool_id_then_netstring_api_key_id_then_raw_key",
                    namespace: TransportEnvelope.prompt_cache_session_namespace(),
                    scope: "authenticated_pool_and_api_key",
@@ -2455,11 +2435,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    transports: ["http_json", "http_sse", "websocket"],
                    websocket_surfaces: "derived_session_id_on_the_upstream_websocket_handshake",
                    websocket_source: "raw_prompt_cache_key_of_the_final_upstream_body",
-                   websocket_upstream_connection_reuse_key:
-                     "included_changed_or_absent_prompt_cache_key_opens_a_new_connection",
+                   websocket_upstream_connection_reuse_key: "included_changed_or_absent_prompt_cache_key_opens_a_new_connection",
                    local_session: "none_bridge_eligibility_stays_fail_closed",
-                   client_key_contract:
-                     "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",
+                   client_key_contract: "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",
                    privacy: "derived_value_not_persisted_or_logged"
                  }
                },
@@ -2818,8 +2796,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                terminal_event: "error",
                wire_error_code: "server_error",
                accounting_error_code: "upstream_stream_error",
-               safe_message:
-                 "upstream request failed: stream interrupted before terminal response event",
+               safe_message: "upstream request failed: stream interrupted before terminal response event",
                post_budget_owner_drain: %{
                  applies_to: "committed websocket bridge turn aborted after rollout drain budget",
                  accounting_error_code: "owner_drained",
@@ -2859,8 +2836,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  ]
                },
                absent_instance_recovery: %{
-                 applies_to:
-                   "open attempt whose owning instance stopped publishing presence, including an attempt still waiting for the first upstream byte that no drain can reach",
+                 applies_to: "open attempt whose owning instance stopped publishing presence, including an attempt still waiting for the first upstream byte that no drain can reach",
                  accounting_error_code: "absent_instance_recovered",
                  response_status_code: 499,
                  turn_status: "interrupted",
@@ -2871,8 +2847,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  in_place_restart: "successor_incarnation_never_refreshes_predecessor_row",
                  pre_incarnation_attempt: "left_to_stale_reservation_sweep",
                  session_owner: "session_and_lease_owner_node_name_and_boot_id",
-                 session_owner_claim:
-                   "same_incarnation_only_successor_takes_owner_unavailable_takeover",
+                 session_owner_claim: "same_incarnation_only_successor_takes_owner_unavailable_takeover",
                  owner_lease_liveness: "absent_incarnation_lease_is_not_live_work",
                  unknown_owner_lease: "treated_as_live_and_left_to_stale_reservation_sweep",
                  pre_incarnation_session: "node_name_only_match_preserved_and_never_recoverable",
@@ -2888,14 +2863,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                non_drain_interruptions: "byte_identical",
                backend_raw_streams: "unchanged",
                public_owner_forwarded_websocket_interruption: %{
-                 applies_to:
-                   "GET /v1/responses owner-forwarded per-call turns after committed public output",
+                 applies_to: "GET /v1/responses owner-forwarded per-call turns after committed public output",
                  terminal_event: "error",
                  status: 502,
                  wire_error_code: "server_error",
                  accounting_error_code: "upstream_stream_error",
-                 safe_message:
-                   "upstream request failed: stream interrupted before terminal response event"
+                 safe_message: "upstream request failed: stream interrupted before terminal response event"
                },
                public_websocket_invalid_provider_frames: %{
                  forms: ["invalid_json", "string", "array", "number", "null"],
@@ -3031,8 +3004,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                ],
                client_session_id_header: "local_only_never_forwarded",
                local_session: "none_bridge_eligibility_stays_fail_closed",
-               client_key_contract:
-                 "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",
+               client_key_contract: "shared_key_within_one_api_key_shares_one_provider_session_id_never_across_api_keys_or_pools",
                privacy: "derived_value_not_persisted_or_logged"
              }
 

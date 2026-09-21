@@ -147,8 +147,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
         skipped_count: skipped_count
       })
 
-    {upstream_payload,
-     put_compression_metadata(request_options, metadata, :skipped, reason, started)}
+    {upstream_payload, put_compression_metadata(request_options, metadata, :skipped, reason, started)}
   end
 
   defp maybe_rewrite_candidates(
@@ -219,8 +218,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
                 skip_reasons
               )
 
-            {compressed_payload,
-             put_compression_metadata(request_options, metadata, :compressed, :rewritten, started)}
+            {compressed_payload, put_compression_metadata(request_options, metadata, :compressed, :rewritten, started)}
 
           {:error, :invalid_range} ->
             fail_open(
@@ -239,13 +237,10 @@ defmodule CodexPooler.Gateway.RequestCompression do
   end
 
   defp candidate_replacements(upstream_payload, candidates, opts) do
-    Enum.reduce_while(candidates, {:ok, [], [], %{}}, fn candidate,
-                                                         {:ok, replacements, metadata,
-                                                          skip_reasons} ->
+    Enum.reduce_while(candidates, {:ok, [], [], %{}}, fn candidate, {:ok, replacements, metadata, skip_reasons} ->
       case candidate_replacement(upstream_payload, candidate, opts) do
         {:ok, replacement, strategy_metadata} ->
-          {:cont,
-           {:ok, [replacement | replacements], [strategy_metadata | metadata], skip_reasons}}
+          {:cont, {:ok, [replacement | replacements], [strategy_metadata | metadata], skip_reasons}}
 
         {:skip, reason} when is_atom(reason) ->
           skip_reasons = increment_skip_reason(skip_reasons, reason)
@@ -345,8 +340,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
       |> put_skip_summary(skip_reasons)
       |> put_strategy_summary(strategy_metadata)
 
-    {upstream_payload,
-     put_compression_metadata(request_options, metadata, status, reason, started)}
+    {upstream_payload, put_compression_metadata(request_options, metadata, status, reason, started)}
   end
 
   defp compressed_metadata(

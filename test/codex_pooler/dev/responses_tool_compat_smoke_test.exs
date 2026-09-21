@@ -133,8 +133,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
         Enum.with_index(@labels, 1)
         |> Enum.map(fn {label, index} ->
           %{
-            id:
-              "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
+            id: "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
             label: label,
             status: "active"
           }
@@ -142,8 +141,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
       other_client_application_names: []
     }
 
-    assert {:ok,
-            "dry-run passed: localhost, sole owner, three distinct active identities, no writes"} =
+    assert {:ok, "dry-run passed: localhost, sole owner, three distinct active identities, no writes"} =
              Smoke.execute(command,
                inspection: inspection,
                server_check: fn _uri -> :ok end
@@ -324,9 +322,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     model = %CodexPooler.Catalog.Model{}
 
     assert {:ok, %{sync_run: ^sync_run, models: [^model]}} =
-             Smoke.accept_catalog_sync_result(
-               {:ok, %{sync_run: sync_run, models: [model], partial?: false}}
-             )
+             Smoke.accept_catalog_sync_result({:ok, %{sync_run: sync_run, models: [model], partial?: false}})
 
     assert {:error, "catalog sync was partial"} =
              Smoke.accept_catalog_sync_result({:ok, %{partial?: true}})
@@ -335,9 +331,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              Smoke.accept_catalog_sync_result({:ok, %{skipped?: true}})
 
     assert {:error, "provisioning returned an unexpected shape"} =
-             Smoke.accept_catalog_sync_result(
-               {:ok, %{sync_run: %URI{}, models: [model], partial?: false}}
-             )
+             Smoke.accept_catalog_sync_result({:ok, %{sync_run: %URI{}, models: [model], partial?: false}})
 
     assert {:error, "provisioning returned an unexpected shape"} =
              Smoke.accept_catalog_sync_result(:unexpected)
@@ -354,9 +348,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
 
     assert Smoke.classify_candidate_probe_result(:not_tested) == "not_tested_http_failed"
 
-    assert Smoke.classify_candidate_probe_result(
-             {:error, "provider did not return the required tool call"}
-           ) == "missing_forced_tool_call"
+    assert Smoke.classify_candidate_probe_result({:error, "provider did not return the required tool call"}) == "missing_forced_tool_call"
 
     assert Smoke.classify_candidate_probe_result({:error, :response_timeout}) ==
              "transport_failed"
@@ -716,9 +708,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     slug = "responses-tool-compat-no-job-#{System.unique_integer([:positive])}"
 
     assert {:ok, pool} =
-             Pools.create_pool(scope, %{slug: slug, name: "No job smoke", status: "active"},
-               broadcast?: false
-             )
+             Pools.create_pool(scope, %{slug: slug, name: "No job smoke", status: "active"}, broadcast?: false)
 
     assert :ok =
              Upstreams.sync_pool_assignments_for_pool_edit(pool, [identity.id],
@@ -763,8 +753,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
         Enum.with_index(@labels, 1)
         |> Enum.map(fn {label, index} ->
           %{
-            id:
-              "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
+            id: "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
             label: label,
             status: "active"
           }
@@ -779,8 +768,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     user =
       %User{}
       |> User.bootstrap_changeset(%{
-        "email" =>
-          "responses-tool-compat-owner-#{System.unique_integer([:positive])}@example.com",
+        "email" => "responses-tool-compat-owner-#{System.unique_integer([:positive])}@example.com",
         "display_name" => "Responses tool compatibility Owner",
         "password" => "bootstrap-pass-123"
       })

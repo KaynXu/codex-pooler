@@ -133,8 +133,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
     cleanup_fixture(second)
   end
 
-  @tag slow:
-         "races actual committed entitlement arming and terminal finalization on separate PostgreSQL connections"
+  @tag slow: "races actual committed entitlement arming and terminal finalization on separate PostgreSQL connections"
   test "independent PostgreSQL arm and terminal finalization transactions converge once" do
     for _ <- 1..10 do
       fixture = committed_replay_fixture!()
@@ -375,9 +374,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
                      where: entitlement.request_id == ^fixture.request.id
                  )
 
-                 Repo.delete_all(
-                   from pool in CodexPooler.Pools.Pool, where: pool.id == ^fixture.pool.id
-                 )
+                 Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^fixture.pool.id)
 
                  Repo.delete_all(
                    from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
@@ -724,9 +721,7 @@ defmodule CodexPooler.Accounting.RequestReplayPostgresTest do
         :ok
     end
 
-    Repo.delete_all(
-      from row in RequestReplayEntitlement, where: row.request_id == ^fixture.request.id
-    )
+    Repo.delete_all(from row in RequestReplayEntitlement, where: row.request_id == ^fixture.request.id)
 
     CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 

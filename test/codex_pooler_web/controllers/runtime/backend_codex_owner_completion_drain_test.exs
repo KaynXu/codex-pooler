@@ -19,8 +19,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
   @moduletag capture_log: true
 
   for disposition <- [:complete, :deadline] do
-    @tag slow:
-           "runs eight accounted websocket turns across owner replacement and a controlled finalization drain"
+    @tag slow: "runs eight accounted websocket turns across owner replacement and a controlled finalization drain"
     test "normal drain retains cleanup authority before caller #{disposition}" do
       {setup, upstream, state, release_ref} =
         fixture(completed_responses: Enum.map(1..7, &custom_response/1))
@@ -92,8 +91,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
           state
         )
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
                      @budget
 
       state = receive_until(state, "response.output_text.delta")
@@ -183,8 +181,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerCompletionDrainTest do
 
       assert Repo.aggregate(
                from(lease in BridgeOwnerLease,
-                 where:
-                   lease.codex_session_id == ^state.codex_session.id and lease.status == "active"
+                 where: lease.codex_session_id == ^state.codex_session.id and lease.status == "active"
                ),
                :count
              ) == 0

@@ -383,9 +383,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   # Same scope-checked loader the request logs page uses for its drawer; the
   # admin surface includes the debug projection.
   defp load_request_log(socket, request_id) do
-    Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id,
-      surface: :admin
-    )
+    Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id, surface: :admin)
   end
 
   defp default_relink_pool(socket) do

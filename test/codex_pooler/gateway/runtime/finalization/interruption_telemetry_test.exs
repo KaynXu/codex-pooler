@@ -399,8 +399,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
       cleanup =
         Task.async(fn -> run_unboxed(fn -> perform_job(RuntimeStateCleanupWorker, %{}) end) end)
 
-      assert_receive {:runtime_cleanup_owner_candidates_selected, cleanup_pid, ^barrier_ref,
-                      candidates},
+      assert_receive {:runtime_cleanup_owner_candidates_selected, cleanup_pid, ^barrier_ref, candidates},
                      @task_timeout
 
       assert Enum.any?(candidates, &(&1.session_id == fixture.session.id)),
@@ -627,8 +626,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
             result = interrupt_turn(fixture)
 
             assert {:error,
-                    {:deferred_after_commit,
-                     {:interrupt_accounting_failed, %Ecto.NoResultsError{}},
+                    {:deferred_after_commit, {:interrupt_accounting_failed, %Ecto.NoResultsError{}},
                      [
                        %{
                          kind: :stream_outcome,

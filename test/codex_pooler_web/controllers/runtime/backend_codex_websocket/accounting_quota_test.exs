@@ -410,9 +410,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AccountingQuotaTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-usage-limit-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-usage-limit-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)

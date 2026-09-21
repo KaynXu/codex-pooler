@@ -68,9 +68,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   """
   @spec transport_decision(RequestOptions.t()) ::
           :websocket | :websocket_without_upstream | :http
-  def transport_decision(
-        %RequestOptions{transport: %{transport: "websocket"} = transport} = request_options
-      ) do
+  def transport_decision(%RequestOptions{transport: %{transport: "websocket"} = transport} = request_options) do
     if is_function(transport.websocket_writer, 1) or
          RequestOptions.connection_bound_compaction?(request_options),
        do: :websocket,
@@ -183,8 +181,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       stream_result: fn response, context ->
         StreamDispatch.streaming_result(response, context, %{
           finalization_callbacks: finalization_callbacks(callbacks),
-          http_first_event_retry:
-            StreamLifecycle.http_first_event_retry(Map.fetch!(callbacks, :retry_dispatch))
+          http_first_event_retry: StreamLifecycle.http_first_event_retry(Map.fetch!(callbacks, :retry_dispatch))
         })
       end
     }
@@ -201,8 +198,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       accounting_request: Keyword.get(opts, :accounting_request),
       accounting_attempt: Keyword.get(opts, :accounting_attempt),
       writer: Keyword.get(opts, :writer),
-      assignment_advertised?:
-        ModelMetadata.assignment_source?(context.model, context.assignment.id),
+      assignment_advertised?: ModelMetadata.assignment_source?(context.model, context.assignment.id),
       native_codex_response_control: native_codex_response_control(context),
       request_options: context.request_options,
       client_retry_dispatch_authority: context.client_retry_dispatch_authority

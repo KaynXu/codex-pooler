@@ -275,9 +275,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
       timestamp_attempt =
         attempt_fixture(timestamp_request, assignment, %{status: "in_progress", completed_at: nil})
 
-      turn_fixture(session_with_owner_timestamp, timestamp_request, timestamp_attempt, now,
-        status: "in_progress"
-      )
+      turn_fixture(session_with_owner_timestamp, timestamp_request, timestamp_attempt, now, status: "in_progress")
 
       session_with_active_lease =
         session_fixture(pool, api_key, assignment, now, %{
@@ -295,9 +293,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
       lease_attempt =
         attempt_fixture(lease_request, assignment, %{status: "in_progress", completed_at: nil})
 
-      turn_fixture(session_with_active_lease, lease_request, lease_attempt, now,
-        status: "in_progress"
-      )
+      turn_fixture(session_with_active_lease, lease_request, lease_attempt, now, status: "in_progress")
 
       lease_fixture(
         session_with_active_lease,

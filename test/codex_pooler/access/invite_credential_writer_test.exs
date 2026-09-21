@@ -60,9 +60,7 @@ defmodule CodexPooler.Access.InviteCredentialWriterTest do
   end
 
   test "invite completion rejects an already expired access token before mutating invite state" do
-    configure_auth_client!(
-      token_payload(expires_in: 1, received_at: DateTime.add(now(), -60, :second))
-    )
+    configure_auth_client!(token_payload(expires_in: 1, received_at: DateTime.add(now(), -60, :second)))
 
     {_scope, _pool, token} = invite_fixture()
     {:ok, started} = InviteOnboarding.start_device(token)
@@ -274,8 +272,7 @@ defmodule CodexPooler.Access.InviteCredentialWriterTest do
          "device_auth_id" => "device-invite-writer",
          "user_code" => "ABCD-EFGH",
          "verification_url" => "https://example.com/device",
-         "expires_at" =>
-           DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.to_iso8601(),
+         "expires_at" => DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.to_iso8601(),
          "poll_interval_seconds" => 5
        }}
     end

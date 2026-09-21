@@ -8,16 +8,12 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     event = [:codex_pooler_test, :cached, unique_event_atom()]
     metric = Telemetry.Metrics.sum(event, event_name: event, measurement: :count)
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     reporter = unique_name()
 
     pid =
-      start_supervised!(
-        {PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000}
-      )
+      start_supervised!({PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000})
 
     initial = PrometheusReporter.scrape(reporter)
     :telemetry.execute(event, %{count: 7}, %{})
@@ -32,16 +28,11 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     event = [:codex_pooler_test, :sync_fold, unique_event_atom()]
     metric = Telemetry.Metrics.sum(event, event_name: event, measurement: :count)
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     reporter = unique_name()
 
-    start_supervised!(
-      {PrometheusReporter,
-       name: reporter, prometheus_name: registry, interval_ms: 60_000, fold_notify: self()}
-    )
+    start_supervised!({PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000, fold_notify: self()})
 
     initial = PrometheusReporter.scrape(reporter)
     :telemetry.execute(event, %{count: 3}, %{})
@@ -56,16 +47,12 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
     event = [:codex_pooler_test, :bad_tag, unique_event_atom()]
     metric = Telemetry.Metrics.sum(event, event_name: event, measurement: :count, tags: [:kind])
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     reporter = unique_name()
 
     pid =
-      start_supervised!(
-        {PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000}
-      )
+      start_supervised!({PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000})
 
     :telemetry.execute(event, %{count: 1}, %{kind: %{invalid: true}})
 
@@ -119,15 +106,11 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
         reporter_options: [buckets: [10, 20, 50]]
       )
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     reporter = unique_name()
 
-    start_supervised!(
-      {PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000}
-    )
+    start_supervised!({PrometheusReporter, name: reporter, prometheus_name: registry, interval_ms: 60_000})
 
     for value <- [5, 15, 40] do
       :telemetry.execute(event, %{value: value}, %{kind: "isolated"})
@@ -166,9 +149,7 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
         reporter_options: [buckets: [10, 20, 50]]
       )
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     parent = self()
     release = make_ref()
@@ -232,19 +213,14 @@ defmodule CodexPoolerWeb.Telemetry.PrometheusReporterTest do
         reporter_options: [buckets: [10, 20, 50]]
       )
 
-    start_supervised!(
-      {TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false}
-    )
+    start_supervised!({TelemetryMetricsPrometheus.Core, metrics: [metric], name: registry, start_async: false})
 
     %{dist_table_id: dist_table, aggregates_table_id: aggregates} =
       TelemetryMetricsPrometheus.Core.Registry.config(registry)
 
     observations = [5, 15, 40, 5, 15, 40, 60]
 
-    start_supervised!(
-      {PrometheusReporter,
-       name: unique_name(), prometheus_name: registry, interval_ms: 10, fold_notify: self()}
-    )
+    start_supervised!({PrometheusReporter, name: unique_name(), prometheus_name: registry, interval_ms: 10, fold_notify: self()})
 
     for value <- observations,
         do: :telemetry.execute(event, %{value: value}, %{kind: "unscraped"})

@@ -131,9 +131,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     assert %{"visibility" => "hide", "priority" => 0} = ModelMetadata.metadata(decoy)
 
     assert %{"visibility" => "list", "priority" => 20} =
-             ModelMetadata.metadata(
-               Repo.get_by!(Model, pool_id: pool_id, exposed_model_id: "gpt-5.5")
-             )
+             ModelMetadata.metadata(Repo.get_by!(Model, pool_id: pool_id, exposed_model_id: "gpt-5.5"))
 
     assert %Model{
              supports_responses: true,
@@ -215,9 +213,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
         |> Map.put(:supports_reasoning, true)
         |> put_assignment_reasoning(assignment.id, assignment_reasoning)
 
-      refute ModelMetadata.supports_reasoning?(
-               ModelMetadata.selected_assignment_metadata(top_level_only_model, assignment.id)
-             )
+      refute ModelMetadata.supports_reasoning?(ModelMetadata.selected_assignment_metadata(top_level_only_model, assignment.id))
 
       assert_reasoning_rejected(top_level_only_model, assignment, identity)
     end

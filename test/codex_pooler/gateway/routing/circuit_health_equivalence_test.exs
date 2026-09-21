@@ -41,10 +41,8 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthEquivalenceTest do
       {:open_future, [status: "open", next_probe_at: DateTime.add(observed_at, 3_600, :second)]},
       {:open_past, [status: "open", next_probe_at: DateTime.add(observed_at, -3_600, :second)]},
       {:open_nil_next_probe, [status: "open"]},
-      {:half_open_free,
-       [status: "half_open", metadata: %{"probe_in_flight_count" => "malformed"}]},
-      {:half_open_saturated_fresh,
-       [status: "half_open", metadata: %{"probe_in_flight_count" => 1}]},
+      {:half_open_free, [status: "half_open", metadata: %{"probe_in_flight_count" => "malformed"}]},
+      {:half_open_saturated_fresh, [status: "half_open", metadata: %{"probe_in_flight_count" => 1}]},
       {:half_open_saturated_stale,
        [
          status: "half_open",

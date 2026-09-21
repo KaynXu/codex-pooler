@@ -69,8 +69,7 @@ defmodule CodexPooler.Accounting.RequestLogs.ErrorSummaries do
     clean_error_summary(%{
       source: "metadata",
       kind: key,
-      code:
-        Map.get(summary, "code") || Map.get(summary, "error_code") || Map.get(summary, "reason"),
+      code: Map.get(summary, "code") || Map.get(summary, "error_code") || Map.get(summary, "reason"),
       message: Map.get(summary, "message")
     })
   end

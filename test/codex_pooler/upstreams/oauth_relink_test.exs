@@ -174,9 +174,7 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
     foreign_pool = pool_fixture()
 
     identity =
-      active_upstream_identity_fixture(
-        relink_identity_attrs("acct_relink_foreign_pool", "ws_foreign_pool")
-      )
+      active_upstream_identity_fixture(relink_identity_attrs("acct_relink_foreign_pool", "ws_foreign_pool"))
 
     assert {:ok, foreign_assignment} =
              PoolAssignments.create_pool_assignment(foreign_pool, identity, %{
@@ -302,9 +300,7 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
     pool = pool_fixture()
 
     identity =
-      active_upstream_identity_fixture(
-        relink_identity_attrs("acct_relink_workspace", "ws_selected")
-      )
+      active_upstream_identity_fixture(relink_identity_attrs("acct_relink_workspace", "ws_selected"))
 
     assert {:ok, _assignment} =
              PoolAssignments.create_pool_assignment(pool, identity)
@@ -1324,10 +1320,7 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
          FakeOpenAIAuthProvider.token_response(
            access_token: rejected_access,
            refresh_token: rejected_refresh,
-           id_token:
-             relink_id_token(account_id, "ws_subject_different",
-               chatgpt_user_id: incoming_subject
-             )
+           id_token: relink_id_token(account_id, "ws_subject_different", chatgpt_user_id: incoming_subject)
          )}
     })
 
@@ -1391,8 +1384,7 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
          FakeOpenAIAuthProvider.token_response(
            access_token: "matching-subject-access",
            refresh_token: "matching-subject-refresh",
-           id_token:
-             relink_id_token(account_id, "ws_subject_matching", chatgpt_user_id: target_subject)
+           id_token: relink_id_token(account_id, "ws_subject_matching", chatgpt_user_id: target_subject)
          )}
     })
 

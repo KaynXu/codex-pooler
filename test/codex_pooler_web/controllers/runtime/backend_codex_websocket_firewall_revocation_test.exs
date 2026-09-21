@@ -650,8 +650,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
                   {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
                   decoded = Enum.reject(decoded, &metadata_control_frame?/1)
 
-                  {websocket, frames ++ decoded,
-                   closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
+                  {websocket, frames ++ decoded, closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
 
                 _response, acc ->
                   acc

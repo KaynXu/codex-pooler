@@ -1021,12 +1021,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id} > footer.pool-card-metrics.border-t")
 
     metric_links = [
-      {"pool-upstream-count-cell", "pool-row-#{pool.id}-upstream-account-count",
-       "/admin/upstreams?pool_id=#{pool.id}", "Upstreams", "1"},
-      {"pool-api-key-count-cell", "pool-row-#{pool.id}-api-key-count",
-       "/admin/api-keys?pool_id=#{pool.id}", "API keys", "2"},
-      {"pool-request-count-cell", "pool-row-#{pool.id}-request-throughput",
-       "/admin/request-logs?pool_id=#{pool.id}", "Req/TPS 24h", "0 / 0"}
+      {"pool-upstream-count-cell", "pool-row-#{pool.id}-upstream-account-count", "/admin/upstreams?pool_id=#{pool.id}", "Upstreams", "1"},
+      {"pool-api-key-count-cell", "pool-row-#{pool.id}-api-key-count", "/admin/api-keys?pool_id=#{pool.id}", "API keys", "2"},
+      {"pool-request-count-cell", "pool-row-#{pool.id}-request-throughput", "/admin/request-logs?pool_id=#{pool.id}", "Req/TPS 24h", "0 / 0"}
     ]
 
     for {role, value_id, href, label, value} <- metric_links do
@@ -2904,8 +2901,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     for request <- full_requests do
       expected = %{
-        "model_serving_mode_configured" =>
-          if(request == hd(full_requests), do: "lite", else: "full"),
+        "model_serving_mode_configured" => if(request == hd(full_requests), do: "lite", else: "full"),
         "model_serving_mode" => if(request == hd(full_requests), do: "lite", else: "full"),
         "model_serving_mode_source" => "override"
       }
@@ -3675,9 +3671,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     _sync_run =
-      catalog_sync_run_fixture(pool, "succeeded",
-        finished_at: DateTime.add(DateTime.utc_now(), -2, :day)
-      )
+      catalog_sync_run_fixture(pool, "succeeded", finished_at: DateTime.add(DateTime.utc_now(), -2, :day))
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view)

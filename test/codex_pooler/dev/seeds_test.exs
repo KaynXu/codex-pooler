@@ -350,9 +350,7 @@ defmodule CodexPooler.Dev.SeedsTest do
              quota_key == "account" and is_nil(display_label) and is_nil(limit_name)
            end)
 
-    refute Repo.exists?(
-             from window in AccountQuotaWindow, where: window.quota_key == "account_primary"
-           )
+    refute Repo.exists?(from window in AccountQuotaWindow, where: window.quota_key == "account_primary")
 
     ready_identity = Repo.get_by!(UpstreamIdentity, account_label: "Dev Ready Quota")
     exhausted_identity = Repo.get_by!(UpstreamIdentity, account_label: "Dev Exhausted Quota")
@@ -393,8 +391,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     windowless_states =
       for {label, _expected} <- [
-            {"Sample Provider Available",
-             {"provider_available_no_windows", "Provider available", :warning, true}},
+            {"Sample Provider Available", {"provider_available_no_windows", "Provider available", :warning, true}},
             {"Sample Provider Blocked", {"blocked", "Quota blocked", :warning, false}},
             {"Sample Provider Unknown", {"missing_evidence", "Quota missing", :warning, false}}
           ],
@@ -414,8 +411,7 @@ defmodule CodexPooler.Dev.SeedsTest do
       end
 
     assert windowless_states == %{
-             "Sample Provider Available" =>
-               {"provider_available_no_windows", "Provider available", :warning, true},
+             "Sample Provider Available" => {"provider_available_no_windows", "Provider available", :warning, true},
              "Sample Provider Blocked" => {"blocked", "Quota blocked", :warning, false},
              "Sample Provider Unknown" => {"missing_evidence", "Quota missing", :warning, false}
            }
@@ -566,8 +562,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert {length(result.upstream_identities), length(result.assignments)} == {8, 9}
 
-    assert {Repo.aggregate(UpstreamIdentity, :count),
-            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+    assert {Repo.aggregate(UpstreamIdentity, :count), Repo.aggregate(PoolUpstreamAssignment, :count)} ==
              {8, 9}
 
     refute Enum.any?(result.upstream_identities, &String.starts_with?(&1.account_label, "Dev "))
@@ -635,8 +630,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert {length(full.upstream_identities), length(full.assignments)} == {15, 16}
 
-    assert {Repo.aggregate(UpstreamIdentity, :count),
-            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+    assert {Repo.aggregate(UpstreamIdentity, :count), Repo.aggregate(PoolUpstreamAssignment, :count)} ==
              {15, 16}
 
     Seeds.docs_screenshots()
@@ -663,8 +657,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert {length(docs.upstream_identities), length(docs.assignments)} == {8, 9}
 
-    assert {Repo.aggregate(UpstreamIdentity, :count),
-            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+    assert {Repo.aggregate(UpstreamIdentity, :count), Repo.aggregate(PoolUpstreamAssignment, :count)} ==
              {8, 9}
   end
 

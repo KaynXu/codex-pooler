@@ -99,9 +99,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
   for family <- [:failed, :failure_coded_incomplete, :top_level_error, :ordinary_incomplete] do
     @tag collector_family: family
-    test "V2 native collector #{family} fails once without retry or replay", %{
-      collector_family: family
-    } do
+    test "V2 native collector #{family} fails once without retry or replay", %{collector_family: family} do
       {event_type, terminal, {code, param}, diagnostics} = collector_terminal(family)
 
       mode =
@@ -122,25 +120,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     end
   end
 
-  defp collector_terminal(:failed),
-    do:
-      {"response.failed", response_failed(), {"context_length_exceeded", "input"},
-       {"context_length_exceeded", "response.failed", "input"}}
-
-  defp collector_terminal(:failure_coded_incomplete),
-    do:
-      {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"},
-       {"server_error", "response.failed", "input"}}
-
-  defp collector_terminal(:top_level_error),
-    do:
-      {"error", top_level_error(), {"invalid_request", "input"},
-       {"invalid_request", "response.failed", "input"}}
-
-  defp collector_terminal(:ordinary_incomplete),
-    do:
-      {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil},
-       {"max_output_tokens", "response.incomplete", nil}}
+  defp collector_terminal(:failed), do: {"response.failed", response_failed(), {"context_length_exceeded", "input"}, {"context_length_exceeded", "response.failed", "input"}}
+  defp collector_terminal(:failure_coded_incomplete), do: {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"}, {"server_error", "response.failed", "input"}}
+  defp collector_terminal(:top_level_error), do: {"error", top_level_error(), {"invalid_request", "input"}, {"invalid_request", "response.failed", "input"}}
+  defp collector_terminal(:ordinary_incomplete), do: {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil}, {"max_output_tokens", "response.incomplete", nil}}
 
   test "V2 full-history collector preserves a canonicalized typeless terminal failure" do
     result =
@@ -464,17 +447,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       refute Map.has_key?(compact_request.request_metadata || %{}, "auth_refresh")
 
       assert [compact_attempt] =
-               Repo.all(
-                 from(attempt in Attempt, where: attempt.request_id == ^compact_request.id)
-               )
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
 
       assert compact_attempt.status == "failed"
       refute compact_attempt.retryable
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,
-                 where:
-                   entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
+                 where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
                ),
                :count
              ) == 1
@@ -631,8 +611,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     setup = gateway_setup(upstream, compact?: true)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert {:ok,
-            %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} =
+    assert {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} =
              Websocket.prepare_websocket_session(auth)
 
     options =
@@ -846,9 +825,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     setup = gateway_setup(first_upstream, compact?: true)
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-candidate",
-        compact?: true
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-candidate", compact?: true)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -959,8 +936,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert [turn] =
              Repo.all(
                from(turn in CodexTurn,
-                 where:
-                   turn.codex_session_id == ^result.session.id and turn.request_id == ^request.id
+                 where: turn.codex_session_id == ^result.session.id and turn.request_id == ^request.id
                )
              )
 
@@ -1039,9 +1015,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert Repo.all(from(demotion in BridgeDemotion, where: demotion.pool_id == ^request.pool_id)) ==
              []
 
-    assert Repo.all(
-             from(circuit in RoutingCircuitState, where: circuit.pool_id == ^request.pool_id)
-           ) == []
+    assert Repo.all(from(circuit in RoutingCircuitState, where: circuit.pool_id == ^request.pool_id)) == []
   end
 
   defp compact_payload(setup) do

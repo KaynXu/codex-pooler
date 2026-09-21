@@ -122,9 +122,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.CreditBalanceReconciliationTest d
 
     changed =
       fenced_identity
-      |> Ecto.Changeset.change(
-        metadata: Map.put(fenced_identity.metadata, "credential_epoch", epoch + 1)
-      )
+      |> Ecto.Changeset.change(metadata: Map.put(fenced_identity.metadata, "credential_epoch", epoch + 1))
       |> Repo.update!()
 
     assert {:ok, :superseded, _, nil} =
@@ -151,9 +149,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.CreditBalanceReconciliationTest d
 
     for malformed <- [nil, "invalid", %{"version" => 99}] do
       changed
-      |> Ecto.Changeset.change(
-        metadata: Map.put(changed.metadata, "quota_credit_balance", malformed)
-      )
+      |> Ecto.Changeset.change(metadata: Map.put(changed.metadata, "quota_credit_balance", malformed))
       |> Repo.update!()
 
       assert {:ok, usage} = Accounting.build_codex_usage_for_upstream_identity(identity)

@@ -207,8 +207,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
           %{
             "attempt" => 1,
             "at" => "2026-07-29T12:00:01Z",
-            "error" =>
-              "CodexPooler.Jobs.SavedResetRedemptionWorker cancelled with :scheduled_expiry_decision_evidence_invalid"
+            "error" => "CodexPooler.Jobs.SavedResetRedemptionWorker cancelled with :scheduled_expiry_decision_evidence_invalid"
           }
         ]
       )
@@ -354,8 +353,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
         }
       ]
     )
@@ -375,8 +373,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, %{code: :pool_account_not_reconcilable, message: \"active pool assignment was not found for reconciliation\"}}"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, %{code: :pool_account_not_reconcilable, message: \"active pool assignment was not found for reconciliation\"}}"
         }
       ]
     )
@@ -427,8 +424,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
         errors: [
           %{
             "attempt" => 1,
-            "error" =>
-              "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: catalog_sync_failed\"}"
+            "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: catalog_sync_failed\"}"
           }
         ]
       )
@@ -489,8 +485,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
         errors: [
           %{
             "attempt" => 1,
-            "error" =>
-              "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+            "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
           }
         ]
       )
@@ -512,8 +507,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
         errors: [
           %{
             "attempt" => 1,
-            "error" =>
-              "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+            "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
           }
         ]
       )
@@ -561,8 +555,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
         errors: [
           %{
             "attempt" => 2,
-            "error" =>
-              "provider failed with safe recovery context. safe credential punctuation context: secret=secret-value-do-not-leak ; secret_token=secret-token-do-not-leak, client_secret=client-secret-do-not-leak. safe punctuation context: id_token=token-id-do-not-leak, session_token=token-session-do-not-leak; api-token=token-api-do-not-leak nested_token=token-nested-do-not-leak. provider_body={\"access_token\":\"token-access-do-not-leak\",\"nested\":{\"refresh_token\":\"token-refresh-do-not-leak\"}} body=first token-refresh-do-not-leak second auth_json={\"refresh_token\":\"token-auth-json-do-not-leak\"}. escaped string context: auth_json=\"{\\\"refresh_token\\\":\\\"escaped-refresh-do-not-leak\\\",\\\"access_token\\\":\\\"escaped-access-do-not-leak\\\"}\" provider_body=\"{\\\"refresh_token\\\":\\\"escaped-provider-refresh-do-not-leak\\\"}\". spaced alias context: client_secret=space-client-secret-do-not-leak first second; password=space-password-do-not-leak tail words"
+            "error" => "provider failed with safe recovery context. safe credential punctuation context: secret=secret-value-do-not-leak ; secret_token=secret-token-do-not-leak, client_secret=client-secret-do-not-leak. safe punctuation context: id_token=token-id-do-not-leak, session_token=token-session-do-not-leak; api-token=token-api-do-not-leak nested_token=token-nested-do-not-leak. provider_body={\"access_token\":\"token-access-do-not-leak\",\"nested\":{\"refresh_token\":\"token-refresh-do-not-leak\"}} body=first token-refresh-do-not-leak second auth_json={\"refresh_token\":\"token-auth-json-do-not-leak\"}. escaped string context: auth_json=\"{\\\"refresh_token\\\":\\\"escaped-refresh-do-not-leak\\\",\\\"access_token\\\":\\\"escaped-access-do-not-leak\\\"}\" provider_body=\"{\\\"refresh_token\\\":\\\"escaped-provider-refresh-do-not-leak\\\"}\". spaced alias context: client_secret=space-client-secret-do-not-leak first second; password=space-password-do-not-leak tail words"
           }
         ]
       )
@@ -850,9 +843,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     assert length(fast_projection.worker_jobs_by_group.account_reconciliation.unresolved_failures) ==
              3
 
-    assert length(
-             completed_projection.worker_jobs_by_group.account_reconciliation.unresolved_failures
-           ) == 3
+    assert length(completed_projection.worker_jobs_by_group.account_reconciliation.unresolved_failures) == 3
 
     assert full_projection.overview.total == 6
 

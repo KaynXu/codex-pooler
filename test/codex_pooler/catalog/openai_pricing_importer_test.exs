@@ -82,8 +82,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     source_url = "https://user:secret@example.com/pricing.json"
 
-    assert {:error,
-            %{code: :http_transport_failed, message: "pricing catalog transport failed"} = error} =
+    assert {:error, %{code: :http_transport_failed, message: "pricing catalog transport failed"} = error} =
              OpenAIPricingImporter.import_url(source_url)
 
     rendered_error = inspect(error)
@@ -153,9 +152,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert snapshot.source_url == url
     assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_url(url)
 
-    assert Repo.one!(
-             from row in PricingSnapshot, where: row.model_identifier == "http-alias-model"
-           ) == snapshot
+    assert Repo.one!(from row in PricingSnapshot, where: row.model_identifier == "http-alias-model") == snapshot
 
     assert Repo.aggregate(CodexPooler.Catalog.Model, :count) == models_before
     assert :ok = FakeUpstream.verify!(upstream)
@@ -264,13 +261,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, %{inserted: 1, skipped: 1, total: 2}} = OpenAIPricingImporter.import_url(url)
 
-    assert Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^token_identifier
-           )
+    assert Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^token_identifier)
 
-    refute Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^flat_identifier
-           )
+    refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^flat_identifier)
 
     assert :ok = FakeUpstream.verify!(upstream)
   end
@@ -305,9 +298,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert second.skipped == 90
 
     rows =
-      Repo.all(
-        from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
-      )
+      Repo.all(from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version)
 
     assert length(rows) == 208
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
@@ -342,9 +333,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert first.skipped == 87
 
     rows =
-      Repo.all(
-        from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
-      )
+      Repo.all(from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version)
 
     assert length(rows) == 179
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
@@ -594,13 +583,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:ok, %{inserted: 1, skipped: 1, total: 2}} =
              OpenAIPricingImporter.import_file(write_json!(payload))
 
-    assert Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^token_identifier
-           )
+    assert Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^token_identifier)
 
-    refute Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^live_identifier
-           )
+    refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^live_identifier)
   end
 
   test "duplicate raw JSON keys and normalized model collisions fail without writes" do
@@ -626,9 +611,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:error, %{code: :incompatible_pricing_catalog}} =
              OpenAIPricingImporter.import_file(write_json!(collision))
 
-    refute Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == "sample-model"
-           )
+    refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == "sample-model")
   end
 
   test "revision 2 canonical import preserves revision 1 fast rows and attempt references" do
@@ -711,8 +694,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     refute Repo.exists?(
              from row in PricingSnapshot,
-               where:
-                 row.model_identifier == "removed-model" and row.price_version == ^child_version
+               where: row.model_identifier == "removed-model" and row.price_version == ^child_version
            )
 
     assert Map.take(Repo.get!(PricingSnapshot, removed.id), Map.keys(frozen)) == frozen

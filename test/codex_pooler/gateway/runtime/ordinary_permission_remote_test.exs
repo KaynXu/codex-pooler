@@ -67,10 +67,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionRemoteTest do
 
         identity =
           fixture.identity
-          |> Ecto.Changeset.change(
-            metadata:
-              Map.put(fixture.identity.metadata, "usage_base_url", FakeUpstream.url(upstream))
-          )
+          |> Ecto.Changeset.change(metadata: Map.put(fixture.identity.metadata, "usage_base_url", FakeUpstream.url(upstream)))
           |> Repo.update!()
 
         assert {:ok, identity} =

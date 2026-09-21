@@ -44,8 +44,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
       forced_transcription_model: Map.get(opts, :forced_transcription_model),
       native_image_request?: Map.get(opts, :native_image_request?) === true,
       masked_image_request?: Map.get(opts, :masked_image_request?) === true,
-      image_generation_permission_required?:
-        Map.get(opts, :image_generation_permission_required?) === true,
+      image_generation_permission_required?: Map.get(opts, :image_generation_permission_required?) === true,
       compaction_trigger_bridge?: Map.get(opts, :compaction_trigger_bridge?) === true,
       compaction_input_mode: compaction_input_mode,
       compaction_result_transport: compaction_result_transport(opts),

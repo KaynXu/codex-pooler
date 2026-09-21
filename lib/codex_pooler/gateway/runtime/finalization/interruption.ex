@@ -75,8 +75,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       _turn =
         Repo.one(
           from t in CodexTurn,
-            where:
-              t.codex_session_id == ^receipt.session_id and t.request_id == ^receipt.request_id,
+            where: t.codex_session_id == ^receipt.session_id and t.request_id == ^receipt.request_id,
             lock: "FOR UPDATE"
         )
 
@@ -243,9 +242,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
        when is_map(binding) and status in ["accepted", "in_progress"] do
     if is_nil(latest_attempt_for_update(request.id)) do
       request
-      |> Ecto.Changeset.change(
-        request_metadata: Map.put(request.request_metadata, "websocket_pre_attempt_drain", true)
-      )
+      |> Ecto.Changeset.change(request_metadata: Map.put(request.request_metadata, "websocket_pre_attempt_drain", true))
       |> Repo.update!()
     else
       request
@@ -343,8 +340,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       turn =
         Repo.one(
           from t in CodexTurn,
-            where:
-              t.codex_session_id == ^receipt.session_id and t.request_id == ^receipt.request_id,
+            where: t.codex_session_id == ^receipt.session_id and t.request_id == ^receipt.request_id,
             lock: "FOR UPDATE"
         )
 
@@ -1483,9 +1479,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     end
   end
 
-  defp finalize_marker_transaction(
-         {:error, [public_error: public_error, interrupted_outcomes: markers]}
-       ) do
+  defp finalize_marker_transaction({:error, [public_error: public_error, interrupted_outcomes: markers]}) do
     case emit_outcomes_after_commit(markers) do
       :ok -> {:error, public_error}
       {:deferred, deferred} -> {:error, {:deferred_after_commit, public_error, deferred}}

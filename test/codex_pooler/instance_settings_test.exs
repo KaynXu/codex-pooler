@@ -607,9 +607,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill forwarded client policy without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'"
-    )
+    Repo.query!("UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -647,9 +645,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill the websocket owner idle timeout without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET gateway = gateway - 'websocket_owner_idle_timeout_ms'"
-    )
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'websocket_owner_idle_timeout_ms'")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -670,9 +666,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill the upstream connection idle bound without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET gateway = gateway - 'upstream_conn_max_idle_time_ms'"
-    )
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'upstream_conn_max_idle_time_ms'")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -690,9 +684,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill the proactive token refresh margin without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET gateway = gateway - 'upstream_token_refresh_margin_seconds'"
-    )
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'upstream_token_refresh_margin_seconds'")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -711,9 +703,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill development helper flags without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET development = '{\"impeccable_live_enabled\": false}'::jsonb"
-    )
+    Repo.query!("UPDATE instance_settings SET development = '{\"impeccable_live_enabled\": false}'::jsonb")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -1165,8 +1155,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert_receive {TestTimer, :scheduled, _ref4, _cache, {Cache, {:retry, generation4}}, 30}
     assert %{attempt: 3, generation: ^generation4} = :sys.get_state(Cache).retry_timer
 
-    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}},
-                     _delay}
+    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}}, _delay}
 
     configure_scripted_repo(database_settings, :none)
     send(Cache, {Cache, {:retry, generation4}})
@@ -1186,16 +1175,14 @@ defmodule CodexPooler.InstanceSettingsTest do
     configure_scripted_cache(database_settings, :load)
     _fallback = InstanceSettings.current()
 
-    assert_receive {TestTimer, :scheduled, retry_ref, _cache, {Cache, {:retry, stale_generation}},
-                    10}
+    assert_receive {TestTimer, :scheduled, retry_ref, _cache, {Cache, {:retry, stale_generation}}, 10}
 
     send(Cache, {Cache, {:updated, database_settings.lock_version + 1}})
     _ = :sys.get_state(Cache)
 
     assert_receive {TestTimer, :cancelled, ^retry_ref}
 
-    assert_receive {TestTimer, :scheduled, _new_ref, _cache,
-                    {Cache, {:retry, current_generation}}, 10}
+    assert_receive {TestTimer, :scheduled, _new_ref, _cache, {Cache, {:retry, current_generation}}, 10}
 
     refute current_generation == stale_generation
     flush_scripted_repo_calls()
@@ -1205,8 +1192,7 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     refute_received {ScriptedRepo, _operation}
 
-    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}},
-                     _delay}
+    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}}, _delay}
 
     assert %{generation: ^current_generation} = :sys.get_state(Cache).retry_timer
   end
@@ -1543,9 +1529,7 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert {:ok, updated} =
              settings
-             |> InstanceSettings.update_system_settings(
-               InstanceSettings.put_metrics_bearer_token(%{}, token)
-             )
+             |> InstanceSettings.update_system_settings(InstanceSettings.put_metrics_bearer_token(%{}, token))
 
     assert updated.metrics.bearer_token_status == :configured
     assert updated.metrics.bearer_token_fingerprint =~ "sha256:"

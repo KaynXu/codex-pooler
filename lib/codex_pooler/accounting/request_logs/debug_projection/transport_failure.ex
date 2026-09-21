@@ -179,9 +179,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
       :peer_close_reason_present,
       transport_failure_value(transport_failure, "peer_close_reason_present")
     )
-    |> put_peer_close_reason_bytes(
-      transport_failure_value(transport_failure, "peer_close_reason_bytes")
-    )
+    |> put_peer_close_reason_bytes(transport_failure_value(transport_failure, "peer_close_reason_bytes"))
   end
 
   @spec transport_failure_value(map(), String.t()) :: term()

@@ -286,8 +286,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
        when is_binary(request_id) and is_binary(attempt_id) and is_integer(generation) and
               generation >= 0 do
     case {CodexPooler.Repo.get(Request, request_id), CodexPooler.Repo.get(Attempt, attempt_id)} do
-      {%Request{} = request,
-       %Attempt{request_id: ^request_id, replay_generation: ^generation} = attempt} ->
+      {%Request{} = request, %Attempt{request_id: ^request_id, replay_generation: ^generation} = attempt} ->
         {:ok, request, attempt}
 
       _missing_or_mismatched ->

@@ -45,8 +45,7 @@ defmodule CodexPooler.Dev.NativeCompletionDrainTest do
           state
         )
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
                      15_000
 
       state = receive_until(state, "response.output_text.delta")

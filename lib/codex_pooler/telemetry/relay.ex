@@ -79,14 +79,10 @@ defmodule CodexPooler.Telemetry.Relay do
   @spec health() :: map()
   def health do
     %{rows: [[rows, samples]]} =
-      Repo.query!(
-        "SELECT count(*),COALESCE(sum(count),0)::bigint FROM telemetry_relay_events WHERE claimed_at IS NULL"
-      )
+      Repo.query!("SELECT count(*),COALESCE(sum(count),0)::bigint FROM telemetry_relay_events WHERE claimed_at IS NULL")
 
     %{rows: [[consumers]]} =
-      Repo.query!(
-        "SELECT count(*) FROM telemetry_relay_consumers WHERE NOT quiesced AND heartbeat_at > clock_timestamp()-interval '60 seconds'"
-      )
+      Repo.query!("SELECT count(*) FROM telemetry_relay_consumers WHERE NOT quiesced AND heartbeat_at > clock_timestamp()-interval '60 seconds'")
 
     %{rows: losses} = Repo.query!("SELECT reason,rows,samples FROM telemetry_relay_losses")
     %{backlog_rows: rows, backlog_samples: samples, fresh_consumers: consumers, losses: losses}
@@ -94,17 +90,13 @@ defmodule CodexPooler.Telemetry.Relay do
 
   @spec prune_heartbeats() :: :ok
   def prune_heartbeats do
-    Repo.query!(
-      "DELETE FROM telemetry_relay_loss_checkpoints WHERE ctid IN (SELECT c.ctid FROM telemetry_relay_loss_checkpoints c WHERE c.updated_at<clock_timestamp()-interval '7 days' AND NOT EXISTS (SELECT 1 FROM telemetry_relay_heartbeats h WHERE h.owner=c.owner AND h.heartbeat_at>clock_timestamp()-interval '7 days') LIMIT 100 FOR UPDATE SKIP LOCKED)"
-    )
+    Repo.query!("DELETE FROM telemetry_relay_loss_checkpoints WHERE ctid IN (SELECT c.ctid FROM telemetry_relay_loss_checkpoints c WHERE c.updated_at<clock_timestamp()-interval '7 days' AND NOT EXISTS (SELECT 1 FROM telemetry_relay_heartbeats h WHERE h.owner=c.owner AND h.heartbeat_at>clock_timestamp()-interval '7 days') LIMIT 100 FOR UPDATE SKIP LOCKED)")
 
     for {table, timestamp} <- [
           {"telemetry_relay_heartbeats", "heartbeat_at"},
           {"telemetry_relay_consumers", "heartbeat_at"}
         ] do
-      Repo.query!(
-        "DELETE FROM #{table} WHERE ctid IN (SELECT ctid FROM #{table} WHERE #{timestamp}<clock_timestamp()-interval '7 days' LIMIT 100 FOR UPDATE SKIP LOCKED)"
-      )
+      Repo.query!("DELETE FROM #{table} WHERE ctid IN (SELECT ctid FROM #{table} WHERE #{timestamp}<clock_timestamp()-interval '7 days' LIMIT 100 FOR UPDATE SKIP LOCKED)")
     end
 
     :ok
@@ -172,11 +164,7 @@ defmodule CodexPooler.Telemetry.Relay do
         lock: "FOR UPDATE SKIP LOCKED"
       )
       |> Repo.all()
-      |> Enum.map(
-        &Repo.update!(
-          Ecto.Changeset.change(&1, claimed_at: DateTime.utc_now(), claimed_by: owner)
-        )
-      )
+      |> Enum.map(&Repo.update!(Ecto.Changeset.change(&1, claimed_at: DateTime.utc_now(), claimed_by: owner)))
     end)
   end
 

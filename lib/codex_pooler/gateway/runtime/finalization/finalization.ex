@@ -155,17 +155,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        ) do
     cond do
       public_ineligible_misalignment_policy_violation?(status, body, context) ->
-        finalize_upstream_status_failure(response, context, body,
-          failure_projection: :canonical_full
-        )
+        finalize_upstream_status_failure(response, context, body, failure_projection: :canonical_full)
 
       assignment_model_unavailable?(status, body, context) ->
         finalize_assignment_model_unavailable(response, context, body)
 
       true ->
-        finalize_upstream_status_failure(response, context, body,
-          before_finalize: fn -> maybe_record_unauthorized_route_failure(status, context) end
-        )
+        finalize_upstream_status_failure(response, context, body, before_finalize: fn -> maybe_record_unauthorized_route_failure(status, context) end)
     end
   end
 
@@ -360,9 +356,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:error, gateway_error} -> {:error, gateway_error}
       end
     else
-      finalize_upstream_status_failure(response, context, body,
-        attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed")
-      )
+      finalize_upstream_status_failure(response, context, body, attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed"))
     end
   end
 
@@ -463,8 +457,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           {:ok, finalized}
 
         {:ok, _finalized} ->
-          {:error,
-           error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))}
+          {:error, error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))}
 
         {:error, gateway_error} ->
           {:error, gateway_error}
@@ -640,8 +633,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        ) do
     validation_rejection = Keyword.get(opts, :validation_rejection)
 
-    case {Keyword.get(opts, :failure_projection, :mode_scoped),
-          Metadata.explicit_full_ordinary_responses?(request_options)} do
+    case {Keyword.get(opts, :failure_projection, :mode_scoped), Metadata.explicit_full_ordinary_responses?(request_options)} do
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
         error =
           %{"code" => summary.code, "message" => summary.message}
@@ -677,8 +669,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           status: status,
           headers: headers,
           raw_body: body,
-          public_stream_startup_error_code:
-            stream_startup_error_code(error_code, request_options),
+          public_stream_startup_error_code: stream_startup_error_code(error_code, request_options),
           public_input_file_upstream_404?: marker
         }
     end
@@ -691,8 +682,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     %{
       status: status,
       headers: json_content_type(headers),
-      raw_body:
-        CodexPooler.JSON.encode!(%{"error" => ValidationRejection.error(validation_rejection)}),
+      raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.error(validation_rejection)}),
       public_validation_rejection: validation_rejection
     }
   end
@@ -882,9 +872,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp public_input_file_upstream_404?(404, %RequestOptions{} = request_options, payload)
        when is_map(payload) do
     request_options.openai_compatibility.source_endpoint == "/v1/responses" and
-      RequestOptions.OpenAICompatibility.translated_responses_surface?(
-        request_options.openai_compatibility
-      ) and contains_input_file?(payload)
+      RequestOptions.OpenAICompatibility.translated_responses_surface?(request_options.openai_compatibility) and contains_input_file?(payload)
   end
 
   defp public_input_file_upstream_404?(_status, _request_options, _payload), do: false

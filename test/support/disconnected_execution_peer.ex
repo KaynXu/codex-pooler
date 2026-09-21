@@ -91,8 +91,7 @@ defmodule CodexPooler.DisconnectedExecutionPeer do
     %{
       queued: Enum.count(ExecutionRegistry.pending(100)),
       warned: String.contains?(logs, "publication unavailable"),
-      publisher_alive:
-        Process.alive?(Process.whereis(CodexPooler.Platform.ExecutionProofPublisher))
+      publisher_alive: Process.alive?(Process.whereis(CodexPooler.Platform.ExecutionProofPublisher))
     }
   end
 

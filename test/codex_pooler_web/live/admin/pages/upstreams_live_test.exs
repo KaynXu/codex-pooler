@@ -92,8 +92,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
             account_label: label,
             identity_metadata: %{
               "credential_epoch" => 1,
-              AccountAvailabilityStore.metadata_key() =>
-                AccountAvailabilityStore.encode!(state, as_of, 1)
+              AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(state, as_of, 1)
             }
           })
 
@@ -1038,9 +1037,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       Pools.create_pool(scope, %{slug: "oauth-flow-summaries", name: "OAuth Flow Summaries"})
 
     assert {:ok, %{flow: browser_flow, authorization_url: authorization_url}} =
-             Upstreams.start_browser_oauth(scope, pool,
-               metadata: %{"source" => "admin_upstreams_test"}
-             )
+             Upstreams.start_browser_oauth(scope, pool, metadata: %{"source" => "admin_upstreams_test"})
 
     device_auth_id = runtime_secret("oauth-flow-device-auth-id")
 
@@ -2114,9 +2111,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-account-#{active_identity.id}-saved-reset-panel")
 
     view
-    |> element(
-      "#upstream-account-#{active_identity.id}-pools-panel-trigger[aria-expanded='true']"
-    )
+    |> element("#upstream-account-#{active_identity.id}-pools-panel-trigger[aria-expanded='true']")
     |> render_click()
 
     assert has_element?(
@@ -3836,9 +3831,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, view, html} = live(conn, ~p"/admin/upstreams")
 
     limit_ids =
-      Regex.scan(~r/id="(upstream-account-#{identity.id}-limit-[^"]+)"/, html,
-        capture: :all_but_first
-      )
+      Regex.scan(~r/id="(upstream-account-#{identity.id}-limit-[^"]+)"/, html, capture: :all_but_first)
       |> List.flatten()
 
     assert limit_ids == Enum.uniq(limit_ids)
@@ -5108,8 +5101,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Routing ready",
              tone: :success,
              reason_code: "routing_ready",
-             reason:
-               "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+             reason: "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: %{routing_ready_now?: true}
@@ -5133,8 +5125,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Assignment unavailable",
              tone: :warning,
              reason_code: "assignment_unavailable",
-             reason:
-               "No active, healthy, eligible pool assignment is available for this upstream account.",
+             reason: "No active, healthy, eligible pool assignment is available for this upstream account.",
              identity_status: "active",
              assignment_ready?: false,
              quota_readiness: %{routing_ready_now?: true}
@@ -5274,8 +5265,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Circuit protection active",
              tone: :error,
              reason_code: "circuit_routes_blocked",
-             reason:
-               "One or more model and route lanes are blocked; unaffected routes may remain available.",
+             reason: "One or more model and route lanes are blocked; unaffected routes may remain available.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: blocked_quota
@@ -5305,8 +5295,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Circuit recovery in progress",
              tone: :warning,
              reason_code: "circuit_recovering",
-             reason:
-               "One or more model and route lanes are recovering; unaffected routes may remain available.",
+             reason: "One or more model and route lanes are recovering; unaffected routes may remain available.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: recovering_quota
@@ -5321,8 +5310,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Routing ready",
              tone: :success,
              reason_code: "routing_ready",
-             reason:
-               "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+             reason: "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: clear_quota
@@ -5705,8 +5693,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Assignment unavailable",
              tone: :warning,
              reason_code: "assignment_unavailable",
-             reason:
-               "No active, healthy, eligible pool assignment is available for this upstream account."
+             reason: "No active, healthy, eligible pool assignment is available for this upstream account."
            } = accounts[assignment_identity.id].routing_readiness
 
     assert %{
@@ -6281,8 +6268,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         assignment_metadata: %{"quota_priming" => %{"status" => "known"}},
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, now, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, now, 1)
         }
       })
 
@@ -7215,8 +7201,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       upstream_assignment_fixture(pool, %{
         account_label: "Reauthentication priority",
         identity_status: "reauth_required",
-        identity_metadata:
-          credential_expiry_metadata(:known, future_deadline) |> Map.merge(reset_metadata)
+        identity_metadata: credential_expiry_metadata(:known, future_deadline) |> Map.merge(reset_metadata)
       })
 
     assert {:ok, _secret} =
@@ -8647,8 +8632,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp blocked_auth_metadata(status) do
     %{
-      "access_token_expires_at" =>
-        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601(),
+      "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601(),
       "token_refresh" => %{
         "status" => status,
         "reason" => %{
@@ -8762,8 +8746,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         quota_evidence_age: nil,
         credential_expiry: %{state: "unavailable", expires_at: nil, age: nil}
       },
-      access_token_label:
-        Keyword.get(opts, :access_token_label, "access token expiry unavailable"),
+      access_token_label: Keyword.get(opts, :access_token_label, "access token expiry unavailable"),
       secret_status: Keyword.get(opts, :secret_status, :expired),
       reauth_required?: status == "reauth_required",
       reauth_reason_code: nil,
@@ -9125,9 +9108,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         where: identity.chatgpt_account_id == ^"acct-mounted-recovery-#{suffix}"
     )
 
-    Repo.delete_all(
-      from pool in CodexPooler.Pools.Pool, where: pool.slug == ^"mounted-recovery-#{suffix}"
-    )
+    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^"mounted-recovery-#{suffix}")
 
     :ok
   end
@@ -9238,8 +9219,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       active_secrets:
         Repo.aggregate(
           from(secret in EncryptedSecret,
-            where:
-              secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
+            where: secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
           ),
           :count
         ),
@@ -9624,8 +9604,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     "http://localhost:1455/auth/callback?" <>
       URI.encode_query([
         {"code", code},
-        {"scope",
-         "openid profile email offline_access api.connectors.read api.connectors.invoke"},
+        {"scope", "openid profile email offline_access api.connectors.read api.connectors.invoke"},
         {"provider_extra", "ignored"},
         {"state", state}
       ])

@@ -52,8 +52,7 @@ defmodule CodexPoolerWeb.Admin.OpenAIIncidentsReadModel do
       last_error_code: state && state.last_error_code,
       stale?: Freshness.stale?(state && state.last_success_at),
       available?: not is_nil(state && state.last_success_at),
-      polling_enabled?:
-        CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled
+      polling_enabled?: CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled
     }
   end
 

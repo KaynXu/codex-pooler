@@ -1217,9 +1217,7 @@ defmodule CodexPooler.Admin.StatsTest do
       )
     end
 
-    insert_hourly_model_usage_rollup!(pool, model, ~U[2026-08-14 08:00:00.000000Z],
-      total_tokens: 20
-    )
+    insert_hourly_model_usage_rollup!(pool, model, ~U[2026-08-14 08:00:00.000000Z], total_tokens: 20)
 
     assert {:ok, dashboard} =
              Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
@@ -1510,13 +1508,9 @@ defmodule CodexPooler.Admin.StatsTest do
     assert result.summary_by_pool_id[hidden_pool.id].total_tokens == 25
     assert Map.keys(result.histogram_by_pool_id) == [pool.id]
 
-    assert Enum.sum(
-             Enum.map(result.histogram_by_pool_id[pool.id].token_histogram, & &1.total_tokens)
-           ) == 100
+    assert Enum.sum(Enum.map(result.histogram_by_pool_id[pool.id].token_histogram, & &1.total_tokens)) == 100
 
-    assert Enum.sum(
-             Enum.map(result.histogram_by_pool_id[pool.id].request_histogram, & &1.requests)
-           ) == 1
+    assert Enum.sum(Enum.map(result.histogram_by_pool_id[pool.id].request_histogram, & &1.requests)) == 1
   end
 
   @tag :pool_usage_rollup_fallback

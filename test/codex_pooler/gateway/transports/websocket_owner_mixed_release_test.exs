@@ -38,8 +38,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   test "fixture records the historical legacy request protocol" do
     assert Fixture.provenance() == %{
              source_commit: @source_commit,
-             source_path:
-               "lib/codex_pooler/gateway/transports/websocket/websocket_owner_forwarder.ex",
+             source_path: "lib/codex_pooler/gateway/transports/websocket/websocket_owner_forwarder.ex",
              public_entrypoint: {:remote_submit_request, 4},
              owner_resolution: {:ensure_remote_owner, 4},
              submission: {:submit_remote_owner_request, 5},
@@ -174,9 +173,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     attached = attach!(owner_peer.node, session.id, "corr-current-current")
     request = owner_request(upstream_identity_id, version: 1, submission_notification?: true)
 
-    assert {:rpc_receipt, rpc_arguments,
-            {:websocket_owner_submission_accepted,
-             {:ok, %{terminal: "response.completed", status: 200}}}} =
+    assert {:rpc_receipt, rpc_arguments, {:websocket_owner_submission_accepted, {:ok, %{terminal: "response.completed", status: 200}}}} =
              :erpc.call(proxy.node, Fixture, :call_current_v1, [
                owner_peer.node,
                session.id,
@@ -349,8 +346,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   defp owner_session_fixture(auth, owner_node, suffix) do
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
-               accepted_turn_state:
-                 "mixed-release-#{suffix}-#{System.unique_integer([:positive])}",
+               accepted_turn_state: "mixed-release-#{suffix}-#{System.unique_integer([:positive])}",
                owner_instance_id: Atom.to_string(owner_node)
              })
 

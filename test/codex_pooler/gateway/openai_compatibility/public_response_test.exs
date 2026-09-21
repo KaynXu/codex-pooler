@@ -158,9 +158,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
 
       body = CodexPooler.JSON.encode!(%{"error" => upstream_error})
 
-      assert PublicResponse.normalize_raw_body(404, body, &Function.identity/1,
-               input_file_upstream_404?: true
-             ) ==
+      assert PublicResponse.normalize_raw_body(404, body, &Function.identity/1, input_file_upstream_404?: true) ==
                {:ok,
                 %{
                   "error" => %{

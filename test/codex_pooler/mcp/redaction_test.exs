@@ -130,9 +130,7 @@ defmodule CodexPooler.MCP.RedactionTest do
     end
 
     assert_raise ExUnit.AssertionError, ~r/upload_url/, fn ->
-      Redaction.assert_text_content_safe!(
-        "upload destination https://uploads.example.com/private/file"
-      )
+      Redaction.assert_text_content_safe!("upload destination https://uploads.example.com/private/file")
     end
   end
 

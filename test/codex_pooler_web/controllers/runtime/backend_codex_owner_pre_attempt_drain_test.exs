@@ -92,8 +92,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
           {Map.delete(receipt, :owner_binding), "owner_forwarded_request_without_binding"},
           {%{receipt | owner_binding: nil}, "owner_forwarded_request_without_binding"},
           {%{receipt | owner_binding: %{}}, "owner_binding_malformed"},
-          {put_in(receipt.owner_binding.owner_lease_token, Ecto.UUID.generate()),
-           "session_owner_lease_token"},
+          {put_in(receipt.owner_binding.owner_lease_token, Ecto.UUID.generate()), "session_owner_lease_token"},
           {put_in(
              receipt.owner_binding.downstream_epoch,
              receipt.owner_binding.downstream_epoch + 1
@@ -395,8 +394,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerPreAttemptDrainTest do
     {1, _} =
       Repo.update_all(
         from(l in BridgeOwnerLease,
-          where:
-            l.codex_session_id == ^session_id and l.status == ^BridgeOwnerLease.active_status()
+          where: l.codex_session_id == ^session_id and l.status == ^BridgeOwnerLease.active_status()
         ),
         set: [expires_at: past]
       )

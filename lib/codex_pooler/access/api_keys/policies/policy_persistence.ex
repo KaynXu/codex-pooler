@@ -58,9 +58,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyPersistence do
 
       with {:ok, updated_api_key} <- Repo.update(changeset),
            {_count, _rows} <-
-             Repo.delete_all(
-               from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^api_key.id)
-             ),
+             Repo.delete_all(from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^api_key.id)),
            {:ok, bindings} <-
              insert_api_key_policy_bindings(Repo, policy_inputs, updated_api_key, timestamp) do
         {:ok, %{api_key: updated_api_key, policy_bindings: bindings}}

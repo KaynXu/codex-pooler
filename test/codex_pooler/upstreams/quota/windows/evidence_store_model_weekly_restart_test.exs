@@ -678,12 +678,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert ModelWeeklyResetSemantics.classify(malformed_unknown) == :unknown
 
     assert WindowSelector.logical_key(markerless_positive) ==
-             {"model", "codex_model", "gpt-5.3-codex-spark", nil, "codex_spark", "secondary",
-              10_080}
+             {"model", "codex_model", "gpt-5.3-codex-spark", nil, "codex_spark", "secondary", 10_080}
 
     assert WindowSelector.logical_key(malformed_unknown) ==
-             {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark",
-              "secondary", 10_080}
+             {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark", "secondary", 10_080}
 
     baseline = full_row_snapshot(identity)
     expected_physical_ids = Enum.sort([markerless_positive.id, malformed_unknown.id])
@@ -884,9 +882,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
            |> length() == 1
 
     assert [[index_definition]] =
-             Repo.query!(
-               "SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = 'account_quota_windows_evidence_identity_uq'::regclass"
-             ).rows
+             Repo.query!("SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = 'account_quota_windows_evidence_identity_uq'::regclass").rows
 
     assert index_definition =~ "raw_metered_feature"
 
@@ -912,8 +908,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
       assert candidate_order
              |> UsageResponses.additional_codex_rate_limits(observed_at)
              |> Enum.map(fn entry ->
-               {entry.quota_key, entry.metered_feature,
-                entry.rate_limit.secondary_window.used_percent}
+               {entry.quota_key, entry.metered_feature, entry.rate_limit.secondary_window.used_percent}
              end) == expected_public
     end
 
@@ -931,9 +926,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
 
   defp advisory_lock_count do
     assert [[count]] =
-             Repo.query!(
-               "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted"
-             ).rows
+             Repo.query!("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted").rows
 
     count
   end
@@ -1002,9 +995,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert {:ok, _row} =
              EvidenceStore.record_evidence(
                identity,
-               model_weekly(candidate_at, "0",
-                 reset_at: DateTime.add(candidate_provider_at, @window_seconds, :second)
-               ),
+               model_weekly(candidate_at, "0", reset_at: DateTime.add(candidate_provider_at, @window_seconds, :second)),
                candidate_at,
                candidate_at
              )
@@ -1029,9 +1020,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert {:ok, _row} =
              EvidenceStore.record_evidence(
                identity,
-               model_weekly(confirmed_at, "0",
-                 reset_at: DateTime.add(confirmed_provider_at, @window_seconds, :second)
-               ),
+               model_weekly(confirmed_at, "0", reset_at: DateTime.add(confirmed_provider_at, @window_seconds, :second)),
                confirmed_at,
                confirmed_at
              )
@@ -1100,14 +1089,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
             model_weekly(observed_at, "0", reset_at: accepted.reset_at)
 
           :older ->
-            model_weekly(observed_at, "0",
-              reset_at: DateTime.add(accepted.reset_at, -60, :second)
-            )
+            model_weekly(observed_at, "0", reset_at: DateTime.add(accepted.reset_at, -60, :second))
 
           :future ->
-            model_weekly(observed_at, "0",
-              reset_at: DateTime.add(observed_at, @window_seconds + 10 * 60, :second)
-            )
+            model_weekly(observed_at, "0", reset_at: DateTime.add(observed_at, @window_seconds + 10 * 60, :second))
 
           :malformed ->
             model_weekly(observed_at, "0", metadata: %{"reset_after_seconds" => "bad"})
@@ -1249,9 +1234,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
       assert {:ok, _row} =
                EvidenceStore.record_evidence(
                  identity,
-                 model_weekly(observed_at, "0",
-                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
-                 ),
+                 model_weekly(observed_at, "0", reset_at: DateTime.add(provider_at, @window_seconds, :second)),
                  observed_at,
                  observed_at
                )
@@ -1290,9 +1273,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
       assert {:ok, _row} =
                EvidenceStore.record_evidence(
                  identity,
-                 model_weekly(observed_at, "0",
-                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
-                 ),
+                 model_weekly(observed_at, "0", reset_at: DateTime.add(provider_at, @window_seconds, :second)),
                  observed_at,
                  observed_at
                )
@@ -1342,9 +1323,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert {:ok, _row} =
              EvidenceStore.record_evidence(
                identity,
-               model_weekly(cached_positive_at, "80",
-                 reset_at: DateTime.add(base, @window_seconds, :second)
-               ),
+               model_weekly(cached_positive_at, "80", reset_at: DateTime.add(base, @window_seconds, :second)),
                cached_positive_at,
                cached_positive_at
              )
@@ -1359,9 +1338,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
       assert {:ok, _row} =
                EvidenceStore.record_evidence(
                  identity,
-                 model_weekly(observed_at, "0",
-                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
-                 ),
+                 model_weekly(observed_at, "0", reset_at: DateTime.add(provider_at, @window_seconds, :second)),
                  observed_at,
                  observed_at
                )
@@ -1391,9 +1368,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     legacy_row = model_weekly_row(identity)
 
     legacy_row
-    |> Ecto.Changeset.change(
-      metadata: Map.delete(legacy_row.metadata, "__quota_relative_liveness_v1")
-    )
+    |> Ecto.Changeset.change(metadata: Map.delete(legacy_row.metadata, "__quota_relative_liveness_v1"))
     |> Repo.update!()
 
     cached_positive_at = DateTime.add(base, 7, :minute)
@@ -1401,9 +1376,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert {:ok, _row} =
              EvidenceStore.record_evidence(
                identity,
-               model_weekly(cached_positive_at, "80",
-                 reset_at: DateTime.add(base, @window_seconds, :second)
-               ),
+               model_weekly(cached_positive_at, "80", reset_at: DateTime.add(base, @window_seconds, :second)),
                cached_positive_at,
                cached_positive_at
              )
@@ -1418,9 +1391,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
       assert {:ok, _row} =
                EvidenceStore.record_evidence(
                  identity,
-                 model_weekly(observed_at, "0",
-                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
-                 ),
+                 model_weekly(observed_at, "0", reset_at: DateTime.add(provider_at, @window_seconds, :second)),
                  observed_at,
                  observed_at
                )
@@ -1614,8 +1585,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert log =~ "scope=model source=provider_usage"
 
     assert events == [
-             {%{count: 1},
-              %{scope: "model", decision: :anchored_confirmed, source: "provider_usage"}}
+             {%{count: 1}, %{scope: "model", decision: :anchored_confirmed, source: "provider_usage"}}
            ]
 
     row = model_weekly_row(identity)
@@ -1946,8 +1916,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert log =~ "decision=anchored_confirmed reason=relative_countdown_confirmed"
 
     assert events == [
-             {%{count: 1},
-              %{scope: "model", decision: :anchored_confirmed, source: "provider_usage"}}
+             {%{count: 1}, %{scope: "model", decision: :anchored_confirmed, source: "provider_usage"}}
            ]
 
     anchored = model_weekly_row(identity)
@@ -2075,9 +2044,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     pending = model_weekly_row(identity)
 
     pending
-    |> Ecto.Changeset.change(
-      metadata: Map.delete(pending.metadata, "__quota_relative_candidate_liveness_v1")
-    )
+    |> Ecto.Changeset.change(metadata: Map.delete(pending.metadata, "__quota_relative_candidate_liveness_v1"))
     |> Repo.update!()
 
     restarted_at = DateTime.add(candidate_at, 2, :minute)

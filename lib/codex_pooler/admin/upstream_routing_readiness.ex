@@ -21,8 +21,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
     state: "circuit_protection_active",
     label: "Circuit protection active",
     tone: :error,
-    reason:
-      "One or more model and route lanes are blocked; unaffected routes may remain available.",
+    reason: "One or more model and route lanes are blocked; unaffected routes may remain available.",
     reason_code: "circuit_routes_blocked",
     recovery_action: "Wait for circuit protection to clear before relying on affected routes."
   }
@@ -30,8 +29,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
     state: "circuit_recovering",
     label: "Circuit recovery in progress",
     tone: :warning,
-    reason:
-      "One or more model and route lanes are recovering; unaffected routes may remain available.",
+    reason: "One or more model and route lanes are recovering; unaffected routes may remain available.",
     reason_code: "circuit_recovering",
     recovery_action: "Wait for circuit recovery to complete before relying on affected routes."
   }
@@ -207,8 +205,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
           state: "ready_refreshing",
           label: "Routing while refreshing",
           tone: :warning,
-          reason:
-            "Identity refresh is in progress, but this lifecycle state remains visible for model routing.",
+          reason: "Identity refresh is in progress, but this lifecycle state remains visible for model routing.",
           reason_code: "identity_refreshing_model_routable",
           recovery_action: nil
         })
@@ -230,8 +227,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
           state: "ready",
           label: "Routing ready",
           tone: :success,
-          reason:
-            "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+          reason: "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
           reason_code: "routing_ready",
           recovery_action: nil
         })
@@ -277,8 +273,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
       state: "assignment_unavailable",
       label: "Assignment unavailable",
       tone: :warning,
-      reason:
-        "No active, healthy, eligible pool assignment is available for this upstream account.",
+      reason: "No active, healthy, eligible pool assignment is available for this upstream account.",
       reason_code: "assignment_unavailable",
       recovery_action: "Enable a healthy, eligible pool assignment."
     })

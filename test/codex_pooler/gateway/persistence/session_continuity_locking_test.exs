@@ -221,8 +221,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
              end)
   end
 
-  @tag slow:
-         "real deferred PostgreSQL COMMIT trigger retains the lock beyond the old renewal budget"
+  @tag slow: "real deferred PostgreSQL COMMIT trigger retains the lock beyond the old renewal budget"
   test "synchronous renewal survives a healthy transaction retaining the session lock during commit" do
     fixture = unboxed_owner_session_fixture("renewal-commit-latency", 1)
     parent = self()
@@ -415,8 +414,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     @tag :session_continuity_pin
     @tag timeout: 120_000
-    @tag slow:
-           "boots a fresh BEAM runtime to verify returned database columns before their atoms exist"
+    @tag slow: "boots a fresh BEAM runtime to verify returned database columns before their atoms exist"
     test "turn allocation loads returned columns in a fresh runtime" do
       fixture = unboxed_fresh_runtime_turn_fixture()
 
@@ -528,8 +526,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       opts =
         request_options(
           accepted_turn_state: "batch-turn-#{System.unique_integer([:positive, :monotonic])}",
-          previous_response_id:
-            "batch-previous-#{System.unique_integer([:positive, :monotonic])}",
+          previous_response_id: "batch-previous-#{System.unique_integer([:positive, :monotonic])}",
           response_id: "batch-response-#{System.unique_integer([:positive, :monotonic])}",
           session_header: "batch-header-#{System.unique_integer([:positive, :monotonic])}"
         )
@@ -759,8 +756,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     @tag :session_continuity_contention
     @tag timeout: 30_000
-    @tag slow:
-           "exercises a real PostgreSQL renewal timeout through a session-to-key mutex wait chain"
+    @tag slow: "exercises a real PostgreSQL renewal timeout through a session-to-key mutex wait chain"
     test "a bounded renewal behind a session holder waiting on the key-wide mutex names that wait" do
       fixture = unboxed_owner_session_fixture("bounded-renewal-api-key-chain", 1)
       api_key = fixture.auth.api_key
@@ -834,9 +830,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         assert observe_renewal_lock_wait!(waiter_backend_pid, session_holder_backend_pid) ==
                  "codex_sessions"
 
-        assert {:error,
-                {:lock_timeout,
-                 %{relation: :codex_sessions, waiter_pid: ^waiter_backend_pid, blocker: holder}}} =
+        assert {:error, {:lock_timeout, %{relation: :codex_sessions, waiter_pid: ^waiter_backend_pid, blocker: holder}}} =
                  Task.await(renewal, 15_000)
 
         assert holder.pid == session_holder_backend_pid
@@ -914,8 +908,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
           # The blocker still holds its row, so only PostgreSQL can end the wait,
           # and the still-open renewal transaction names the idle holder.
-          assert {:error,
-                  {:lock_timeout, %{relation: relation, waiter_pid: ^waiter_backend_pid} = wait}} =
+          assert {:error, {:lock_timeout, %{relation: relation, waiter_pid: ^waiter_backend_pid} = wait}} =
                    Task.await(renewal, 15_000)
 
           holder = wait.blocker
@@ -1110,8 +1103,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       %{
         kind: "expired_sessions_frozen_set",
-        backend_pid_hashes:
-          Enum.map([a_backend_pid, b_backend_pid, observer_backend_pid], &sha256/1),
+        backend_pid_hashes: Enum.map([a_backend_pid, b_backend_pid, observer_backend_pid], &sha256/1),
         blocked_replacement: sanitize_block(observation),
         frozen_session_id_sha256: sha256(fixture.session.id),
         replacement_id_sha256: sha256(fixture.replacement.id),
@@ -1481,8 +1473,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     send(
       observer.pid,
-      {:session_continuity_observe_block, ref, request_ref, waiter_pid, blocker_pid,
-       expected_operation}
+      {:session_continuity_observe_block, ref, request_ref, waiter_pid, blocker_pid, expected_operation}
     )
 
     receive do
@@ -1637,8 +1628,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       %{
         direction_id: direction_id,
         iteration: iteration,
-        backend_pid_hashes:
-          Enum.map([a_backend_pid, b_backend_pid, observer_backend_pid], &sha256/1),
+        backend_pid_hashes: Enum.map([a_backend_pid, b_backend_pid, observer_backend_pid], &sha256/1),
         blocker_observations: [sanitize_block(first_block), sanitize_block(second_block)],
         a_order: relation_operation_order(traces.a),
         b_order: relation_operation_order(traces.b),
@@ -1793,8 +1783,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp observer_loop(parent, ref) do
     receive do
-      {:session_continuity_observe_block, ^ref, request_ref, waiter_pid, blocker_pid,
-       expected_operation} ->
+      {:session_continuity_observe_block, ^ref, request_ref, waiter_pid, blocker_pid, expected_operation} ->
         observation = observe_session_block(waiter_pid, blocker_pid, expected_operation)
         send(parent, {:session_continuity_block_observed, ref, request_ref, observation})
         observer_loop(parent, ref)
@@ -1876,9 +1865,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         traces = append_trace(traces, role, event)
 
         if event.source == "bridge_owner_leases" do
-          flunk(
-            "bridge_owner_leases #{event.operation} completed before the blocked codex_sessions SELECT FOR UPDATE"
-          )
+          flunk("bridge_owner_leases #{event.operation} completed before the blocked codex_sessions SELECT FOR UPDATE")
         end
 
         await_blocked_before_lease!(ref, role, request_ref, traces)
@@ -2221,8 +2208,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         relation: event.source,
         operation: event.operation,
         lock: if(event.for_update?, do: "FOR UPDATE", else: nil),
-        ordered_by_primary_key:
-          event.operation != "SELECT" or ordered_primary_key_lock?(event.query)
+        ordered_by_primary_key: event.operation != "SELECT" or ordered_primary_key_lock?(event.query)
       }
     end)
   end
@@ -2500,8 +2486,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       assert {:ok, %CodexSession{} = session} =
                Gateway.start_codex_session(auth, %{
-                 accepted_turn_state:
-                   "session-continuity-fresh-runtime-#{System.unique_integer([:positive, :monotonic])}",
+                 accepted_turn_state: "session-continuity-fresh-runtime-#{System.unique_integer([:positive, :monotonic])}",
                  owner_instance_id: "node-a"
                })
 
@@ -2519,8 +2504,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       assert {:ok, %CodexSession{} = session} =
                Gateway.start_codex_session(auth, %{
-                 accepted_turn_state:
-                   "replacement-deadlock-#{System.unique_integer([:positive, :monotonic])}",
+                 accepted_turn_state: "replacement-deadlock-#{System.unique_integer([:positive, :monotonic])}",
                  owner_instance_id: "node-a"
                })
 
@@ -2568,8 +2552,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
-               accepted_turn_state:
-                 "session-continuity-pin-#{System.unique_integer([:positive, :monotonic])}",
+               accepted_turn_state: "session-continuity-pin-#{System.unique_integer([:positive, :monotonic])}",
                owner_instance_id: "node-a"
              })
 

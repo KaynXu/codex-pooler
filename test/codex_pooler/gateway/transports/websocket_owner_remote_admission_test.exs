@@ -144,8 +144,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
     }
   end
 
-  @tag slow:
-         "boots a remote BEAM owner and verifies real committed admission cancellation before lease release"
+  @tag slow: "boots a remote BEAM owner and verifies real committed admission cancellation before lease release"
   test "remote drain cancels proxy admission and finalizes a committed reservation before releasing its lease",
        context do
     {task, cleanup} = start_admission(context)
@@ -342,9 +341,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   end
 
   defp lease_status(session_id) do
-    Repo.one!(
-      from(l in BridgeOwnerLease, where: l.codex_session_id == ^session_id, select: l.status)
-    )
+    Repo.one!(from(l in BridgeOwnerLease, where: l.codex_session_id == ^session_id, select: l.status))
   end
 
   defp lock_session(session_id) do

@@ -71,10 +71,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       conversation_key: Map.get(opts, :conversation_key),
       owner_instance_id: Map.get(opts, :owner_instance_id),
       owner_instance_boot_id: Map.get(opts, :owner_instance_boot_id),
-      bridge_owner_lease_ttl_seconds:
-        Normalization.optional_positive_integer(Map.get(opts, :bridge_owner_lease_ttl_seconds)),
-      reconnect_window_seconds:
-        Normalization.optional_non_negative_integer(Map.get(opts, :reconnect_window_seconds)),
+      bridge_owner_lease_ttl_seconds: Normalization.optional_positive_integer(Map.get(opts, :bridge_owner_lease_ttl_seconds)),
+      reconnect_window_seconds: Normalization.optional_non_negative_integer(Map.get(opts, :reconnect_window_seconds)),
       codex_session: Map.get(opts, :codex_session),
       semantic_turn_key: semantic_turn_key(Map.get(opts, :semantic_turn_key)),
       turn_claim_key: turn_claim_key(Map.get(opts, :turn_claim_key)),

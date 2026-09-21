@@ -544,13 +544,10 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
 
       for {field, value, constraint} <- [
             {:exposed_model_id, "", :pool_model_serving_overrides_exposed_model_id_check},
-            {:exposed_model_id, String.duplicate("a", 256),
-             :pool_model_serving_overrides_exposed_model_id_check},
-            {:exposed_model_id, " Model-A ",
-             :pool_model_serving_overrides_exposed_model_id_check},
+            {:exposed_model_id, String.duplicate("a", 256), :pool_model_serving_overrides_exposed_model_id_check},
+            {:exposed_model_id, " Model-A ", :pool_model_serving_overrides_exposed_model_id_check},
             {:exposed_model_id, "Model-A", :pool_model_serving_overrides_exposed_model_id_check},
-            {:exposed_model_id, "\tmodel-a",
-             :pool_model_serving_overrides_exposed_model_id_check},
+            {:exposed_model_id, "\tmodel-a", :pool_model_serving_overrides_exposed_model_id_check},
             {:mode, "auto", :pool_model_serving_overrides_mode_check}
           ] do
         attrs = %{
@@ -683,9 +680,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
       unrelated_user =
         Sandbox.unboxed_run(Repo, fn ->
           %User{}
-          |> User.bootstrap_changeset(
-            valid_bootstrap_attributes(%{"email" => unique_user_email()})
-          )
+          |> User.bootstrap_changeset(valid_bootstrap_attributes(%{"email" => unique_user_email()}))
           |> Repo.insert!()
         end)
 
@@ -712,9 +707,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
                    where: state.owner_user_id == ^fixture.owner.id
                )
 
-        refute Repo.exists?(
-                 from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id
-               )
+        refute Repo.exists?(from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id)
 
         assert Repo.get(User, unrelated_user.id)
       end)
@@ -750,9 +743,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
 
       CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id
-      )
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
 
       Repo.delete_all(from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id)
       Repo.delete_all(from user in User, where: user.id == ^fixture.owner.id)

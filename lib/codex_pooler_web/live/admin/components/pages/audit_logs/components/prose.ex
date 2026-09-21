@@ -38,25 +38,19 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Prose do
     "pool.update" => {:pool, "updated the Pool", nil},
     "pool.status_update" => {:pool, "changed the status of the Pool", "status"},
     "pool.routing_update" => {:pool, "updated the routing of the Pool", nil},
-    "pool.model_serving_modes_update" =>
-      {:pool, "updated the model serving modes of the Pool", nil},
+    "pool.model_serving_modes_update" => {:pool, "updated the model serving modes of the Pool", nil},
     "pool.delete" => {:pool, "deleted the Pool", nil},
     "invite.create" => {:invite, "invited", "created an invite for the Pool"},
     "invite.revoke" => {:invite, "revoked the invite for", "revoked an invite for the Pool"},
     "upstream_account.import" => {:named, "imported the upstream account"},
-    "upstream_account.oauth_browser_link" =>
-      {:named_suffix, "linked the upstream account", "through the browser OAuth flow"},
-    "upstream_account.oauth_device_link" =>
-      {:named_suffix, "linked the upstream account", "with a device code"},
+    "upstream_account.oauth_browser_link" => {:named_suffix, "linked the upstream account", "through the browser OAuth flow"},
+    "upstream_account.oauth_device_link" => {:named_suffix, "linked the upstream account", "with a device code"},
     "upstream_account.pause" => {:named, "paused the upstream account"},
     "upstream_account.reactivate" => {:named, "reactivated the upstream account"},
-    "upstream_account.refresh_enqueue" =>
-      {:named, "queued a token refresh for the upstream account"},
+    "upstream_account.refresh_enqueue" => {:named, "queued a token refresh for the upstream account"},
     "upstream_account.delete" => {:named, "deleted the upstream account"},
-    "upstream_account.saved_reset_policy_update" =>
-      {:named, "updated the saved-reset policy of the upstream account"},
-    "upstream_account.saved_reset_redeem_enqueue" =>
-      {:named, "queued a saved-reset redemption for the upstream account"},
+    "upstream_account.saved_reset_policy_update" => {:named, "updated the saved-reset policy of the upstream account"},
+    "upstream_account.saved_reset_redeem_enqueue" => {:named, "queued a saved-reset redemption for the upstream account"},
     "api_key.create" => {:named, "created the API key"},
     "api_key.update" => {:named, "updated the API key"},
     "api_key.pause" => {:named, "paused the API key"},

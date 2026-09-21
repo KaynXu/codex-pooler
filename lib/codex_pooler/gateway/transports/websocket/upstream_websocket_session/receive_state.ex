@@ -4,10 +4,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
   defstruct mode: :relay, effective_serving_mode: nil
 
   @type t :: %__MODULE__{
-          mode:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.delivery_mode(),
-          effective_serving_mode:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.effective_serving_mode()
+          mode: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.delivery_mode(),
+          effective_serving_mode: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.effective_serving_mode()
         }
 end
 
@@ -61,13 +59,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
   ]
 
   @type t :: %__MODULE__{
-          writer:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.writer(),
+          writer: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.writer(),
           timeouts: map(),
-          message_mapper:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
-          frame_observer:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
+          message_mapper: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
+          frame_observer: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
           native_codex_response_control: TurnSnapshot.t() | nil,
           delivery: Delivery.t(),
           response_id: String.t() | nil,
@@ -82,8 +77,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           connection_idle_bucket: atom() | nil,
           request_caller_pid: pid() | nil,
           request_caller_monitor: reference() | nil,
-          native_client_retry_observation:
-            CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
+          native_client_retry_observation: CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
           assignment_advertised?: boolean(),
           native_metadata_emitted?: boolean(),
           downstream_output_started?: boolean(),
@@ -96,8 +90,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           terminal_candidate_rejection: String.t() | nil,
           text_frame_count: non_neg_integer(),
           websocket_frame_headers: %{optional(String.t()) => String.t()},
-          peer_close_metadata:
-            CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
+          peer_close_metadata: CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
           body: RetainedBody.t(),
           collected_body: CollectedBody.t()
         }

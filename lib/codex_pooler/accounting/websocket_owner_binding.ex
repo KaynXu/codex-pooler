@@ -206,9 +206,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
     with {:ok, attempt} <- update_attempt_transport(attempt, "http_sse"),
          {:ok, request} <-
            request
-           |> Ecto.Changeset.change(
-             request_metadata: Map.delete(request.request_metadata, "websocket_owner_forwarding")
-           )
+           |> Ecto.Changeset.change(request_metadata: Map.delete(request.request_metadata, "websocket_owner_forwarding"))
            |> Repo.update() do
       %{request: request, attempt: attempt}
     else

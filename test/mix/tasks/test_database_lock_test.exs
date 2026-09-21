@@ -130,9 +130,7 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
   end
 
   defp assert_advisory_lock_waiter!(_conn, repo_config, 0) do
-    flunk(
-      "expected a PostgreSQL advisory lock waiter for #{Keyword.fetch!(repo_config, :database)}"
-    )
+    flunk("expected a PostgreSQL advisory lock waiter for #{Keyword.fetch!(repo_config, :database)}")
   end
 
   defp advisory_lock_waiter?(conn, repo_config) do

@@ -43,8 +43,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketPreparedFrameProvenanceTest do
                owner_instance_id: "provenance-absent-instance@127.0.0.1"
              })
 
-    {:ok,
-     auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
+    {:ok, auth: auth, session: Repo.get!(CodexSession, session.id), model: setup.model.exposed_model_id}
   end
 
   test "a deferred compaction reservation on the reconnect route answers owner_unavailable, not a client 400",

@@ -114,8 +114,7 @@ defmodule CodexPooler.Platform.ExecutionRegistry do
   end
 
   def handle_call({:acknowledge, ids}, _from, state) do
-    {:reply, :ok,
-     %{state | pending: Map.drop(state.pending, ids), overflow: false, expired_warning: false}}
+    {:reply, :ok, %{state | pending: Map.drop(state.pending, ids), overflow: false, expired_warning: false}}
   end
 
   @impl true
@@ -130,10 +129,7 @@ defmodule CodexPooler.Platform.ExecutionRegistry do
     expired = Map.has_key?(state.pending, id)
 
     if expired and not state.expired_warning,
-      do:
-        Logger.warning(
-          "execution terminal proof expired before publication; execution becomes unknown"
-        )
+      do: Logger.warning("execution terminal proof expired before publication; execution becomes unknown")
 
     {:noreply,
      %{
@@ -170,10 +166,7 @@ defmodule CodexPooler.Platform.ExecutionRegistry do
       %{state | pending: Map.put(state.pending, id, proof)}
     else
       unless state.overflow,
-        do:
-          Logger.warning(
-            "execution terminal proof queue full; unpublished executions remain unknown"
-          )
+        do: Logger.warning("execution terminal proof queue full; unpublished executions remain unknown")
 
       %{state | overflow: true}
     end

@@ -11,9 +11,7 @@ defmodule CodexPooler.Repo.Migrations.AddInstancePresenceAndAttemptOwner do
       add :updated_at, :utc_datetime_usec, null: false, default: fragment("now()")
     end
 
-    create constraint(:instance_presences, :instance_presences_instance_id_present_check,
-             check: "length(btrim(instance_id)) > 0"
-           )
+    create constraint(:instance_presences, :instance_presences_instance_id_present_check, check: "length(btrim(instance_id)) > 0")
 
     create index(:instance_presences, [:last_seen_at])
 

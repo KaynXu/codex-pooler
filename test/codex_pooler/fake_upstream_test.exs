@@ -310,8 +310,7 @@ defmodule CodexPooler.FakeUpstreamTest do
               method: "WEBSOCKET",
               websocket_connection_ordinal: 1,
               json: [valid: true, equals: %{"type" => "response.processed"}],
-              respond:
-                FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: ack_ref)
+              respond: FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: ack_ref)
             )
           ])
         )
@@ -511,8 +510,7 @@ defmodule CodexPooler.FakeUpstreamTest do
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
               json: [valid: true, equals: %{"type" => "response.create"}],
-              respond:
-                FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: turn_ref)
+              respond: FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: turn_ref)
             )
           ])
         )
@@ -592,9 +590,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
     test "serves deterministic JSON responses and captures request details" do
       upstream =
-        start_upstream(
-          FakeUpstream.json_response(%{"id" => "resp_test", "status" => "completed"})
-        )
+        start_upstream(FakeUpstream.json_response(%{"id" => "resp_test", "status" => "completed"}))
 
       response =
         Req.post!(FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
@@ -918,8 +914,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       response = Req.get!(FakeUpstream.url(upstream) <> "/late-terminal", into: :self)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
                      1_000
 
       assert {:ok, [data: created]} = receive_stream_message(response)
@@ -946,8 +941,7 @@ defmodule CodexPooler.FakeUpstreamTest do
       assert FakeUpstream.websocket_close() ==
                {:websocket_sse_then_close, [], 1011, "synthetic websocket close"}
 
-      assert {:websocket_upgrade_error, 503, %{"error" => %{"code" => "upgrade_failed"}}, [], nil,
-              nil} =
+      assert {:websocket_upgrade_error, 503, %{"error" => %{"code" => "upgrade_failed"}}, [], nil, nil} =
                FakeUpstream.websocket_upgrade_error(
                  %{"error" => %{"code" => "upgrade_failed"}},
                  status: 503
@@ -958,9 +952,7 @@ defmodule CodexPooler.FakeUpstreamTest do
       release_ref = make_ref()
 
       upstream =
-        start_upstream(
-          FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-        )
+        start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
       assert {:error, error} =
                Req.get(FakeUpstream.url(upstream) <> "/slow",
@@ -968,8 +960,7 @@ defmodule CodexPooler.FakeUpstreamTest do
                  retry: false
                )
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                      1_000
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})

@@ -136,9 +136,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbeTest do
 
     assert Probe.legacy_observe_only_mode(persisted) == "observe_only"
 
-    assert Probe.legacy_observe_only_mode(
-             Map.put(persisted, "provider_replay", %{"version" => 1})
-           ) ==
+    assert Probe.legacy_observe_only_mode(Map.put(persisted, "provider_replay", %{"version" => 1})) ==
              "unexpected"
 
     assert Probe.legacy_observe_only_mode(Map.put(persisted, "status", "succeeded")) ==
@@ -147,9 +145,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbeTest do
     assert Probe.legacy_observe_only_mode(Map.put(persisted, "phase", "confirmed_by_quota")) ==
              "unexpected"
 
-    assert Probe.legacy_observe_only_mode(
-             Map.put(persisted, "legacy_recovery", %{"version" => 2, "state" => "operator_owned"})
-           ) == "unexpected"
+    assert Probe.legacy_observe_only_mode(Map.put(persisted, "legacy_recovery", %{"version" => 2, "state" => "operator_owned"})) == "unexpected"
 
     assert Probe.legacy_observe_only_mode(%{}) == "unexpected"
   end

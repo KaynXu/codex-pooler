@@ -201,8 +201,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         {:ok, url}
 
       {:error, :invalid_upstream_base_url} ->
-        {:error,
-         safe_error(502, :invalid_upstream_base_url, "upstream file bridge is misconfigured")}
+        {:error, safe_error(502, :invalid_upstream_base_url, "upstream file bridge is misconfigured")}
     end
   end
 
@@ -406,11 +405,9 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       exception: exception |> TransportFailureReason.safe_exception() |> safe_log_value(),
       reason: exception |> TransportFailureReason.safe_reason() |> safe_log_value(),
       pool_upstream_assignment_id: safe_log_value(file_bridge.pool_upstream_assignment_id),
-      upstream_identity_id:
-        safe_log_value(file_bridge.upstream_identity_id || identity_id(identity)),
+      upstream_identity_id: safe_log_value(file_bridge.upstream_identity_id || identity_id(identity)),
       route_class: safe_log_value(route_metadata[:route_class] || route_metadata["route_class"]),
-      routing_strategy:
-        safe_log_value(route_metadata[:routing_strategy] || route_metadata["routing_strategy"])
+      routing_strategy: safe_log_value(route_metadata[:routing_strategy] || route_metadata["routing_strategy"])
     ]
     |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
   end
@@ -461,8 +458,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   end
 
   defp json_success(%Req.Response{status: status}, operation) do
-    {:error,
-     safe_error(status, :upstream_file_bridge_failed, "upstream file #{operation} failed")}
+    {:error, safe_error(status, :upstream_file_bridge_failed, "upstream file #{operation} failed")}
   end
 
   defp retry_options(opts) do

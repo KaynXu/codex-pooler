@@ -113,8 +113,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
       Map.has_key?(payload, "parallel_tool_calls") and
           not is_boolean(payload["parallel_tool_calls"]) ->
-        {:error,
-         Error.invalid_request("parallel_tool_calls must be a boolean", "parallel_tool_calls")}
+        {:error, Error.invalid_request("parallel_tool_calls must be a boolean", "parallel_tool_calls")}
 
       Map.has_key?(payload, "text") and not is_map(payload["text"]) ->
         {:error, Error.invalid_request("text must be an object", "text")}

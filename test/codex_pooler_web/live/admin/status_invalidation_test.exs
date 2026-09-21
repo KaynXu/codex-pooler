@@ -22,16 +22,14 @@ defmodule CodexPoolerWeb.Admin.StatusInvalidationTest do
     assert_stale_recovery(conn, :not_modified)
   end
 
-  @tag slow:
-         "runs 300 committed status polls through mounted page and banner across a simulated day"
+  @tag slow: "runs 300 committed status polls through mounted page and banner across a simulated day"
   test "successive unchanged 200 polls keep mounted freshness past fifteen minutes and a day", %{
     conn: conn
   } do
     assert_continuous_freshness(conn, :ok)
   end
 
-  @tag slow:
-         "runs 300 committed not-modified polls through mounted page and banner across a simulated day"
+  @tag slow: "runs 300 committed not-modified polls through mounted page and banner across a simulated day"
   test "successive unchanged 304 polls keep mounted freshness past fifteen minutes and a day", %{
     conn: conn
   } do

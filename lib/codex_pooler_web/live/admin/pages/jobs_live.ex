@@ -65,8 +65,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
   @impl true
   def handle_event("filter", %{"filters" => filter_params}, socket) do
-    {:noreply,
-     push_patch(socket, to: ~p"/admin/jobs?#{JobFilterForm.query_params(filter_params)}")}
+    {:noreply, push_patch(socket, to: ~p"/admin/jobs?#{JobFilterForm.query_params(filter_params)}")}
   end
 
   def handle_event("select_attention_filter", %{"attention" => attention}, socket) do
@@ -99,8 +98,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   def handle_event("open_job", %{"job-id" => job_id}, socket) do
     {:noreply,
      push_patch(socket,
-       to:
-         ~p"/admin/jobs?#{JobFilterForm.open_job_query_params(socket.assigns.current_params, job_id)}"
+       to: ~p"/admin/jobs?#{JobFilterForm.open_job_query_params(socket.assigns.current_params, job_id)}"
      )}
   end
 
@@ -116,8 +114,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
     {:noreply,
      push_patch(socket,
-       to:
-         ~p"/admin/jobs?#{toggle_worker_failure_query_params(socket.assigns.current_params, socket.assigns.selected_worker_failure_job_id, failure_job_id)}"
+       to: ~p"/admin/jobs?#{toggle_worker_failure_query_params(socket.assigns.current_params, socket.assigns.selected_worker_failure_job_id, failure_job_id)}"
      )}
   end
 
@@ -140,8 +137,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
            |> refresh_jobs()}
 
         {:error, reason} ->
-          {:noreply,
-           put_flash(socket, :error, enqueue_worker_group_error(socket, worker_group, reason))}
+          {:noreply, put_flash(socket, :error, enqueue_worker_group_error(socket, worker_group, reason))}
       end
     else
       {:noreply, put_flash(socket, :error, "System jobs require owner access")}
@@ -366,8 +362,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
     cond do
       errors_count > 0 ->
-        {:error,
-         "#{title} enqueue partially failed: #{inserted_count} queued, #{conflicts_count} already queued, #{errors_count} failed"}
+        {:error, "#{title} enqueue partially failed: #{inserted_count} queued, #{conflicts_count} already queued, #{errors_count} failed"}
 
       inserted_count == 1 and conflicts_count == 0 ->
         {:info, "#{title} queued"}
@@ -379,8 +374,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
         {:info, enqueue_worker_group_empty_message(socket, worker_group)}
 
       true ->
-        {:info,
-         "#{title} enqueue requested: #{inserted_count} queued, #{conflicts_count} already queued"}
+        {:info, "#{title} enqueue requested: #{inserted_count} queued, #{conflicts_count} already queued"}
     end
   end
 
@@ -476,8 +470,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
       filter_warnings: filter_warnings,
       filter_errors: filter_warnings,
       selected_job: selected_job(filters.job_id, socket.assigns.explorer.items),
-      selected_worker_failure_job_id:
-        selected_worker_failure_job_id(params, socket.assigns.worker_cards)
+      selected_worker_failure_job_id: selected_worker_failure_job_id(params, socket.assigns.worker_cards)
     )
   end
 

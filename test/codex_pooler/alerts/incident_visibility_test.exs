@@ -45,9 +45,7 @@ defmodule CodexPooler.Alerts.IncidentVisibilityTest do
              )
 
     assert {:ok, %{incident: same_incident, inserted?: false, target_inserted?: true}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(hidden_rule, hidden_pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(hidden_rule, hidden_pool, identity, dedupe_key, matched_at))
 
     assert same_incident.id == incident.id
 
@@ -93,14 +91,10 @@ defmodule CodexPooler.Alerts.IncidentVisibilityTest do
     matched_at = now()
 
     assert {:ok, %{incident: incident, inserted?: true, target_inserted?: true}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(first_rule, pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(first_rule, pool, identity, dedupe_key, matched_at))
 
     assert {:ok, %{incident: same_incident, inserted?: false, target_inserted?: true}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(second_rule, pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(second_rule, pool, identity, dedupe_key, matched_at))
 
     assert same_incident.id == incident.id
     assert alert_incident_target_count(incident.id) == 2

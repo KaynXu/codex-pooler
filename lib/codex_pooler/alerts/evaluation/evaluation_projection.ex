@@ -354,8 +354,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
            normalize_alias(catalog_model.exposed_model_id) == normalized_model
          end) do
       nil ->
-        {[exposed_model_id: normalized_model, upstream_model_id: normalized_model],
-         projection_cache}
+        {[exposed_model_id: normalized_model, upstream_model_id: normalized_model], projection_cache}
 
       %{exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id} ->
         normalize_catalog_aliases(exposed_model_id, upstream_model_id, projection_cache)
@@ -365,8 +364,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
   defp normalize_catalog_aliases(exposed_model_id, upstream_model_id, projection_cache) do
     with {:ok, exposed_model_id} <- normalize_concrete_alias(exposed_model_id),
          {:ok, upstream_model_id} <- normalize_concrete_alias(upstream_model_id) do
-      {[exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id],
-       projection_cache}
+      {[exposed_model_id: exposed_model_id, upstream_model_id: upstream_model_id], projection_cache}
     else
       _malformed_alias -> {:invalid_concrete_model, projection_cache}
     end

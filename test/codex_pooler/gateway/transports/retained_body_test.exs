@@ -8,8 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.RetainedBodyTest do
   test "matches the bounded suffix reference across seeded binary and iodata appends" do
     rng = :rand.seed_s(:exsss, @property_seed)
 
-    Enum.reduce(1..120, {rng, RetainedBody.empty(), ""}, fn _iteration,
-                                                            {rng, retained, reference} ->
+    Enum.reduce(1..120, {rng, RetainedBody.empty(), ""}, fn _iteration, {rng, retained, reference} ->
       {data, rng} = random_iodata(rng)
       retained = RetainedBody.append(retained, data)
       reference = reference_append(reference, data)
@@ -43,9 +42,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.RetainedBodyTest do
 
     assert byte_size(RetainedBody.read(retained)) == RetainedBody.max_bytes()
 
-    assert_receive {[:codex_pooler, :gateway, :stream_buffer, :truncated],
-                    %{bytes: bytes, count: 1, max_bytes: 65_536},
-                    %{buffer: "retained_body", endpoint: "unknown", route_class: "unknown"}}
+    assert_receive {[:codex_pooler, :gateway, :stream_buffer, :truncated], %{bytes: bytes, count: 1, max_bytes: 65_536}, %{buffer: "retained_body", endpoint: "unknown", route_class: "unknown"}}
 
     assert bytes > 65_536
   end

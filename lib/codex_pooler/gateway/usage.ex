@@ -112,8 +112,7 @@ defmodule CodexPooler.Gateway.Usage do
       {:ok, {:chatgpt_account_token, identity}}
     else
       "" ->
-        {:error,
-         %{status: 401, code: "invalid_authorization", message: "chatgpt token is required"}}
+        {:error, %{status: 401, code: "invalid_authorization", message: "chatgpt token is required"}}
 
       {:error, _reason} ->
         {:error,

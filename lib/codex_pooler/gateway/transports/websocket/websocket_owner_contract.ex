@@ -67,8 +67,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
 
   @type downstream_message ::
           {:websocket_owner_frame, correlation_id(), downstream_epoch(), downstream_payload()}
-          | {:websocket_owner_frame, correlation_id(), downstream_epoch(), owner_turn_id(),
-             downstream_payload()}
+          | {:websocket_owner_frame, correlation_id(), downstream_epoch(), owner_turn_id(), downstream_payload()}
 
   @type forwarding_result ::
           :ok
@@ -80,17 +79,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   @type downstream_match_result ::
           {:ok, downstream_payload()} | :drop | {:error, :invalid_downstream_message}
   @type output_commit_probe ::
-          {:websocket_owner_output_commit_probe, correlation_id(), downstream_epoch(),
-           owner_turn_id(), reference(), pid(), reference()}
+          {:websocket_owner_output_commit_probe, correlation_id(), downstream_epoch(), owner_turn_id(), reference(), pid(), reference()}
   @type output_commit_ack ::
-          {:websocket_owner_output_commit_ack, correlation_id(), downstream_epoch(),
-           owner_turn_id(), reference(), reference(), boolean()}
+          {:websocket_owner_output_commit_ack, correlation_id(), downstream_epoch(), owner_turn_id(), reference(), reference(), boolean()}
   @type handoff_outcome :: :ready | {:failed, :owner_forward_timeout | :owner_drained}
   @type handoff_message ::
-          {:websocket_owner_handoff_ready, correlation_id(), downstream_epoch(), owner_turn_id(),
-           pid(), reference()}
-          | {:websocket_owner_handoff_failed, correlation_id(), downstream_epoch(),
-             owner_turn_id(), pid(), reference(), :owner_forward_timeout | :owner_drained}
+          {:websocket_owner_handoff_ready, correlation_id(), downstream_epoch(), owner_turn_id(), pid(), reference()}
+          | {:websocket_owner_handoff_failed, correlation_id(), downstream_epoch(), owner_turn_id(), pid(), reference(), :owner_forward_timeout | :owner_drained}
 
   @owner_errors CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary.owner_errors()
 
@@ -200,9 +195,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0,
       do: downstream_payload?(payload)
 
-  def downstream_message?(
-        {:websocket_owner_frame, correlation_id, downstream_epoch, owner_turn_id, payload}
-      )
+  def downstream_message?({:websocket_owner_frame, correlation_id, downstream_epoch, owner_turn_id, payload})
       when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
              is_pid(owner_turn_id),
       do: downstream_payload?(payload)
@@ -293,10 +286,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       do: {:error, :invalid_downstream_message}
 
   @spec output_commit_probe?(term()) :: boolean()
-  def output_commit_probe?(
-        {:websocket_owner_output_commit_probe, correlation_id, downstream_epoch, owner_turn_id,
-         active_turn_ref, owner_pid, probe_ref}
-      )
+  def output_commit_probe?({:websocket_owner_output_commit_probe, correlation_id, downstream_epoch, owner_turn_id, active_turn_ref, owner_pid, probe_ref})
       when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
              is_pid(owner_turn_id) and is_reference(active_turn_ref) and is_pid(owner_pid) and
              is_reference(probe_ref),
@@ -311,8 +301,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           owner_turn_id()
         ) :: {:ok, reference(), pid(), reference()} | :drop | {:error, :invalid_probe}
   def accept_output_commit_probe(
-        {:websocket_owner_output_commit_probe, correlation_id, downstream_epoch, owner_turn_id,
-         active_turn_ref, owner_pid, probe_ref} = message,
+        {:websocket_owner_output_commit_probe, correlation_id, downstream_epoch, owner_turn_id, active_turn_ref, owner_pid, probe_ref} = message,
         downstream_epoch,
         correlation_id,
         owner_turn_id
@@ -327,10 +316,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   end
 
   @spec output_commit_ack?(term()) :: boolean()
-  def output_commit_ack?(
-        {:websocket_owner_output_commit_ack, correlation_id, downstream_epoch, owner_turn_id,
-         active_turn_ref, probe_ref, committed?}
-      )
+  def output_commit_ack?({:websocket_owner_output_commit_ack, correlation_id, downstream_epoch, owner_turn_id, active_turn_ref, probe_ref, committed?})
       when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
              is_pid(owner_turn_id) and is_reference(active_turn_ref) and is_reference(probe_ref) and
              is_boolean(committed?),
@@ -347,8 +333,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           reference()
         ) :: {:ok, boolean()} | :drop | {:error, :invalid_ack}
   def accept_output_commit_ack(
-        {:websocket_owner_output_commit_ack, correlation_id, downstream_epoch, owner_turn_id,
-         active_turn_ref, probe_ref, committed?} = message,
+        {:websocket_owner_output_commit_ack, correlation_id, downstream_epoch, owner_turn_id, active_turn_ref, probe_ref, committed?} = message,
         downstream_epoch,
         correlation_id,
         owner_turn_id,
@@ -378,8 +363,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           reference()
         ) :: {:ok, handoff_outcome()} | :drop | {:error, :invalid_handoff_message}
   def accept_handoff_message(
-        {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid,
-         control_ref},
+        {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid, control_ref},
         downstream_pid,
         epoch,
         correlation_id,
@@ -391,8 +375,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       do: {:ok, :ready}
 
   def accept_handoff_message(
-        {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid,
-         control_ref, reason},
+        {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid, control_ref, reason},
         downstream_pid,
         epoch,
         correlation_id,
@@ -408,22 +391,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
     if handoff_message?(message), do: :drop, else: {:error, :invalid_handoff_message}
   end
 
-  defp handoff_message?(
-         {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid,
-          control_ref}
-       ),
-       do:
-         is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
-           is_pid(owner_turn_id) and is_pid(downstream_pid) and is_reference(control_ref)
+  defp handoff_message?({:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid, control_ref}),
+    do:
+      is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
+        is_pid(owner_turn_id) and is_pid(downstream_pid) and is_reference(control_ref)
 
-  defp handoff_message?(
-         {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid,
-          control_ref, reason}
-       ),
-       do:
-         is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
-           is_pid(owner_turn_id) and is_pid(downstream_pid) and is_reference(control_ref) and
-           reason in [:owner_forward_timeout, :owner_drained]
+  defp handoff_message?({:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid, control_ref, reason}),
+    do:
+      is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
+        is_pid(owner_turn_id) and is_pid(downstream_pid) and is_reference(control_ref) and
+        reason in [:owner_forward_timeout, :owner_drained]
 
   defp handoff_message?(_message), do: false
 

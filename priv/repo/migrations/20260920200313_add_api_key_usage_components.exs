@@ -4,10 +4,8 @@ defmodule CodexPooler.Repo.Migrations.AddApiKeyUsageComponents do
   @disable_ddl_transaction true
 
   @indexes [
-    {"ledger_entries_reservation_key_occurred_idx",
-     "(api_key_id, occurred_at) INCLUDE (request_id, total_tokens) WHERE ((entry_kind = 'reservation'::text) AND (amount_status = 'recorded'::text))"},
-    {"ledger_entries_terminal_request_idx",
-     "(request_id) WHERE (entry_kind = ANY (ARRAY['release'::text, 'settlement'::text]))"},
+    {"ledger_entries_reservation_key_occurred_idx", "(api_key_id, occurred_at) INCLUDE (request_id, total_tokens) WHERE ((entry_kind = 'reservation'::text) AND (amount_status = 'recorded'::text))"},
+    {"ledger_entries_terminal_request_idx", "(request_id) WHERE (entry_kind = ANY (ARRAY['release'::text, 'settlement'::text]))"},
     {"ledger_entries_key_occurred_idx", "(api_key_id, occurred_at) INCLUDE (request_id)"}
   ]
 
@@ -40,16 +38,12 @@ defmodule CodexPooler.Repo.Migrations.AddApiKeyUsageComponents do
           # No bucket lock is held while acquiring this publication lock.
           query("LOCK TABLE public.ledger_entries IN SHARE ROW EXCLUSIVE MODE")
 
-          query(
-            "DROP TRIGGER IF EXISTS ledger_entries_sync_api_key_usage_buckets ON public.ledger_entries"
-          )
+          query("DROP TRIGGER IF EXISTS ledger_entries_sync_api_key_usage_buckets ON public.ledger_entries")
 
           for operation <- [:insert, :update, :delete] do
             query(sync_function(operation))
 
-            query(
-              "DROP TRIGGER IF EXISTS ledger_entries_usage_components_#{operation} ON public.ledger_entries"
-            )
+            query("DROP TRIGGER IF EXISTS ledger_entries_usage_components_#{operation} ON public.ledger_entries")
 
             query(sync_trigger(operation))
           end
@@ -67,20 +61,14 @@ defmodule CodexPooler.Repo.Migrations.AddApiKeyUsageComponents do
           query("LOCK TABLE public.ledger_entries IN SHARE ROW EXCLUSIVE MODE NOWAIT")
 
           for operation <- [:insert, :update, :delete] do
-            query(
-              "DROP TRIGGER IF EXISTS ledger_entries_usage_components_#{operation} ON public.ledger_entries"
-            )
+            query("DROP TRIGGER IF EXISTS ledger_entries_usage_components_#{operation} ON public.ledger_entries")
 
             query("DROP FUNCTION IF EXISTS public.sync_api_key_usage_components_#{operation}()")
           end
 
-          query(
-            "DROP TRIGGER IF EXISTS ledger_entries_sync_api_key_usage_buckets ON public.ledger_entries"
-          )
+          query("DROP TRIGGER IF EXISTS ledger_entries_sync_api_key_usage_buckets ON public.ledger_entries")
 
-          query(
-            "CREATE TRIGGER ledger_entries_sync_api_key_usage_buckets AFTER INSERT OR UPDATE OR DELETE ON public.ledger_entries FOR EACH ROW EXECUTE FUNCTION public.sync_api_key_usage_bucket_from_ledger_entry()"
-          )
+          query("CREATE TRIGGER ledger_entries_sync_api_key_usage_buckets AFTER INSERT OR UPDATE OR DELETE ON public.ledger_entries FOR EACH ROW EXECUTE FUNCTION public.sync_api_key_usage_bucket_from_ledger_entry()")
         end)
 
       Enum.each(@indexes, fn {name, _} ->
@@ -90,9 +78,7 @@ defmodule CodexPooler.Repo.Migrations.AddApiKeyUsageComponents do
       query("DROP FUNCTION IF EXISTS public.rebuild_api_key_usage_components()")
       query("DROP FUNCTION IF EXISTS public.api_key_usage_events(public.ledger_entries[])")
 
-      query(
-        "ALTER TABLE public.api_key_usage_buckets DROP COLUMN IF EXISTS known_total_tokens, DROP COLUMN IF EXISTS provisional_total_tokens, DROP COLUMN IF EXISTS admission_count, DROP COLUMN IF EXISTS known_cost_micros"
-      )
+      query("ALTER TABLE public.api_key_usage_buckets DROP COLUMN IF EXISTS known_total_tokens, DROP COLUMN IF EXISTS provisional_total_tokens, DROP COLUMN IF EXISTS admission_count, DROP COLUMN IF EXISTS known_cost_micros")
     end)
   end
 

@@ -212,9 +212,7 @@ defmodule CodexPooler.Platform.ReadinessTest do
   test "a query encoding exception becomes an immediate bounded failure over the real Repo boundary" do
     assert Readiness.check() == :ready
 
-    Repo.query!(
-      "ALTER TABLE schema_migrations ALTER COLUMN version TYPE text USING version::text"
-    )
+    Repo.query!("ALTER TABLE schema_migrations ALTER COLUMN version TYPE text USING version::text")
 
     assert Readiness.check() == {:not_ready, "DBConnection.EncodeError"}
   end

@@ -376,8 +376,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
         before = Repo.get!(UpstreamIdentity, identity.id)
 
-        assert {:error,
-                %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}} =
+        assert {:error, %{code: :invalid_credential_epoch, message: "credential epoch is invalid"}} =
                  TokenRefresh.refresh_access_token(identity, trigger_kind: "invalid_epoch_test")
 
         after_attempt = Repo.get!(UpstreamIdentity, identity.id)
@@ -409,13 +408,9 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       timeout_release_ref = make_ref()
 
       cases = [
-        {:timeout,
-         FakeUpstream.timeout_before_headers(notify: self(), release_ref: timeout_release_ref),
-         "codex_auth_transient", timeout_release_ref},
-        {:malformed, FakeUpstream.json_response(%{"expires_in" => 3600}),
-         "codex_oauth_refresh_failed", nil},
-        {:revoked, FakeUpstream.json_response(%{"error" => "invalid_grant"}, 400),
-         "refresh_token_revoked", nil}
+        {:timeout, FakeUpstream.timeout_before_headers(notify: self(), release_ref: timeout_release_ref), "codex_auth_transient", timeout_release_ref},
+        {:malformed, FakeUpstream.json_response(%{"expires_in" => 3600}), "codex_oauth_refresh_failed", nil},
+        {:revoked, FakeUpstream.json_response(%{"error" => "invalid_grant"}, 400), "refresh_token_revoked", nil}
       ]
 
       for {label, response, expected_code, release_ref} <- cases do
@@ -438,8 +433,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
           )
 
         if release_ref do
-          assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                          ^release_ref},
+          assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                          1_000
 
           send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -502,8 +496,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
           TokenRefresh.refresh_access_token(identity, trigger_kind: "late_epoch_test")
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                      1_000
 
       claimed = Repo.get!(UpstreamIdentity, identity.id)
@@ -563,8 +556,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
           TokenRefresh.refresh_access_token(identity, trigger_kind: "invalid_result_epoch_test")
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                      1_000
 
       claimed = Repo.get!(UpstreamIdentity, identity.id)
@@ -679,8 +671,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
           TokenRefresh.refresh_access_token(identity, trigger_kind: "single_flight_first")
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                      1_000
 
       persisted = Repo.get!(UpstreamIdentity, identity.id)
@@ -813,9 +804,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       release_ref = make_ref()
 
       upstream =
-        start_upstream(
-          FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-        )
+        start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
       identity =
         refreshable_identity_fixture("active", %{
@@ -835,8 +824,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       elapsed_ms = System.monotonic_time(:millisecond) - started_at
       assert elapsed_ms < 2_000
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                      1_000
 
       send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -989,8 +977,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
           TokenRefresh.refresh_access_token(identity, trigger_kind: "late_first")
         end)
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                      1_000
 
       claimed = Repo.get!(UpstreamIdentity, identity.id).metadata["token_refresh"]

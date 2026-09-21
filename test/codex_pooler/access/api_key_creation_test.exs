@@ -421,9 +421,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       blocked_user =
         %User{}
-        |> User.bootstrap_changeset(
-          valid_bootstrap_attributes(%{"email" => "blocked@example.com"})
-        )
+        |> User.bootstrap_changeset(valid_bootstrap_attributes(%{"email" => "blocked@example.com"}))
         |> Repo.insert!()
 
       blocked_scope = Scope.for_user(blocked_user, [])
@@ -475,9 +473,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       refute api_key_changeset.valid?
 
-      assert "must be a non-empty model identifier without whitespace" in errors_on(
-               api_key_changeset
-             ).enforced_model_identifier
+      assert "must be a non-empty model identifier without whitespace" in errors_on(api_key_changeset).enforced_model_identifier
 
       assert "is invalid" in errors_on(api_key_changeset).enforced_reasoning_effort
       assert "is invalid" in errors_on(api_key_changeset).enforced_service_tier
@@ -577,9 +573,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       refute conflicting_reasoning_api_key_changeset.valid?
 
-      assert "cannot be set when exact reasoning effort is enforced" in errors_on(
-               conflicting_reasoning_api_key_changeset
-             ).maximum_reasoning_effort
+      assert "cannot be set when exact reasoning effort is enforced" in errors_on(conflicting_reasoning_api_key_changeset).maximum_reasoning_effort
 
       ultrafast_api_key_changeset =
         APIKey.changeset(%APIKey{}, %{

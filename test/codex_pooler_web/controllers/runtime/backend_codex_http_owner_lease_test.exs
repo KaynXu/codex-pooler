@@ -168,9 +168,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     on_exit(fn ->
       CodexPooler.UnboxedFixture.run_unboxed(fn ->
-        Repo.delete_all(
-          from(p in InstancePresence.Instance, where: p.instance_id == ^remote.instance_id)
-        )
+        Repo.delete_all(from(p in InstancePresence.Instance, where: p.instance_id == ^remote.instance_id))
       end)
     end)
 
@@ -272,9 +270,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     on_exit(fn ->
       CodexPooler.UnboxedFixture.run_unboxed(fn ->
-        Repo.delete_all(
-          from(p in InstancePresence.Instance, where: p.instance_id == ^remote.instance_id)
-        )
+        Repo.delete_all(from(p in InstancePresence.Instance, where: p.instance_id == ^remote.instance_id))
       end)
     end)
 
@@ -488,9 +484,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     # lands inside the lease however the test is scheduled; after an expiry the
     # gateway intentionally replaces the session, which is a different contract.
     task =
-      controller_request(conn, setup, session_key, http_payload(setup), self(),
-        ttl_seconds: @stable_owner_ttl_seconds
-      )
+      controller_request(conn, setup, session_key, http_payload(setup), self(), ttl_seconds: @stable_owner_ttl_seconds)
 
     assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_budget
     response = Task.await(task, @detection_budget)
@@ -531,8 +525,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => "resp_sse_liveness"}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_sse_liveness"}}}
           ],
           {"response.completed", completed_event("resp_sse_liveness")},
           notify: self(),
@@ -572,8 +565,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert %{status: "succeeded"} = Repo.get_by!(CodexTurn, request_id: request.id)
   end
 
-  @tag slow:
-         "waits for the real three-second lease's periodic heartbeat to detect takeover during SSE"
+  @tag slow: "waits for the real three-second lease's periodic heartbeat to detect takeover during SSE"
   test "takeover during backend SSE keeps public completion and accounting but fences old continuity",
        %{conn: conn} do
     release_ref = make_ref()
@@ -583,8 +575,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => response_id}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => response_id}}}
           ],
           {"response.completed", completed_event(response_id)},
           notify: self(),
@@ -652,8 +643,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => "resp_v1_liveness"}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_v1_liveness"}}}
           ],
           {"response.completed", completed_event("resp_v1_liveness")},
           notify: self(),
@@ -735,8 +725,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     send(upstream_pid, {:fake_upstream_release_gate, release_ref})
   end
 
-  @tag slow:
-         "waits for a real periodic heartbeat, terminates its blocked PostgreSQL backend, and verifies fencing"
+  @tag slow: "waits for a real periodic heartbeat, terminates its blocked PostgreSQL backend, and verifies fencing"
   test "renewal database failure stops an in-flight heartbeat and stale completion stays fenced",
        %{conn: conn} do
     release_ref = make_ref()
@@ -746,8 +735,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => response_id}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => response_id}}}
           ],
           {"response.completed", completed_event(response_id)},
           notify: self(),
@@ -790,8 +778,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
   end
 
-  @tag slow:
-         "waits for periodic renewal to block on PostgreSQL before terminating its backend and releasing SSE"
+  @tag slow: "waits for periodic renewal to block on PostgreSQL before terminating its backend and releasing SSE"
   test "renewal database failure before delayed headers preserves the dispatched response",
        %{conn: conn} do
     release_ref = make_ref()
@@ -1061,8 +1048,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
           barrier: {barrier_ref, unquote(phase)}
         )
 
-      assert_receive {:runtime_authorization_barrier, ^barrier_ref, operation, barrier_phase,
-                      task_pid},
+      assert_receive {:runtime_authorization_barrier, ^barrier_ref, operation, barrier_phase, task_pid},
                      @detection_budget
 
       assert {operation, barrier_phase} == unquote(phase)
@@ -1107,8 +1093,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
           barrier: {barrier_ref, {:reservation_lock, :before}}
         )
 
-      assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reservation_lock, :before,
-                      task_pid},
+      assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reservation_lock, :before, task_pid},
                      @detection_budget
 
       make_owner_unavailable!(session, unquote(failure))
@@ -1390,9 +1375,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   defp with_cancelling_adapter(%Plug.Conn{adapter: {adapter, delegate_state}} = conn, notify) do
     %{
       conn
-      | adapter:
-          {CancellingAdapter,
-           %{delegate: adapter, delegate_state: delegate_state, notify: notify}}
+      | adapter: {CancellingAdapter, %{delegate: adapter, delegate_state: delegate_state, notify: notify}}
     }
   end
 

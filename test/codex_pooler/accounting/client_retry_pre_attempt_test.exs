@@ -312,8 +312,7 @@ defmodule CodexPooler.Accounting.ClientRetryPreAttemptTest do
     request =
       Repo.update!(
         Ecto.Changeset.change(request,
-          request_metadata:
-            Map.put(request.request_metadata || %{}, "websocket_pre_attempt_drain", true)
+          request_metadata: Map.put(request.request_metadata || %{}, "websocket_pre_attempt_drain", true)
         )
       )
 

@@ -182,8 +182,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.FailedPredecessorResend do
          false <-
            Repo.exists?(
              from l in RequestClientRetryLink,
-               where:
-                 l.predecessor_request_id == ^request.id or l.successor_request_id == ^request.id
+               where: l.predecessor_request_id == ^request.id or l.successor_request_id == ^request.id
            ),
          true <- not is_nil(turn) and turn.codex_session_id == Map.get(scope, :codex_session_id),
          true <-

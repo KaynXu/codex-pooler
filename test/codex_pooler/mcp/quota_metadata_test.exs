@@ -230,8 +230,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
       upstream_assignment_fixture(pool, %{
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -289,8 +288,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
         chatgpt_account_id: "acct-quota-windowless",
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -324,8 +322,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
         chatgpt_account_id: "acct-quota-windowless-model-detail",
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -573,14 +570,10 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     reset_at = DateTime.add(observed_at, 3_600, :second)
 
     controls = [
-      {"D8 exhausted credits", "acct-quota-d8",
-       %{active_limit: nil, credits: 3817, used_percent: Decimal.new("100")}},
-      {"D12 capacity credits", "acct-quota-d12",
-       %{active_limit: 601, credits: 601, used_percent: Decimal.new("0")}},
-      {"Unknown used credits", "acct-quota-unknown-used",
-       %{active_limit: nil, credits: 1701, used_percent: nil}},
-      {"Zero exhausted credits", "acct-quota-zero",
-       %{active_limit: nil, credits: 0, used_percent: Decimal.new("100")}}
+      {"D8 exhausted credits", "acct-quota-d8", %{active_limit: nil, credits: 3817, used_percent: Decimal.new("100")}},
+      {"D12 capacity credits", "acct-quota-d12", %{active_limit: 601, credits: 601, used_percent: Decimal.new("0")}},
+      {"Unknown used credits", "acct-quota-unknown-used", %{active_limit: nil, credits: 1701, used_percent: nil}},
+      {"Zero exhausted credits", "acct-quota-zero", %{active_limit: nil, credits: 0, used_percent: Decimal.new("100")}}
     ]
 
     for {account_label, chatgpt_account_id, attrs} <- controls do

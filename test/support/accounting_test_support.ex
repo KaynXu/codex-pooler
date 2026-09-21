@@ -53,8 +53,7 @@ defmodule CodexPooler.AccountingTestSupport do
         currency_code: "USD",
         billing_unit: "token",
         input_token_micros: Map.get(pricing_attrs, :input_token_micros, Decimal.new(10)),
-        cached_input_token_micros:
-          Map.get(pricing_attrs, :cached_input_token_micros, Decimal.new(1)),
+        cached_input_token_micros: Map.get(pricing_attrs, :cached_input_token_micros, Decimal.new(1)),
         cache_write_token_micros: Map.get(pricing_attrs, :cache_write_token_micros),
         output_token_micros: Map.get(pricing_attrs, :output_token_micros, Decimal.new(20)),
         reasoning_token_micros: Map.get(pricing_attrs, :reasoning_token_micros, Decimal.new(30)),
@@ -94,13 +93,10 @@ defmodule CodexPooler.AccountingTestSupport do
       currency_code: Map.get(attrs, :currency_code, base.currency_code),
       billing_unit: Map.get(attrs, :billing_unit, base.billing_unit),
       input_token_micros: Map.get(attrs, :input_token_micros, base.input_token_micros),
-      cached_input_token_micros:
-        Map.get(attrs, :cached_input_token_micros, base.cached_input_token_micros),
-      cache_write_token_micros:
-        Map.get(attrs, :cache_write_token_micros, base.cache_write_token_micros),
+      cached_input_token_micros: Map.get(attrs, :cached_input_token_micros, base.cached_input_token_micros),
+      cache_write_token_micros: Map.get(attrs, :cache_write_token_micros, base.cache_write_token_micros),
       output_token_micros: Map.get(attrs, :output_token_micros, base.output_token_micros),
-      reasoning_token_micros:
-        Map.get(attrs, :reasoning_token_micros, base.reasoning_token_micros),
+      reasoning_token_micros: Map.get(attrs, :reasoning_token_micros, base.reasoning_token_micros),
       request_base_micros: Map.get(attrs, :request_base_micros, base.request_base_micros),
       effective_at: Map.get(attrs, :effective_at, DateTime.add(now, -60, :second)),
       captured_at: Map.get(attrs, :captured_at, now),

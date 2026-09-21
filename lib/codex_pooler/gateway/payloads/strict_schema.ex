@@ -630,8 +630,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
         end
 
       _other ->
-        {:error,
-         invalid_schema(path <> ".type", "type must be a string or a non-empty array of strings")}
+        {:error, invalid_schema(path <> ".type", "type must be a string or a non-empty array of strings")}
     end
   end
 

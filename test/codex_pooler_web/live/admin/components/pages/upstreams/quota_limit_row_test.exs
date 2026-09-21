@@ -25,9 +25,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
 
     expanded_document = LazyHTML.from_fragment(render_quota_row(%{limit | observations: entries}))
 
-    assert Enum.count(
-             LazyHTML.query(expanded_document, "[data-role='quota-observation']:not(.hidden)")
-           ) == 5
+    assert Enum.count(LazyHTML.query(expanded_document, "[data-role='quota-observation']:not(.hidden)")) == 5
 
     assert Enum.count(LazyHTML.query(expanded_document, "[data-extra-evidence='true'].hidden")) ==
              3
@@ -146,8 +144,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
           observations: [%{observation() | measurement_pending?: true}],
           measurement_pending?: true,
           measurement_pending_label: "Retained measurement awaits confirmation",
-          measurement_pending_detail:
-            "Retained measurement; newer provider measurement awaits confirmation",
+          measurement_pending_detail: "Retained measurement; newer provider measurement awaits confirmation",
           evidence_state: :fresh,
           meter_state: :current,
           reset_display_state: :absent,
@@ -276,8 +273,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
             evidence_state: evidence_state,
             meter_state: meter_state,
             freshness_label: if(evidence_state == :stale, do: "last reported", else: "current"),
-            observed_label:
-              if(evidence_state == :stale, do: "last reported", else: "observed at snapshot"),
+            observed_label: if(evidence_state == :stale, do: "last reported", else: "observed at snapshot"),
             reset_display_state: :absent,
             reset_semantics: :unknown
           }

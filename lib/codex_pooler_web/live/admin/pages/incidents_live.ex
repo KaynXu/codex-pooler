@@ -14,8 +14,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsLive do
       |> assign(
         page_title: "OpenAI incidents",
         incidents_page: OpenAIIncidentsReadModel.load(),
-        datetime_preferences:
-          DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
+        datetime_preferences: DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
       )
       |> Phoenix.LiveView.attach_hook(
         :openai_incidents_refresh,

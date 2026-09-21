@@ -69,8 +69,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataTest do
       {:legacy_true, %{"supports_reasoning_summaries" => true}, nil, true, true},
       {:legacy_false, %{"supports_reasoning_summaries" => false}, nil, false, true},
       {:legacy_malformed, %{"supports_reasoning_summaries" => "true"}, nil, nil, true},
-      {:nested_false, %{"upstream_model" => %{"supports_reasoning_summary_parameter" => false}},
-       false, nil, false}
+      {:nested_false, %{"upstream_model" => %{"supports_reasoning_summary_parameter" => false}}, false, nil, false}
     ]
 
     for {_case_label, metadata, current_value, legacy_value, capability?} <- cases do

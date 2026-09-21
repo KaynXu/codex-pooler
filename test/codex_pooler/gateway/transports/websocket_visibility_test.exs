@@ -89,8 +89,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [],
       payload: "{}",
-      timeouts:
-        RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
+      timeouts: RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
       request_id: fixture.request.id,
       attempt_id: fixture.attempt.id,
       frame_observer: observer,
@@ -266,14 +265,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
           url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
           headers: [],
           payload: "{}",
-          timeouts:
-            RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
+          timeouts: RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
           message_mapper: & &1,
           effective_serving_mode: "full",
           request_id: fixture.request.id,
           attempt_id: fixture.attempt.id,
-          frame_observer:
-            WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(fixture))
+          frame_observer: WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(fixture))
         })
 
       {result, owner}
@@ -476,9 +473,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
 
         CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
-        Repo.delete_all(
-          from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id
-        )
+        Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
       end)
     end)
 

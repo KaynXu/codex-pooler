@@ -27,8 +27,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
       upstream_assignment_fixture(pool, %{
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:blocked, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:blocked, as_of, 1)
         }
       })
 
@@ -50,8 +49,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
         metadata: %{
           "independent_spark_permission" => true,
           "independent_spark_permission_observed_at" => DateTime.to_iso8601(as_of),
-          "independent_spark_permission_reset_at" =>
-            as_of |> DateTime.add(6, :day) |> DateTime.to_iso8601(),
+          "independent_spark_permission_reset_at" => as_of |> DateTime.add(6, :day) |> DateTime.to_iso8601(),
           "rate_limit_allowed" => true,
           "rate_limit_reached" => false
         }
@@ -85,8 +83,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
         account_label: "Example Available Without Windows",
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -402,8 +399,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
            ]) ==
              %{
                label: "x1",
-               title:
-                 "last 5m: 20 tokens; previous 1h: 0 tokens; settled usage reported for 1 of 2 requests; 1 usage record missing",
+               title: "last 5m: 20 tokens; previous 1h: 0 tokens; settled usage reported for 1 of 2 requests; 1 usage record missing",
                usage_state: :partial,
                recent_requests: 2,
                known_request_count: 1,

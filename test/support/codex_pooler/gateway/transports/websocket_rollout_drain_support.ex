@@ -45,11 +45,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts,
-        name:
-          {:via, Registry,
-           {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}}
-      )
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
     end
 
     @impl GenServer
@@ -107,11 +103,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts,
-        name:
-          {:via, Registry,
-           {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}}
-      )
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
     end
 
     @impl GenServer
@@ -273,11 +265,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts,
-        name:
-          {:via, Registry,
-           {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}}
-      )
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
     end
 
     @spec complete_turn(pid()) :: :ok
@@ -348,11 +336,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     def start_link(opts) do
       key = Keyword.fetch!(opts, :key)
 
-      GenServer.start_link(__MODULE__, opts,
-        name:
-          {:via, Registry,
-           {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}}
-      )
+      GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry, key}})
     end
 
     @impl GenServer
@@ -437,9 +421,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
 
     File.write!(marker_path, "draining")
 
-    Application.put_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus,
-      drain_marker_path: marker_path
-    )
+    Application.put_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus, drain_marker_path: marker_path)
 
     ExUnit.Callbacks.on_exit(fn ->
       File.rm(marker_path)

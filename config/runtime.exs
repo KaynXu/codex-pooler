@@ -14,8 +14,7 @@ config :codex_pooler,
        CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
        mode: native_compaction_trace_mode
 
-config :codex_pooler, CodexPooler.Platform.OutboundHTTP,
-  proxy_config: CodexPooler.Platform.OutboundHTTP.proxy_config_from_env!()
+config :codex_pooler, CodexPooler.Platform.OutboundHTTP, proxy_config: CodexPooler.Platform.OutboundHTTP.proxy_config_from_env!()
 
 if System.get_env("PHX_SERVER") in ~w(true 1) do
   config :codex_pooler, CodexPoolerWeb.Endpoint, server: true
@@ -43,8 +42,7 @@ config :codex_pooler,
        :websocket_owner_forwarding_enabled,
        CodexPooler.Gateway.OperationalSettings.parse_websocket_owner_forwarding_env!()
 
-config :codex_pooler, CodexPooler.Gateway.OperationalStatus,
-  drain_marker_path: System.get_env("CODEX_POOLER_DRAIN_MARKER_PATH")
+config :codex_pooler, CodexPooler.Gateway.OperationalStatus, drain_marker_path: System.get_env("CODEX_POOLER_DRAIN_MARKER_PATH")
 
 if config_env() == :prod do
   database_url =

@@ -652,9 +652,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
       refute render(view) =~ "synthetic private prompt must not appear"
 
-      render_click(
-        element(view, "#request-log-detail-sidebar [aria-label='Close request details']")
-      )
+      render_click(element(view, "#request-log-detail-sidebar [aria-label='Close request details']"))
 
       assert_patch(view)
     end
@@ -807,9 +805,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     view
-    |> element(
-      "#request-log-upstream-filter [data-role='upstream-filter-option'][data-upstream-id='#{second_identity.id}']"
-    )
+    |> element("#request-log-upstream-filter [data-role='upstream-filter-option'][data-upstream-id='#{second_identity.id}']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?upstream_identity_id=#{second_identity.id}")
@@ -824,8 +820,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{first_request.id}")
   end
 
-  @tag slow:
-         "seeds a full 50-row page plus excluded history and verifies mounted filter choices across two pools"
+  @tag slow: "seeds a full 50-row page plus excluded history and verifies mounted filter choices across two pools"
   test "filter controls use custom selectors with status icons and table-derived models", %{
     conn: conn,
     scope: scope
@@ -941,9 +936,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     view
-    |> element(
-      "#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{second_pool.id}']"
-    )
+    |> element("#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{second_pool.id}']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?pool_id=#{second_pool.id}")
@@ -954,9 +947,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{failed_request.id}")
 
     view
-    |> element(
-      "#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{first_pool.id}']"
-    )
+    |> element("#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{first_pool.id}']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?pool_id=#{first_pool.id}")
@@ -1027,9 +1018,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     view
-    |> element(
-      "#request-log-model-filter [data-role='model-filter-option'][data-model='gpt-custom-failed']"
-    )
+    |> element("#request-log-model-filter [data-role='model-filter-option'][data-model='gpt-custom-failed']")
     |> render_click()
 
     _ = assert_patch(view)
@@ -1041,9 +1030,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{second_pool_request.id}")
 
     view
-    |> element(
-      "#request-log-status-filter [data-role='status-filter-option'][data-status='failed']"
-    )
+    |> element("#request-log-status-filter [data-role='status-filter-option'][data-status='failed']")
     |> render_click()
 
     _ = assert_patch(view)
@@ -1795,9 +1782,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         refute html =~ forbidden
       end
 
-      render_click(
-        element(view, "#request-log-detail-sidebar [aria-label='Close request details']")
-      )
+      render_click(element(view, "#request-log-detail-sidebar [aria-label='Close request details']"))
 
       assert_patch(view)
     end
@@ -3145,8 +3130,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
-  @tag slow:
-         "seeds fifty-one request lifecycles and exercises mounted pagination after a live arrival"
+  @tag slow: "seeds fifty-one request lifecycles and exercises mounted pagination after a live arrival"
   test "paging forward after a live refresh does not skip records admitted since the load", %{
     conn: conn,
     scope: scope
@@ -3623,11 +3607,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       attempt_fixture(request, assignment, %{
         status: Map.get(attrs, :attempt_status, "succeeded"),
         latency_ms: Map.get(attrs, :latency_ms),
-        usage_status:
-          Map.get(attrs, :attempt_usage_status, Map.get(attrs, :usage_status, "usage_known")),
+        usage_status: Map.get(attrs, :attempt_usage_status, Map.get(attrs, :usage_status, "usage_known")),
         upstream_status_code: Map.get(attrs, :response_status_code, 200),
-        network_error_code:
-          Map.get(attrs, :attempt_network_error_code, Map.get(attrs, :last_error_code)),
+        network_error_code: Map.get(attrs, :attempt_network_error_code, Map.get(attrs, :last_error_code)),
         response_metadata: Map.get(attrs, :attempt_response_metadata, %{})
       })
 
@@ -3641,8 +3623,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       output_tokens: Map.get(attrs, :output_tokens, 1),
       total_tokens: Map.get(attrs, :total_tokens, 2),
       settled_cost_micros: Map.get(attrs, :settled_cost_micros, 0),
-      usage_status:
-        Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known")),
+      usage_status: Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known")),
       details: Map.get(attrs, :settlement_details, %{})
     })
 

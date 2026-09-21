@@ -102,8 +102,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketOwnerRecoveryDrainTest do
 
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
-               accepted_turn_state:
-                 "recovery-drain-#{label}-#{System.unique_integer([:positive])}",
+               accepted_turn_state: "recovery-drain-#{label}-#{System.unique_integer([:positive])}",
                owner_instance_id: local_node_string
              })
 

@@ -424,8 +424,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         capture_repo_queries(fn ->
           [node_b_options, node_c_options] = request_options
 
-          {RoutingSessionContinuity.attach_codex_session(setup.auth, payload, node_b_options),
-           RoutingSessionContinuity.attach_codex_session(setup.auth, payload, node_c_options)}
+          {RoutingSessionContinuity.attach_codex_session(setup.auth, payload, node_b_options), RoutingSessionContinuity.attach_codex_session(setup.auth, payload, node_c_options)}
         end)
 
       [node_b_options, node_c_options] = request_options
@@ -553,9 +552,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         prompt_cache_order_ids(setup, remaining_candidates, prompt_cache_key)
 
       plan =
-        plan_for_prompt_cache(setup, "bridge_ring", "remaining-request", prompt_cache_key,
-          candidates: remaining_candidates
-        )
+        plan_for_prompt_cache(setup, "bridge_ring", "remaining-request", prompt_cache_key, candidates: remaining_candidates)
 
       refute dropped_id in candidate_ids(plan.candidates)
       assert candidate_ids(plan.candidates) == remaining_expected_ids
@@ -583,9 +580,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       expected_ids = prompt_cache_order_ids(setup, remaining_candidates, prompt_cache_key)
 
       plan =
-        plan_for_prompt_cache(setup, "bridge_ring", "filtered-request", prompt_cache_key,
-          candidates: remaining_candidates
-        )
+        plan_for_prompt_cache(setup, "bridge_ring", "filtered-request", prompt_cache_key, candidates: remaining_candidates)
 
       refute filtered_assignment.id in candidate_ids(plan.candidates)
       assert candidate_ids(plan.candidates) == expected_ids
@@ -616,9 +611,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       insert_affinity!(setup, sticky_assignment, sticky_identity, request_id)
 
       plan =
-        plan_for_prompt_cache(setup, "bridge_ring", "continuity-request", prompt_cache_key,
-          request_id: request_id
-        )
+        plan_for_prompt_cache(setup, "bridge_ring", "continuity-request", prompt_cache_key, request_id: request_id)
 
       assert plan.affinity.status == "hit"
       assert plan.selected_assignment_id == sticky_id
@@ -648,9 +641,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       refute prompt_preferred_id == hd(base_ids)
 
       plan =
-        plan_for_prompt_cache(setup, "bridge_ring", routing_seed, prompt_cache_key,
-          prompt_cache_affinity_enabled: false
-        )
+        plan_for_prompt_cache(setup, "bridge_ring", routing_seed, prompt_cache_key, prompt_cache_affinity_enabled: false)
 
       assert candidate_ids(plan.candidates) == base_ids
       assert plan.selected_assignment_id == hd(base_ids)
@@ -666,14 +657,10 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       expected_ids = prompt_cache_order_ids(setup, setup.candidates, prompt_cache_key)
 
       http_plan =
-        plan_for_prompt_cache(setup, "bridge_ring", "http-request", prompt_cache_key,
-          payload: %{"stream" => false}
-        )
+        plan_for_prompt_cache(setup, "bridge_ring", "http-request", prompt_cache_key, payload: %{"stream" => false})
 
       stream_plan =
-        plan_for_prompt_cache(setup, "bridge_ring", "stream-request", prompt_cache_key,
-          payload: %{"stream" => true}
-        )
+        plan_for_prompt_cache(setup, "bridge_ring", "stream-request", prompt_cache_key, payload: %{"stream" => true})
 
       assert http_plan.selected_assignment_id == hd(expected_ids)
       assert stream_plan.selected_assignment_id == hd(expected_ids)
@@ -779,8 +766,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert quota_first_plan.selected_assignment_id == requested_model_remaining.id
     end
 
-    @tag slow:
-           "persists four quota observations and two routing configurations around the real request snapshot"
+    @tag slow: "persists four quota observations and two routing configurations around the real request snapshot"
     test "quota_first and routing settings consume the request-local route-state snapshot" do
       setup = routing_setup(2)
       [snapshot_best, snapshot_worst] = setup.assignments
@@ -860,9 +846,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         put_test_quota_snapshots(route_state, snapshots, refreshed_at)
 
       refreshed_plan =
-        plan_for(setup, "quota_first", "quota-snapshot-boundary",
-          route_state: refreshed_route_state
-        )
+        plan_for(setup, "quota_first", "quota-snapshot-boundary", route_state: refreshed_route_state)
 
       assert refreshed_plan.selected_assignment_id == second_assignment.id
     end
@@ -947,9 +931,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       live_plan = quota_first_plan(setup, prepared_candidates, route_plan_input, seed)
 
       snapshot_plan =
-        quota_first_plan(setup, prepared_candidates, route_plan_input, seed,
-          route_state: route_state
-        )
+        quota_first_plan(setup, prepared_candidates, route_plan_input, seed, route_state: route_state)
 
       sweep_results =
         Enum.map(1..500, fn index ->
@@ -960,9 +942,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
             |> Map.fetch!(:selected_assignment_id)
 
           snapshot =
-            quota_first_plan(setup, prepared_candidates, route_plan_input, sweep_seed,
-              route_state: route_state
-            )
+            quota_first_plan(setup, prepared_candidates, route_plan_input, sweep_seed, route_state: route_state)
             |> Map.fetch!(:selected_assignment_id)
 
           %{seed: sweep_seed, live: live, snapshot: snapshot}
@@ -1001,8 +981,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       update_routing_settings!(setup.pool, "quota_first", 2)
 
       excluded_controls = [
-        {"stale", %{observed_at: DateTime.add(snapshot_at, -901, :second)},
-         reported_assignment.id},
+        {"stale", %{observed_at: DateTime.add(snapshot_at, -901, :second)}, reported_assignment.id},
         {"resetless", %{reset_at: nil}, reported_assignment.id},
         {"expired", %{reset_at: DateTime.add(snapshot_at, -1, :second)}, reported_assignment.id},
         {"active_limit_zero", %{active_limit: 0}, reported_assignment.id},
@@ -1027,9 +1006,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
           )
 
         plan =
-          quota_first_plan(setup, setup.candidates, route_plan_input, "#{seed}-#{label}",
-            route_state: route_state
-          )
+          quota_first_plan(setup, setup.candidates, route_plan_input, "#{seed}-#{label}", route_state: route_state)
 
         assert plan.selected_assignment_id == expected_assignment_id,
                "#{label} must stay out of capacity scoring"
@@ -1056,9 +1033,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         )
 
       monthly_plan =
-        quota_first_plan(setup, setup.candidates, route_plan_input, "#{seed}-monthly-primary",
-          route_state: monthly_route_state
-        )
+        quota_first_plan(setup, setup.candidates, route_plan_input, "#{seed}-monthly-primary", route_state: monthly_route_state)
 
       assert monthly_plan.selected_assignment_id == positive_assignment.id
     end
@@ -1130,9 +1105,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       insert_demotion!(setup, preferred_assignment, preferred_identity, "upstream_5xx")
 
       plan =
-        plan_for(setup, "bridge_ring", "session-preference-demotion",
-          session_assignment_id: preferred_assignment.id
-        )
+        plan_for(setup, "bridge_ring", "session-preference-demotion", session_assignment_id: preferred_assignment.id)
 
       assert List.last(candidate_ids(plan.candidates)) == preferred_assignment.id
       refute plan.selected_assignment_id == preferred_assignment.id
@@ -1248,9 +1221,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       after_planning = DateTime.utc_now()
 
       demotion =
-        insert_demotion!(setup, assignment, identity, "upstream_5xx",
-          now: DateTime.add(after_planning, 1, :millisecond)
-        )
+        insert_demotion!(setup, assignment, identity, "upstream_5xx", now: DateTime.add(after_planning, 1, :millisecond))
 
       assert DateTime.compare(demotion.updated_at, after_planning) == :gt
 
@@ -2108,9 +2079,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       preferred = Enum.at(setup.assignments, 2)
 
       plan =
-        plan_for(setup, "bridge_ring", "preference-pinned-key",
-          session_assignment_id: preferred.id
-        )
+        plan_for(setup, "bridge_ring", "preference-pinned-key", session_assignment_id: preferred.id)
 
       assert plan.request_metadata["session_preference_kind"] == "pinned"
       assert plan.request_metadata["session_preference_status"] == "applied"
@@ -2122,9 +2091,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       preferred = Enum.at(setup.assignments, 1)
 
       plan =
-        plan_for(setup, "bridge_ring", "preference-recreated-key",
-          recreated_from_assignment_id: preferred.id
-        )
+        plan_for(setup, "bridge_ring", "preference-recreated-key", recreated_from_assignment_id: preferred.id)
 
       # This is the shape that shipped as a no-op once and stayed invisible:
       # a replacement session carries its predecessor's account in memory only,
@@ -2139,9 +2106,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       absent_assignment_id = Ecto.UUID.generate()
 
       plan =
-        plan_for(setup, "bridge_ring", "preference-absent-key",
-          session_assignment_id: absent_assignment_id
-        )
+        plan_for(setup, "bridge_ring", "preference-absent-key", session_assignment_id: absent_assignment_id)
 
       # The distinction the whole key exists for: hoisting nothing must not read
       # the same as being honoured.
@@ -2208,8 +2173,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   defp routing_setup(candidate_count) do
     pool =
       pool_fixture(%{
-        slug:
-          "bridge-pool-#{System.unique_integer([:positive, :monotonic])}-#{System.os_time(:nanosecond)}"
+        slug: "bridge-pool-#{System.unique_integer([:positive, :monotonic])}-#{System.os_time(:nanosecond)}"
       })
 
     auth = active_api_key_fixture(pool)
@@ -2328,9 +2292,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
           from session in CodexSession,
             where: session.pool_id == ^auth.pool.id and session.api_key_id == ^auth.api_key.id,
             order_by: [asc: session.id],
-            select:
-              {session.id, session.status, session.owner_instance_id,
-               session.owner_lease_expires_at, session.updated_at}
+            select: {session.id, session.status, session.owner_instance_id, session.owner_lease_expires_at, session.updated_at}
         ),
       aliases:
         Repo.all(
@@ -2339,18 +2301,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
               alias_record.pool_id == ^auth.pool.id and
                 alias_record.api_key_id == ^auth.api_key.id,
             order_by: [asc: alias_record.id],
-            select:
-              {alias_record.id, alias_record.alias_kind, alias_record.status,
-               alias_record.updated_at}
+            select: {alias_record.id, alias_record.alias_kind, alias_record.status, alias_record.updated_at}
         ),
       owner_leases:
         Repo.all(
           from lease in BridgeOwnerLease,
             where: lease.pool_id == ^auth.pool.id and lease.api_key_id == ^auth.api_key.id,
             order_by: [asc: lease.id],
-            select:
-              {lease.id, lease.owner_instance_id, lease.status, lease.renewed_at,
-               lease.expires_at, lease.updated_at}
+            select: {lease.id, lease.owner_instance_id, lease.status, lease.renewed_at, lease.expires_at, lease.updated_at}
         )
     }
   end
@@ -2979,8 +2937,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
     snapshots =
       Map.new(windows_by_identity_id, fn {identity_id, windows} ->
-        {identity_id,
-         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+        {identity_id, RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
       end)
 
     RouteState.put_quota_snapshots(route_state, snapshots)

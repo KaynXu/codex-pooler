@@ -1115,8 +1115,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            upstream_invalidator: Map.get(upstream, :invalidate, &invalidate_owner_upstream/1),
            downstream_sender: Keyword.get(opts, :downstream_sender, &send_downstream_message/2),
            monotonic_now_ms: monotonic_now_ms,
-           replay_suspender:
-             Keyword.get(opts, :replay_suspender, &CodexPooler.Accounting.arm_request_replay/1),
+           replay_suspender: Keyword.get(opts, :replay_suspender, &CodexPooler.Accounting.arm_request_replay/1),
            replay_status_reader:
              Keyword.get(
                opts,
@@ -1252,8 +1251,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   else
     def handle_call(
-          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization,
-           _restorer},
+          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization, _restorer},
           _from,
           state
         ),
@@ -1725,8 +1723,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         visible_output?: false,
         upstream_pid: state.upstream_pid,
         admission_phase: admission_phase,
-        first_compact_request_identity:
-          NativeCompactionAdmission.FirstCompactResult.request_identity(upstream_payload),
+        first_compact_request_identity: NativeCompactionAdmission.FirstCompactResult.request_identity(upstream_payload),
         ordinary_request_identity: ordinary_request_identity(upstream_payload),
         task_settled?: false,
         submitter_exited?: false,
@@ -2068,8 +2065,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_info(
-        {:websocket_owner_upstream_frame, ref, _payload,
-         %TerminalDiscriminator{} = _discriminator},
+        {:websocket_owner_upstream_frame, ref, _payload, %TerminalDiscriminator{} = _discriminator},
         %{active_turn: %{ref: ref, collect?: true}} = state
       ) do
     {:noreply, state}
@@ -2113,8 +2109,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_info(
-        {:websocket_owner_output_commit_ack, _correlation_id, _epoch, _owner_turn_id,
-         _active_turn_ref, _probe_ref, _committed?} = message,
+        {:websocket_owner_output_commit_ack, _correlation_id, _epoch, _owner_turn_id, _active_turn_ref, _probe_ref, _committed?} = message,
         %{active_turn: %{output_commit_probe: probe}} = state
       )
       when is_map(probe) do
@@ -2346,8 +2341,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_info({:websocket_owner_replay_reconcile, _token}, state), do: {:noreply, state}
 
   def handle_info(:idle_shutdown, %{downstream: nil, active_turn: nil} = state) do
-    {:stop, :normal,
-     %{state | idle_shutdown_ref: nil, draining?: true, owner_exit_cause: :idle_expiry}}
+    {:stop, :normal, %{state | idle_shutdown_ref: nil, draining?: true, owner_exit_cause: :idle_expiry}}
   end
 
   def handle_info(:idle_shutdown, state) do
@@ -2365,8 +2359,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:error, reason} when reason in [:stale_owner, :owner_unavailable] ->
         Logger.owner_renewal_stale(reason, state)
 
-        {:stop, {:shutdown, :stale_owner},
-         state |> clear_native_compaction_admission() |> Map.put(:draining?, true)}
+        {:stop, {:shutdown, :stale_owner}, state |> clear_native_compaction_admission() |> Map.put(:draining?, true)}
 
       {:error, reason} ->
         Logger.owner_renewal_failed(reason, state)
@@ -2923,8 +2916,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           binding: %{receipt.binding | topology: topology}
       }
 
-      {{:ok, Map.put(result, :first_compact_result, receipt)},
-       %{state | first_compact_result: receipt}}
+      {{:ok, Map.put(result, :first_compact_result, receipt)}, %{state | first_compact_result: receipt}}
     else
       {{:ok, Map.delete(result, :first_compact_result)}, state}
     end
@@ -2947,8 +2939,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
       receipt = %{receipt | owner: self(), result_ref: make_ref(), topology: topology}
 
-      {{:ok, Map.put(result, :ordinary_success_result, receipt)},
-       %{state | ordinary_success_result: receipt}}
+      {{:ok, Map.put(result, :ordinary_success_result, receipt)}, %{state | ordinary_success_result: receipt}}
     else
       {{:ok, Map.delete(result, :ordinary_success_result)}, state}
     end
@@ -3126,8 +3117,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     probe_ref = make_ref()
 
     probe =
-      {:websocket_owner_output_commit_probe, downstream.correlation_id, downstream.epoch,
-       downstream.owner_turn_id, active_turn_ref, self(), probe_ref}
+      {:websocket_owner_output_commit_probe, downstream.correlation_id, downstream.epoch, downstream.owner_turn_id, active_turn_ref, self(), probe_ref}
 
     # The timer only bounds a live downstream that never acks. A downstream
     # that is provably gone (monitor DOWN, detach, or a reconnect on a newer
@@ -3189,9 +3179,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     clear_active_turn(state)
   end
 
-  defp settle_probe_before_reconnect(
-         %{active_turn: %{output_commit_probe: %{result: result}}} = state
-       ) do
+  defp settle_probe_before_reconnect(%{active_turn: %{output_commit_probe: %{result: result}}} = state) do
     settle_active_turn_without_downstream_delivery(state, result)
   end
 
@@ -3255,8 +3243,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     pending = %{pending | status: :ready}
 
     message =
-      {:websocket_owner_handoff_ready, pending.correlation_id, pending.epoch,
-       pending.owner_turn_id, pending.pid, pending.control_ref}
+      {:websocket_owner_handoff_ready, pending.correlation_id, pending.epoch, pending.owner_turn_id, pending.pid, pending.control_ref}
 
     _result = state.callbacks.downstream_sender.(pending.pid, message)
     %{state | active_turn: nil, pending_handoff: pending}
@@ -3310,8 +3297,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp fail_pending_handoff(%{pending_handoff: pending} = state, reason) do
     message =
-      {:websocket_owner_handoff_failed, pending.correlation_id, pending.epoch,
-       pending.owner_turn_id, pending.pid, pending.control_ref, reason}
+      {:websocket_owner_handoff_failed, pending.correlation_id, pending.epoch, pending.owner_turn_id, pending.pid, pending.control_ref, reason}
 
     _result = state.callbacks.downstream_sender.(pending.pid, message)
     clear_pending_handoff(state)
@@ -3409,8 +3395,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp take_next_turn_descriptor(
          %{
-           next_turn_descriptor:
-             %{downstream: expected, semantic_turn_key: semantic_turn_key} = next
+           next_turn_descriptor: %{downstream: expected, semantic_turn_key: semantic_turn_key} = next
          } =
            state,
          downstream,
@@ -3571,9 +3556,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         | epoch: DownstreamState.next_downstream_epoch(state.downstream_epoch)
       }
 
-      {:ok,
-       {:provisional, suspended.provisional_token, 1, suspended.owner_process_generation,
-        downstream},
+      {:ok, {:provisional, suspended.provisional_token, 1, suspended.owner_process_generation, downstream},
        state
        |> put_in([Access.key(:suspended_replay), Access.key(:downstream)], downstream)
        |> attach_provisional_downstream(downstream)}
@@ -3593,9 +3576,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         | epoch: DownstreamState.next_downstream_epoch(state.downstream_epoch)
       }
 
-      {:ok,
-       {:provisional, suspended.provisional_token, 1, suspended.owner_process_generation,
-        downstream},
+      {:ok, {:provisional, suspended.provisional_token, 1, suspended.owner_process_generation, downstream},
        state
        |> put_in([Access.key(:suspended_replay), Access.key(:downstream)], downstream)
        |> attach_provisional_downstream(downstream)}
@@ -3616,9 +3597,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:error, :owner_busy}
 
       suspended.provisional_status == :consume_reserved ->
-        {:ok,
-         {:consume_reserved, suspended.reserve_timeout_ms, suspended.reserve_receipt,
-          suspended.reserve_receipt_digest}, state}
+        {:ok, {:consume_reserved, suspended.reserve_timeout_ms, suspended.reserve_receipt, suspended.reserve_receipt_digest}, state}
 
       suspended.provisional_status == :provisional and
           reserve_now_ms < suspended.deadline_ms ->
@@ -3649,8 +3628,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
           next_state = schedule_replay_reconciliation(%{state | suspended_replay: suspended})
 
-          {:ok, {:consume_reserved, reserve_timeout_ms, reserve_receipt, reserve_receipt_digest},
-           next_state}
+          {:ok, {:consume_reserved, reserve_timeout_ms, reserve_receipt, reserve_receipt_digest}, next_state}
         else
           {:error, :owner_busy}
         end
@@ -3862,9 +3840,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     |> Map.put(:suspended_replay, nil)
   end
 
-  defp reconcile_disconnected_provisional(
-         %{suspended_replay: %{provisional_status: status} = suspended} = state
-       )
+  defp reconcile_disconnected_provisional(%{suspended_replay: %{provisional_status: status} = suspended} = state)
        when status in [:provisional, :consume_reserved] do
     suspended =
       suspended
@@ -4283,9 +4259,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp settle_terminal_winner(state), do: state
 
-  defp complete_terminal_winner_detach(
-         %{terminal_winner_detach: %{reply_to: reply_to, downstream: downstream}} = state
-       ) do
+  defp complete_terminal_winner_detach(%{terminal_winner_detach: %{reply_to: reply_to, downstream: downstream}} = state) do
     GenServer.reply(reply_to, :ok)
 
     state

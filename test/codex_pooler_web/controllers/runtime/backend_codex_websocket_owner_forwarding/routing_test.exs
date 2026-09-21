@@ -92,9 +92,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
     setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
 
     second =
-      gateway_upstream(setup.pool, upstream, "upstream-token-owner-model-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, upstream, "upstream-token-owner-model-fallback", compact?: false)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -597,8 +595,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
 
       assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
-      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
-                      :remote_submit_request_v1},
+      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref, :remote_submit_request_v1},
                      1_000
 
       try do
@@ -723,9 +720,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
       assert MapSet.size(state.tasks) == 0
 
       fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback", compact?: false)
 
       prime_routing_quota!(fallback.identity)
       _model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
@@ -822,8 +817,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RoutingTes
       {:path_json,
        %{
          "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-         "/api/codex/usage" =>
-           {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+         "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
        }}
     )
   end

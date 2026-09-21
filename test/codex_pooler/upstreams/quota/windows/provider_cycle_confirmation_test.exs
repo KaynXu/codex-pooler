@@ -95,14 +95,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
       incoming_at = ~U[2026-07-22 01:14:00Z]
       incoming_reset = DateTime.add(accepted_reset, drift_seconds, :second)
 
-      provider_row!(identity, accepted_at, "0", accepted_reset,
-        provider_at: ~U[2026-07-21 17:06:01Z]
-      )
+      provider_row!(identity, accepted_at, "0", accepted_reset, provider_at: ~U[2026-07-21 17:06:01Z])
 
       assert {:ok, _row} =
-               record_provider(identity, incoming_at, "0", incoming_reset,
-                 provider_at: incoming_at
-               )
+               record_provider(identity, incoming_at, "0", incoming_reset, provider_at: incoming_at)
 
       row = provider_row(identity)
 
@@ -137,9 +133,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
     provider_row!(identity, accepted_at, "0", accepted_reset, provider_at: accepted_at)
 
     assert {:ok, _row} =
-             record_provider(identity, incoming_at, "0", incoming_reset,
-               provider_at: DateTime.add(incoming_at, 1, :second)
-             )
+             record_provider(identity, incoming_at, "0", incoming_reset, provider_at: DateTime.add(incoming_at, 1, :second))
 
     unchanged = provider_row(identity)
     assert DateTime.compare(unchanged.reset_at, accepted_reset) == :eq
@@ -157,9 +151,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
       provider_row!(candidate_identity, canonical_at, "54", @old_reset)
 
       assert {:ok, _row} =
-               record_provider(candidate_identity, candidate_at, "0", @new_reset,
-                 provider_at: provider_at
-               )
+               record_provider(candidate_identity, candidate_at, "0", @new_reset, provider_at: provider_at)
 
       candidate_row = provider_row(candidate_identity)
 
@@ -177,17 +169,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
     provider_row!(confirmation_identity, canonical_at, "54", @old_reset)
 
     assert {:ok, _row} =
-             record_provider(confirmation_identity, candidate_at, "0", @new_reset,
-               provider_at: candidate_at
-             )
+             record_provider(confirmation_identity, candidate_at, "0", @new_reset, provider_at: candidate_at)
 
     assert {:ok, _candidate} =
              EvidenceStore.parse_candidate(provider_row(confirmation_identity).metadata)
 
     assert {:ok, _row} =
-             record_provider(confirmation_identity, confirmed_at, "0", @new_reset,
-               provider_at: DateTime.add(confirmed_at, 1, :microsecond)
-             )
+             record_provider(confirmation_identity, confirmed_at, "0", @new_reset, provider_at: DateTime.add(confirmed_at, 1, :microsecond))
 
     unconfirmed = provider_row(confirmation_identity)
     assert Decimal.equal?(unconfirmed.used_percent, Decimal.new("54"))
@@ -217,9 +205,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
       capture_quota_cycle_events(fn ->
         capture_info_log(fn ->
           assert {:ok, _row} =
-                   record_provider(identity, incoming_at, "0", incoming_reset,
-                     provider_at: incoming_at
-                   )
+                   record_provider(identity, incoming_at, "0", incoming_reset, provider_at: incoming_at)
         end)
       end)
 
@@ -290,9 +276,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
       row |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
 
       assert {:ok, _row} =
-               record_provider(identity, incoming_at, "0", incoming_reset,
-                 provider_at: incoming_at
-               )
+               record_provider(identity, incoming_at, "0", incoming_reset, provider_at: incoming_at)
 
       maintained = provider_row(identity)
 

@@ -145,8 +145,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         {:error, Error.invalid_request("legacy functions are not translatable", "functions")}
 
       Map.has_key?(payload, "function_call") ->
-        {:error,
-         Error.invalid_request("legacy function_call is not translatable", "function_call")}
+        {:error, Error.invalid_request("legacy function_call is not translatable", "function_call")}
 
       true ->
         :ok
@@ -262,8 +261,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         :ok
 
       [key | _rest] ->
-        {:error,
-         Error.invalid_request("stream_options field is not supported", "stream_options." <> key)}
+        {:error, Error.invalid_request("stream_options field is not supported", "stream_options." <> key)}
     end
   end
 
@@ -518,9 +516,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp assistant_tool_call_items(tool_calls),
     do: Enum.map(tool_calls, &assistant_tool_call_item/1)
 
-  defp assistant_tool_call_item(
-         %{"function" => %{"name" => name, "arguments" => arguments}} = item
-       ) do
+  defp assistant_tool_call_item(%{"function" => %{"name" => name, "arguments" => arguments}} = item) do
     %{
       "type" => "function_call",
       "call_id" => assistant_tool_call_id(item),
@@ -611,8 +607,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     if content
        |> content_parts()
        |> Enum.any?(&marked_text_content_part?/1) do
-      {:error,
-       Error.invalid_request("assistant prompt_cache_breakpoint is not translatable", "input")}
+      {:error, Error.invalid_request("assistant prompt_cache_breakpoint is not translatable", "input")}
     end
   end
 
@@ -620,8 +615,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     if content
        |> content_parts()
        |> Enum.any?(&marked_input_audio_content_part?/1) do
-      {:error,
-       Error.invalid_request("input_audio prompt_cache_breakpoint is not translatable", "input")}
+      {:error, Error.invalid_request("input_audio prompt_cache_breakpoint is not translatable", "input")}
     end
   end
 
@@ -664,9 +658,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp valid_assistant_tool_calls?(tool_calls),
     do: Enum.all?(tool_calls, &valid_assistant_tool_call?/1)
 
-  defp valid_assistant_tool_call?(
-         %{"function" => %{"name" => name, "arguments" => arguments}} = item
-       )
+  defp valid_assistant_tool_call?(%{"function" => %{"name" => name, "arguments" => arguments}} = item)
        when is_binary(name) and name != "" and is_binary(arguments) do
     assistant_tool_call_id(item) != nil
   end
@@ -905,8 +897,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         {:ok, Map.put(acc, "text", %{"format" => Map.put(schema, "type", "json_schema")})}
 
       %{"type" => "json_schema"} ->
-        {:error,
-         Error.invalid_request("response_format json_schema must be an object", "response_format")}
+        {:error, Error.invalid_request("response_format json_schema must be an object", "response_format")}
 
       %{"type" => "text"} ->
         {:ok, Map.put(acc, "text", %{"format" => %{"type" => "text"}})}

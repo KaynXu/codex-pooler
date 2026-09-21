@@ -233,8 +233,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                "encrypted_content" => "synthetic-reasoning-content"
              }
            }},
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => compact_item}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -294,8 +293,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => alias_item}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => alias_item}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -334,10 +332,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => canonical}},
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => alias_item}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => canonical}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => alias_item}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -384,8 +380,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       upstream =
         start_upstream(
           FakeUpstream.sse_stream([
-            {"response.output_item.done",
-             %{"type" => "response.output_item.done", "item" => compact_item}},
+            {"response.output_item.done", %{"type" => "response.output_item.done", "item" => compact_item}},
             {"response.completed",
              %{
                "type" => "response.completed",
@@ -495,8 +490,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         start_upstream(
           FakeUpstream.sse_stream(
             [
-              {"response.output_item.done",
-               %{"type" => "response.output_item.done", "item" => compact_item}},
+              {"response.output_item.done", %{"type" => "response.output_item.done", "item" => compact_item}},
               "event: response.completed\ndata: #{CodexPooler.JSON.encode!(compact_completion)}"
             ],
             done: false
@@ -599,8 +593,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_item.done",
-             %{"type" => "response.output_item.done", "item" => compact_item}},
+            {"response.output_item.done", %{"type" => "response.output_item.done", "item" => compact_item}},
             {"response.completed", completed},
             "event: response.output_text.delta\ndata: #{CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta", "delta" => "synthetic-post-terminal"})}"
           ],
@@ -646,8 +639,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => compact_item}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -693,12 +685,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     metadata_cases = [
       {"legacy_absent", nil},
       {"malformed", %{"x-codex-turn-metadata" => "{malformed"}},
-      {"non_object",
-       %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(["not", "an", "object"])}},
+      {"non_object", %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(["not", "an", "object"])}},
       {"wrong_implementation",
        %{
-         "x-codex-turn-metadata" =>
-           CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
+         "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
        }}
     ]
 
@@ -773,8 +763,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => source_item}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => source_item}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -794,8 +783,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" =>
-          visible_input("synthetic malformed metadata compact") ++ [compaction_trigger()],
+        "input" => visible_input("synthetic malformed metadata compact") ++ [compaction_trigger()],
         "stream" => true,
         "client_metadata" => %{
           "x-codex-turn-metadata" =>
@@ -829,8 +817,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_item.done",
-           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => compact_item}},
           {"response.done",
            %{
              "type" => "response.done",
@@ -1275,10 +1262,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   @tag :model_serving_modes
   test "Full compact rejects empty history before provider dispatch", %{conn: conn} do
     upstream =
-      start_upstream(
-        {:json_error, 400,
-         %{"error" => %{"code" => "synthetic_empty_history", "message" => "synthetic"}}}
-      )
+      start_upstream({:json_error, 400, %{"error" => %{"code" => "synthetic_empty_history", "message" => "synthetic"}}})
 
     setup = gateway_setup(upstream, compact?: true)
     put_compact_model_serving_mode!(setup, "full")
@@ -1733,8 +1717,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
           }
         },
         raw_sentinel,
-        expected_diagnostics:
-          {DiagnosticTaxonomy.identifier(malformed_code), "response.failed", nil}
+        expected_diagnostics: {DiagnosticTaxonomy.identifier(malformed_code), "response.failed", nil}
       )
 
     assert result.attempt.response_metadata["upstream_error_code"] =~
@@ -1901,10 +1884,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       {"tools", "not-an-array", "tools", "tools must be an array"},
       {"tools", nil, "tools", "tools must be an array"},
       {"tools", %{}, "tools", "tools must be an array"},
-      {"parallel_tool_calls", "not-a-boolean", "parallel_tool_calls",
-       "parallel_tool_calls must be a boolean"},
-      {"parallel_tool_calls", nil, "parallel_tool_calls",
-       "parallel_tool_calls must be a boolean"},
+      {"parallel_tool_calls", "not-a-boolean", "parallel_tool_calls", "parallel_tool_calls must be a boolean"},
+      {"parallel_tool_calls", nil, "parallel_tool_calls", "parallel_tool_calls must be a boolean"},
       {"parallel_tool_calls", [], "parallel_tool_calls", "parallel_tool_calls must be a boolean"},
       {"text", "not-an-object", "text", "text must be an object"},
       {"text", nil, "text", "text must be an object"},
@@ -1916,8 +1897,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       setup = gateway_setup(upstream, compact?: true)
 
       for {path, input} <- [
-            {"/backend-api/codex/responses",
-             visible_input("compact bridge validation") ++ [compaction_trigger()]},
+            {"/backend-api/codex/responses", visible_input("compact bridge validation") ++ [compaction_trigger()]},
             {"/backend-api/codex/responses/compact", visible_input("direct compact validation")}
           ] do
         response =
@@ -2014,8 +1994,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     shapes = [
       {"output_compaction", :output, "compaction", "cmp_output_current", "turn-output-current"},
-      {"output_summary", :output, "compaction_summary", "legacy item id / 1",
-       "\tlegacy turn id\n"},
+      {"output_summary", :output, "compaction_summary", "legacy item id / 1", "\tlegacy turn id\n"},
       {"top_level_summary", :top_level, "compaction_summary", "", ""}
     ]
 
@@ -2178,11 +2157,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   } do
     cases = [
       {"missing", %{}, %{}},
-      {"nil", %{"id" => nil, "internal_chat_message_metadata_passthrough" => %{"turn_id" => nil}},
-       %{}},
-      {"non_string",
-       %{"id" => 17, "internal_chat_message_metadata_passthrough" => %{"turn_id" => ["bad"]}},
-       %{}},
+      {"nil", %{"id" => nil, "internal_chat_message_metadata_passthrough" => %{"turn_id" => nil}}, %{}},
+      {"non_string", %{"id" => 17, "internal_chat_message_metadata_passthrough" => %{"turn_id" => ["bad"]}}, %{}},
       {"missing_turn",
        %{
          "id" => "cmp-missing-turn",
@@ -2193,9 +2169,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
          "id" => nil,
          "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-without-id"}
        }, %{"internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-without-id"}}},
-      {"empty_strings",
-       %{"id" => "", "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}},
-       %{"id" => "", "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}}},
+      {"empty_strings", %{"id" => "", "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}}, %{"id" => "", "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}}},
       {"legacy_strings",
        %{
          "id" => " legacy item id ",
@@ -2532,8 +2506,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" =>
-          visible_input("synthetic V2 compact terminal trigger") ++ [compaction_trigger()],
+        "input" => visible_input("synthetic V2 compact terminal trigger") ++ [compaction_trigger()],
         "stream" => true,
         "client_metadata" => %{"x-codex-turn-metadata" => v2_turn_metadata}
       })
@@ -2607,9 +2580,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
              attempt.response_metadata["upstream_error_param"],
              attempt.response_metadata["compaction_invalid_reason"]
            } ==
-             {"failed", "invalid_compaction_response", "failed", "invalid_compaction_response",
-              elem(expected_diagnostics, 0), elem(expected_diagnostics, 1),
-              elem(expected_diagnostics, 2), "provider_failure"}
+             {"failed", "invalid_compaction_response", "failed", "invalid_compaction_response", elem(expected_diagnostics, 0), elem(expected_diagnostics, 1), elem(expected_diagnostics, 2), "provider_failure"}
 
     %{attempt: attempt, request: request, response: response, settlement: settlement}
   end

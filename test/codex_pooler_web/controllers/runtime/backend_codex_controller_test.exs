@@ -601,8 +601,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [denied_assignment.id],
           "source_assignment_models" => %{
-            denied_assignment.id =>
-              pristine_catalog_source("gpt-backend-policy-denied-etag", "policy-denied")
+            denied_assignment.id => pristine_catalog_source("gpt-backend-policy-denied-etag", "policy-denied")
           }
         }
       })
@@ -675,8 +674,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         source_assignment_count: 3,
         metadata: %{
           "upstream_model" => %{"description" => "lossy aggregate must not emit"},
-          "source_assignment_ids" =>
-            Enum.sort([setup.assignment.id, matching_assignment.id, divergent_assignment.id]),
+          "source_assignment_ids" => Enum.sort([setup.assignment.id, matching_assignment.id, divergent_assignment.id]),
           "source_assignment_models" => %{
             setup.assignment.id => source,
             matching_assignment.id => source,
@@ -782,8 +780,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [hidden_assignment.id],
           "source_assignment_models" => %{
-            hidden_assignment.id =>
-              pristine_catalog_source("gpt-hidden-serving-mode", "hidden-serving-mode")
+            hidden_assignment.id => pristine_catalog_source("gpt-hidden-serving-mode", "hidden-serving-mode")
           }
         }
       })
@@ -848,8 +845,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       stream? <- [false, true] do
     @tag :model_serving_modes
     @tag mode_path: path, mode_kind: kind, mode_stream: stream?
-    test "backend response alias #{path} keeps the selected Pool model mode with stream=#{stream?}",
-         %{conn: conn, mode_path: path, mode_kind: kind, mode_stream: stream?} do
+    test "backend response alias #{path} keeps the selected Pool model mode with stream=#{stream?}", %{conn: conn, mode_path: path, mode_kind: kind, mode_stream: stream?} do
       upstream = start_upstream(backend_mode_matrix_upstream(kind, stream?))
       setup = gateway_setup(upstream)
       payload = backend_mode_matrix_payload(setup, kind, stream?)
@@ -1010,9 +1006,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(first_upstream, exposed_model_id: "gpt-mode-failover")
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback", compact?: false)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -1208,9 +1202,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(rejecting_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-full-rejection-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-full-rejection-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -1927,8 +1919,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [allowed_assignment.id],
           "source_assignment_models" => %{
-            allowed_assignment.id =>
-              pristine_catalog_source("gpt-backend-visible-allowed", "policy-allowed")
+            allowed_assignment.id => pristine_catalog_source("gpt-backend-visible-allowed", "policy-allowed")
           }
         }
       })
@@ -1946,8 +1937,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [hidden_assignment.id],
           "source_assignment_models" => %{
-            hidden_assignment.id =>
-              pristine_catalog_source("gpt-backend-policy-hidden", "policy-hidden")
+            hidden_assignment.id => pristine_catalog_source("gpt-backend-policy-hidden", "policy-hidden")
           }
         }
       })
@@ -2837,9 +2827,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "GET /backend-api/codex/models derives short context window from pricing", %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{model_context_window_overrides: %{}}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{model_context_window_overrides: %{}})
 
     on_exit(fn ->
       if previous_env,
@@ -2874,9 +2862,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "GET /backend-api/codex/models promotes long context window from pricing", %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{model_context_window_overrides: %{}}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{model_context_window_overrides: %{}})
 
     on_exit(fn ->
       if previous_env,
@@ -4538,8 +4524,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert terminal == %{
              "error" => %{
-               "message" =>
-                 "upstream request failed: stream interrupted before terminal response event",
+               "message" => "upstream request failed: stream interrupted before terminal response event",
                "type" => "server_error",
                "code" => "server_error",
                "param" => nil
@@ -5622,9 +5607,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       end
 
       assert [parent, fork, resumed] =
-               Repo.all(
-                 from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at)
-               )
+               Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at))
 
       parent_session = parent.request_metadata["codex_session_id"]
       fork_session = fork.request_metadata["codex_session_id"]
@@ -5708,9 +5691,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     release_ref = make_ref()
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     setup = gateway_setup(upstream)
 
@@ -6026,9 +6007,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              })
 
     success =
-      gateway_upstream(setup.pool, success_upstream, "upstream-token-transport-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, success_upstream, "upstream-token-transport-fallback", compact?: false)
 
     prime_routing_quota!(success.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -6113,9 +6092,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     release_ref = make_ref()
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -6183,9 +6160,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     release_ref = make_ref()
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref))
 
     fallback_upstream =
       start_upstream(
@@ -6204,9 +6179,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-silent-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-silent-fallback", compact?: false)
 
     setup =
       setup
@@ -6250,8 +6223,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute stream_conn.resp_body =~ "[DONE]"
     refute stream_conn.resp_body =~ "resp_silent_fallback_should_not_run"
 
-    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid, ^release_ref},
                    1_000
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -6290,9 +6262,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-partial-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-partial-fallback", compact?: false)
 
     setup =
       setup
@@ -7503,8 +7473,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         byte_size: 9,
         status: "expired",
         finalize_status: "succeeded",
-        expires_at:
-          DateTime.add(DateTime.utc_now() |> DateTime.truncate(:microsecond), -60, :second)
+        expires_at: DateTime.add(DateTime.utc_now() |> DateTime.truncate(:microsecond), -60, :second)
       ).file_id
 
     expired_conn =
@@ -7636,8 +7605,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
          "previous_response_id" => previous_response_id,
          "input" => visible_input
        }},
-      {"header previous response", [{"x-codex-previous-response-id", previous_response_id}],
-       %{"input" => visible_input}},
+      {"header previous response", [{"x-codex-previous-response-id", previous_response_id}], %{"input" => visible_input}},
       {"tool result continuation", [],
        %{
          "previous_response_id" => previous_response_id,
@@ -7735,10 +7703,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured.json, "previous_response_id")
 
     metadata_text =
-      inspect(
-        {fresh_request.request_metadata, fresh_attempt.response_metadata,
-         RequestLogs.list(setup.pool)}
-      )
+      inspect({fresh_request.request_metadata, fresh_attempt.response_metadata, RequestLogs.list(setup.pool)})
 
     refute metadata_text =~ previous_response_id
     refute metadata_text =~ "visible pinned reauth context must not persist"
@@ -7854,8 +7819,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = %{
       setup
-      | model:
-          put_model_source_assignments!(setup.model, [setup.assignment, alternate.assignment])
+      | model: put_model_source_assignments!(setup.model, [setup.assignment, alternate.assignment])
     }
 
     use_routing_strategy!(setup.pool, "bridge_ring", 1)
@@ -7953,9 +7917,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(retryable_upstream)
 
     shortlisted_success =
-      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted", compact?: false)
 
     excluded =
       gateway_upstream(setup.pool, excluded_upstream, "upstream-token-excluded", compact?: false)
@@ -8061,9 +8023,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
 
       second =
-        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-fallback", compact?: false)
 
       prime_routing_quota!(second.identity)
       use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8179,9 +8139,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
 
       second =
-        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-status-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-status-fallback", compact?: false)
 
       prime_routing_quota!(second.identity)
       use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8349,9 +8307,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-hard-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-hard-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8421,9 +8377,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-provenance-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-provenance-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8493,9 +8447,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-model-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-model-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8623,9 +8575,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(first_upstream, compact?: true, exposed_model_id: "gpt-example-luna")
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-compact-model-fallback",
-        compact?: true
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-compact-model-fallback", compact?: true)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8698,9 +8648,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     alternate =
-      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-prompt-cache-alternate",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-prompt-cache-alternate", compact?: false)
 
     prime_routing_quota!(alternate.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8827,9 +8775,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     sibling =
-      gateway_upstream(setup.pool, sibling_upstream, "synthetic-current-reasoning-sibling-token",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, sibling_upstream, "synthetic-current-reasoning-sibling-token", compact?: false)
 
     prime_routing_quota!(sibling.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8897,9 +8843,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(retryable_upstream)
 
     shortlisted_success =
-      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted", compact?: false)
 
     excluded =
       gateway_upstream(setup.pool, excluded_upstream, "upstream-token-excluded", compact?: false)
@@ -8989,9 +8933,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(older_success_upstream)
 
     newer_success =
-      gateway_upstream(setup.pool, newer_success_upstream, "upstream-token-newer",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, newer_success_upstream, "upstream-token-newer", compact?: false)
 
     prime_routing_quota!(newer_success.identity)
 
@@ -9153,19 +9095,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(high_usage_upstream, quota?: false)
 
     lower_usage =
-      gateway_upstream(setup.pool, lower_usage_upstream, "upstream-token-lower-usage",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, lower_usage_upstream, "upstream-token-lower-usage", compact?: false)
 
     exhausted =
-      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted-quota",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted-quota", compact?: false)
 
     resetless =
-      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless-quota",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless-quota", compact?: false)
 
     prime_routing_quota!(setup.identity, %{used_percent: Decimal.new("90")})
     prime_routing_quota!(lower_usage.identity, %{used_percent: Decimal.new("10")})
@@ -9260,14 +9196,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(retryable_upstream)
 
     shortlisted_success =
-      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-sse-shortlisted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-sse-shortlisted", compact?: false)
 
     excluded =
-      gateway_upstream(setup.pool, excluded_upstream, "upstream-token-sse-excluded",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, excluded_upstream, "upstream-token-sse-excluded", compact?: false)
 
     prime_routing_quota!(shortlisted_success.identity)
     prime_routing_quota!(excluded.identity)
@@ -9487,9 +9419,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   } do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -9598,10 +9528,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert [failed_attempt, successful_attempt] =
                Repo.all(
                  from(a in Attempt,
-                   where:
-                     a.request_id in subquery(
-                       from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id)
-                     ),
+                   where: a.request_id in subquery(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id)),
                    order_by: [asc: a.attempt_number]
                  )
                )
@@ -9878,8 +9805,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           retry_preamble_event("response.created", first_id),
           retry_preamble_event("response.in_progress", first_id),
           first_event_terminal_payload("response.failed", "server_error"),
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "late-first"}}
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "late-first"}}
         ],
         barrier_after: 3,
         done: false,
@@ -9961,9 +9887,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              from(entry in LedgerEntry,
                where:
                  entry.entry_kind == "settlement" and
-                   entry.request_id in subquery(
-                     from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id)
-                   )
+                   entry.request_id in subquery(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id))
              ),
              :count
            ) == 1
@@ -10009,10 +9933,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.retry_count == 1
     assert request.usage_status == "usage_unknown"
 
-    refute inspect(
-             {request.request_metadata, first_attempt.response_metadata,
-              second_attempt.response_metadata}
-           ) =~
+    refute inspect({request.request_metadata, first_attempt.response_metadata, second_attempt.response_metadata}) =~
              "usage_observer"
 
     settlement =
@@ -10139,9 +10060,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE keepalive before assignment model miss preserves the failover window" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -10207,8 +10126,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     first_mode =
       FakeUpstream.sse_stream(
         [
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible-once"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible-once"}},
           {"response.failed",
            %{
              "type" => "response.failed",
@@ -10266,9 +10184,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-sse-hard-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-sse-hard-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -10317,8 +10233,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     first_upstream =
       FakeUpstream.sse_stream(
         [
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible"}},
           first_event_terminal_payload("response.failed", "upstream_request_timeout")
         ],
         done: false
@@ -10435,8 +10350,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible"}}
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible"}}
         ])
       )
 
@@ -10619,9 +10533,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(rejecting_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-cyber-policy-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-cyber-policy-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -10857,8 +10769,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -10925,8 +10836,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -11134,9 +11044,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE streams inject keepalive comments during upstream idle gaps" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -11150,8 +11058,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.barrier_sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "first"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "first"}},
             {"response.completed",
              %{
                "type" => "response.completed",
@@ -11198,9 +11105,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE streams can disable keepalive comments" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 0}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 0})
 
     on_exit(fn ->
       if previous_env,
@@ -11255,9 +11160,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE keepalive before retryable first event preserves current stream state" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -11478,9 +11381,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "failed"
     assert request.last_error_code == "no_eligible_backend"
 
-    refute Repo.exists?(
-             from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress")
-           )
+    refute Repo.exists?(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"))
 
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
@@ -11745,9 +11646,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     request = Repo.get!(Request, request_id)
     assert request.status == "succeeded"
 
-    refute Repo.exists?(
-             from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress")
-           )
+    refute Repo.exists?(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"))
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.pool_upstream_assignment_id == second.assignment.id
@@ -12452,8 +12351,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "backend-visible-before-close"}}
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "backend-visible-before-close"}}
           ],
           done: false
         )
@@ -12786,8 +12684,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           %{
             "error" => %{
               "code" => "rate_limit_exceeded",
-              "message" =>
-                "We're currently experiencing high demand, which may cause temporary errors."
+              "message" => "We're currently experiencing high demand, which may cause temporary errors."
             }
           },
           [{"x-codex-turn-state", response_turn_state}],
@@ -13168,8 +13065,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {%{
          "plan_type" => "sample_unknown_plan",
          "rate_limit" => %{"allowed" => true, "limit_reached" => true}
-       }, "quota_evidence_unavailable",
-       "no upstream account has fresh reset-bearing quota evidence for this model"},
+       }, "quota_evidence_unavailable", "no upstream account has fresh reset-bearing quota evidence for this model"},
       {%{
          "plan_type" => "sample_malformed_additional_plan",
          "rate_limit" => %{"allowed" => true, "limit_reached" => false},
@@ -13184,8 +13080,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              }
            }
          ]
-       }, "quota_evidence_unavailable",
-       "no upstream account has fresh reset-bearing quota evidence for this model"},
+       }, "quota_evidence_unavailable", "no upstream account has fresh reset-bearing quota evidence for this model"},
       {%{
          "plan_type" => "sample_blocked_additional_plan",
          "rate_limit" => %{"allowed" => true, "limit_reached" => false},
@@ -13196,8 +13091,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "rate_limit" => %{"allowed" => false, "limit_reached" => true}
            }
          ]
-       }, "quota_evidence_unavailable",
-       "no upstream account has fresh reset-bearing quota evidence for this model"}
+       }, "quota_evidence_unavailable", "no upstream account has fresh reset-bearing quota evidence for this model"}
     ]
 
     Enum.each(cases, fn {usage_payload, code, message} ->
@@ -13275,12 +13169,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end)
   end
 
-  for field <- ~w(limit_window_seconds reset_after_seconds reset_at),
-      mutation <- [:missing, :wrong_type],
-      scope <- [:account, :additional] do
+  for field <- ~w(limit_window_seconds reset_after_seconds reset_at), mutation <- [:missing, :wrong_type], scope <- [:account, :additional] do
     @tag window_field: field, window_mutation: mutation, window_scope: scope
-    test "POST /backend-api/codex/responses rejects #{scope} window #{field} #{mutation} before dispatch",
-         %{conn: conn, window_field: field, window_mutation: mutation, window_scope: scope} do
+    test "POST /backend-api/codex/responses rejects #{scope} window #{field} #{mutation} before dispatch", %{conn: conn, window_field: field, window_mutation: mutation, window_scope: scope} do
       valid_window = %{
         "used_percent" => 25,
         "limit_window_seconds" => 18_000,
@@ -13363,9 +13254,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     rotated_identity =
       refreshed_identity
-      |> Ecto.Changeset.change(
-        metadata: CredentialFencing.advance_credential_epoch(refreshed_identity)
-      )
+      |> Ecto.Changeset.change(metadata: CredentialFencing.advance_credential_epoch(refreshed_identity))
       |> Repo.update!()
 
     assert get_in(rotated_identity.metadata, ["credential_epoch"]) == 2
@@ -13381,8 +13270,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{
              "error" => %{
                "code" => "quota_evidence_unavailable",
-               "message" =>
-                 "no upstream account has fresh reset-bearing quota evidence for this model"
+               "message" => "no upstream account has fresh reset-bearing quota evidence for this model"
              }
            } = json_response(conn, 503)
 
@@ -13575,9 +13463,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              ])
 
     assert {:ok, _identity} =
-             PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment,
-               observed_at: usage_at
-             )
+             PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment, observed_at: usage_at)
 
     assert QuotaWindows.list_quota_windows(setup.identity) == []
 
@@ -14006,9 +13892,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-soft-pinned-json",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-soft-pinned-json", compact?: false)
 
     prime_exhausted_routing_quota!(pinned.identity)
 
@@ -14077,9 +13961,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-session-header-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-session-header-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -14146,9 +14028,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-turn-state-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-turn-state-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -14304,9 +14184,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(pinned_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-hard-pin-recovery-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-hard-pin-recovery-fallback", compact?: false)
 
     setup =
       Map.put(
@@ -14398,9 +14276,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(fallback_upstream) == 0
 
     requests =
-      Repo.all(
-        from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at])
-      )
+      Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
 
     assert Enum.map(requests, &{&1.status, &1.last_error_code}) ==
              [
@@ -14564,9 +14440,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(fallback_upstream) == 0
 
     requests =
-      Repo.all(
-        from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at])
-      )
+      Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
 
     assert Enum.map(requests, &{&1.status, &1.last_error_code}) ==
              [
@@ -14611,9 +14485,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-exhausted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-exhausted", compact?: false)
 
     prime_exhausted_routing_quota!(pinned.identity)
 
@@ -14681,9 +14553,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
 
     pinned_upstream =
-      start_upstream(
-        {:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}}
-      )
+      start_upstream({:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}})
 
     fallback_upstream =
       start_upstream(
@@ -14697,9 +14567,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-previous-anchor-stale",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-previous-anchor-stale", compact?: false)
 
     prime_stale_routing_quota!(pinned.identity)
 
@@ -14783,9 +14651,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-stale",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-stale", compact?: false)
 
     prime_stale_routing_quota!(pinned.identity)
 
@@ -14870,16 +14736,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(precise_upstream)
 
     exhausted =
-      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted", compact?: false)
 
     stale = gateway_upstream(setup.pool, stale_upstream, "upstream-token-stale", compact?: false)
 
     resetless =
-      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless", compact?: false)
 
     prime_exhausted_routing_quota!(exhausted.identity)
     prime_stale_routing_quota!(stale.identity)
@@ -14944,9 +14806,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(first_upstream, quota?: false)
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-exhausted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-exhausted", compact?: false)
 
     prime_exhausted_routing_quota!(setup.identity)
     prime_exhausted_routing_quota!(second.identity)
@@ -15028,9 +14888,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     stale = gateway_upstream(setup.pool, stale_upstream, "upstream-token-stale", compact?: false)
 
     resetless =
-      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless", compact?: false)
 
     prime_exhausted_routing_quota!(setup.identity)
     prime_stale_routing_quota!(stale.identity)
@@ -16406,8 +16264,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
          "type" => "response.created",
          "response" => %{"id" => "resp_backend_mode_matrix", "status" => "in_progress"}
        }},
-      {"response.output_text.delta",
-       %{"type" => "response.output_text.delta", "delta" => "synthetic backend mode answer"}},
+      {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic backend mode answer"}},
       {"response.completed",
        %{
          "type" => "response.completed",
@@ -16675,9 +16532,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp raw_http_request_complete?(data) do
     case :binary.split(data, "\r\n\r\n") do
       [headers, body] ->
-        case Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> headers,
-               capture: :all_but_first
-             ) do
+        case Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> headers, capture: :all_but_first) do
           [length] -> byte_size(body) >= String.to_integer(length)
           nil -> true
         end

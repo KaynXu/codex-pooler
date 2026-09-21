@@ -465,17 +465,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       @limit_fields
       |> Enum.flat_map(fn field ->
         [
-          {"Default #{limit_field_label(field)}",
-           normalized_limit_value(form[String.to_atom("default_#{field}")].value)},
-          {"Model #{limit_field_label(field)}",
-           normalized_limit_value(form[String.to_atom("model_#{field}")].value)}
+          {"Default #{limit_field_label(field)}", normalized_limit_value(form[String.to_atom("default_#{field}")].value)},
+          {"Model #{limit_field_label(field)}", normalized_limit_value(form[String.to_atom("model_#{field}")].value)}
         ]
       end)
       |> Enum.reject(fn {_label, value} -> is_nil(value) end)
 
     key_wide =
-      {"Active requests across all models",
-       normalized_limit_value(form[:max_active_requests].value) || "Disabled"}
+      {"Active requests across all models", normalized_limit_value(form[:max_active_requests].value) || "Disabled"}
 
     model = blank_to_nil(form[:model_policy_model_identifier].value)
     model_rows = if model, do: [{"Model override", model}], else: []

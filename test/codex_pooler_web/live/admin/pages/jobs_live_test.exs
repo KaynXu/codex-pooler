@@ -682,9 +682,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     assert has_element?(view, "#filters_show_completed[value='false']")
     refute has_element?(view, "#job-filter-clear")
 
-    render_click(
-      element(view, "#job-state-filter [data-role='state-filter-option'][data-state='retryable']")
-    )
+    render_click(element(view, "#job-state-filter [data-role='state-filter-option'][data-state='retryable']"))
 
     assert_patch(view, ~p"/admin/jobs?state=retryable")
     assert has_element?(view, "#filters_state[value='retryable']")
@@ -864,8 +862,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
           %{
             "attempt" => 1,
             "kind" => "RuntimeError",
-            "error" =>
-              "upstream timeout\nauthorization=Bearer drawer-error-bearer\tprompt=drawer-error-prompt cookie=drawer-error-cookie access_token=drawer-error-access refresh_token=drawer-error-refresh password=drawer-error-password secret=drawer-error-secret"
+            "error" => "upstream timeout\nauthorization=Bearer drawer-error-bearer\tprompt=drawer-error-prompt cookie=drawer-error-cookie access_token=drawer-error-access refresh_token=drawer-error-refresh password=drawer-error-password secret=drawer-error-secret"
           }
         ]
       )

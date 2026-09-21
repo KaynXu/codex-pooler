@@ -19,9 +19,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.PlanTest do
 
     options =
       RequestOptions.build(%{}, "/backend-api/codex/responses", %{})
-      |> RequestOptions.put_continuity(
-        codex_session: %CodexSession{pool_upstream_assignment_id: pinned.id}
-      )
+      |> RequestOptions.put_continuity(codex_session: %CodexSession{pool_upstream_assignment_id: pinned.id})
 
     assert Plan.refresh_candidates(plan(candidates, options)) ==
              [List.last(candidates), hd(candidates)]
@@ -32,9 +30,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.PlanTest do
 
     options =
       RequestOptions.build(%{}, "/backend-api/codex/responses", %{})
-      |> RequestOptions.put_continuity(
-        codex_session: %CodexSession{pool_upstream_assignment_id: Ecto.UUID.generate()}
-      )
+      |> RequestOptions.put_continuity(codex_session: %CodexSession{pool_upstream_assignment_id: Ecto.UUID.generate()})
 
     assert Plan.refresh_candidates(plan(candidates, options)) == Enum.take(candidates, 2)
     assert Plan.refresh_candidates(plan([], options)) == []

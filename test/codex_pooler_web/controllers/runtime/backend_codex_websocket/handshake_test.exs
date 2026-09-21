@@ -128,8 +128,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
           {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
           assert CodexPooler.JSON.decode!(frame)["type"] == "response.completed"
 
-          assert_receive {Events,
-                          %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+          assert_receive {Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
                          @connection_shutdown_timeout_ms
         after
           Mint.HTTP.close(conn)
@@ -137,9 +136,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.HandshakeTest do
       end
 
       assert [parent, fork, resumed] =
-               Repo.all(
-                 from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at)
-               )
+               Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at))
 
       parent_session = parent.request_metadata["codex_session_id"]
       assert is_binary(parent_session)

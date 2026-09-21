@@ -190,8 +190,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
           {"fresh", %{"rate_limit_reached" => true}, _window} ->
             false
 
-          {"fresh", %{"rate_limit_allowed" => true, "rate_limit_reached" => false},
-           %{source: "codex_usage_api", active_limit: nil, credits: nil}} ->
+          {"fresh", %{"rate_limit_allowed" => true, "rate_limit_reached" => false}, %{source: "codex_usage_api", active_limit: nil, credits: nil}} ->
             true
 
           _other ->
@@ -299,8 +298,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
     %{
       used_percent: snapshot_used_percent(limit),
       limit_window_seconds: window_seconds(limit.limit_window),
-      reset_after_seconds:
-        if(reset_at, do: max(DateTime.diff(reset_at, now(), :second), 0), else: nil),
+      reset_after_seconds: if(reset_at, do: max(DateTime.diff(reset_at, now(), :second), 0), else: nil),
       reset_at: if(reset_at, do: DateTime.to_unix(reset_at), else: nil)
     }
   end

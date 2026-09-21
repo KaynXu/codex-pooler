@@ -328,9 +328,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   defp decimal_equal?(_left, _right), do: false
 
   defp rollback_conflict do
-    Repo.rollback(
-      error(:concurrent_pricing_conflict, error_message(:concurrent_pricing_conflict))
-    )
+    Repo.rollback(error(:concurrent_pricing_conflict, error_message(:concurrent_pricing_conflict)))
   end
 
   defp file_error(reason) do

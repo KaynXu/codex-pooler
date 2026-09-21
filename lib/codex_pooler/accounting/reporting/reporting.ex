@@ -345,9 +345,7 @@ defmodule CodexPooler.Accounting.Reporting do
              )
            )}
     )
-    |> Enum.reduce(%{}, fn {upstream_identity_id, pool_id, model_id, total, requests,
-                            known_requests, unknown_requests, cost},
-                           acc ->
+    |> Enum.reduce(%{}, fn {upstream_identity_id, pool_id, model_id, total, requests, known_requests, unknown_requests, cost}, acc ->
       row = %{
         pool_id: pool_id,
         model_id: model_id,
@@ -688,9 +686,7 @@ defmodule CodexPooler.Accounting.Reporting do
 
     dumped_pool_ids = Enum.map(pool_ids, &Ecto.UUID.dump!/1)
 
-    case Repo.query(sql, [dumped_pool_ids, dates],
-           telemetry_options: [reporting_projection: :covered_pool_daily_usage_snapshot]
-         ) do
+    case Repo.query(sql, [dumped_pool_ids, dates], telemetry_options: [reporting_projection: :covered_pool_daily_usage_snapshot]) do
       {:ok, %{rows: [[false | _rest]]}} ->
         {:fallback, :incomplete_coverage}
 

@@ -254,8 +254,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert {:ok, :confirmed_by_quota} =
              Convergence.converge(identity, decision_at, "runtime_headers")
 
-    assert_receive {^handler_id, %{count: 1} = measurements,
-                    %{source: "runtime_headers", outcome: "confirmed_by_quota"}}
+    assert_receive {^handler_id, %{count: 1} = measurements, %{source: "runtime_headers", outcome: "confirmed_by_quota"}}
 
     assert is_integer(measurements.applied_to_lifecycle_ms)
     assert measurements.applied_to_lifecycle_ms >= 0

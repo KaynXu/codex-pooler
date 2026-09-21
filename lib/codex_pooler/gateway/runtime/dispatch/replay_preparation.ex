@@ -90,8 +90,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
               )
           )
 
-        {:ok, options,
-         %RoutingSettings{request_compression_enabled: snapshot["request_compression_enabled"]}}
+        {:ok, options, %RoutingSettings{request_compression_enabled: snapshot["request_compression_enabled"]}}
 
       _invalid ->
         {:error, :invalid_replay_preparation}
@@ -138,8 +137,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
   defp eligible?(%RequestOptions{}), do: false
 
   defp snapshot(%SelectedCandidateContext{request_options: options, route_state: route_state}) do
-    case {RequestOptions.model_serving_mode_snapshot(options),
-          options.routing.reasoning_effort_decision} do
+    case {RequestOptions.model_serving_mode_snapshot(options), options.routing.reasoning_effort_decision} do
       {%{} = mode, %Decision{} = decision} ->
         sanitize(%{
           "version" => 1,
@@ -150,10 +148,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation do
           "configured_effort" => decision.configured_effort,
           "requested_effort" => decision.requested_effort,
           "applied_effort" => decision.applied_effort,
-          "supports_reasoning_summary" =>
-            options.routing.supports_reasoning_summary_parameter? != false,
-          "request_compression_enabled" =>
-            Map.get(route_state.routing_settings || %{}, :request_compression_enabled) == true,
+          "supports_reasoning_summary" => options.routing.supports_reasoning_summary_parameter? != false,
+          "request_compression_enabled" => Map.get(route_state.routing_settings || %{}, :request_compression_enabled) == true,
           "models_etag" => route_state_models_etag(route_state)
         })
 

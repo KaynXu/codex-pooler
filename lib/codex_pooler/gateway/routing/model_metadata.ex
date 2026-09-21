@@ -106,10 +106,8 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
       "slug" => model.exposed_model_id,
       "display_name" => model.display_name,
       "description" => metadata["description"] || model.display_name,
-      "default_reasoning_level" =>
-        projected_default_reasoning_level(reasoning_projection, model, metadata),
-      "supported_reasoning_levels" =>
-        projected_reasoning_levels(reasoning_projection, model, metadata),
+      "default_reasoning_level" => projected_default_reasoning_level(reasoning_projection, model, metadata),
+      "supported_reasoning_levels" => projected_reasoning_levels(reasoning_projection, model, metadata),
       "shell_type" => "shell_command",
       "visibility" => "list",
       "priority" => int_metadata(metadata, "priority", 0),
@@ -135,15 +133,13 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
       "supports_parallel_tool_calls" => model.supports_tools,
       "supports_image_detail_original" => supports_image_detail_original?(metadata),
       "model_messages" => map_metadata(metadata, "model_messages"),
-      "include_skills_usage_instructions" =>
-        bool_metadata(metadata, "include_skills_usage_instructions"),
+      "include_skills_usage_instructions" => bool_metadata(metadata, "include_skills_usage_instructions"),
       "prefer_websockets" => bool_metadata(metadata, "prefer_websockets"),
       "reasoning_summary_format" => string_metadata(metadata, "reasoning_summary_format"),
       "context_window" => metadata["context_window"],
       "max_context_window" => metadata["max_context_window"],
       "auto_compact_token_limit" => metadata["auto_compact_token_limit"],
-      "effective_context_window_percent" =>
-        int_metadata(metadata, "effective_context_window_percent", 95),
+      "effective_context_window_percent" => int_metadata(metadata, "effective_context_window_percent", 95),
       "experimental_supported_tools" => list_metadata(metadata, "experimental_supported_tools"),
       "input_modalities" => input_modalities(metadata),
       "supports_search_tool" => bool_metadata(metadata, "supports_search_tool"),
@@ -316,8 +312,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   def reasoning_level_maps_and_default(%Model{} = model) do
     metadata = metadata(model)
 
-    {effective_reasoning_level_maps(model, metadata),
-     canonical_default_reasoning_level(model, metadata)}
+    {effective_reasoning_level_maps(model, metadata), canonical_default_reasoning_level(model, metadata)}
   end
 
   defp canonical_default_reasoning_level(%Model{} = model, metadata) do

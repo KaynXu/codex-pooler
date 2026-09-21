@@ -455,8 +455,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
         RuntimeCleanup.cleanup_expired_runtime_state(now)
       end)
 
-    assert_receive {:runtime_cleanup_owner_candidates_selected, cleanup_pid, ^barrier_ref,
-                    [candidate]}
+    assert_receive {:runtime_cleanup_owner_candidates_selected, cleanup_pid, ^barrier_ref, [candidate]}
 
     assert candidate.session_id == session.id
     assert candidate.owner_instance_id == session.owner_instance_id
@@ -691,9 +690,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
               %{rows: [[backend]]} = Repo.query!("SELECT pg_backend_pid()")
 
               if held do
-                Repo.one!(
-                  from s in CodexSession, where: s.id == ^fixture.session.id, lock: "FOR UPDATE"
-                )
+                Repo.one!(from s in CodexSession, where: s.id == ^fixture.session.id, lock: "FOR UPDATE")
               end
 
               send(parent, {:race_backend, kind, self(), backend})
@@ -735,9 +732,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
         System.monotonic_time(:millisecond) + 15_000
       )
 
-      TestDiagnostics.puts(
-        "expired owner race #{first}: distinct backends #{blocker_backend}/#{waiter_backend}; pg_blocking_pids observed"
-      )
+      TestDiagnostics.puts("expired owner race #{first}: distinct backends #{blocker_backend}/#{waiter_backend}; pg_blocking_pids observed")
 
       send(blocker, :release)
       assert_receive {:race_result, ^first, {:ok, {:ok, _}}}, 15_000
@@ -749,9 +744,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
         assert Repo.reload!(fixture.request).last_error_code == "dead_execution_recovered"
         assert Repo.reload!(fixture.turn).error_code == "dead_execution_recovered"
 
-        assert Enum.sort(
-                 Enum.map(ledger_entries_for_request(fixture.request.id), & &1.entry_kind)
-               ) == ["release", "reservation", "settlement"]
+        assert Enum.sort(Enum.map(ledger_entries_for_request(fixture.request.id), & &1.entry_kind)) == ["release", "reservation", "settlement"]
       end)
     end
   end

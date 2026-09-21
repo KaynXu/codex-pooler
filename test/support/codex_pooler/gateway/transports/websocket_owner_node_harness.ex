@@ -200,9 +200,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
           )
 
         {:ok, _task_supervisor} =
-          Task.Supervisor.start_link(
-            name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor
-          )
+          Task.Supervisor.start_link(name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor)
 
         send(caller, {ready_ref, :ready})
 
@@ -229,9 +227,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   def put_owner_idle_timeout(timeout) when is_integer(timeout) do
     settings = OperationalSettings.current()
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %{settings | websocket_owner_idle_timeout_ms: timeout}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %{settings | websocket_owner_idle_timeout_ms: timeout})
   end
 
   def start_owner_with_local_idle_timeout(opts) when is_list(opts) do

@@ -174,11 +174,9 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Pools do
       description:
         ToolRegistry.metadata_description(
           use_when: "an MCP client needs bounded Pool metadata discovery",
-          returns:
-            "sanitized Pool records with status, routing summary, upstream counts, and Pool API-key counts",
+          returns: "sanitized Pool records with status, routing summary, upstream counts, and Pool API-key counts",
           never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
-          filters_limits:
-            "accepts optional query, status, and limit; limit is capped at #{Common.max_limit()} records"
+          filters_limits: "accepts optional query, status, and limit; limit is capped at #{Common.max_limit()} records"
         ),
       input_schema: Common.list_schema(),
       output_schema: Common.list_output_schema(),
@@ -194,11 +192,9 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Pools do
       description:
         ToolRegistry.metadata_description(
           use_when: "an MCP client needs one Pool metadata record by id, slug, or name",
-          returns:
-            "one sanitized Pool record or structured ambiguity candidates when the selector matches multiple records",
+          returns: "one sanitized Pool record or structured ambiguity candidates when the selector matches multiple records",
           never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
-          filters_limits:
-            "requires selector; exact id and slug are preferred, while duplicate names return ambiguity candidates"
+          filters_limits: "requires selector; exact id and slug are preferred, while duplicate names return ambiguity candidates"
         ),
       input_schema: Common.selector_schema(),
       output_schema: Common.get_output_schema(),

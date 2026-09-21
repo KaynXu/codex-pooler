@@ -420,8 +420,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     } = input
 
     {eligible, exclusions} =
-      Enum.reduce(candidates, {[], []}, fn {assignment, identity} = candidate,
-                                           {eligible, excluded} ->
+      Enum.reduce(candidates, {[], []}, fn {assignment, identity} = candidate, {eligible, excluded} ->
         if CircuitState.eligible?(auth, model, assignment, route_class) do
           {[candidate | eligible], excluded}
         else
@@ -459,8 +458,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     %{candidates: candidates, route_class: route_class} = input
 
     {eligible, exclusions} =
-      Enum.reduce(candidates, {[], []}, fn {assignment, identity} = candidate,
-                                           {eligible, excluded} ->
+      Enum.reduce(candidates, {[], []}, fn {assignment, identity} = candidate, {eligible, excluded} ->
         if RouteState.circuit_eligible?(route_state, assignment.id) do
           {[candidate | eligible], excluded}
         else
@@ -608,8 +606,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   # fields alphabetically (day before month before year), which inverts ranks
   # across month boundaries.
   defp model_source_rank({%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity}) do
-    {model_source_plan_rank(identity), DateTime.to_unix(assignment.created_at, :microsecond),
-     assignment.id}
+    {model_source_plan_rank(identity), DateTime.to_unix(assignment.created_at, :microsecond), assignment.id}
   end
 
   defp model_source_plan_rank(%UpstreamIdentity{} = identity) do

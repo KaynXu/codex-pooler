@@ -47,9 +47,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
     setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-mode-snapshot")
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback", compact?: false)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -179,8 +177,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       terminal = terminal_event(error_payload("model_not_found", "model"))
       coalesced = ": upstream keepalive\n\n" <> terminal
 
-      assert {{:retry, %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: "", parser: _parser}} =
+      assert {{:retry, %{code: "model_not_found", upstream_error_param: "model"}}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  coalesced,
                  StreamAttempt.first_event_state(),
@@ -197,8 +194,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
 
       terminal = terminal_event(code_less_model_param_payload())
 
-      assert {{:retry, %{code: "invalid_request_error", upstream_error_param: "model"}},
-              %{classified?: true, buffer: "", parser: _parser}} =
+      assert {{:retry, %{code: "invalid_request_error", upstream_error_param: "model"}}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  rate_limits <> terminal,
                  StreamAttempt.first_event_state(),
@@ -241,9 +237,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
     test "structured model_not_found remains terminal when assignment failover is disabled" do
       terminal = terminal_event(error_payload("model_not_found", "model"))
 
-      assert {{:write_terminal_failure, ^terminal,
-               %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: "", parser: _parser}} =
+      assert {{:write_terminal_failure, ^terminal, %{code: "model_not_found", upstream_error_param: "model"}}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  terminal,
                  StreamAttempt.first_event_state()
@@ -270,15 +264,13 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       controls = [
         {"generic", generic_error_payload()},
         {"invalid_model", error_payload("invalid_model", "model")},
-        {"previous_response_not_found",
-         error_payload("previous_response_not_found", "previous_response_id")}
+        {"previous_response_not_found", error_payload("previous_response_not_found", "previous_response_id")}
       ]
 
       for {_label, payload} <- controls do
         terminal = terminal_event(payload)
 
-        assert {{:write_terminal_failure, ^terminal, _failure},
-                %{classified?: true, buffer: "", parser: _parser}} =
+        assert {{:write_terminal_failure, ^terminal, _failure}, %{classified?: true, buffer: "", parser: _parser}} =
                  StreamAttempt.classify_first_event(terminal, StreamAttempt.first_event_state())
       end
     end
@@ -299,9 +291,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
 
       terminal = terminal_event(error_payload("model_not_found", "model"))
 
-      assert {{:write_terminal_failure, ^terminal,
-               %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: "", parser: _parser}} =
+      assert {{:write_terminal_failure, ^terminal, %{code: "model_not_found", upstream_error_param: "model"}}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(terminal, state, true)
     end
 

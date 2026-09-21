@@ -83,9 +83,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.LockWaitDiagnostics 
   @spec capture(:codex_sessions | :bridge_owner_leases, Ecto.UUID.t()) :: t()
   def capture(relation, session_id) when is_map_key(@locker_rows, relation) do
     _timeout =
-      SQL.query!(Repo, "SELECT set_config('statement_timeout', $1, true)", [@statement_timeout],
-        mode: :savepoint
-      )
+      SQL.query!(Repo, "SELECT set_config('statement_timeout', $1, true)", [@statement_timeout], mode: :savepoint)
 
     %{rows: [[waiter_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [], mode: :savepoint)
     session_id = Ecto.UUID.dump!(session_id)

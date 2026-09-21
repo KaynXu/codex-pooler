@@ -7,8 +7,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
 
   # Keep the real disconnected peer and failing writes; seed stale presence
   # and shorten only the publisher cadence, not the production liveness window.
-  @tag slow:
-         "boots a disconnected BEAM peer and proves live execution preservation through failed heartbeat writes"
+  @tag slow: "boots a disconnected BEAM peer and proves live execution preservation through failed heartbeat writes"
   test "owner-only heartbeat starvation cannot finalize a living disconnected response task",
        context do
     start_distribution!()
@@ -22,9 +21,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
       ids = Repo.all(from p in CodexPooler.Pools.Pool, where: p.slug == ^slug, select: p.id)
       CodexPooler.PoolerFixtures.delete_committed_pools!(ids)
 
-      Repo.delete_all(
-        from i in CodexPooler.Upstreams.Schemas.UpstreamIdentity, where: i.account_label == ^slug
-      )
+      Repo.delete_all(from i in CodexPooler.Upstreams.Schemas.UpstreamIdentity, where: i.account_label == ^slug)
 
       Repo.delete_all(from i in Instance, where: i.instance_id == ^observer.instance_id)
     end)
@@ -142,9 +139,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
       END $$
       """)
 
-      Repo.query!(
-        "CREATE TRIGGER presence_starvation_failure BEFORE INSERT OR UPDATE ON instance_presences FOR EACH ROW EXECUTE FUNCTION presence_starvation_failure()"
-      )
+      Repo.query!("CREATE TRIGGER presence_starvation_failure BEFORE INSERT OR UPDATE ON instance_presences FOR EACH ROW EXECUTE FUNCTION presence_starvation_failure()")
     end)
 
     assert %{failures: failures, age_seconds: age, warned: true} =
@@ -195,9 +190,7 @@ defmodule CodexPooler.Platform.InstancePresenceStarvationTest do
     CodexPooler.PeerRegistry.assert_peer_absent!(peer_name, peer_node: remote)
     CodexPooler.InstancePresencePeer.assert_os_process_stopped!(os_identity)
 
-    CodexPooler.TestDiagnostics.puts(
-      "presence starvation: failed_writes=#{failures} age_seconds=#{age} live_unknown_preserved=true terminal_recovered=true"
-    )
+    CodexPooler.TestDiagnostics.puts("presence starvation: failed_writes=#{failures} age_seconds=#{age} live_unknown_preserved=true terminal_recovered=true")
   end
 
   defp start_distribution! do

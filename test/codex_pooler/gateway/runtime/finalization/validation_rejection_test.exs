@@ -52,8 +52,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
                "type" => "invalid_request_error",
                "code" => code,
                "param" => "reasoning.effort",
-               "message" =>
-                 "upstream rejected parameter reasoning.effort (#{code}); supported values: low, medium, high, xhigh"
+               "message" => "upstream rejected parameter reasoning.effort (#{code}); supported values: low, medium, high, xhigh"
              }
     end
 
@@ -182,18 +181,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
   test "extracts identifier-shaped supported values from the trailing provider list" do
     assert ValidationRejection.supported_values(@observed_message) == ~w(low medium high xhigh)
 
-    assert ValidationRejection.supported_values(
-             "Invalid value: 'ultra'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'."
-           ) == ~w(none minimal low medium high xhigh max)
+    assert ValidationRejection.supported_values("Invalid value: 'ultra'. Supported values are: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', and 'max'.") == ~w(none minimal low medium high xhigh max)
 
     assert ValidationRejection.supported_values("Supported values are: 'low' and 'high'.") ==
              ~w(low high)
 
     assert ValidationRejection.supported_values("Supported values are: 'auto'") == ["auto"]
 
-    assert ValidationRejection.supported_values(
-             "Supported values are: 'gpt-5.5', 'v1_beta', and 'a.b-c'."
-           ) == ~w(gpt-5.5 v1_beta a.b-c)
+    assert ValidationRejection.supported_values("Supported values are: 'gpt-5.5', 'v1_beta', and 'a.b-c'.") == ~w(gpt-5.5 v1_beta a.b-c)
 
     twelve = Enum.map_join(1..12, ", ", &"'v#{&1}'")
 
@@ -202,13 +197,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
   end
 
   test "never includes the rejected value or any value quoted before the list" do
-    assert ValidationRejection.supported_values(
-             "Unsupported value: 'low' is not supported. Supported values are: 'low' and 'high'."
-           ) == ["high"]
+    assert ValidationRejection.supported_values("Unsupported value: 'low' is not supported. Supported values are: 'low' and 'high'.") == ["high"]
 
-    assert ValidationRejection.supported_values(
-             "Unsupported value: 'max' with 'high'. Supported values are: 'max' and 'high'."
-           ) == nil
+    assert ValidationRejection.supported_values("Unsupported value: 'max' with 'high'. Supported values are: 'max' and 'high'.") == nil
   end
 
   test "rejects unsafe, repeated, trailing, oversized, or malformed lists" do
@@ -369,8 +360,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ValidationRejectionTest do
         CodexPooler.JSON.encode!(%{
           "error" => %{
             "code" => code,
-            "message" =>
-              message || "Unsupported value. Supported values are: 'low'. " <> @provider_sentinel,
+            "message" => message || "Unsupported value. Supported values are: 'low'. " <> @provider_sentinel,
             "param" => param,
             "type" => type
           }

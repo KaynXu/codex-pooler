@@ -226,9 +226,7 @@ defmodule CodexPooler.PoolerFixtures do
 
     identity
     |> Ecto.Changeset.change()
-    |> UpstreamIdentity.put_credential_provenance(
-      Map.get(attrs, :credential_provenance, :codex_chatgpt)
-    )
+    |> UpstreamIdentity.put_credential_provenance(Map.get(attrs, :credential_provenance, :codex_chatgpt))
     |> Repo.update!()
   end
 
@@ -303,8 +301,7 @@ defmodule CodexPooler.PoolerFixtures do
 
     assert {:ok, assignment} =
              PoolAssignments.create_pool_assignment(pool, identity, %{
-               assignment_label:
-                 Map.get(attrs, :assignment_label, "Gateway assignment #{unique}"),
+               assignment_label: Map.get(attrs, :assignment_label, "Gateway assignment #{unique}"),
                metadata: metadata
              })
 
@@ -461,8 +458,7 @@ defmodule CodexPooler.PoolerFixtures do
         transport: Map.get(attrs, :transport, "http_json"),
         status: Map.get(attrs, :status, "succeeded"),
         usage_status: Map.get(attrs, :usage_status, "usage_known"),
-        correlation_id:
-          Map.get(attrs, :correlation_id, "corr-#{System.unique_integer([:positive])}"),
+        correlation_id: Map.get(attrs, :correlation_id, "corr-#{System.unique_integer([:positive])}"),
         user_agent: Map.get(attrs, :user_agent),
         request_metadata: Map.get(attrs, :request_metadata, %{}),
         admitted_at: now(),

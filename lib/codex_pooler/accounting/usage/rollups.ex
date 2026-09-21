@@ -22,14 +22,9 @@ defmodule CodexPooler.Accounting.Rollups do
   @unknown_model_code "Unknown model"
   @daily_rollup_conflict_targets %{
     "pool" => {:unsafe_fragment, "(rollup_date, pool_id) WHERE dimension_kind = 'pool'"},
-    "api_key" =>
-      {:unsafe_fragment, "(rollup_date, pool_id, api_key_id) WHERE dimension_kind = 'api_key'"},
-    "pool_upstream_assignment" =>
-      {:unsafe_fragment,
-       "(rollup_date, pool_upstream_assignment_id) WHERE dimension_kind = 'pool_upstream_assignment'"},
-    "upstream_identity" =>
-      {:unsafe_fragment,
-       "(rollup_date, upstream_identity_id) WHERE dimension_kind = 'upstream_identity'"},
+    "api_key" => {:unsafe_fragment, "(rollup_date, pool_id, api_key_id) WHERE dimension_kind = 'api_key'"},
+    "pool_upstream_assignment" => {:unsafe_fragment, "(rollup_date, pool_upstream_assignment_id) WHERE dimension_kind = 'pool_upstream_assignment'"},
+    "upstream_identity" => {:unsafe_fragment, "(rollup_date, upstream_identity_id) WHERE dimension_kind = 'upstream_identity'"},
     "model" => {:unsafe_fragment, "(rollup_date, model_id) WHERE dimension_kind = 'model'"}
   }
 
@@ -711,10 +706,8 @@ defmodule CodexPooler.Accounting.Rollups do
       update: [
         set: [
           model_id: ^model_id,
-          estimated_cost_micros:
-            fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
-          settled_cost_micros:
-            fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
+          estimated_cost_micros: fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
+          settled_cost_micros: fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
           updated_at: ^now
         ],
         inc: [
@@ -770,10 +763,8 @@ defmodule CodexPooler.Accounting.Rollups do
     from rollup in DailyRollup,
       update: [
         set: [
-          estimated_cost_micros:
-            fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
-          settled_cost_micros:
-            fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
+          estimated_cost_micros: fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
+          settled_cost_micros: fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
           updated_at: ^now
         ],
         inc: [

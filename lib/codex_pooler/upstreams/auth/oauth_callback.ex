@@ -11,8 +11,7 @@ defmodule CodexPooler.Upstreams.Auth.OAuthCallback do
     invalid_callback_origin: "OAuth callback URL must use http://localhost:1455/auth/callback",
     missing_state: "OAuth callback is missing state",
     duplicate_callback_param: "OAuth callback contains duplicate parameters",
-    missing_callback_result:
-      "OAuth callback must include either an authorization code or provider error",
+    missing_callback_result: "OAuth callback must include either an authorization code or provider error",
     provider_denied: "OpenAI denied the OAuth request",
     invalid_state: "OAuth callback state does not match a pending flow",
     expired_flow: "OAuth flow has expired",

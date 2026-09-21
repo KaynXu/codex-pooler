@@ -62,12 +62,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
 
     %__MODULE__{
       now: Map.get(opts, :now),
-      api_key_runtime_epoch:
-        Normalization.optional_non_negative_integer(Map.get(opts, :api_key_runtime_epoch)),
+      api_key_runtime_epoch: Normalization.optional_non_negative_integer(Map.get(opts, :api_key_runtime_epoch)),
       interrupt_reason: Map.get(opts, :interrupt_reason) || Map.get(opts, :reason),
       gateway_debug_payload: Map.get(opts, :gateway_debug_payload),
-      payload_compression:
-        RequestCompressionMetadata.runtime_metadata(Map.get(opts, :payload_compression)),
+      payload_compression: RequestCompressionMetadata.runtime_metadata(Map.get(opts, :payload_compression)),
       reasoning_effort_snapshot: Map.get(opts, :reasoning_effort_snapshot),
       prompt_cache_controls_downgraded: false,
       replay_authorization_binding: Map.get(opts, :replay_authorization_binding),

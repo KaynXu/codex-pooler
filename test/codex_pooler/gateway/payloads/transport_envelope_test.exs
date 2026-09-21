@@ -186,9 +186,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       token = access_token(%{"chatgpt_compute_residency" => "region-trimmed"})
 
       headers =
-        TransportEnvelope.headers(identity(), " \t#{token}\n", [],
-          forwarded_headers: [{"x-openai-unrelated", "preserved"}]
-        )
+        TransportEnvelope.headers(identity(), " \t#{token}\n", [], forwarded_headers: [{"x-openai-unrelated", "preserved"}])
 
       assert {"authorization", "Bearer #{token}"} in headers
       assert {"x-openai-unrelated", "preserved"} in headers
@@ -324,15 +322,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"thread-id", "thread_01.a:b"}
              ]
 
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/v1/responses", forwarded_headers: input_headers)
-             ) == []
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/v1/responses", forwarded_headers: input_headers)) == []
 
       # The envelope narrows the same way when a caller bypasses the runtime filter.
       envelope_headers =
-        TransportEnvelope.headers(identity(), "upstream-token", [],
-          forwarded_headers: input_headers
-        )
+        TransportEnvelope.headers(identity(), "upstream-token", [], forwarded_headers: input_headers)
 
       assert Enum.filter(envelope_headers, fn {name, _value} ->
                name in ["session-id", "thread-id", "x-client-request-id", "x-session-id"]
@@ -457,17 +451,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     end
 
     test "gates forwarded metadata to backend responses and compact transport only" do
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/backend-api/codex/responses")
-             ) == approved_forwarded_metadata_headers()
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses")) == approved_forwarded_metadata_headers()
 
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/backend-api/codex/responses/compact")
-             ) == approved_forwarded_metadata_headers()
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses/compact")) == approved_forwarded_metadata_headers()
 
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/v1/responses")
-             ) == []
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/v1/responses")) == []
 
       assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
                runtime_options("/backend-api/codex/responses",
@@ -772,8 +760,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp turn_metadata(label) do
     CodexPooler.JSON.encode!(%{
-      "code_mode_tool_names" =>
-        Map.new(1..256, fn index -> {"tool_#{index}", "#{label}-handler-#{index}"} end),
+      "code_mode_tool_names" => Map.new(1..256, fn index -> {"tool_#{index}", "#{label}-handler-#{index}"} end),
       "nested" => %{"code_mode_tool_names" => %{"nested-tool" => "nested sentinel"}},
       "non_ascii" => "cafe \u2615",
       "unrelated" => "#{label}-unrelated"

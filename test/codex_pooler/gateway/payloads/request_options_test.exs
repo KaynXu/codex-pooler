@@ -283,11 +283,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       cases = [
         {:ordinary, base},
-        {:bridge_only,
-         RequestOptions.put_payload_context(base, compaction_trigger_bridge?: true)},
+        {:bridge_only, RequestOptions.put_payload_context(base, compaction_trigger_bridge?: true)},
         {:websocket_only, RequestOptions.for_websocket(base, payload)},
-        {:collect_only,
-         RequestOptions.put_transport(base, websocket_delivery_mode: :collect_compaction)},
+        {:collect_only, RequestOptions.put_transport(base, websocket_delivery_mode: :collect_compaction)},
         {:full_history_websocket_collect,
          full_history_base
          |> RequestOptions.for_websocket(%{"input" => [%{"type" => "compaction_trigger"}]})
@@ -1109,9 +1107,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
           payload
         )
 
-      assert OpenAICompatibility.translated_responses_surface?(
-               public_responses.openai_compatibility
-             )
+      assert OpenAICompatibility.translated_responses_surface?(public_responses.openai_compatibility)
 
       assert OpenAICompatibility.translated_responses_surface?(public_chat.openai_compatibility)
       assert OpenAICompatibility.translated_responses_surface?(backend_chat.openai_compatibility)
@@ -1120,17 +1116,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       refute OpenAICompatibility.translated_responses_surface?(raw_backend.openai_compatibility)
 
-      refute OpenAICompatibility.translated_responses_surface?(
-               raw_backend_source.openai_compatibility
-             )
+      refute OpenAICompatibility.translated_responses_surface?(raw_backend_source.openai_compatibility)
 
-      refute OpenAICompatibility.translated_responses_surface?(
-               wrong_media_endpoint.openai_compatibility
-             )
+      refute OpenAICompatibility.translated_responses_surface?(wrong_media_endpoint.openai_compatibility)
 
-      refute OpenAICompatibility.translated_responses_surface?(
-               malformed_source.openai_compatibility
-             )
+      refute OpenAICompatibility.translated_responses_surface?(malformed_source.openai_compatibility)
 
       assert websocket.openai_compatibility.source_endpoint == "/v1/responses"
 
@@ -1335,10 +1325,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
                )
 
       changed_scopes = [
-        {:scope_mismatch, "00000000-0000-0000-0000-000000000003", @identity_id, @effective_model,
-         @reset_probe_route_class},
-        {:scope_mismatch, @assignment_id, "00000000-0000-0000-0000-000000000004",
-         @effective_model, @reset_probe_route_class},
+        {:scope_mismatch, "00000000-0000-0000-0000-000000000003", @identity_id, @effective_model, @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, "00000000-0000-0000-0000-000000000004", @effective_model, @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, "gpt-5.4-mini", @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, "GPT-5.4", @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, @effective_model, "proxy_stream"},
@@ -2158,19 +2146,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     test "classifies request compression route surfaces without promoting public compact" do
       cases = [
         {"POST", "/backend-api/codex/responses", %{}, nil, "proxy_http", "http_json"},
-        {"POST", "/backend-api/codex/responses", %{"stream" => true}, nil, "proxy_stream",
-         "http_sse"},
+        {"POST", "/backend-api/codex/responses", %{"stream" => true}, nil, "proxy_stream", "http_sse"},
         {"POST", "/backend-api/codex/v1/responses", %{}, nil, "proxy_http", "http_json"},
         {"POST", "/backend-api/codex/v1/chat/completions", %{}, nil, "proxy_http", "http_json"},
         {"POST", "/v1/responses", %{}, nil, "proxy_http", "http_json"},
         {"POST", "/v1/chat/completions", %{}, nil, "proxy_http", "http_json"},
-        {"POST", "/backend-api/codex/responses/compact", %{}, nil, "proxy_compact",
-         "http_compact_json"},
-        {"POST", "/backend-api/codex/v1/responses/compact", %{}, nil, "proxy_compact",
-         "http_compact_json"},
+        {"POST", "/backend-api/codex/responses/compact", %{}, nil, "proxy_compact", "http_compact_json"},
+        {"POST", "/backend-api/codex/v1/responses/compact", %{}, nil, "proxy_compact", "http_compact_json"},
         {"GET", "/backend-api/codex/responses", %{}, "websocket", "proxy_websocket", "websocket"},
-        {"GET", "/backend-api/codex/v1/responses", %{}, "websocket", "proxy_websocket",
-         "websocket"},
+        {"GET", "/backend-api/codex/v1/responses", %{}, "websocket", "proxy_websocket", "websocket"},
         {"GET", "/v1/responses", %{}, "websocket", "proxy_websocket", "websocket"},
         {"POST", "/v1/responses/compact", %{}, nil, "proxy_http", "http_json"}
       ]
@@ -2698,9 +2682,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
           forwarded_headers: [{"x-codex-client", :invalid}],
           finalize_retry_timeout_ms: -1
         )
-        |> RequestOptions.put_runtime_context(
-          payload_compression: %{"enabled" => true, "attempted" => false, "status" => "disabled"}
-        )
+        |> RequestOptions.put_runtime_context(payload_compression: %{"enabled" => true, "attempted" => false, "status" => "disabled"})
 
       assert updated.continuity.session_header_source == "session-id"
       assert updated.continuity.reconnect_window_seconds == nil
@@ -2741,9 +2723,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
           forwarded_headers: [{"user-agent", "codex_cli_rs/0.0.0"}],
           finalize_retry_timeout_ms: 0
         )
-        |> RequestOptions.put_runtime_context(
-          payload_compression: %{"attempted" => true, "status" => "no_change"}
-        )
+        |> RequestOptions.put_runtime_context(payload_compression: %{"attempted" => true, "status" => "no_change"})
 
       assert updated.continuity.session_header_source == "x-session-id"
 

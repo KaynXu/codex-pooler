@@ -152,8 +152,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Leaderboard do
   end
 
   defp ranking(rows, :cost),
-    do:
-      rows |> Enum.sort_by(&{&1.settled_cost_micros, &1.total_tokens}, :desc) |> Enum.take(@limit)
+    do: rows |> Enum.sort_by(&{&1.settled_cost_micros, &1.total_tokens}, :desc) |> Enum.take(@limit)
 
   defp ranking(rows, _sort),
     do: rows |> Enum.sort_by(&{&1.total_tokens, &1.requests}, :desc) |> Enum.take(@limit)

@@ -353,9 +353,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     rule = alert_rule_fixture(pool, rule_kind: "pool_no_usable_assignments")
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp),
-               attempted_at: timestamp
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp), attempted_at: timestamp)
 
     assert %AlertIncident{} = incident = incident_for_rule(rule)
     assert incident.state == "open"
@@ -379,9 +377,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     link_rule_channel!(rule, disabled_channel, timestamp)
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp),
-               attempted_at: timestamp
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp), attempted_at: timestamp)
 
     assert %AlertIncident{} = incident_for_rule(rule)
     assert [job] = all_enqueued(worker: AlertDeliveryWorker)
@@ -390,9 +386,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     assert_safe_job_args(job.args)
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp),
-               attempted_at: timestamp
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp), attempted_at: timestamp)
 
     assert [job] = all_enqueued(worker: AlertDeliveryWorker)
     assert job.args["alert_channel_id"] == active_channel.id
@@ -409,9 +403,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     link_rule_channel!(rule, channel, first_seen)
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, first_seen),
-               attempted_at: first_seen
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, first_seen), attempted_at: first_seen)
 
     assert [first_job] = all_enqueued(worker: AlertDeliveryWorker)
     incident = incident_for_rule(rule)
@@ -419,16 +411,12 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     insert_sent_attempt!(incident, channel, 1, first_seen)
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, within_cooldown),
-               attempted_at: within_cooldown
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, within_cooldown), attempted_at: within_cooldown)
 
     assert [] = all_enqueued(worker: AlertDeliveryWorker)
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, after_cooldown),
-               attempted_at: after_cooldown
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, after_cooldown), attempted_at: after_cooldown)
 
     assert [recurrence_job] = all_enqueued(worker: AlertDeliveryWorker)
     assert recurrence_job.args == first_job.args
@@ -444,9 +432,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     link_rule_channel!(rule, channel, first_seen)
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, first_seen),
-               attempted_at: first_seen
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, first_seen), attempted_at: first_seen)
 
     assert %AlertIncident{} = incident = incident_for_rule(rule)
     assert incident.state == "open"
@@ -464,9 +450,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
              ])
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, cleared_at),
-               attempted_at: cleared_at
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, cleared_at), attempted_at: cleared_at)
 
     assert %AlertIncident{state: "resolved", resolved_at: ^cleared_at} =
              Repo.get!(AlertIncident, incident.id)
@@ -481,9 +465,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     rule = alert_rule_fixture(pool, rule_kind: "pool_no_usable_assignments", state: "disabled")
 
     assert :ok =
-             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp),
-               attempted_at: timestamp
-             )
+             perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp), attempted_at: timestamp)
 
     assert [] = Repo.all(AlertIncident)
   end

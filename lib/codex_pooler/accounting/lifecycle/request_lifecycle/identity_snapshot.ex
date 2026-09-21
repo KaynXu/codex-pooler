@@ -65,8 +65,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
       upstream_account_plan_label: request.upstream_account_plan_label,
       upstream_account_plan_family: request.upstream_account_plan_family,
       reasoning_effort: settings_snapshot.reasoning_effort || request.reasoning_effort,
-      requested_service_tier:
-        settings_snapshot.requested_service_tier || request.requested_service_tier,
+      requested_service_tier: settings_snapshot.requested_service_tier || request.requested_service_tier,
       actual_service_tier: settings_snapshot.actual_service_tier || request.actual_service_tier,
       service_tier:
         settings_snapshot.service_tier ||

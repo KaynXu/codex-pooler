@@ -104,8 +104,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AuthRefresh do
   end
 
   defp classify({:ok, result}, trigger_kind) do
-    {:refresh_not_retryable,
-     %{"status" => to_string(result.status), "trigger_kind" => trigger_kind}}
+    {:refresh_not_retryable, %{"status" => to_string(result.status), "trigger_kind" => trigger_kind}}
   end
 
   defp classify({:error, :refresh_in_progress, metadata}, trigger_kind) do

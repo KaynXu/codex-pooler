@@ -110,8 +110,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_total(total), do: Integer.to_string(total || 0)
 
   def format_datetime(value, datetime_preferences),
-    do:
-      DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: "not recorded")
+    do: DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: "not recorded")
 
   def format_datetime(nil), do: "not recorded"
 

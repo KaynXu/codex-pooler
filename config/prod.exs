@@ -1,7 +1,6 @@
 import Config
 
-config :codex_pooler, CodexPoolerWeb.Endpoint,
-  cache_static_manifest: "priv/static/cache_manifest.json"
+config :codex_pooler, CodexPoolerWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
 config :codex_pooler, CodexPoolerWeb.Endpoint,
   force_ssl: [

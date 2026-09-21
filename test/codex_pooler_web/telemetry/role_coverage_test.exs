@@ -595,11 +595,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
 
     assert length(roots) >= 10, "no Oban workers were found to root the derivation from"
 
-    {:ok,
-     graph: graph,
-     roots: roots,
-     reachable: CallGraph.reachable(graph, roots),
-     sites: CallGraph.emission_sites(graph, declared_metric_events())}
+    {:ok, graph: graph, roots: roots, reachable: CallGraph.reachable(graph, roots), sites: CallGraph.emission_sites(graph, declared_metric_events())}
   end
 
   describe "the premise" do
@@ -1013,27 +1009,15 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
       assert unresolved_promotion_gates(promoted.(evidence_from(path, qualified))) == []
 
       for {label, evidence, expected} <- [
-            {"a test nobody wrote in a real test file", evidence_from(path, "nobody wrote this"),
-             {:no_such_test, path, "nobody wrote this"}},
-            {"a test file nobody wrote",
-             evidence_from("test/does_not_exist_xyz_test.exs", "a test nobody wrote"),
-             {:no_such_file, "test/does_not_exist_xyz_test.exs"}},
+            {"a test nobody wrote in a real test file", evidence_from(path, "nobody wrote this"), {:no_such_test, path, "nobody wrote this"}},
+            {"a test file nobody wrote", evidence_from("test/does_not_exist_xyz_test.exs", "a test nobody wrote"), {:no_such_file, "test/does_not_exist_xyz_test.exs"}},
             {"a path that is not a test file", evidence_from(".", "."), {:not_a_test_file, "."}},
-            {"the repository's own mix file", evidence_from("mix.exs", "anything"),
-             {:not_a_test_file, "mix.exs"}},
-            {"a path that escapes the repository",
-             evidence_from("test/../../elsewhere_test.exs", "anything"),
-             {:not_a_test_file, "test/../../elsewhere_test.exs"}},
-            {"an absolute path", evidence_from(Path.expand(path, @repo_root), "anything"),
-             {:not_a_test_file, Path.expand(path, @repo_root)}},
-            {"this guard's own test", evidence_from(@guard_file, "anything"),
-             {:names_the_guard_itself, @guard_file}},
-            {"a test ExUnit will never run",
-             evidence_from(path, "the probe skipped test #{suffix}"),
-             {:skipped_test, path, "the probe skipped test #{suffix}"}},
-            {"a test this suite excludes",
-             evidence_from(path, "the probe excluded test #{suffix}"),
-             {:excluded_test, path, "the probe excluded test #{suffix}"}}
+            {"the repository's own mix file", evidence_from("mix.exs", "anything"), {:not_a_test_file, "mix.exs"}},
+            {"a path that escapes the repository", evidence_from("test/../../elsewhere_test.exs", "anything"), {:not_a_test_file, "test/../../elsewhere_test.exs"}},
+            {"an absolute path", evidence_from(Path.expand(path, @repo_root), "anything"), {:not_a_test_file, Path.expand(path, @repo_root)}},
+            {"this guard's own test", evidence_from(@guard_file, "anything"), {:names_the_guard_itself, @guard_file}},
+            {"a test ExUnit will never run", evidence_from(path, "the probe skipped test #{suffix}"), {:skipped_test, path, "the probe skipped test #{suffix}"}},
+            {"a test this suite excludes", evidence_from(path, "the probe excluded test #{suffix}"), {:excluded_test, path, "the probe excluded test #{suffix}"}}
           ] do
         declaration = promoted.(Map.put(evidence, :live_comparison, "TODO"))
 
@@ -1226,9 +1210,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
             series <- panel_series(%{"targets" => [target]}, candidates),
             event <- Map.get(by_series, series, []),
             MapSet.member?(relayed, event),
-            do:
-              {Map.get(panel, "title", "<untitled>"), series, expr,
-               RoleCoverage.coverage_for(event)}
+            do: {Map.get(panel, "title", "<untitled>"), series, expr, RoleCoverage.coverage_for(event)}
 
       assert charted != [],
              "no operator dashboard panel charts a relayed family any more; this check would " <>
@@ -1563,8 +1545,7 @@ defmodule CodexPoolerWeb.Telemetry.RoleCoverageTest do
   end
 
   describe "the guard itself" do
-    @tag slow:
-           "compiles a synthetic worker and scans the actual whole-application BEAM call graph for unscripted job metrics"
+    @tag slow: "compiles a synthetic worker and scans the actual whole-application BEAM call graph for unscripted job metrics"
     test "a metric added on a new job path is derived even though nothing declares it", context do
       {dir, modules} = compile_synthetic_worker()
 

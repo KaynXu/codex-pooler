@@ -235,10 +235,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   } do
     cases = [
       {[maximum_reasoning_effort: "medium"], %{}, false, "medium", "allow_up_to"},
-      {[maximum_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, true, "low",
-       "allow_up_to"},
-      {[enforced_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, false, "high",
-       "always_use"},
+      {[maximum_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, true, "low", "allow_up_to"},
+      {[enforced_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, false, "high", "always_use"},
       {[], %{}, false, nil, "unrestricted"},
       {[], %{"reasoning" => %{"effort" => "focused"}}, false, "focused", "unrestricted"}
     ]
@@ -2994,8 +2992,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         |> post("/v1/responses", %{
           "model" => setup.model.exposed_model_id,
           "previous_response_id" => previous_response_id,
-          "input" =>
-            public_tool_output_compaction_trigger_input("synthetic public compact #{stream?}"),
+          "input" => public_tool_output_compaction_trigger_input("synthetic public compact #{stream?}"),
           "stream" => stream?,
           "include" => ["reasoning.encrypted_content"],
           "store" => false,
@@ -3198,8 +3195,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "error" => %{
                  "code" => "invalid_request",
-                 "message" =>
-                   "compaction_trigger must be the final input item and must follow visible input",
+                 "message" => "compaction_trigger must be the final input item and must follow visible input",
                  "param" => "input"
                }
              } = json_response(response, 400)
@@ -4005,8 +4001,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            %{"type" => "custom", "name" => "shared_fixture"}
          ]
        }},
-      {"explicit invalid public type", "invalid_function_parameters",
-       "tools.0.parameters.properties.candidate.type",
+      {"explicit invalid public type", "invalid_function_parameters", "tools.0.parameters.properties.candidate.type",
        %{
          "tools" => [
            issue_241_strict_function_tool(%{
@@ -4017,8 +4012,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            })
          ]
        }},
-      {"ambiguous repair evidence", "invalid_function_parameters",
-       "tools.0.parameters.properties.candidate.type",
+      {"ambiguous repair evidence", "invalid_function_parameters", "tools.0.parameters.properties.candidate.type",
        %{
          "tools" => [
            issue_241_strict_function_tool(%{
@@ -4036,8 +4030,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            })
          ]
        }},
-      {"opaque combinator subtree", "invalid_function_parameters",
-       "tools.0.parameters.properties.candidate.allOf.0.type",
+      {"opaque combinator subtree", "invalid_function_parameters", "tools.0.parameters.properties.candidate.allOf.0.type",
        %{
          "tools" => [
            issue_241_strict_function_tool(%{
@@ -4706,9 +4699,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         })
 
       assert {:ok, projection} =
-               Observatory.read(principal, "1h",
-                 as_of: DateTime.add(request.completed_at, 1, :second)
-               )
+               Observatory.read(principal, "1h", as_of: DateTime.add(request.completed_at, 1, :second))
 
       assert projection.totals.requests == %{total: 1, succeeded: 1, failed: 0, in_progress: 0}
       assert projection.accounting.recorded_settlements == 1
@@ -4788,8 +4779,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   defp measured_usage_field(:malformed_large, _usage), do: {"malformed", ~s("usage":17,)}
 
   defp measured_usage_field(:candidate_limit_large, _usage) do
-    {"candidate_limit",
-     ~s("usage":{"padding":#{CodexPooler.JSON.encode!(String.duplicate("y", 20_000))}},)}
+    {"candidate_limit", ~s("usage":{"padding":#{CodexPooler.JSON.encode!(String.duplicate("y", 20_000))}},)}
   end
 
   defp measured_usage_field(_scenario, usage), do: {"known", ~s("usage":#{usage},)}
@@ -5143,12 +5133,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "first"}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "second"}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "third"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "first"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "second"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "third"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -6838,9 +6825,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     attempts =
       unboxed_run(fn ->
-        Repo.all(
-          from(attempt in Attempt, where: attempt.request_id in ^Enum.map(requests, & &1.id))
-        )
+        Repo.all(from(attempt in Attempt, where: attempt.request_id in ^Enum.map(requests, & &1.id)))
       end)
 
     assert length(attempts) == success_count
@@ -7351,12 +7336,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     conn: conn
   } do
     cases = [
-      {401, "invalid_api_key", "provider_key",
-       "provider 401 leaked https://provider.internal.example/auth?key=sk-secret account acct_123"},
-      {403, "insufficient_quota", "organization",
-       "provider 403 leaked org org-secret and https://provider.internal.example/quota"},
-      {400, "context_length_exceeded", "input",
-       "provider 400 echoed prompt SENTINEL_PROMPT_CONTEXT and file file-secret.txt"}
+      {401, "invalid_api_key", "provider_key", "provider 401 leaked https://provider.internal.example/auth?key=sk-secret account acct_123"},
+      {403, "insufficient_quota", "organization", "provider 403 leaked org org-secret and https://provider.internal.example/quota"},
+      {400, "context_length_exceeded", "input", "provider 400 echoed prompt SENTINEL_PROMPT_CONTEXT and file file-secret.txt"}
     ]
 
     Enum.each(cases, fn {status, code, param, provider_message} ->
@@ -7718,8 +7700,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         {:ok,
          %{
            status: 429,
-           raw_body:
-             CodexPooler.JSON.encode!(%{"error" => safe_looking_upstream_error(provider_message)})
+           raw_body: CodexPooler.JSON.encode!(%{"error" => safe_looking_upstream_error(provider_message)})
          }},
         fn decoded -> decoded end
       )
@@ -8062,8 +8043,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "partial public text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial public text"}},
           {"response.failed",
            %{
              "type" => "response.failed",
@@ -8175,8 +8155,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert %{
              "code" => "server_error",
              "error" => nested_error,
-             "message" =>
-               "upstream request failed: stream interrupted before terminal response event",
+             "message" => "upstream request failed: stream interrupted before terminal response event",
              "param" => nil,
              "sequence_number" => sequence_number,
              "type" => "error"
@@ -8190,8 +8169,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert nested_error == %{
              "code" => "server_error",
-             "message" =>
-               "upstream request failed: stream interrupted before terminal response event",
+             "message" => "upstream request failed: stream interrupted before terminal response event",
              "param" => nil,
              "type" => "server_error"
            }
@@ -9123,8 +9101,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       start_upstream(
         FakeUpstream.sse_stream([
           {"codex.rate_limits", %{"type" => "codex.rate_limits", "limits" => []}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible text"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -9244,8 +9221,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "model" => "omni-moderation-latest",
              "check_id" => "mod_check_stream_fixture"
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible moderated text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible moderated text"}},
           {"response.moderation.completed",
            %{
              "type" => "response.moderation.completed",
@@ -9334,8 +9310,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                "metadata" => moderation_metadata
              }
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible metadata text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible metadata text"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -9404,12 +9379,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "first"}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "second"}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "third"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "first"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "second"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "third"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -9511,9 +9483,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     setup_runtime_ingress_override(%OperationalSettings{upstream_receive_timeout_ms: 200})
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     setup = gateway_setup(upstream)
     port = start_public_endpoint!()
@@ -9527,8 +9497,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "stream" => true
           })
 
-        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                        ^release_ref},
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                        @timing_observation_timeout_ms
 
         try do
@@ -9723,9 +9692,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     setup_runtime_ingress_override(%OperationalSettings{upstream_receive_timeout_ms: 100})
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref))
 
     setup = gateway_setup(upstream)
     port = start_public_endpoint!()
@@ -9737,8 +9704,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         "stream" => true
       })
 
-    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid, ^release_ref},
                    @timing_observation_timeout_ms
 
     try do
@@ -10234,8 +10200,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "output_index" => 0,
              "item" => web_search_item
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "final text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "final text"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -10735,10 +10700,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     setup = gateway_setup(upstream)
 
     invalid_parts = [
-      {%{"type" => "input_image", "image_url" => "file:///tmp/private.png"},
-       "unsupported_input_image_format"},
-      {%{"type" => "input_image", "image_url" => "http://example.com/private.png"},
-       "unsupported_input_image_format"},
+      {%{"type" => "input_image", "image_url" => "file:///tmp/private.png"}, "unsupported_input_image_format"},
+      {%{"type" => "input_image", "image_url" => "http://example.com/private.png"}, "unsupported_input_image_format"},
       {%{
          "type" => "input_file",
          "filename" => "sample.html",
@@ -10855,8 +10818,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
          "type" => "response.created",
          "response" => %{"id" => "resp_public_mode_matrix", "status" => "in_progress"}
        }},
-      {"response.output_text.delta",
-       %{"type" => "response.output_text.delta", "delta" => "synthetic public mode answer"}},
+      {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic public mode answer"}},
       {"response.completed",
        %{
          "type" => "response.completed",
@@ -10964,8 +10926,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   defp long_turn_progress_events(response_id) do
     progress_events =
       for index <- 1..6 do
-        {"response.output_text.delta",
-         %{"type" => "response.output_text.delta", "delta" => "progress-#{index}"}}
+        {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "progress-#{index}"}}
       end
 
     progress_events ++
@@ -12150,8 +12111,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     %OperationalSettings{
       bulkheads:
         Map.new(Admission.route_classes(), fn route_class ->
-          {route_class,
-           %{max_concurrency: 1, queue_limit: queue_limit, queue_timeout_ms: queue_timeout_ms}}
+          {route_class, %{max_concurrency: 1, queue_limit: queue_limit, queue_timeout_ms: queue_timeout_ms}}
         end)
     }
   end

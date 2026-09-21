@@ -117,8 +117,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert %{
              "file_id" => "file_upstream_bridge",
-             "upload_url" =>
-               "https://fake-upload.invalid/upload/file_upstream_bridge?sig=fake-upload"
+             "upload_url" => "https://fake-upload.invalid/upload/file_upstream_bridge?sig=fake-upload"
            } = json_response(create_conn, 200)
 
     file = Repo.get_by!(FileRecord, file_id: "file_upstream_bridge")
@@ -139,8 +138,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert %{
              "status" => "success",
-             "download_url" =>
-               "https://fake-download.invalid/download/file_upstream_bridge?sig=fake-download",
+             "download_url" => "https://fake-download.invalid/download/file_upstream_bridge?sig=fake-download",
              "file_name" => "bridge-fixture.txt",
              "mime_type" => "text/plain"
            } = json_response(finalize_conn, 200)
@@ -478,8 +476,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
         assignment =
           active_upstream_assignment_fixture(setup.pool, %{
-            chatgpt_account_id:
-              "acct_file_batched_quota_#{index}_#{System.unique_integer([:positive])}",
+            chatgpt_account_id: "acct_file_batched_quota_#{index}_#{System.unique_integer([:positive])}",
             metadata: %{"base_url" => FakeUpstream.url(upstream)},
             access_token: "file-batched-quota-token-#{index}"
           })
@@ -663,8 +660,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     %{assignment: assignment} =
       active_upstream_assignment_fixture(setup.pool, %{
-        chatgpt_account_id:
-          "acct_file_bridge_create_failure_#{System.unique_integer([:positive])}",
+        chatgpt_account_id: "acct_file_bridge_create_failure_#{System.unique_integer([:positive])}",
         metadata: %{"base_url" => FakeUpstream.url(upstream)},
         access_token: "file-create-failure-token"
       })

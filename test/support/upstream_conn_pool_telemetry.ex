@@ -33,9 +33,7 @@ defmodule CodexPooler.UpstreamConnPoolTelemetry do
     previous_outbound = Application.get_env(:codex_pooler, OutboundHTTP)
     settings = Keyword.get(previous || [], :settings, %OperationalSettings{})
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %{settings | upstream_conn_max_idle_time_ms: idle_ms}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %{settings | upstream_conn_max_idle_time_ms: idle_ms})
 
     Application.put_env(:codex_pooler, OutboundHTTP, conn_max_idle_time_ms: idle_ms)
 

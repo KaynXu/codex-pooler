@@ -83,9 +83,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   def reserve(_auth, _model_or_id, _payload, _opts),
-    do:
-      {:error,
-       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec claim_websocket_turn(auth(), model_ref(), map()) :: request_result()
   def claim_websocket_turn(%{pool: _pool, api_key: _api_key} = auth, model_or_id, opts) do
@@ -97,9 +95,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   def claim_websocket_turn(_auth, _model_or_id, _opts),
-    do:
-      {:error,
-       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec claim_client_retry_successor(auth(), model_ref(), map(), map()) ::
           {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
@@ -144,9 +140,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   def record_denied_request(_auth, _model_or_id, _opts),
-    do:
-      {:error,
-       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec recover_stale_reservations(DateTime.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def recover_stale_reservations(now \\ DateTime.utc_now(), opts \\ []) do
@@ -372,9 +366,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   defp ensure_no_request_replay!(request_id) do
-    if Repo.exists?(
-         from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id
-       ) do
+    if Repo.exists?(from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id) do
       Repo.rollback(
         Metadata.accounting_error(
           :request_replay_required,
@@ -1040,8 +1032,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         %{
           status: finalization.attempt_status,
           completed_at: finalization.timestamp,
-          upstream_status_code:
-            Map.get(attrs, :upstream_status_code, finalization.response_status_code),
+          upstream_status_code: Map.get(attrs, :upstream_status_code, finalization.response_status_code),
           retryable: Map.get(attrs, :retryable, false),
           network_error_code: finalization.last_error_code,
           error_message: finalization.error_message,

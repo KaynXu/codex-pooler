@@ -385,8 +385,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
       failure_rate_label: rate_percent_label(chart.kpis.failure_rate_24h),
       p50_latency_label: latency_label(chart.kpis.p50_latency_ms_24h),
       error_breakdown: Enum.map(chart.kpis.error_breakdown_24h, &error_breakdown_entry/1),
-      summary:
-        "#{Formatting.pluralize_count(chart.kpis.total_requests_7d, "request", "requests")} over seven days; #{chart.kpis.failed_requests_24h} failed in the last 24h; failure rate #{rate_percent_label(chart.kpis.failure_rate_24h)}."
+      summary: "#{Formatting.pluralize_count(chart.kpis.total_requests_7d, "request", "requests")} over seven days; #{chart.kpis.failed_requests_24h} failed in the last 24h; failure rate #{rate_percent_label(chart.kpis.failure_rate_24h)}."
     }
   end
 
@@ -425,10 +424,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
 
   defp rate_percent_label(value) when is_integer(value), do: rate_percent_label(value * 1.0)
 
-  defp chart_date_label(
-         <<_year::binary-size(4), "-", month::binary-size(2), "-", day::binary-size(2)>>
-       ),
-       do: month <> "-" <> day
+  defp chart_date_label(<<_year::binary-size(4), "-", month::binary-size(2), "-", day::binary-size(2)>>),
+    do: month <> "-" <> day
 
   defp chart_date_label(date), do: to_string(date)
 end

@@ -38,9 +38,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
   def final_outcome_rows(log, datetime_preferences) do
     [
       detail("request-log-detail-request-id", "Request id", log.id, mono: true),
-      detail("request-log-detail-correlation-id", "Correlation id", log.correlation_id,
-        mono: true
-      ),
+      detail("request-log-detail-correlation-id", "Correlation id", log.correlation_id, mono: true),
       detail("request-log-detail-status", "Status", status_label(log.status || "unknown")),
       detail("request-log-detail-endpoint", "Endpoint", log.endpoint, mono: true),
       detail("request-log-detail-model", "Model", log.requested_model),
@@ -102,9 +100,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
           requested || @tier_not_set,
           mono: !is_nil(requested)
         ),
-        detail("request-log-detail-upstream-reported-tier", "Upstream reported", reported,
-          mono: true
-        ),
+        detail("request-log-detail-upstream-reported-tier", "Upstream reported", reported, mono: true),
         detail("request-log-detail-priced-tier", "Priced as", priced, mono: true)
       ]
     end
@@ -129,12 +125,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       detail("request-log-detail-assignment", "Assignment", log.assignment_label),
       detail("request-log-detail-api-key", "API key", format_api_key(log)),
       detail("request-log-detail-route", "Route", format_transport_route(log), mono: true),
-      detail("request-log-detail-route-class", "Route class", Map.get(routing, "route_class"),
-        mono: true
-      ),
-      detail("request-log-detail-routing-strategy", "Strategy", Map.get(routing, "strategy"),
-        mono: true
-      ),
+      detail("request-log-detail-route-class", "Route class", Map.get(routing, "route_class"), mono: true),
+      detail("request-log-detail-routing-strategy", "Strategy", Map.get(routing, "strategy"), mono: true),
       detail(
         "request-log-detail-selected-rank",
         "Selected rank",
@@ -282,15 +274,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     attempt = Map.get(debug, :attempt, %{})
 
     [
-      detail("request-log-detail-continuity-status", "Continuity", continuity[:status],
-        mono: true
-      ),
-      detail("request-log-detail-session-ref", "Session ref", continuity[:session_ref],
-        mono: true
-      ),
-      detail("request-log-detail-turn-ref", "Turn ref", continuity[:turn_ref] || turn[:turn_ref],
-        mono: true
-      ),
+      detail("request-log-detail-continuity-status", "Continuity", continuity[:status], mono: true),
+      detail("request-log-detail-session-ref", "Session ref", continuity[:session_ref], mono: true),
+      detail("request-log-detail-turn-ref", "Turn ref", continuity[:turn_ref] || turn[:turn_ref], mono: true),
       detail(
         "request-log-detail-turn-status",
         "Turn status",
@@ -303,9 +289,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         turn[:final_attempt_ref],
         mono: true
       ),
-      detail("request-log-detail-failure-source", "Failure source", failure[:error_source],
-        mono: true
-      ),
+      detail("request-log-detail-failure-source", "Failure source", failure[:error_source], mono: true),
       detail("request-log-detail-debug-error", "Debug error", failure[:error_code], mono: true),
       detail("request-log-detail-terminal-state", "Terminal state", terminal[:state], mono: true),
       detail("request-log-detail-terminal-mismatch", "Terminal mismatch", terminal[:mismatch]),
@@ -339,15 +323,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         Map.get(log.metadata || %{}, "operation"),
         mono: true
       ),
-      detail("request-log-detail-file-status", "File status", Map.get(file, "status"),
-        mono: true
-      ),
-      detail("request-log-detail-compression-status", "Compression status", compression[:status],
-        mono: true
-      ),
-      detail("request-log-detail-compression-reason", "Compression reason", compression[:reason],
-        mono: true
-      ),
+      detail("request-log-detail-file-status", "File status", Map.get(file, "status"), mono: true),
+      detail("request-log-detail-compression-status", "Compression status", compression[:status], mono: true),
+      detail("request-log-detail-compression-reason", "Compression reason", compression[:reason], mono: true),
       detail(
         "request-log-detail-compression-saved",
         "Compression saved",

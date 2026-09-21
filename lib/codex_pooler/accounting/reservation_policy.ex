@@ -101,17 +101,11 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
 
     limits =
       [
-        {:max_requests_per_minute, policy.max_requests_per_minute, :minute,
-         DateTime.add(timestamp, -60, :second), :effective_request_count, 1, "request_count",
-         "minute"},
-        {:max_tokens_per_day, policy.max_tokens_per_day, :daily, beginning_of_day(timestamp),
-         :effective_total_tokens, estimate.total_tokens, "total_tokens", "daily"},
-        {:max_tokens_per_week, policy.max_tokens_per_week, :weekly,
-         DateTime.add(timestamp, -7, :day), :effective_total_tokens, estimate.total_tokens,
-         "total_tokens", "weekly"}
+        {:max_requests_per_minute, policy.max_requests_per_minute, :minute, DateTime.add(timestamp, -60, :second), :effective_request_count, 1, "request_count", "minute"},
+        {:max_tokens_per_day, policy.max_tokens_per_day, :daily, beginning_of_day(timestamp), :effective_total_tokens, estimate.total_tokens, "total_tokens", "daily"},
+        {:max_tokens_per_week, policy.max_tokens_per_week, :weekly, DateTime.add(timestamp, -7, :day), :effective_total_tokens, estimate.total_tokens, "total_tokens", "weekly"}
       ]
-      |> Enum.reject(fn {_field, max_value, _window, _since, _usage_field, _delta, _metric,
-                         _label} ->
+      |> Enum.reject(fn {_field, max_value, _window, _since, _usage_field, _delta, _metric, _label} ->
         is_nil(max_value)
       end)
 

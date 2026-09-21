@@ -187,9 +187,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
   end
 
   defp enqueue_token_refresh(socket, identity_id, reload_fun) do
-    case Upstreams.enqueue_token_refresh_for_scope(socket.assigns.current_scope, identity_id,
-           trigger_kind: @reason
-         ) do
+    case Upstreams.enqueue_token_refresh_for_scope(socket.assigns.current_scope, identity_id, trigger_kind: @reason) do
       {:ok, %{job: job}} ->
         message =
           if job.conflict?, do: "Token refresh is already queued", else: "Token refresh queued"

@@ -19,9 +19,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
       parent = self()
       registry = Module.concat(__MODULE__, "Sensitive#{System.unique_integer([:positive])}")
 
-      start_supervised!(
-        {CodexPooler.Gateway.Transports.Websocket.ActivityRegistry, name: registry}
-      )
+      start_supervised!({CodexPooler.Gateway.Transports.Websocket.ActivityRegistry, name: registry})
 
       starter =
         start_supervised!({Task,
@@ -244,9 +242,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
       System.monotonic_time(:millisecond) + 15_000
     )
 
-    CodexPooler.TestDiagnostics.puts(
-      "dead execution race: distinct PostgreSQL backends=#{finalizer_backend},#{recovery_backend}; pg_blocking_pids observed recovery waiting on finalization"
-    )
+    CodexPooler.TestDiagnostics.puts("dead execution race: distinct PostgreSQL backends=#{finalizer_backend},#{recovery_backend}; pg_blocking_pids observed recovery waiting on finalization")
 
     send(finalizer, :commit)
     assert_receive {:finalized, {:ok, _}}, 15_000
@@ -257,9 +253,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
     UnboxedFixture.run_unboxed(fn ->
       assert Repo.reload!(request).status == "succeeded"
 
-      assert Enum.sort(
-               Enum.map(Accounting.list_ledger_entries_for_request(request.id), & &1.entry_kind)
-             ) == ["release", "reservation", "settlement"]
+      assert Enum.sort(Enum.map(Accounting.list_ledger_entries_for_request(request.id), & &1.entry_kind)) == ["release", "reservation", "settlement"]
     end)
   end
 
@@ -498,9 +492,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
       assert {:ok, %{dead_execution_attempts_recovered: 0}} =
                DeadExecutionRecovery.recover(DateTime.add(now, 1), minimum_age_seconds: 0)
 
-      assert Enum.sort(
-               Enum.map(Accounting.list_ledger_entries_for_request(request.id), & &1.entry_kind)
-             ) == ["release", "reservation", "settlement"]
+      assert Enum.sort(Enum.map(Accounting.list_ledger_entries_for_request(request.id), & &1.entry_kind)) == ["release", "reservation", "settlement"]
 
       assert {:ok, _} =
                Accounting.reserve(setup.auth, setup.model, %{

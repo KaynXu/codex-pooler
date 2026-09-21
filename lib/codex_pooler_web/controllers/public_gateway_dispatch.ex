@@ -145,9 +145,7 @@ defmodule CodexPoolerWeb.PublicGatewayDispatch do
 
             result = dispatcher.(auth, coerced)
 
-            PublicGatewayResult.send(conn, result, &normalize_success.(&1, coerced),
-              validation_param: validation_param_mapper(coerced)
-            )
+            PublicGatewayResult.send(conn, result, &normalize_success.(&1, coerced), validation_param: validation_param_mapper(coerced))
 
           {:error, reason} ->
             GatewayHelpers.send_error(conn, reason)

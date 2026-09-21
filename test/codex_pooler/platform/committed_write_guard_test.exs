@@ -24,31 +24,23 @@ defmodule CodexPooler.CommittedWriteGuardTest do
 
   @probe_path "test/support/fixtures/committed_write_guard_probe.exs"
 
-  @tag slow:
-         "boots an isolated ExUnit runtime and verifies actual committed leaks and cleanup outcomes"
+  @tag slow: "boots an isolated ExUnit runtime and verifies actual committed leaks and cleanup outcomes"
   test "fails the tests that leave committed rows behind, and the run when nothing guarded them" do
     on_exit(&delete_probe_rows!/0)
     probe = run_probe!()
 
     assert probe.outcomes == %{
-             "test leaves an upstream identity no user created behind" =>
-               {"failed", "during", ["upstream_identities"]},
+             "test leaves an upstream identity no user created behind" => {"failed", "during", ["upstream_identities"]},
              "test writes inside the sandbox after that leak" => {"passed", "none", []},
-             "test fails in its body after leaking a committed identity" =>
-               {"failed", "none", []},
+             "test fails in its body after leaking a committed identity" => {"failed", "none", []},
              "test commits an identity and registers its removal first" => {"passed", "none", []},
-             "test commits through a connection it starts with DBConnection.start_link/2" =>
-               {"failed", "during", ["instance_presences"]},
-             "test updates the committed instance settings singleton and never restores it" =>
-               {"failed", "during", ["instance_settings"]},
-             "test leaves a pricing snapshot behind in auto mode" =>
-               {"failed", "during", ["pricing_snapshots"]},
+             "test commits through a connection it starts with DBConnection.start_link/2" => {"failed", "during", ["instance_presences"]},
+             "test updates the committed instance settings singleton and never restores it" => {"failed", "during", ["instance_settings"]},
+             "test leaves a pricing snapshot behind in auto mode" => {"failed", "during", ["pricing_snapshots"]},
              "test commits an identity without the guard" => {"passed", "none", []},
-             "test starts after rows an unguarded test committed" =>
-               {"failed", "before", ["upstream_identities"]},
+             "test starts after rows an unguarded test committed" => {"failed", "before", ["upstream_identities"]},
              "test starts after that failure has been reported" => {"passed", "none", []},
-             "test commits through a connection opened before the guard started, as the last test" =>
-               {"passed", "none", []}
+             "test commits through a connection opened before the guard started, as the last test" => {"passed", "none", []}
            },
            probe.output
 
@@ -108,9 +100,7 @@ defmodule CodexPooler.CommittedWriteGuardTest do
           where: like(pricing.model_identifier, "committed-write-guard-probe-%")
       )
 
-      Repo.query!(
-        "DELETE FROM instance_presences WHERE instance_id LIKE 'committed-write-guard-probe-%'"
-      )
+      Repo.query!("DELETE FROM instance_presences WHERE instance_id LIKE 'committed-write-guard-probe-%'")
 
       Repo.query!(
         "UPDATE instance_settings SET metadata = metadata - 'committed_write_guard_probe' " <>

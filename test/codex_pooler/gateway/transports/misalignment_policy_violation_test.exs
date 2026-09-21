@@ -71,8 +71,7 @@ defmodule CodexPooler.Gateway.Transports.MisalignmentPolicyViolationTest do
         do: {status, exact_body("blocked"), eligible_options}
       ) ++
         [
-          {400, CodexPooler.JSON.encode!(%{"error" => %{"code" => "other_code"}}),
-           eligible_options},
+          {400, CodexPooler.JSON.encode!(%{"error" => %{"code" => "other_code"}}), eligible_options},
           {400,
            CodexPooler.JSON.encode!(%{
              "response" => %{

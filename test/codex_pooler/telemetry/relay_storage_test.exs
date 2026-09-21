@@ -18,16 +18,12 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     assert {1, _} = Relay.expire_counted()
 
     assert %{rows: [[1, 7]]} =
-             Repo.query!(
-               "SELECT rows, samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'"
-             )
+             Repo.query!("SELECT rows, samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'")
 
     assert {0, _} = Relay.expire_counted()
 
     assert %{rows: [[1, 7]]} =
-             Repo.query!(
-               "SELECT rows, samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'"
-             )
+             Repo.query!("SELECT rows, samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'")
   end
 
   test "loss checkpoints are idempotent and daily prune counts unclaimed samples" do
@@ -36,9 +32,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     assert {:ok, :ok} = Relay.checkpoint_loss("writer", "buffer_overflow", 8)
 
     assert %{rows: [[0, 8]]} =
-             Repo.query!(
-               "SELECT rows,samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'"
-             )
+             Repo.query!("SELECT rows,samples FROM telemetry_relay_losses WHERE reason='buffer_overflow'")
 
     Repo.insert!(%RelayEvent{
       event: "stream_outcome",
@@ -49,9 +43,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
     assert {1, _} = Relay.prune()
 
     assert %{rows: [[1, 9]]} =
-             Repo.query!(
-               "SELECT rows,samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'"
-             )
+             Repo.query!("SELECT rows,samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'")
   end
 
   test "expiry rollback restores rows and loss totals together" do
@@ -131,9 +123,7 @@ defmodule CodexPooler.Telemetry.RelayStorageTest do
 
     UnboxedFixture.run_unboxed(fn ->
       assert %{rows: [[2, 16]]} =
-               Repo.query!(
-                 "SELECT rows,samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'"
-               )
+               Repo.query!("SELECT rows,samples FROM telemetry_relay_losses WHERE reason='expired_unclaimed'")
 
       assert {:ok, []} = Relay.claim()
     end)

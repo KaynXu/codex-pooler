@@ -32,8 +32,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
 
   for forwarding <- [false, true] do
     @tag forwarding: forwarding
-    @tag slow:
-           "kills a real executor, waits for its durable proof, and verifies exactly one websocket resend"
+    @tag slow: "kills a real executor, waits for its durable proof, and verifies exactly one websocket resend"
     test "socket forwarding=#{forwarding} resends an exactly recovered execution", %{
       forwarding: forwarding
     } do
@@ -51,8 +50,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
               path: "/backend-api/codex/responses",
-              respond:
-                FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: barrier)
+              respond: FakeUpstream.barrier_websocket_frames([], notify: self(), release_ref: barrier)
             ),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -120,19 +118,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DeadExecutionResendTest d
         # the terminal proof this test then waits for; the publisher is started
         # here only because the test environment leaves it disabled.
         publisher =
-          start_supervised!(
-            {ExecutionProofPublisher,
-             enabled: true, name: :"dead_execution_resend_publisher_#{unquote(forwarding)}"}
-          )
+          start_supervised!({ExecutionProofPublisher, enabled: true, name: :"dead_execution_resend_publisher_#{unquote(forwarding)}"})
 
         :ok = CodexPooler.ExecutionProofSupport.await_terminal!(attempt, publisher)
         assert ExecutionTerminalProofs.terminal?(attempt)
 
         # Scheduled recovery entry, at a time past the liveness window.
         assert {:ok, %{dead_execution_attempts_recovered: 1}} =
-                 Accounting.recover_dead_execution_attempts(
-                   DateTime.add(DateTime.utc_now(), 121, :second)
-                 )
+                 Accounting.recover_dead_execution_attempts(DateTime.add(DateTime.utc_now(), 121, :second))
       after
         :erlang.resume_process(socket)
       end

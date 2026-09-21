@@ -130,9 +130,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
 
   @tag slow: "keeps a real deferred SSE request alive across heartbeat renewal"
   test "sessioned HTTP streaming keeps the owner lease live until deferred completion" do
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %{OperationalSettings.current() | sse_keepalive_interval_ms: 60_000}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %{OperationalSettings.current() | sse_keepalive_interval_ms: 60_000})
 
     release_ref = make_ref()
     created = created_event()
@@ -255,8 +253,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.failed",
-             %{"type" => "response.failed", "error" => %{"code" => "server_error"}}}
+            {"response.failed", %{"type" => "response.failed", "error" => %{"code" => "server_error"}}}
           ],
           done: false
         )
@@ -272,16 +269,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.NativeSSECompletionTest do
 
     fixture = %{
       fixture
-      | model:
-          put_model_source_assignments!(fixture.model, [fixture.assignment, second.assignment])
+      | model: put_model_source_assignments!(fixture.model, [fixture.assignment, second.assignment])
     }
 
     {:ok, auth} = Access.authenticate_authorization_header(fixture.authorization)
 
     assert {:ok, session} =
              Websocket.start_codex_session(auth,
-               accepted_turn_state:
-                 "native-sse-retry-owner-#{System.unique_integer([:positive])}",
+               accepted_turn_state: "native-sse-retry-owner-#{System.unique_integer([:positive])}",
                owner_instance_id: "native-sse-retry-owner"
              )
 

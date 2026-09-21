@@ -102,9 +102,7 @@ defmodule CodexPoolerWeb.Admin.UnassignedUpstreamsLiveTest do
     |> CodexPooler.Repo.update!()
 
     assert :ok =
-             Upstreams.sync_pool_assignments_for_pool_edit(pool, [identity.id],
-               select_by: :upstream_identity_id
-             )
+             Upstreams.sync_pool_assignments_for_pool_edit(pool, [identity.id], select_by: :upstream_identity_id)
 
     assert [%{status: "active", upstream_identity_id: identity_id}] =
              Upstreams.list_pool_assignments(pool)

@@ -178,8 +178,7 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
     noncanonical_owner = insert_active_owner!("unusable-fallback")
     noncanonical_setting = insert_operator_setting!(noncanonical_owner, false)
 
-    assert {:error,
-            "MCP fixture canonical bootstrap owner is not usable: expected active, undeleted, password-ready instance owner"} =
+    assert {:error, "MCP fixture canonical bootstrap owner is not usable: expected active, undeleted, password-ready instance owner"} =
              MCPFixture.acquire(options)
 
     refute File.exists?(path)

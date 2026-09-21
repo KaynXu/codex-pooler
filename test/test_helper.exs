@@ -52,9 +52,7 @@ settings = CodexPooler.InstanceSettings.ensure_singleton!()
 
 # Keep the authoritative snapshot without background DB timers between tests.
 :ok =
-  CodexPooler.InstanceSettings.Cache.restore_for_test(
-    CodexPooler.InstanceSettings.Cache.snapshot_for_test()
-  )
+  CodexPooler.InstanceSettings.Cache.restore_for_test(CodexPooler.InstanceSettings.Cache.snapshot_for_test())
 
 # Fails any guarded test that leaves committed rows behind. Started after the harness's own
 # committed row above, so that row is part of the baseline every test is compared with.

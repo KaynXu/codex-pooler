@@ -8,8 +8,7 @@ defmodule CodexPooler.Accounting.DeadExecutionCandidateQueryTest do
 
   for planner <- [:default, :bitmap] do
     @tag planner: planner
-    @tag slow:
-           "seeds 10000 attempts and verifies the real recovery query remains bounded across bitmap and index plans"
+    @tag slow: "seeds 10000 attempts and verifies the real recovery query remains bounded across bitmap and index plans"
     test "candidate batch stays bounded and advances with #{planner} planning", %{
       planner: planner
     } do

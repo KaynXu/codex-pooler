@@ -49,8 +49,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "unsupported_value",
                   "param" => "reasoning.effort",
-                  "message" =>
-                    "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+                  "message" => "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
                 }
               }}
 
@@ -106,8 +105,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "invalid_value",
                   "param" => nil,
-                  "message" =>
-                    "upstream rejected the request (invalid_value); supported values: low, medium, high"
+                  "message" => "upstream rejected the request (invalid_value); supported values: low, medium, high"
                 }
               }}
 
@@ -120,12 +118,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
   } do
     cases = [
       {"unknown code", validation_rejection(400, "provider_specific_code", "reasoning.effort")},
-      {"server_error type",
-       validation_rejection(400, "unsupported_value", "reasoning.effort", "server_error")},
+      {"server_error type", validation_rejection(400, "unsupported_value", "reasoning.effort", "server_error")},
       {"missing type", validation_rejection(400, "unsupported_value", "reasoning.effort", nil)},
-      {"detail body",
-       {:json_error, 400,
-        %{"detail" => "Unsupported value reasoning.effort " <> @provider_sentinel}}},
+      {"detail body", {:json_error, 400, %{"detail" => "Unsupported value reasoning.effort " <> @provider_sentinel}}},
       {"403", validation_rejection(403, "unsupported_value", "reasoning.effort")},
       {"404", validation_rejection(404, "unsupported_value", "reasoning.effort")},
       {"422", validation_rejection(422, "invalid_value", "reasoning.effort")}
@@ -231,8 +226,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "unsupported_value",
                   "param" => "reasoning.effort",
-                  "message" =>
-                    "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+                  "message" => "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
                 }
               }}
 
@@ -290,8 +284,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                   "type" => "invalid_request_error",
                   "code" => "invalid_value",
                   "param" => nil,
-                  "message" =>
-                    "upstream rejected the request (invalid_value); supported values: low, medium, high"
+                  "message" => "upstream rejected the request (invalid_value); supported values: low, medium, high"
                 }
               }}
 
@@ -315,12 +308,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     conn: conn
   } do
     cases = [
-      {"none", @message_without_list, nil, "none",
-       "upstream rejected parameter reasoning.effort (unsupported_value)"},
-      {"unparseable", @message_with_unparseable_list, nil, "unparseable",
-       "upstream rejected parameter reasoning.effort (unsupported_value)"},
-      {"present", @message_with_list, ~w(low medium high), "present",
-       "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"}
+      {"none", @message_without_list, nil, "none", "upstream rejected parameter reasoning.effort (unsupported_value)"},
+      {"unparseable", @message_with_unparseable_list, nil, "unparseable", "upstream rejected parameter reasoning.effort (unsupported_value)"},
+      {"present", @message_with_list, ~w(low medium high), "present", "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"}
     ]
 
     for full? <- [false, true], {label, message, values, state, expected} <- cases do
@@ -410,8 +400,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
           FakeUpstream.expect_request(
             method: "POST",
             path: "/backend-api/codex/responses",
-            respond:
-              message_rejection(404, "unsupported_value", "reasoning.effort", @message_with_list)
+            respond: message_rejection(404, "unsupported_value", "reasoning.effort", @message_with_list)
           )
         ])
       )
@@ -523,8 +512,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
             FakeUpstream.expect_request(
               method: "POST",
               path: "/backend-api/codex/responses",
-              respond:
-                {:json_error, 400, %{"error" => Map.put(error, "message", @provider_sentinel)}}
+              respond: {:json_error, 400, %{"error" => Map.put(error, "message", @provider_sentinel)}}
             )
           ])
         )
@@ -595,9 +583,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
     # relay and the server-owned body must stay byte-identical.
     for status <- [429, 500] do
       upstream =
-        start_upstream(
-          FakeUpstream.repeat_last([validation_rejection(status, "invalid_value", "tools")])
-        )
+        start_upstream(FakeUpstream.repeat_last([validation_rejection(status, "invalid_value", "tools")]))
 
       setup = gateway_setup(upstream)
       put_full_override!(setup)
@@ -764,8 +750,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexValidationRejectionTest do
                     "type" => "invalid_request_error",
                     "code" => "unsupported_value",
                     "param" => "reasoning_effort",
-                    "message" =>
-                      "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high"
+                    "message" => "upstream rejected parameter reasoning_effort (unsupported_value); supported values: low, medium, high"
                   }
                 }},
              "stream #{stream?}"

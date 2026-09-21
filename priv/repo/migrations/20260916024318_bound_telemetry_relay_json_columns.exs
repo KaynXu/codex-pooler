@@ -80,37 +80,25 @@ defmodule CodexPooler.Repo.Migrations.BoundTelemetryRelayJsonColumns do
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT labels_values_bounded")
     execute(@labels_function)
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT labels_values_bounded CHECK (telemetry_relay_labels_bounded(labels))"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT labels_values_bounded CHECK (telemetry_relay_labels_bounded(labels))")
 
-    execute(
-      "ALTER TABLE telemetry_relay_events DROP CONSTRAINT measurements_non_negative_integers"
-    )
+    execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT measurements_non_negative_integers")
 
     execute(@measurements_function)
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT measurements_non_negative_integers CHECK (telemetry_relay_measurements_bounded(measurements))"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT measurements_non_negative_integers CHECK (telemetry_relay_measurements_bounded(measurements))")
   end
 
   def down do
-    execute(
-      "ALTER TABLE telemetry_relay_events DROP CONSTRAINT measurements_non_negative_integers"
-    )
+    execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT measurements_non_negative_integers")
 
     execute("DROP FUNCTION telemetry_relay_measurements_bounded(jsonb)")
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT measurements_non_negative_integers CHECK (#{@previous_measurements_check})"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT measurements_non_negative_integers CHECK (#{@previous_measurements_check})")
 
     execute("ALTER TABLE telemetry_relay_events DROP CONSTRAINT labels_values_bounded")
     execute(@previous_labels_function)
 
-    execute(
-      "ALTER TABLE telemetry_relay_events ADD CONSTRAINT labels_values_bounded CHECK (telemetry_relay_labels_bounded(labels))"
-    )
+    execute("ALTER TABLE telemetry_relay_events ADD CONSTRAINT labels_values_bounded CHECK (telemetry_relay_labels_bounded(labels))")
   end
 end

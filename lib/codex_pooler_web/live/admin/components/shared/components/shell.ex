@@ -110,8 +110,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   attr :active_nav, :atom, required: true
   attr :alert_notification_center, :map, required: true
 
-  attr :openai_status_aggregate, :map,
-    default: %{incidents: [], last_success_at: nil, stale?: false}
+  attr :openai_status_aggregate, :map, default: %{incidents: [], last_success_at: nil, stale?: false}
 
   slot :inner_block, required: true
 
@@ -334,9 +333,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
         >
           <div class="flex min-w-0 flex-col gap-6 p-4 sm:p-6 xl:p-8">
             <.openai_status_banner
-              :if={
-                @active_nav != :incidents and openai_status_banner_visible?(@openai_status_aggregate)
-              }
+              :if={@active_nav != :incidents and openai_status_banner_visible?(@openai_status_aggregate)}
               aggregate={@openai_status_aggregate}
             />
             {render_slot(@inner_block)}

@@ -276,8 +276,7 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
     test "failed account-link priming records sanitized failure and discards without retry" do
       upstream =
         start_path_upstream(%{
-          "/backend-api/wham/usage" =>
-            {500, %{"error" => %{"message" => "Bearer secret-token failed"}}},
+          "/backend-api/wham/usage" => {500, %{"error" => %{"message" => "Bearer secret-token failed"}}},
           "/codex/models" => {200, %{"models" => [%{"id" => "gpt-failure"}]}}
         })
 
@@ -548,9 +547,7 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
 
     unless skip_activation_priming do
       assert {:ok, _job} =
-               Jobs.enqueue_assignment_priming(assignment.pool_id, assignment,
-                 trigger_kind: "assignment_activated"
-               )
+               Jobs.enqueue_assignment_priming(assignment.pool_id, assignment, trigger_kind: "assignment_activated")
     end
 
     {pool, assignment, identity}

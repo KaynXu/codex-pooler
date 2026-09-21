@@ -80,9 +80,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
         %{chatgpt_account_id: "acct_beta", account_email: "shared@example.COM"}
       )
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN broad_domain account_holder=#{account_holder} account_waiter=#{account_waiter} account_blocking=#{inspect(account_blocking)} email_holder=#{email_holder} email_waiter=#{email_waiter} email_blocking=#{inspect(email_blocking)} terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN broad_domain account_holder=#{account_holder} account_waiter=#{account_waiter} account_blocking=#{inspect(account_blocking)} email_holder=#{email_holder} email_waiter=#{email_waiter} email_blocking=#{inspect(email_blocking)} terminal=ok sqlstate_40P01=0")
   end
 
   test "disjoint identity resources proceed while another transaction holds its slot" do
@@ -105,9 +103,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     assert waiter_blocking == []
     assert {:ok, ^waiter_backend_pid} = Task.await(waiter, @detection_timeout_ms)
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN disjoint holder=#{blocker_backend_pid} peer=#{waiter_backend_pid} holder_blocking=#{inspect(blocker_blocking)} peer_blocking=#{inspect(waiter_blocking)} terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN disjoint holder=#{blocker_backend_pid} peer=#{waiter_backend_pid} holder_blocking=#{inspect(blocker_blocking)} peer_blocking=#{inspect(waiter_blocking)} terminal=ok sqlstate_40P01=0")
 
     send(blocker.pid, {barrier, :release})
     assert {:ok, ^blocker_backend_pid} = Task.await(blocker, @detection_timeout_ms)
@@ -133,9 +129,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     assert_receive {^barrier, :waiter, :locked, ^waiter_backend_pid}, @detection_timeout_ms
     assert {:ok, ^waiter_backend_pid} = Task.await(waiter, @detection_timeout_ms)
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN reverse_union holder=#{blocker_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN reverse_union holder=#{blocker_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} terminal=ok sqlstate_40P01=0")
   end
 
   test "workspace and subject selection stays distinct after acquiring broader account locks" do
@@ -287,9 +281,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
 
     assert Decimal.compare(used_percent, Decimal.new(31)) == :eq
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN reentrant_advisory holder=#{holder_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} wait_event=advisory terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN reentrant_advisory holder=#{holder_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} wait_event=advisory terminal=ok sqlstate_40P01=0")
   end
 
   defp evidence_attrs(used_percent),
@@ -390,8 +382,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
 
     %{
       legacy: committed_identity!(%{chatgpt_account_id: account_id}),
-      alpha:
-        committed_identity!(%{chatgpt_account_id: account_id, workspace_id: "workspace_alpha"}),
+      alpha: committed_identity!(%{chatgpt_account_id: account_id, workspace_id: "workspace_alpha"}),
       beta: committed_identity!(%{chatgpt_account_id: account_id, workspace_id: "workspace_beta"})
     }
   end

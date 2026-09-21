@@ -201,10 +201,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     # registry local rather than flipping the global one for later tests.
     start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
-    start_supervised!(
-      {RolloutDrain,
-       name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry}
-    )
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry})
 
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
 
@@ -296,8 +293,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
         fn event, _measurements, metadata, destination ->
           send(
             destination,
-            {:endpoint_log_decision, event, metadata.conn.request_path,
-             endpoint_log_level(metadata)}
+            {:endpoint_log_decision, event, metadata.conn.request_path, endpoint_log_level(metadata)}
           )
         end,
         test_pid

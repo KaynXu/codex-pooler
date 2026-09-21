@@ -27,11 +27,8 @@ defmodule CodexPooler.Application do
       CodexPooler.Access.APIKeys.TouchDebounce,
       CodexPooler.Upstreams.CloudflareCookies,
       CodexPooler.Gateway.Transports.Admission,
-      {Registry,
-       keys: :unique,
-       name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
-      {Task.Supervisor,
-       name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
+      {Registry, keys: :unique, name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
+      {Task.Supervisor, name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
       ActivityRegistry,
       CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry,
       CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
@@ -41,9 +38,7 @@ defmodule CodexPooler.Application do
       CodexPooler.Events.PostgresBridge,
       CodexPooler.InstanceSettings.Cache,
       {Oban, Application.fetch_env!(:codex_pooler, Oban)},
-      {DNSCluster,
-       query: Application.get_env(:codex_pooler, :dns_cluster_query) || :ignore,
-       resolver: CodexPooler.Platform.DNSClusterResolver},
+      {DNSCluster, query: Application.get_env(:codex_pooler, :dns_cluster_query) || :ignore, resolver: CodexPooler.Platform.DNSClusterResolver},
       CodexPoolerWeb.Endpoint
     ]
 

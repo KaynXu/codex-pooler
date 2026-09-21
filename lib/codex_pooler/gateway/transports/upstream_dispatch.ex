@@ -82,14 +82,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:identity) => UpstreamIdentity.t(),
           required(:observation) => WebsocketOwnerRequest.observation(),
           required(:reset_probe) => ResetProbe.t() | nil,
-          required(:native_codex_response_control) =>
-            CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
+          required(:native_codex_response_control) => CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
           required(:assignment_advertised?) => boolean(),
           required(:connection_bound_continuation?) => boolean(),
-          required(:websocket_delivery_mode) =>
-            :relay | :collect_compaction | :collect_full_history,
-          required(:native_compaction_metadata) =>
-            CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
+          required(:websocket_delivery_mode) => :relay | :collect_compaction | :collect_full_history,
+          required(:native_compaction_metadata) => CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
           required(:effective_serving_mode) => String.t(),
           required(:request_id) => Ecto.UUID.t() | nil,
           required(:attempt_id) => Ecto.UUID.t() | nil,
@@ -99,8 +96,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:native_compaction_capability) =>
             CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t()
             | nil,
-          required(:first_compact_collection) =>
-            NativeCompactionAdmission.FirstCompactCollection.t() | nil,
+          required(:first_compact_collection) => NativeCompactionAdmission.FirstCompactCollection.t() | nil,
           required(:expected_connection_lifecycle) => map() | nil,
           required(:forward_error_body?) => boolean(),
           required(:native_client_retry_observation) => ClientRetry.Observation.t() | nil,
@@ -679,8 +675,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           do: Map.get(lifecycle, :replay_attempt_id, attempt.id),
           else: Map.get(lifecycle, :eligible_attempt_id, attempt.id)
         ),
-      replay_generation:
-        Map.get(attempt, :replay_generation, Map.get(lifecycle, :replay_generation, 0))
+      replay_generation: Map.get(attempt, :replay_generation, Map.get(lifecycle, :replay_generation, 0))
     }
 
     WebsocketOwnerForwarder.prepare_next_replay_descriptor(
@@ -839,8 +834,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           assignment_advertised?: request_data.assignment_advertised?,
           connection_bound_continuation?: request_data.connection_bound_continuation?,
           forward_error_body?: request_data.forward_error_body?,
-          submission_notification?:
-            is_function(request_options.transport.websocket_owner_submission_observer, 0)
+          submission_notification?: is_function(request_options.transport.websocket_owner_submission_observer, 0)
         }
 
         owner_request_envelope(attrs, request_data, request_options)
@@ -918,8 +912,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp owner_request_envelope_without_replay(attrs, request_data, request_options, admission) do
     case {request_data.websocket_delivery_mode, admission} do
-      {delivery_mode,
-       {:ok, capability, {:forwarded, _session, _lease, _downstream, _opts}, _lifecycle}}
+      {delivery_mode, {:ok, capability, {:forwarded, _session, _lease, _downstream, _opts}, _lifecycle}}
       when delivery_mode in [:relay, :collect_compaction] ->
         owner_request_v3(
           attrs,
@@ -958,8 +951,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         |> Map.merge(%{
           version: 7,
           client_retry_dispatch_authority: authority,
-          compaction_retry_submit_hold:
-            Map.get(request_options.runtime, :compaction_retry_submit_hold)
+          compaction_retry_submit_hold: Map.get(request_options.runtime, :compaction_retry_submit_hold)
         })
         |> WebsocketOwnerRequestV7.new()
     end
@@ -1369,14 +1361,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       {:status, reply.status != 200},
       {:headers, not owner_response_headers?(reply.headers)},
       {:response_id, invalid_optional_owner_field?(reply, :response_id, &clean_binary?/1)},
-      {:upstream_websocket_connection,
-       invalid_optional_owner_field?(reply, :upstream_websocket_connection, &is_map/1)},
-      {:websocket_frame_headers,
-       invalid_optional_owner_field?(reply, :websocket_frame_headers, &is_map/1)},
-      {:upstream_error_code,
-       invalid_optional_owner_field?(reply, :upstream_error_code, &nil_or_clean_binary?/1)},
-      {:upstream_error_param,
-       invalid_optional_owner_field?(reply, :upstream_error_param, &nil_or_clean_binary?/1)},
+      {:upstream_websocket_connection, invalid_optional_owner_field?(reply, :upstream_websocket_connection, &is_map/1)},
+      {:websocket_frame_headers, invalid_optional_owner_field?(reply, :websocket_frame_headers, &is_map/1)},
+      {:upstream_error_code, invalid_optional_owner_field?(reply, :upstream_error_code, &nil_or_clean_binary?/1)},
+      {:upstream_error_param, invalid_optional_owner_field?(reply, :upstream_error_param, &nil_or_clean_binary?/1)},
       {:transport_failure, invalid_optional_owner_field?(reply, :transport_failure, &is_map/1)}
     ]
     |> Enum.flat_map(fn

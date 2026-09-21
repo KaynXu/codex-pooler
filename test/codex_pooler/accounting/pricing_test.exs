@@ -174,8 +174,7 @@ defmodule CodexPooler.Accounting.PricingTest do
                    model,
                    %{"model" => requested_identifier, "service_tier" => "priority"},
                    %{
-                     correlation_id:
-                       "corr-legacy-case-#{test_case.path}-#{test_case.availability}-#{unique}"
+                     correlation_id: "corr-legacy-case-#{test_case.path}-#{test_case.availability}-#{unique}"
                    }
                  )
 
@@ -2185,8 +2184,7 @@ defmodule CodexPooler.Accounting.PricingTest do
         })
 
       for {suffix, payload, usage, expected_snapshot, expected_rate} <- [
-            {"priority-short", %{"service_tier" => "priority"}, %{input_tokens: 10},
-             priority_pricing, "11"},
+            {"priority-short", %{"service_tier" => "priority"}, %{input_tokens: 10}, priority_pricing, "11"},
             {"standard-long", %{}, %{input_tokens: 272_001}, long_context_pricing, "13"}
           ] do
         assert {:ok, reserved} =

@@ -92,8 +92,7 @@ defmodule CodexPooler.Accounting.Metadata do
           correlation_id: attr(attrs, :correlation_id) || Ecto.UUID.generate(),
           client_ip: blank_to_nil(attr(attrs, :client_ip)),
           user_agent: blank_to_nil(attr(attrs, :user_agent)),
-          request_metadata:
-            metadata_request_metadata(auth, attr(attrs, :request_metadata) || %{}),
+          request_metadata: metadata_request_metadata(auth, attr(attrs, :request_metadata) || %{}),
           admitted_at: timestamp,
           completed_at: timestamp,
           response_status_code: attr(attrs, :response_status_code),
@@ -115,8 +114,7 @@ defmodule CodexPooler.Accounting.Metadata do
   end
 
   def record_metadata_request(_auth, _attrs),
-    do:
-      {:error, accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec record_upstream_identity_metadata_request(UpstreamIdentity.t(), map()) :: request_result()
   def record_upstream_identity_metadata_request(identity, attrs \\ %{})
@@ -199,8 +197,7 @@ defmodule CodexPooler.Accounting.Metadata do
           correlation_id: attr(attrs, :correlation_id) || Ecto.UUID.generate(),
           client_ip: blank_to_nil(attr(attrs, :client_ip)),
           user_agent: blank_to_nil(attr(attrs, :user_agent)),
-          request_metadata:
-            identity_metadata_request_metadata(identity, attr(attrs, :request_metadata) || %{}),
+          request_metadata: identity_metadata_request_metadata(identity, attr(attrs, :request_metadata) || %{}),
           admitted_at: timestamp,
           completed_at: timestamp,
           response_status_code: attr(attrs, :response_status_code),
@@ -457,9 +454,7 @@ defmodule CodexPooler.Accounting.Metadata do
 
   defp sanitize_native_client_retry_observation(value) do
     value
-    |> Map.take(
-      ~w(version authority_complete output_item_done_count output_item_done_count_saturated partial_reasoning_seen first_visible_at terminal_seen terminal_candidate_seen)
-    )
+    |> Map.take(~w(version authority_complete output_item_done_count output_item_done_count_saturated partial_reasoning_seen first_visible_at terminal_seen terminal_candidate_seen))
     |> Enum.reduce(%{}, fn
       {"version", 1}, sanitized ->
         Map.put(sanitized, "version", 1)

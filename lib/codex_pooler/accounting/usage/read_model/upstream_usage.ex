@@ -61,8 +61,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
         build_codex_usage_for_upstream_identity(identity, opts)
 
       [] ->
-        {:error,
-         accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
+        {:error, accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
 
       [_first, _second | _rest] ->
         {:error,
@@ -74,9 +73,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   end
 
   def build_codex_usage_for_chatgpt_account(_chatgpt_account_id, _opts),
-    do:
-      {:error,
-       accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
+    do: {:error, accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
 
   @spec build_codex_usage_for_upstream_identity(UpstreamIdentity.t(), keyword()) ::
           {:ok, map()} | {:error, accounting_error()}
@@ -84,8 +81,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     if active_assigned_identity?(identity) do
       build_codex_usage_for_identity(identity, opts)
     else
-      {:error,
-       accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
+      {:error, accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
     end
   end
 
@@ -225,9 +221,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     }
   end
 
-  defp codex_usage_candidate_has_quota?(
-         {%UpstreamIdentity{}, %PoolUpstreamAssignment{}, snapshot}
-       ) do
+  defp codex_usage_candidate_has_quota?({%UpstreamIdentity{}, %PoolUpstreamAssignment{}, snapshot}) do
     Enum.any?(RoutingQuotaSnapshot.time_visible_raw_windows(snapshot), fn window ->
       window.quota_scope == "account"
     end) or

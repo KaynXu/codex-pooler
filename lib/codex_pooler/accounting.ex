@@ -332,8 +332,7 @@ defmodule CodexPooler.Accounting do
       Map.merge(opts, %{
         request_status: "failed",
         attempt_status: "failed",
-        usage:
-          Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
+        usage: Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
         last_error_code: Map.get(opts, :last_error_code, "stream_interrupted")
       })
 
@@ -359,8 +358,7 @@ defmodule CodexPooler.Accounting do
       Map.merge(opts, %{
         request_status: "failed",
         attempt_status: "failed",
-        usage:
-          Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
+        usage: Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
         last_error_code: Map.get(opts, :last_error_code, "stream_interrupted")
       })
 

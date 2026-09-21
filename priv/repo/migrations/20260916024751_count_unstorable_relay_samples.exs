@@ -16,17 +16,11 @@ defmodule CodexPooler.Repo.Migrations.CountUnstorableRelaySamples do
   def up do
     execute("ALTER TABLE telemetry_relay_losses DROP CONSTRAINT relay_loss_reason")
 
-    execute(
-      "ALTER TABLE telemetry_relay_losses ADD CONSTRAINT relay_loss_reason CHECK (reason IN (#{@reasons}))"
-    )
+    execute("ALTER TABLE telemetry_relay_losses ADD CONSTRAINT relay_loss_reason CHECK (reason IN (#{@reasons}))")
 
-    execute(
-      "ALTER TABLE telemetry_relay_loss_checkpoints DROP CONSTRAINT relay_checkpoint_reason"
-    )
+    execute("ALTER TABLE telemetry_relay_loss_checkpoints DROP CONSTRAINT relay_checkpoint_reason")
 
-    execute(
-      "ALTER TABLE telemetry_relay_loss_checkpoints ADD CONSTRAINT relay_checkpoint_reason CHECK (reason IN (#{@checkpoint_reasons}) AND samples >= 0)"
-    )
+    execute("ALTER TABLE telemetry_relay_loss_checkpoints ADD CONSTRAINT relay_checkpoint_reason CHECK (reason IN (#{@checkpoint_reasons}) AND samples >= 0)")
   end
 
   def down do
@@ -37,16 +31,10 @@ defmodule CodexPooler.Repo.Migrations.CountUnstorableRelaySamples do
     execute("DELETE FROM telemetry_relay_loss_checkpoints WHERE reason = 'rejected_sample'")
     execute("ALTER TABLE telemetry_relay_losses DROP CONSTRAINT relay_loss_reason")
 
-    execute(
-      "ALTER TABLE telemetry_relay_losses ADD CONSTRAINT relay_loss_reason CHECK (reason IN (#{@previous_reasons}))"
-    )
+    execute("ALTER TABLE telemetry_relay_losses ADD CONSTRAINT relay_loss_reason CHECK (reason IN (#{@previous_reasons}))")
 
-    execute(
-      "ALTER TABLE telemetry_relay_loss_checkpoints DROP CONSTRAINT relay_checkpoint_reason"
-    )
+    execute("ALTER TABLE telemetry_relay_loss_checkpoints DROP CONSTRAINT relay_checkpoint_reason")
 
-    execute(
-      "ALTER TABLE telemetry_relay_loss_checkpoints ADD CONSTRAINT relay_checkpoint_reason CHECK (reason IN (#{@previous_checkpoint_reasons}) AND samples >= 0)"
-    )
+    execute("ALTER TABLE telemetry_relay_loss_checkpoints ADD CONSTRAINT relay_checkpoint_reason CHECK (reason IN (#{@previous_checkpoint_reasons}) AND samples >= 0)")
   end
 end

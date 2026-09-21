@@ -342,8 +342,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     assert Accounts.get_user_by_session_token(current_token)
     refute Accounts.get_user_by_session_token(parallel_token)
 
-    assert_receive {:disconnect_user_sessions,
-                    %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
+    assert_receive {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
 
     assert user_id == user.id
 
@@ -578,8 +577,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
       assert_redirect(view, ~p"/admin/pools")
 
-      assert_receive {:disconnect_user_sessions,
-                      %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
+      assert_receive {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
 
       assert user_id == user.id
       assert except_live_socket_id == CodexPoolerWeb.UserAuth.live_socket_id_for_token(token)

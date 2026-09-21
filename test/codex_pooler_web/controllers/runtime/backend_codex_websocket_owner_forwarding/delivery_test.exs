@@ -400,9 +400,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DeliveryTe
     upstream_boundary = frame_observer_failure_upstream_boundary(self(), marker)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-observer-failure", "owner-observer-failure",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-observer-failure", "owner-observer-failure", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     logs =
       capture_log(fn ->
@@ -626,8 +624,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DeliveryTe
 
     send(
       parent,
-      {:receiver_delivery_gap_result, :cleanup_first, events,
-       receiver_delivery_gap_snapshot(state)}
+      {:receiver_delivery_gap_result, :cleanup_first, events, receiver_delivery_gap_snapshot(state)}
     )
   end
 

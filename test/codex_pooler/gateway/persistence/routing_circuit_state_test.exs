@@ -780,10 +780,8 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
              in_db_observer_with_backend_pid(fn ->
                %{
                  exact_lane: CircuitState.eligible?(auth, model, assignment, "proxy_http"),
-                 sibling_assignment:
-                   CircuitState.eligible?(auth, model, sibling_assignment, "proxy_http"),
-                 sibling_model:
-                   CircuitState.eligible?(auth, sibling_model, assignment, "proxy_http"),
+                 sibling_assignment: CircuitState.eligible?(auth, model, sibling_assignment, "proxy_http"),
+                 sibling_model: CircuitState.eligible?(auth, sibling_model, assignment, "proxy_http"),
                  sibling_route: CircuitState.eligible?(auth, model, assignment, "proxy_stream"),
                  retained_state: Repo.get!(RoutingCircuitState, written.id)
                }
@@ -844,8 +842,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       |> Repo.update!()
     end)
 
-    assert {:ok,
-            %{admission: :probe, state: %RoutingCircuitState{status: "half_open"} = first_probe}} =
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{status: "half_open"} = first_probe}} =
              in_db_observer(fn ->
                CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
              end)

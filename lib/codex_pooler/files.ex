@@ -107,8 +107,7 @@ defmodule CodexPooler.Files do
              create_file_request_opts(opts),
              %{
                "operation" => "create",
-               "error_code" =>
-                 bridge_error |> Map.get(:code, :upstream_file_bridge_failed) |> to_string()
+               "error_code" => bridge_error |> Map.get(:code, :upstream_file_bridge_failed) |> to_string()
              }
              |> Map.merge(RequestLog.bridge_route_metadata(bridge_error))
            ) do
@@ -462,8 +461,7 @@ defmodule CodexPooler.Files do
     records = Repo.all(response_assignment_affinity_record_query(pool_id, api_key_id, ids))
 
     if Enum.any?(records, &response_file_not_ready?(&1, now)) do
-      {:error,
-       error(409, :file_not_ready, "referenced file is not ready for responses use", "file_id")}
+      {:error, error(409, :file_not_ready, "referenced file is not ready for responses use", "file_id")}
     else
       {:error, error(404, :file_not_found, "file was not found", "file_id")}
     end

@@ -92,9 +92,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
 
     for size <- [16_383, 16_384, 16_385] do
       object =
-        CodexPooler.JSON.encode!(
-          Map.put(usage(16, 5, 21), "padding", String.duplicate("x", size - byte_size(base)))
-        )
+        CodexPooler.JSON.encode!(Map.put(usage(16, 5, 21), "padding", String.duplicate("x", size - byte_size(base))))
 
       prefix =
         ~s(event: response.completed\ndata: {"type":"response.completed","service_tier":"priority","usage":)

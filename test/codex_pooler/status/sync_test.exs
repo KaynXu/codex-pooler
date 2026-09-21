@@ -329,10 +329,7 @@ defmodule CodexPooler.Status.SyncTest do
     assert is_reference(bridge_ref)
 
     notifications =
-      start_supervised!(
-        {Postgrex.Notifications,
-         Keyword.take(Repo.config(), [:hostname, :port, :database, :username, :password, :ssl])}
-      )
+      start_supervised!({Postgrex.Notifications, Keyword.take(Repo.config(), [:hostname, :port, :database, :username, :password, :ssl])})
 
     channel = Events.postgres_channel()
     assert {:ok, ref} = Postgrex.Notifications.listen(notifications, channel)

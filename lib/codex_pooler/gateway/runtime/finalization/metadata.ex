@@ -584,8 +584,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       case DownstreamStream.public_openai_responses_stream_metadata(state) do
         %{"public_openai_responses_stream" => summary} when is_map(summary) ->
           %{
-            "public_openai_responses_stream" =>
-              Map.take(summary, @public_openai_responses_stream_keys)
+            "public_openai_responses_stream" => Map.take(summary, @public_openai_responses_stream_keys)
           }
 
         _metadata ->

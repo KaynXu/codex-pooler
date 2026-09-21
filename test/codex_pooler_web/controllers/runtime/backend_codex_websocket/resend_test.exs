@@ -102,9 +102,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
         end
 
       upstream =
-        start_upstream(
-          FakeUpstream.websocket_text_frames(Enum.map(frames, &CodexPooler.JSON.encode!/1))
-        )
+        start_upstream(FakeUpstream.websocket_text_frames(Enum.map(frames, &CodexPooler.JSON.encode!/1)))
 
       fallback_upstream =
         start_upstream(completed_response_frames("resp_quota_must_not_replay", 3, 1))
@@ -112,9 +110,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
       setup = gateway_setup(upstream)
 
       fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-quota-control",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-quota-control", compact?: false)
 
       prime_routing_quota!(fallback.identity)
       model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
@@ -190,9 +186,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-quota-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-quota-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -484,9 +478,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
     assert request.status == "failed"
 
     assert [first, second] =
-             Repo.all(
-               from(a in Attempt, where: a.request_id == ^request.id, order_by: a.attempt_number)
-             )
+             Repo.all(from(a in Attempt, where: a.request_id == ^request.id, order_by: a.attempt_number))
 
     refute first.pool_upstream_assignment_id == second.pool_upstream_assignment_id
     assert second.status == "failed"
@@ -1107,12 +1099,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
         start_upstream(
           # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
-            strict_native_request_any_connection(
-              FakeUpstream.websocket_text_frames(Enum.map(frames, &CodexPooler.JSON.encode!/1))
-            ),
-            strict_native_request_any_connection(
-              completed_response_frames("resp_cap_successor", 3, 1)
-            )
+            strict_native_request_any_connection(FakeUpstream.websocket_text_frames(Enum.map(frames, &CodexPooler.JSON.encode!/1))),
+            strict_native_request_any_connection(completed_response_frames("resp_cap_successor", 3, 1))
           ])
         )
 
@@ -1127,9 +1115,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
       assert :ok = Events.subscribe_pool(setup.pool)
 
       server =
-        start_supervised!(
-          {Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-        )
+        start_supervised!({Bandit, plug: CodexPoolerWeb.Endpoint, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
@@ -1137,9 +1123,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
         refute Process.alive?(server)
         assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000)
 
-        CodexPooler.TestDiagnostics.puts(
-          inspect(%{scenario: :successor_cap_cleanup, listener_stopped: true, port_closed: true})
-        )
+        CodexPooler.TestDiagnostics.puts(inspect(%{scenario: :successor_cap_cleanup, listener_stopped: true, port_closed: true}))
       end)
 
       {conn, websocket, ref} = public_websocket_connect!(port, setup, Ecto.UUID.generate())
@@ -1260,9 +1244,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
         assert {:ok, closed} = Mint.HTTP.close(conn)
         refute Mint.HTTP.open?(closed)
 
-        CodexPooler.TestDiagnostics.puts(
-          inspect(%{scenario: :successor_cap_cleanup, client_socket_closed: true})
-        )
+        CodexPooler.TestDiagnostics.puts(inspect(%{scenario: :successor_cap_cleanup, client_socket_closed: true}))
       end
     end
   end
@@ -1479,9 +1461,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
         # provenance: observed runbook terminal-failure resend (2026-09-09 23:43 UTC response.failed server_error)
         FakeUpstream.strict_sequence([
           strict_native_request_any_connection(provider_terminal_failure_frames("concurrent")),
-          strict_native_request_any_connection(
-            completed_response_frames("resp_after_concurrent_resend", 3, 1)
-          )
+          strict_native_request_any_connection(completed_response_frames("resp_after_concurrent_resend", 3, 1))
         ])
       )
 
@@ -2212,9 +2192,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ResendTest do
             5 -> await_turn_completed!(request_id, deadline)
           end
         else
-          flunk(
-            "expected the failed turn to complete, got #{inspect(Enum.map(turns, & &1.status))}"
-          )
+          flunk("expected the failed turn to complete, got #{inspect(Enum.map(turns, & &1.status))}")
         end
     end
   end

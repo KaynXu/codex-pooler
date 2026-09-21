@@ -19,10 +19,8 @@ defmodule CodexPoolerWeb.Mcp.ProtocolTest do
     test "Given initialize requests, When headers or metadata disagree, Then legacy semantics always win" do
       cases = [
         {%{}, nil},
-        {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => @modern_version}},
-         @modern_version},
-        {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => "unknown-version"}},
-         "unknown-version"}
+        {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => @modern_version}}, @modern_version},
+        {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => "unknown-version"}}, "unknown-version"}
       ]
 
       for {params, header} <- cases do
@@ -64,8 +62,7 @@ defmodule CodexPoolerWeb.Mcp.ProtocolTest do
       cases = [
         {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => "unknown-version"}}, nil},
         {%{}, "unknown-version"},
-        {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => "2025-11-25"}},
-         "2025-11-25"},
+        {%{"_meta" => %{"io.modelcontextprotocol/protocolVersion" => "2025-11-25"}}, "2025-11-25"},
         {modern_params(), "unknown-version"}
       ]
 

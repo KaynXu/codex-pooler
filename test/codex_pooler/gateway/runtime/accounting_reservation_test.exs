@@ -317,9 +317,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       auth
       |> request_options(payload, setup.model.exposed_model_id, "terminal-client-retry")
       |> RequestOptions.put_continuity(codex_session: session)
-      |> RequestOptions.put_transport(
-        websocket_writer: fn frame -> send(self(), {:frame, frame}) end
-      )
+      |> RequestOptions.put_transport(websocket_writer: fn frame -> send(self(), {:frame, frame}) end)
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
 
     assert {:ok, prepared} =
@@ -948,10 +946,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     opts =
       auth
       |> request_options(payload, setup.model.exposed_model_id, "replacement-lock-order")
-      |> RequestOptions.put_continuity(
-        accepted_turn_state:
-          "replacement-lock-order-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      |> RequestOptions.put_continuity(accepted_turn_state: "replacement-lock-order-#{System.unique_integer([:positive, :monotonic])}")
 
     assert {:ok, %CodexSession{} = session} = Websocket.start_codex_session(auth, opts)
     opts = RequestOptions.put_continuity(opts, codex_session: session)
@@ -1163,14 +1158,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
                Accounting.claim_websocket_turn(auth, setup.model, claim_attrs)
 
       reserve_and_start_turn = fn
-        received_auth,
-        received_model,
-        received_payload,
-        received_endpoint,
-        received_request_options,
-        received_route_state,
-        received_turn_claim,
-        received_authorized_correlation_id ->
+        received_auth, received_model, received_payload, received_endpoint, received_request_options, received_route_state, received_turn_claim, received_authorized_correlation_id ->
           assert received_auth == auth
           assert received_model.id == setup.model.id
           assert received_payload == payload
@@ -1436,8 +1424,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
           request_options =
             RequestOptions.build(
               %{
-                accepted_turn_state:
-                  "http-reservation-owner-#{failure}-#{System.unique_integer([:positive])}",
+                accepted_turn_state: "http-reservation-owner-#{failure}-#{System.unique_integer([:positive])}",
                 owner_instance_id: "http-owner-a",
                 session_lease_heartbeat_test_observer: parent
               },
@@ -1543,10 +1530,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     opts =
       auth
       |> request_options(payload, setup.model.exposed_model_id, "transport-required")
-      |> RequestOptions.put_continuity(
-        accepted_turn_state:
-          "transport-required-#{System.unique_integer([:positive, :monotonic])}"
-      )
+      |> RequestOptions.put_continuity(accepted_turn_state: "transport-required-#{System.unique_integer([:positive, :monotonic])}")
 
     assert {:ok, %CodexSession{} = session} = Websocket.start_codex_session(auth, opts)
 
@@ -1681,8 +1665,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     request_options =
       RequestOptions.build(
         %{
-          accepted_turn_state:
-            "http-heartbeat-terminal-#{suffix}-#{System.unique_integer([:positive])}",
+          accepted_turn_state: "http-heartbeat-terminal-#{suffix}-#{System.unique_integer([:positive])}",
           session_lease_heartbeat_test_observer: observer
         },
         @endpoint,

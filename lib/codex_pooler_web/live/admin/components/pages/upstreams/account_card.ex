@@ -599,8 +599,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp upstream_account_actions(assigns) do
     assigns =
       assign(assigns,
-        assignment_unavailable_reason:
-          UpstreamAccountActions.assignment_unavailable_reason(assigns.account.assignments),
+        assignment_unavailable_reason: UpstreamAccountActions.assignment_unavailable_reason(assigns.account.assignments),
         recovery_eligible?: recovery_eligible?(assigns.account),
         recovery_default_pool_id: recovery_default_pool_id(assigns.account),
         recovery_reinvite_path: ReinviteLink.path_for_account(assigns.account),
@@ -658,9 +657,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             variant={:positive}
             phx-click="reactivate_account"
             phx-value-id={@account.identity.id}
-            disabled={
-              @assignment_unavailable_reason != nil or !reactivatable?(@account.identity.status)
-            }
+            disabled={@assignment_unavailable_reason != nil or !reactivatable?(@account.identity.status)}
             title={@assignment_unavailable_reason}
           />
         </li>
@@ -708,9 +705,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             label="Refresh token"
             phx-click="refresh_account"
             phx-value-id={@account.identity.id}
-            disabled={
-              @assignment_unavailable_reason != nil or !refreshable?(@account.identity.status)
-            }
+            disabled={@assignment_unavailable_reason != nil or !refreshable?(@account.identity.status)}
             title={@assignment_unavailable_reason}
           />
         </li>
@@ -912,8 +907,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     %{
       id: "upstream-account-#{id}-refresh-failed-warning",
       title: "Token refresh failed",
-      body:
-        "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked.",
+      body: "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked.",
       reason: lifecycle_reason(account)
     }
   end

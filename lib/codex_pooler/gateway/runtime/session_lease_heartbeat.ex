@@ -256,13 +256,11 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
          session_id: session_id,
          owner_lease_token: owner_lease_token,
          ttl_seconds: ttl_seconds,
-         renewal_interval_ms:
-           OwnerRenewalSchedule.base_interval_ms(renewal_interval_ms, ttl_seconds * 1_000),
+         renewal_interval_ms: OwnerRenewalSchedule.base_interval_ms(renewal_interval_ms, ttl_seconds * 1_000),
          caller_pid: Keyword.get(opts, :caller, self()),
          schedule?: Keyword.get(opts, :schedule?, true) == true,
          renew: Keyword.get(opts, :renew, &SessionContinuity.renew_owner_token/4),
-         renewal_delay:
-           Keyword.get(opts, :renewal_delay, &OwnerRenewalSchedule.staggered_delay/1),
+         renewal_delay: Keyword.get(opts, :renewal_delay, &OwnerRenewalSchedule.staggered_delay/1),
          renew_call_timeout_ms: renew_call_timeout_ms(opts, request_options),
          test_observer: test_observer(request_options)
        }}
@@ -456,8 +454,7 @@ defmodule CodexPooler.Gateway.Runtime.SessionLeaseHeartbeat do
     %{
       state
       | handoff_token: token,
-        handoff_ref:
-          Process.send_after(self(), {:session_lease_heartbeat_handoff_timeout, token}, ttl_ms)
+        handoff_ref: Process.send_after(self(), {:session_lease_heartbeat_handoff_timeout, token}, ttl_ms)
     }
   end
 

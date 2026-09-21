@@ -97,8 +97,7 @@ defmodule CodexPooler.Access.APIKeyRuntimeAuthorizationTest do
                  Access.authorize_api_key_runtime_turn(Ecto.UUID.generate(), 0)
                end)
 
-      assert {:ok,
-              {:error, %{code: :api_key_runtime_epoch_stale, disabling_epoch: 0} = stale_error}} =
+      assert {:ok, {:error, %{code: :api_key_runtime_epoch_stale, disabling_epoch: 0} = stale_error}} =
                Repo.transaction(fn ->
                  Access.authorize_api_key_runtime_turn(active_key.id, 1)
                end)

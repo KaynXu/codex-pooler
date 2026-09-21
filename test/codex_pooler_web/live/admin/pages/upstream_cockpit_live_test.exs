@@ -2560,8 +2560,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         assignment_label: long_assignment_label,
         plan_label: "Enterprise",
         identity_metadata: %{
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(1, :hour) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(1, :hour) |> DateTime.to_iso8601(),
           "token_refresh" => %{"status" => "imported"},
           "safe_auth_json_label" => auth_json_secret,
           "cookie" => cookie_secret,
@@ -5590,8 +5589,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         chatgpt_account_id: raw_stored_account_id,
         identity_status: "refresh_failed",
         identity_metadata: %{
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
           "token_refresh" => %{
             "status" => "failed",
             "reason" => %{
@@ -5750,8 +5748,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         chatgpt_account_id: raw_stored_account_id,
         identity_status: "refresh_failed",
         identity_metadata: %{
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
           "token_refresh" => %{
             "status" => "failed",
             "reason" => %{
@@ -6018,8 +6015,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         })
         |> Ecto.Changeset.change(%{
           started_at: DateTime.add(Map.fetch!(attrs, :admitted_at), attempt_number - 1, :second),
-          network_error_code:
-            Map.get(attrs, :extra_attempt_network_error_code, "upstream_retryable_failure")
+          network_error_code: Map.get(attrs, :extra_attempt_network_error_code, "upstream_retryable_failure")
         })
         |> Repo.update!()
       end
@@ -6041,8 +6037,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         transport: Map.get(attrs, :transport, "http_json"),
         status: status,
         usage_status: Map.get(attrs, :usage_status, "usage_known"),
-        correlation_id:
-          Map.get(attrs, :correlation_id, "request-health-#{System.unique_integer([:positive])}"),
+        correlation_id: Map.get(attrs, :correlation_id, "request-health-#{System.unique_integer([:positive])}"),
         request_metadata: Map.get(attrs, :request_metadata, %{}),
         response_status_code: Map.get(attrs, :response_status_code, response_status_code(status)),
         last_error_code: Map.get(attrs, :last_error_code, request_error_code(status))
@@ -6061,8 +6056,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       |> Ecto.Changeset.change(%{
         started_at: admitted_at,
         completed_at: completed_at,
-        network_error_code:
-          Map.get(attrs, :attempt_network_error_code, request_error_code(status))
+        network_error_code: Map.get(attrs, :attempt_network_error_code, request_error_code(status))
       })
       |> Repo.update!()
 
@@ -6071,8 +6065,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       pool_upstream_assignment_id: assignment.id,
       upstream_identity_id: assignment.upstream_identity_id,
       occurred_at: completed_at,
-      usage_status:
-        Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known"))
+      usage_status: Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known"))
     })
 
     %{request: request, attempt: attempt}
@@ -6544,8 +6537,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       active_secrets:
         Repo.aggregate(
           from(secret in EncryptedSecret,
-            where:
-              secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
+            where: secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
           ),
           :count
         ),

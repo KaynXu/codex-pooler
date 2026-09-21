@@ -23,10 +23,7 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
 
       identity = %UpstreamIdentity{
         metadata: %{
-          "saved_reset_redemption" =>
-            stale_consuming_redemption(started_at, attempt_id, 7,
-              next_action_at: DateTime.to_iso8601(now)
-            )
+          "saved_reset_redemption" => stale_consuming_redemption(started_at, attempt_id, 7, next_action_at: DateTime.to_iso8601(now))
         }
       }
 
@@ -86,8 +83,7 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
           ] do
         identity = %UpstreamIdentity{
           metadata: %{
-            "saved_reset_redemption" =>
-              Map.merge(stale_consuming_redemption(started_at, attempt_id, 3), extra)
+            "saved_reset_redemption" => Map.merge(stale_consuming_redemption(started_at, attempt_id, 3), extra)
           }
         }
 
@@ -402,9 +398,7 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
       raw_token = "provider-token-must-not-leak"
 
       %{fake: fake, identity: identity, assignment: assignment} =
-        scheduled_expiry_fixture(
-          consume_response: {502, %{"code" => raw_token, "detail" => raw_body}}
-        )
+        scheduled_expiry_fixture(consume_response: {502, %{"code" => raw_token, "detail" => raw_body}})
 
       result = perform_scheduled_job(assignment.id, identity.id)
 
@@ -437,8 +431,7 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
     FakeUpstream.start_link(
       {:path_json,
        %{
-         "/api/codex/rate-limit-reset-credits/consume" =>
-           Keyword.get(opts, :consume_response, {200, %{"code" => "reset"}}),
+         "/api/codex/rate-limit-reset-credits/consume" => Keyword.get(opts, :consume_response, {200, %{"code" => "reset"}}),
          "/api/codex/usage" => Keyword.get(opts, :usage_response, {200, usage_payload(0)})
        }}
     )
@@ -484,8 +477,7 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
         "available_count" => available_count,
         "source" => "codex_usage_api",
         "path_style" => "codex_api",
-        "observed_at" =>
-          DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+        "observed_at" => DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
         "usage_path" => "/api/codex/usage",
         "reason" => nil
       })

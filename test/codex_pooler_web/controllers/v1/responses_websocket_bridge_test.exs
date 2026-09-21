@@ -134,16 +134,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp created_event(id) do
-    {"response.created",
-     %{"type" => "response.created", "response" => %{"id" => id, "status" => "in_progress"}}}
+    {"response.created", %{"type" => "response.created", "response" => %{"id" => id, "status" => "in_progress"}}}
   end
 
   # Native websocket frames for `{event_type, payload}` tuples: one text frame
   # per event, no SSE framing.
   defp websocket_frames(events) do
-    FakeUpstream.websocket_text_frames(
-      Enum.map(events, fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end)
-    )
+    FakeUpstream.websocket_text_frames(Enum.map(events, fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end))
   end
 
   # One strict native bridge turn pinned to a physical upstream connection.
@@ -670,9 +667,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "bridged turns preserve the downstream SSE", %{conn: conn} do
     upstream =
-      start_upstream(
-        FakeUpstream.sse_stream([created_event("resp_parity"), completed_event("resp_parity")])
-      )
+      start_upstream(FakeUpstream.sse_stream([created_event("resp_parity"), completed_event("resp_parity")]))
 
     setup = gateway_setup(upstream)
     session = "parity-session-#{System.unique_integer([:positive])}"
@@ -794,8 +789,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              WebsocketOwnerContract.safe_error_payload(:owner_unavailable, nil)
 
     owner_frame =
-      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
-       {:error, :owner_unavailable, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:error, :owner_unavailable, safe_payload}}
 
     assert {:push, {:text, payload}, ^state} =
              CodexResponsesSocket.handle_info(owner_frame, state)
@@ -876,8 +870,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              WebsocketOwnerContract.safe_error_payload(:upstream_stream_error, nil)
 
     owner_frame =
-      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
-       {:error, :upstream_stream_error, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:error, :upstream_stream_error, safe_payload}}
 
     {_result, log} =
       with_log(fn ->
@@ -903,8 +896,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
 
     owner_frame =
-      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
-       {:error, :owner_drained, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:error, :owner_drained, safe_payload}}
 
     {_result, log} =
       with_log(fn ->
@@ -1718,9 +1710,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     # Guards the preflight against reordering the first event behind the
     # terminal marker: the non-terminal response.created must survive.
     upstream =
-      start_upstream(
-        FakeUpstream.sse_stream([created_event("resp_multi"), completed_event("resp_multi")])
-      )
+      start_upstream(FakeUpstream.sse_stream([created_event("resp_multi"), completed_event("resp_multi")]))
 
     setup = gateway_setup(upstream)
     session = "multi-session-#{System.unique_integer([:positive])}"
@@ -1813,8 +1803,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "a bridged stream dying after visible output finalizes as a failed request", %{conn: conn} do
     created_event =
-      {"response.created",
-       %{"type" => "response.created", "response" => %{"id" => "resp_dead_t1"}}}
+      {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_dead_t1"}}}
 
     visible_event =
       {"response.output_text.delta",
@@ -3023,8 +3012,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "an unknown event type commits the bridge so a later close stays fatal", %{conn: conn} do
     events = [
       created_event("resp_unknown_commit"),
-      {"response.entirely_new_event",
-       %{"type" => "response.entirely_new_event", "response_id" => "resp_unknown_commit"}}
+      {"response.entirely_new_event", %{"type" => "response.entirely_new_event", "response_id" => "resp_unknown_commit"}}
     ]
 
     # Exactly one websocket submission is permitted; an HTTP replay would
