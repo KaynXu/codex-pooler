@@ -1501,6 +1501,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
   defp assert_failed_accounting!(accounting, turn_status, error_code) do
     response_status_code = failure_status_code(error_code)
+    request = Repo.get!(Request, accounting.request.id)
 
     assert %Request{
              status: "failed",
@@ -1508,7 +1509,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              response_status_code: ^response_status_code,
              retry_count: 0,
              last_error_code: ^error_code
-           } = Repo.get!(Request, accounting.request.id)
+           } = request
 
     assert %Attempt{
              attempt_number: 1,
@@ -1527,21 +1528,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     assert attempt_id == accounting.attempt.id
 
-    assert [reservation, release, settlement] =
-             Repo.all(
-               from entry in LedgerEntry,
-                 where: entry.request_id == ^accounting.request.id,
-                 order_by: [asc: entry.occurred_at, asc: entry.entry_kind]
-             )
-
-    assert reservation.entry_kind == "reservation"
-    assert reservation.attempt_id == nil
-    assert release.entry_kind == "release"
-    assert release.attempt_id == accounting.attempt.id
-    assert release.usage_status == "usage_unknown"
-    assert settlement.entry_kind == "settlement"
-    assert settlement.attempt_id == accounting.attempt.id
-    assert settlement.usage_status == "usage_unknown"
+    entries = Repo.all(from entry in LedgerEntry, where: entry.request_id == ^request.id)
+    assert_failed_ledger!(entries, request, accounting.attempt)
 
     assert Repo.aggregate(
              from(attempt in Attempt, where: attempt.request_id == ^accounting.request.id),
@@ -1552,6 +1540,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              from(turn in CodexTurn, where: turn.request_id == ^accounting.request.id),
              :count
            ) == 1
+  end
+
+  defp assert_failed_ledger!(entries, request, attempt) do
+    # Settlement uses trusted usage time; release uses the later finalization time.
+    # Select by kind without discarding duplicate or unexpected ledger rows.
+    assert %{
+             "reservation" => [reservation],
+             "release" => [release],
+             "settlement" => [settlement]
+           } = by_kind = Enum.group_by(entries, & &1.entry_kind)
+
+    assert map_size(by_kind) == 3
+
+    for entry <- entries do
+      assert entry.request_id == request.id
+      assert entry.amount_status == "recorded"
+      assert entry.request_count == 1
+      assert entry.correction_of_entry_id == nil
+    end
+
+    assert reservation.attempt_id == nil
+    assert reservation.usage_status == "usage_pending"
+    assert reservation.total_tokens > 0
+
+    for terminal <- [release, settlement] do
+      assert terminal.attempt_id == attempt.id
+      assert terminal.usage_status == "usage_unknown"
+      assert terminal.created_at == request.completed_at
+      assert terminal.total_tokens == reservation.total_tokens
+      assert Decimal.equal?(terminal.estimated_cost_micros, reservation.estimated_cost_micros)
+      assert Decimal.equal?(terminal.settled_cost_micros, Decimal.new(0))
+    end
+
+    assert release.occurred_at == request.completed_at
+    assert DateTime.compare(reservation.occurred_at, settlement.occurred_at) in [:lt, :eq]
+    assert DateTime.compare(settlement.occurred_at, release.occurred_at) in [:lt, :eq]
   end
 
   defp failure_status_code("client_disconnected"), do: 499
