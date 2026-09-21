@@ -13,6 +13,7 @@ defmodule CodexPooler.Platform.RepoApplicationNameTest do
   test "release database tasks name their connections after the task and keep other parameters" do
     repo_config = [
       url: "ecto://user:pass@example.invalid/db",
+      timeout: 1_234,
       parameters: [application_name: "codex_pooler_web", search_path: "public"]
     ]
 
@@ -28,9 +29,15 @@ defmodule CodexPooler.Platform.RepoApplicationNameTest do
       assert config[:parameters][:search_path] == "public"
       assert Keyword.get_values(config[:parameters], :application_name) == [application_name]
       assert byte_size(application_name) <= 63
+
+      if task in [:migrate, :rollback] do
+        assert config[:timeout] == :infinity
+      else
+        assert config[:timeout] == 1_234
+      end
     end
 
-    assert Release.repo_config_for_task([], :migrate)[:parameters] ==
-             [application_name: "codex_pooler_migrate"]
+    assert Release.repo_config_for_task([], :migrate) ==
+             [timeout: :infinity, parameters: [application_name: "codex_pooler_migrate"]]
   end
 end

@@ -64,7 +64,7 @@ dev-compile:
 
 dev-migrate:
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) ecto.create --quiet
-	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) ecto.migrate
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) run --no-start -e 'CodexPooler.Release.migrate()'
 
 dev-pricing:
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) $(MIX) pricing.import_openai

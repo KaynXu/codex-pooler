@@ -133,7 +133,13 @@ defmodule CodexPooler.Release do
       |> Keyword.get(:parameters, [])
       |> Keyword.put(:application_name, Map.fetch!(@task_application_names, task))
 
-    Keyword.put(repo_config, :parameters, parameters)
+    repo_config = Keyword.put(repo_config, :parameters, parameters)
+
+    if task in [:migrate, :rollback] do
+      Keyword.put(repo_config, :timeout, :infinity)
+    else
+      repo_config
+    end
   end
 
   # The task's connection name applies only while the task runs: a release
