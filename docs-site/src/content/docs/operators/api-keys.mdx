@@ -34,6 +34,7 @@ An API key controls:
 6. optional enforced request fields
 7. default request and token limits
 8. one optional model-scoped limit override
+9. an optional key-wide active request limit
 
 API key policy does not bypass Pool routing. The Pool still needs active upstream assignments, compatible models, fresh credentials, and usable quota evidence.
 
@@ -202,21 +203,45 @@ Allow up to rejects rather than changes a disallowed request. An effort above th
 
 ## Limits
 
-The Limits step saves optional policy caps.
+The Limits step separates key-wide concurrency from the default policy and one optional model override.
 
 ![Create API key limits step](/operators/api-keys/api-keys-create-limits-dialog.png)
 
-Default limits can cap:
+Default policy fields check:
 
 1. requests per minute
 2. tokens per day
 3. tokens per week
-4. input tokens per request
-5. output tokens per request
+4. estimated input tokens per request
+5. estimated output tokens per request
 
 Leave a field blank when no cap should be saved. A blank limit is different from a zero limit.
 
-The model-scoped override is an optional single-model override. Use it when one model should be more constrained than the default policy. Additional model rows are not part of the current wizard.
+The model-scoped override is an optional single-model override. A matching active override replaces the default binding for that request; its blank fields do not inherit default limits. Its thresholds still compare against usage across the whole key, not a separate model allowance. Additional model rows are not part of the current wizard. Policy changes and moving the key between Pools do not reset its budget history.
+
+### Active request limit
+
+`max_active_requests` accepts a positive integer. Blank (`null`) disables it for existing and new keys. It counts outstanding execution reservations across every replica, route, and model using that key, independently of the default or model policy. It is not a count of open connections: idle websockets and accepted work without a reservation use no slot.
+
+Lowering the limit lets existing work finish and refuses new reservations until capacity is available. Replaying the same reserved execution reuses its slot; an eligible retry that creates a new successor needs a new slot. Finishing with unknown usage releases the slot even when a provisional token estimate remains.
+
+Saturation returns retryable `429 api_key_concurrency_limit_exceeded` with `rate_limit_error`. HTTP responses include `Retry-After: 1` as minimum backoff advice, not a promise that a slot will be free after one second. Websocket turns receive the corresponding error without requiring the socket to close. Authentication failures remain `401`; token or request-budget denials remain `403 api_key_policy_limit_exceeded`.
+
+### Token estimates and budget pressure
+
+Input and output fields are admission estimates, not provider-enforced generation limits. The output reservation has a floor of 512 tokens, or 2,048 for opaque context such as a continuation reference; higher accepted request or policy values can increase that estimate. Opaque input cannot be measured completely from the visible payload. A low configured output limit can therefore reject an estimate rather than reduce the upstream response.
+
+The upstream may refuse `max_output_tokens`. Neither these fields nor the concurrency limit guarantee an absolute per-response token or spend cap. Actual usage can exceed the reservation and is recorded in full; it is never clipped to make a budget appear satisfied. See [SDK output-budget behavior](/clients/openai-compatible/#output-budgets-and-local-usage).
+
+Daily and weekly admission use three distinct components:
+
+- **Known:** measured terminal usage, including a measured zero.
+- **Provisional:** the original reservation estimate for attempted work that ended without trustworthy usage, until a known correction replaces it or its original terminal time leaves the window. Proven pre-attempt failures add no provisional consumption.
+- **Pending:** every outstanding reservation, including work admitted before the current window began.
+
+Effective token pressure is their sum. Daily usage starts at midnight UTC; weekly usage covers the trailing seven days. A late correction keeps the original terminal attribution time and replaces provisional pressure once. Releasing a reservation cannot subtract another request's consumption. The remaining budget reflects effective pressure; measured token and cost reports exclude pending and provisional estimates. Costs calculated from measured usage and a pricing snapshot are reporting estimates, not provider invoices or proof of subscription quota charges.
+
+Requests per minute count each committed execution reservation once at its original admission time, with no refund after admission, including a later pre-attempt failure. Denials before reservation count zero. Corrections do not move this counter, and replaying the same reservation does not increment it again.
 
 ## Review
 
