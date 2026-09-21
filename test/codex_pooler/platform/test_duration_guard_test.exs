@@ -61,17 +61,30 @@ defmodule CodexPooler.TestDurationGuardTest do
     end
   end
 
-  for mode <- ["normal", "trace"], scenario <- ["ordinary", "hard", "assertion"] do
-    @tag slow: "boots an isolated BEAM VM to verify CI timing reports do not mask assertion failures"
-    test "CI #{mode} reports #{scenario} without enforcing wall-clock budgets" do
-      {output, exit_code} = System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, unquote(scenario), unquote(mode)], env: List.keystore(@local_env, "CI", 0, {"CI", "true"}), stderr_to_stdout: true)
+  for {flag, value} <- [{"CI", "true"}, {"DRONE", "1"}, {"GITHUB_ACTIONS", "TRUE"}], mode <- ["normal", "trace"], scenario <- ["ordinary", "hard", "assertion"] do
+    @tag slow: "boots an isolated BEAM VM to verify CI bypasses duration checks while assertion failures remain errors"
+    test "#{flag} #{mode} disables duration checks for #{scenario}" do
+      {output, exit_code} = System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, unquote(scenario), unquote(mode)], env: List.keystore(@local_env, unquote(flag), 0, {unquote(flag), unquote(value)}), stderr_to_stdout: true)
       expected_exit = if unquote(scenario) == "assertion", do: 2, else: 0
       assert exit_code == expected_exit, output
       refute output =~ "test duration guard failed:", output
+      refute output =~ "test duration report (", output
+      refute output =~ "hard limit", output
+      refute output =~ "@tag slow", output
+      assert output =~ "guard formatter registered=false", output
+      assert output =~ "guard receipts after start=0", output
       assert output =~ "probe teardown completed", output
       assert output =~ "guard receipts remaining=0", output
-      if unquote(scenario) != "assertion", do: assert(output =~ "test duration report (CI; non-blocking):", output)
     end
+  end
+
+  @tag slow: "boots an isolated BEAM VM to verify false CI flags preserve local timing enforcement"
+  test "false CI flags keep local duration checks active" do
+    {output, exit_code} = System.cmd("elixir", ["--erl", "+S 2:2", "-r", @guard, @probe, "ordinary", "normal"], env: [{"CI", "false"}, {"DRONE", "0"}, {"GITHUB_ACTIONS", ""}], stderr_to_stdout: true)
+    assert exit_code == 1, output
+    assert output =~ "test duration guard failed:", output
+    assert output =~ "guard formatter registered=true", output
+    assert output =~ "guard receipts remaining=0", output
   end
 
   for mode <- [[], ["--trace"]] do

@@ -23,6 +23,15 @@ limits =
 
 :ok = CodexPooler.TestDurationGuard.start!(limits)
 
+IO.puts("guard formatter registered=#{CodexPooler.TestDurationGuard in ExUnit.configuration()[:formatters]}")
+
+IO.puts(
+  "guard receipts after start=#{Enum.count(:persistent_term.get(), fn
+    {{CodexPooler.TestDurationGuard, _ref}, _value} -> true
+    _entry -> false
+  end)}"
+)
+
 if scenario == "missing", do: ExUnit.configure(formatters: [ExUnit.CLIFormatter])
 
 defmodule CodexPooler.TestDurationGuardProbe do

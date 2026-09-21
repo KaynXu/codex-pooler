@@ -7,7 +7,8 @@ defmodule CodexPooler.TestDurationGuard do
   Uses ExUnit.Test.time: setup, body and captured logging, excluding setup_all
   and on_exit. Measuring asynchronous formatter delivery would charge unrelated
   scheduler/formatter backlog to a test instead of its actual execution time.
-  CI reports the same observations without failing on runner-dependent timing.
+  CI skips registration entirely: runner-dependent timings are neither checked
+  nor reported, while ExUnit still enforces assertion failures normally.
   """
 
   use GenServer
@@ -17,6 +18,14 @@ defmodule CodexPooler.TestDurationGuard do
 
   @spec start!(keyword()) :: :ok
   def start!(opts \\ []) do
+    unless Enum.any?(~w(CI DRONE GITHUB_ACTIONS), &(System.get_env(&1) in ["1", "true", "TRUE"])) do
+      start_local!(opts)
+    end
+
+    :ok
+  end
+
+  defp start_local!(opts) do
     normal_ms = Keyword.get(opts, :normal_ms, 1_000)
     hard_ms = Keyword.get(opts, :hard_ms, 6_000)
 
@@ -36,8 +45,7 @@ defmodule CodexPooler.TestDurationGuard do
 
     # ExUnit drains/stops formatter servers before after_suite callbacks. The
     # receipt therefore outlives its server without leaving a process behind.
-    report_only? = Enum.any?(~w(CI DRONE GITHUB_ACTIONS), &(System.get_env(&1) in ["1", "true", "TRUE"]))
-    ExUnit.after_suite(fn _stats -> finish(key, report_only?) end)
+    ExUnit.after_suite(fn _stats -> finish(key) end)
     :ok
   end
 
@@ -99,7 +107,7 @@ defmodule CodexPooler.TestDurationGuard do
   defp valid_reason?(_reason), do: false
   defp milliseconds(microseconds), do: :erlang.float_to_binary(microseconds / 1_000, decimals: 1)
 
-  defp finish(key, report_only?) do
+  defp finish(key) do
     receipt = :persistent_term.get(key, :missing)
     :persistent_term.erase(key)
 
@@ -113,21 +121,16 @@ defmodule CodexPooler.TestDurationGuard do
       end
 
     if failures != [] do
-      heading = if report_only?, do: "test duration report (CI; non-blocking):", else: "test duration guard failed:"
-
       IO.puts(
         :stderr,
-        heading <> "\n" <> Enum.map_join(failures, "\n", &("  " <> &1))
+        "test duration guard failed:\n" <> Enum.map_join(failures, "\n", &("  " <> &1))
       )
 
       # Let Mix finish coverage and the test task drop its owned database before
       # returning failure. This also applies to ExUnit's plain autorun mode.
-      schedule_failure_exit(report_only?)
+      System.at_exit(fn _status -> exit({:shutdown, 1}) end)
     end
 
     :ok
   end
-
-  defp schedule_failure_exit(true), do: :ok
-  defp schedule_failure_exit(false), do: System.at_exit(fn _status -> exit({:shutdown, 1}) end)
 end
