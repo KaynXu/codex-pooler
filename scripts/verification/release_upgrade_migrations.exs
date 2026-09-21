@@ -1,3 +1,5 @@
+Code.require_file("test/support/release_upgrade_migrations/budget_rehearsal.exs")
+
 defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
   @moduledoc """
   Owned PostgreSQL release migration rehearsal. Run with MIX_ENV=test,
@@ -7,10 +9,12 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
 
   Scenarios: widths, fresh, head, invalid, invalid_owner, client_exit,
   locks, historical_indexes, validation, null_history, migration_lock,
-  scale, index_conflicts, rollback_cancel, rollback_delete. Optional --rows controls the
+  scale, index_conflicts, rollback_cancel, rollback_delete, budget_upgrade,
+  budget_locks, budget_traffic. Optional --rows controls the
   synthetic request count. The database must not exist and is always dropped.
   """
   alias CodexPooler.Repo
+  alias CodexPooler.Verification.BudgetRehearsal
   alias Ecto.Adapters.Postgres
   alias Ecto.Migrator
 
@@ -47,7 +51,7 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
     scenario = Keyword.fetch!(opts, :scenario)
     rows = Keyword.get(opts, :rows, 100)
 
-    unless scenario in ~w(widths fresh head invalid invalid_owner client_exit locks historical_indexes validation null_history migration_lock scale index_conflicts rollback_cancel rollback_delete) and
+    unless scenario in ~w(widths fresh head invalid invalid_owner client_exit locks historical_indexes validation null_history migration_lock scale index_conflicts rollback_cancel rollback_delete budget_upgrade budget_locks budget_traffic) and
              rows in 1..1_000_000,
            do: raise(ArgumentError, "invalid scenario or row count")
 
@@ -148,6 +152,14 @@ defmodule CodexPooler.Verification.ReleaseUpgradeMigrations do
 
     migrate(20_260_910_230_227)
     receipt("widths", %{rollback_widths: 255, restored_columns: 11, up_down_up: true})
+  end
+
+  defp run_scenario(scenario, rows)
+       when scenario in ~w(budget_upgrade budget_locks budget_traffic) do
+    BudgetRehearsal.run(scenario, rows, %{
+      migrate: &migrate/1,
+      down: &down/1
+    })
   end
 
   defp run_scenario("fresh", rows) do
