@@ -6,17 +6,22 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
   alias CodexPooler.Telemetry.{Relay, RelayEvent, RelayRuntime}
   alias Ecto.Adapters.SQL.Sandbox
 
-  setup %{sandbox_owner: owner} do
+  setup %{sandbox_owner: owner} = context do
+    opts = [
+      enabled: true,
+      role: "worker",
+      start_paused: true,
+      name: {:global, {__MODULE__, make_ref()}},
+      flush_ms: 60_000,
+      drain_ms: 60_000
+    ]
+
     runtime =
-      start_supervised!(
-        {RelayRuntime,
-         enabled: true,
-         role: "worker",
-         start_paused: true,
-         name: {:global, {__MODULE__, make_ref()}},
-         flush_ms: 60_000,
-         drain_ms: 60_000}
-      )
+      if recovery = context[:relay_recovery] do
+        start_recoverable_runtime!(opts, recovery)
+      else
+        start_supervised!({RelayRuntime, opts})
+      end
 
     Sandbox.allow(Repo, owner, runtime)
     :ok = GenServer.call(runtime, :activate)
@@ -714,7 +719,9 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
           {"57000", "an operator-intervention failure", false},
           {"58000", "a system failure", false}
         ] do
-      @tag code: code, permanent?: permanent?
+      @tag code: code,
+           permanent?: permanent?,
+           relay_recovery: if(permanent?, do: nil, else: :sqlstate)
       test "#{label} is #{if permanent?, do: "counted", else: "re-queued"}, by its SQLSTATE", %{
         runtime: runtime,
         table: table,
@@ -757,10 +764,16 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
         else
           assert [{_key, 1}] = :ets.tab2list(table)
           assert rejected_samples() - before == 0
+
+          recover_relay!(runtime, :sqlstate)
+
+          assert [%RelayEvent{count: 1, labels: %{"phase" => "probe_refused"}}] =
+                   Repo.all(RelayEvent)
         end
       end
     end
 
+    @tag relay_recovery: :heartbeat
     test "is not a sample the database never saw: an outage still re-queues", %{
       runtime: runtime,
       table: table,
@@ -791,6 +804,9 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
 
       assert [{_key, 1}] = :ets.tab2list(table)
       assert rejected_samples() - before == 0
+
+      recover_relay!(runtime, :heartbeat)
+      assert [%RelayEvent{count: 1, event: "quota_cycle_decision"}] = Repo.all(RelayEvent)
     end
 
     test "a label value PostgreSQL cannot store is bounded before it is captured", %{
@@ -821,6 +837,55 @@ defmodule CodexPooler.Telemetry.RelayRuntimeTest do
       assert [%RelayEvent{labels: %{"phase" => "unknown"}}] = Repo.all(RelayEvent)
       assert rejected_samples() - before == 0
     end
+  end
+
+  defp start_recoverable_runtime!(opts, recovery) do
+    name = Keyword.fetch!(opts, :name)
+
+    # ExUnit stops supervised children before on_exit. These fault scenarios
+    # need recovery while the sandbox is still alive, even if an assertion fails.
+    on_exit(fn -> stop_recoverable_runtime!(name, recovery) end)
+
+    {:ok, runtime} = RelayRuntime.start_link(opts)
+    Process.unlink(runtime)
+    runtime
+  end
+
+  defp stop_recoverable_runtime!(name, recovery) do
+    if runtime = GenServer.whereis(name) do
+      state = :sys.get_state(runtime)
+      monitor = Process.monitor(runtime)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          try do
+            recover_relay!(runtime, recovery)
+          after
+            GenServer.stop(runtime)
+          end
+        end)
+
+      assert_receive {:DOWN, ^monitor, :process, ^runtime, :normal}
+      assert :ets.info(state.table) == :undefined
+      refute Enum.any?(:telemetry.list_handlers([]), &(&1.id == state.handler))
+      assert log == ""
+    end
+  end
+
+  defp recover_relay!(runtime, recovery) do
+    state = :sys.get_state(runtime)
+    :telemetry.detach(state.handler)
+
+    if recovery == :sqlstate do
+      Repo.query!("DROP TRIGGER IF EXISTS relay_probe_refusal ON telemetry_relay_events")
+    end
+
+    # Every scenario emits synchronously from its test process. Detaching closes
+    # admission; the same-sender flush and state call fence the remaining sample.
+    send(runtime, :heartbeat)
+    send(runtime, :flush)
+    :sys.get_state(runtime)
+    assert :ets.tab2list(state.table) == []
   end
 
   # A real server refusal of a real row, at a SQLSTATE the caller chooses. A
