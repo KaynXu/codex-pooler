@@ -348,6 +348,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
         schedule = %{
           concurrency: concurrency,
           total: length(events),
+          enforcement_clock_queries: Enum.count(events, & &1.enforcement_clock?),
           per_operation: div(length(events), logical_operations),
           operation_sources: Enum.frequencies_by(events, &{&1.operation, &1.source}),
           query_time_us: Enum.sum(Enum.map(events, & &1.query_time_us)),
@@ -365,11 +366,12 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
         schedule
       end
 
-    # Twenty-one statements per claim: one combined token-window snapshot
-    # replaced two window reads, retaining the advisory mutex before the key
-    # reader lock. Nil active caps add no count query: 16 claims * 21 = 336.
-    assert Enum.map(schedules, & &1.total) == [336, 336, 336]
-    assert Enum.map(schedules, & &1.per_operation) == [21, 21, 21]
+    # Each claim samples the database clock under the key lock before reading
+    # the combined token-window snapshot. Nil active caps add no count query:
+    # 16 claims * 22 statements = 352, including one enforcement clock per claim.
+    assert Enum.map(schedules, & &1.enforcement_clock_queries) == [16, 16, 16]
+    assert Enum.map(schedules, & &1.total) == [352, 352, 352]
+    assert Enum.map(schedules, & &1.per_operation) == [22, 22, 22]
     assert Enum.map(schedules, & &1.operation_sources) |> Enum.uniq() |> length() == 1
   end
 
@@ -496,6 +498,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
               %{
                 source: metadata[:source],
                 operation: query_operation(query),
+                enforcement_clock?: String.contains?(query, "SELECT clock_timestamp() AS as_of"),
                 query_time_us: native_microseconds(measurements[:query_time]),
                 queue_time_us: native_microseconds(measurements[:queue_time])
               }
