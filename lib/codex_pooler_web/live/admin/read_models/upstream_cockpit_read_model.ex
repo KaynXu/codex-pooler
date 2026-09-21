@@ -217,6 +217,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   @spec merge_request_metrics(t(), %{
+          optional(:recent_events) => recent_events(),
           request_health: request_health(),
           pool_contribution: pool_contribution()
         }) ::
