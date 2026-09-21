@@ -193,7 +193,9 @@ defmodule CodexPooler.InstancePresencePeer do
   def classify_os_process_probe({_output, 0}), do: :present
 
   def classify_os_process_probe({output, exit_code}) when exit_code > 0 do
-    if Regex.match?(~r/\A(?:kill: )?\(?[0-9]+\)?: [Nn]o such process\s*\z/, output),
+    # System.cmd resolves the executable path; procps-ng uses that argv[0] in
+    # diagnostics, unlike shells that print only "kill".
+    if Regex.match?(~r/\A(?:(?:\/(?:[^\/\s:]+\/)*)?kill: )?\(?[0-9]+\)?: [Nn]o such process\s*\z/, output),
       do: :absent,
       else: :unknown
   end

@@ -107,6 +107,8 @@ defmodule CodexPooler.InstancePresencePeerCleanupTest do
   for result <- [
         {"kill: 123: Operation not permitted\n", 1},
         {"kill: 123: Permission denied\n", 1},
+        {"/usr/bin/kill: (123): Operation not permitted\n", 1},
+        {"/bin/kill: (123): Permission denied\n", 1},
         {"unknown failure", 2},
         {"", 1}
       ] do
@@ -127,6 +129,8 @@ defmodule CodexPooler.InstancePresencePeerCleanupTest do
     for output <- [
           "kill: 123: No such process\n",
           "kill: (123): No such process\n",
+          "/usr/bin/kill: (123): No such process\n",
+          "/bin/kill: (123): No such process\n",
           "123: no such process\n"
         ] do
       assert InstancePresencePeer.classify_os_process_probe({output, 1}) == :absent
