@@ -52,6 +52,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.WindowUsage do
     # per-request function calls or joins between materialized request sets.
     # OFFSET 0 preserves parameterized range/history scans: flattening these
     # lateral reads can scan retained history even for a tiny excluded edge.
+    # Keep terminal existence parameterized too: stale empty-table statistics
+    # can otherwise choose a quadratic unparameterized nested-loop anti join.
     %{rows: rows} =
       Repo.query!(
         """
@@ -152,6 +154,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.WindowUsage do
             AND NOT EXISTS (
               SELECT 1 FROM public.ledger_entries t WHERE t.request_id = r.request_id
                 AND t.entry_kind IN ('release', 'settlement')
+              OFFSET 0
             )
         )
         SELECT b.ordinal, COALESCE(SUM(known_total_tokens), 0)::bigint,
