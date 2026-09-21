@@ -263,14 +263,16 @@ spec:
         name: icoretech
         namespace: flux-system
   interval: 5m
-  timeout: 3m
+  # Allow time for migrations, pod draining, and readiness checks.
+  timeout: 15m
   install:
     remediation:
-      retries: -1
+      retries: 3
   upgrade:
     remediation:
-      retries: -1
-      strategy: uninstall
+      retries: 3
+      # Restore the previous release if an upgrade fails.
+      strategy: rollback
       remediateLastFailure: true
   values:
     config:
