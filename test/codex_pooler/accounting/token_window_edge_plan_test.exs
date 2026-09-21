@@ -183,28 +183,7 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
       key = Ecto.UUID.dump!(fixture.api_key.id)
 
       for setup <- [fixture, other] do
-        pool_id = Ecto.UUID.dump!(setup.pool.id)
-        key_id = Ecto.UUID.dump!(setup.api_key.id)
-
-        Repo.query!(
-          """
-          INSERT INTO requests(pool_id,api_key_id,requested_model,endpoint,transport,correlation_id,admitted_at)
-          SELECT $1,$2,'synthetic-model','/v1/responses','http_json',gen_random_uuid()::text,$3
-          FROM generate_series(1,10000) n
-          """,
-          [pool_id, key_id, at]
-        )
-
-        for kind <- ["reservation", "release"] do
-          Repo.query!(
-            """
-            INSERT INTO ledger_entries(pool_id,api_key_id,request_id,entry_kind,usage_status,total_tokens,request_count,occurred_at,transport)
-            SELECT pool_id,api_key_id,id,$1,'usage_pending',512,1,admitted_at,'http_json'
-            FROM requests WHERE api_key_id=$2
-            """,
-            [kind, key_id]
-          )
-        end
+        insert_retained_histories(setup, at)
       end
 
       handler = "retained-edge-plan-#{System.unique_integer([:positive])}"
@@ -327,6 +306,43 @@ defmodule CodexPooler.Accounting.TokenWindowEdgePlanTest do
       total +
         (node["Actual Rows"] + Map.get(node, "Rows Removed by Filter", 0)) * node["Actual Loops"]
     end)
+  end
+
+  defp insert_retained_histories(setup, at) do
+    assert %{num_rows: 20_000} =
+             Repo.query!(
+               """
+               WITH inserted_requests AS (
+                 INSERT INTO requests(
+                   pool_id,
+                   api_key_id,
+                   requested_model,
+                   endpoint,
+                   transport,
+                   correlation_id,
+                   admitted_at
+                 )
+                 SELECT $1,$2,'synthetic-model','/v1/responses','http_json',gen_random_uuid()::text,$3
+                 FROM generate_series(1,10000)
+                 RETURNING id,pool_id,api_key_id,admitted_at
+               )
+               INSERT INTO ledger_entries(
+                 pool_id,
+                 api_key_id,
+                 request_id,
+                 entry_kind,
+                 usage_status,
+                 total_tokens,
+                 request_count,
+                 occurred_at,
+                 transport
+               )
+               SELECT r.pool_id,r.api_key_id,r.id,event.kind,'usage_pending',512,1,r.admitted_at,'http_json'
+               FROM inserted_requests r
+               CROSS JOIN (VALUES ('reservation'),('release')) AS event(kind)
+               """,
+               [Ecto.UUID.dump!(setup.pool.id), Ecto.UUID.dump!(setup.api_key.id), at]
+             )
   end
 
   defp insert_boundary_releases(fixture, at) do
