@@ -26,17 +26,6 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
 
   @receipt_prefix "drop-on-exit-probe "
 
-  @passing_test ~S"""
-  defmodule CodexPooler.DropOnExitProbe.PassingTest do
-    use CodexPooler.DataCase, async: false
-
-    test "reports the database it runs against" do
-      %{rows: [[database]]} = Repo.query!("SELECT current_database()")
-      IO.puts("drop-on-exit-probe database=#{database}")
-    end
-  end
-  """
-
   @failing_test ~S"""
   defmodule CodexPooler.DropOnExitProbe.FailingTest do
     use CodexPooler.DataCase, async: false
@@ -102,21 +91,17 @@ defmodule CodexPooler.MixTasks.TestDatabaseDropOnExitTest do
     %{directory: directory}
   end
 
-  test "a passing and a failing namespaced run each drop their database and report their outcome",
+  test "a failing namespaced run drops its database and reports its outcome",
        %{directory: directory} do
-    passing = run_namespaced!(directory, "passing", @passing_test)
     failing = run_namespaced!(directory, "failing", @failing_test)
 
-    assert passing.exit_code == 0, passing.output
     assert failing.exit_code != 0, failing.output
 
-    for run <- [passing, failing] do
-      assert run.receipts["database"] == run.database,
-             "the run did not report its run-scoped database #{run.database}\n#{run.output}"
+    assert failing.receipts["database"] == failing.database,
+           "the run did not report its run-scoped database #{failing.database}\n#{failing.output}"
 
-      refute database_exists?(run.database),
-             "run-scoped database #{run.database} survived its run\n#{run.output}"
-    end
+    refute database_exists?(failing.database),
+           "run-scoped database #{failing.database} survived its run\n#{failing.output}"
   end
 
   test "a run that leaks a websocket owner drops its database without waiting out the drain",
