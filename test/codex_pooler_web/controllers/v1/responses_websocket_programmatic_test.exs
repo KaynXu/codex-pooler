@@ -1086,72 +1086,86 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
-  test "GET /v1/responses websocket restores omitted and null declared custom namespaces" do
-    name = "websocket_restored_custom_fixture"
+  for topology <- [:direct, :local_owner] do
+    @tag topology: topology
+    test "GET /v1/responses #{topology} websocket restores omitted and null declared custom namespaces",
+         %{topology: topology} do
+      if topology == :local_owner, do: enable_owner_forwarding!()
+      name = "websocket_restored_custom_fixture"
 
-    output = [
-      %{
-        "type" => "custom_tool_call",
-        "name" => name,
-        "call_id" => "call_websocket_omitted",
-        "input" => "websocket_omitted"
-      },
-      %{
-        "type" => "custom_tool_call",
-        "name" => name,
-        "namespace" => nil,
-        "call_id" => "call_websocket_null",
-        "input" => "websocket_null"
-      },
-      %{
-        "type" => "custom_tool_call",
-        "name" => name,
-        "namespace" => "provider.websocket",
-        "call_id" => "call_websocket_explicit",
-        "input" => "websocket_explicit"
-      }
-    ]
+      output = [
+        %{
+          "type" => "custom_tool_call",
+          "name" => name,
+          "call_id" => "call_websocket_omitted",
+          "input" => "websocket_omitted"
+        },
+        %{
+          "type" => "custom_tool_call",
+          "name" => name,
+          "namespace" => nil,
+          "call_id" => "call_websocket_null",
+          "input" => "websocket_null"
+        },
+        %{
+          "type" => "custom_tool_call",
+          "name" => name,
+          "namespace" => "provider.websocket",
+          "call_id" => "call_websocket_explicit",
+          "input" => "websocket_explicit"
+        }
+      ]
 
-    upstream =
-      start_upstream(completed_websocket_response("resp_ws_restored_custom_namespaces", output))
+      upstream =
+        start_upstream(completed_websocket_response("resp_ws_restored_custom_namespaces", output))
 
-    setup = gateway_setup(upstream)
-    assert :ok = Events.subscribe_pool(setup.pool)
-    port = start_public_endpoint!()
+      setup = gateway_setup(upstream)
+      assert :ok = Events.subscribe_pool(setup.pool)
+      port = start_public_endpoint!()
 
-    {conn, websocket, ref} =
-      public_v1_websocket_connect!(
-        port,
-        setup,
-        "namespace-restoration-#{System.unique_integer([:positive])}"
-      )
+      {conn, websocket, ref} =
+        public_v1_websocket_connect!(
+          port,
+          setup,
+          "namespace-restoration-#{System.unique_integer([:positive])}"
+        )
 
-    try do
-      {conn, websocket} =
-        send_response_create!(conn, websocket, ref, setup, %{
-          "input" => "synthetic websocket namespace restoration",
-          "tools" => [
-            %{
-              "type" => "namespace",
-              "name" => "functions",
-              "description" => "Synthetic websocket namespace",
-              "tools" => [%{"type" => "custom", "name" => name}]
-            }
-          ]
-        })
+      try do
+        {conn, websocket} =
+          send_response_create!(conn, websocket, ref, setup, %{
+            "input" => "synthetic websocket namespace restoration",
+            "tools" => [
+              %{
+                "type" => "namespace",
+                "name" => "functions",
+                "description" => "Synthetic websocket namespace",
+                "tools" => [%{"type" => "custom", "name" => name}]
+              }
+            ]
+          })
 
-      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
-      assert [%{"type" => "response.completed", "response" => %{"output" => calls}}] = frames
+        {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+        assert [%{"type" => "response.completed", "response" => %{"output" => calls}}] = frames
 
-      assert Enum.map(calls, & &1["namespace"]) == [
-               "functions",
-               "functions",
-               "provider.websocket"
-             ]
+        assert Enum.map(calls, & &1["namespace"]) == [
+                 "functions",
+                 "functions",
+                 "provider.websocket"
+               ]
 
-      {conn, websocket}
-    after
-      Mint.HTTP.close(conn)
+        {conn, websocket} =
+          send_response_create!(conn, websocket, ref, setup, %{
+            "input" => "synthetic next turn without tool declarations"
+          })
+
+        {_conn, _websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+        assert [%{"type" => "response.completed", "response" => %{"output" => calls}}] = frames
+        assert Enum.map(calls, & &1["namespace"]) == [nil, nil, "provider.websocket"]
+
+        {conn, websocket}
+      after
+        Mint.HTTP.close(conn)
+      end
     end
   end
 

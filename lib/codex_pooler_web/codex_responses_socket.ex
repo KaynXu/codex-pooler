@@ -4026,14 +4026,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
-  defp maybe_open_public_turn(state, payload, pid) do
-    if public_response_payload?(payload, state) do
+  defp maybe_open_public_turn(state, %PreparedWebsocketFrame{} = prepared, pid) do
+    if public_response_payload?(prepared, state) do
+      turn_state =
+        state
+        |> Map.get(:public_response_stream_id)
+        |> Adapter.public_responses_turn_state()
+        |> Map.put(
+          :custom_tool_namespaces,
+          prepared.request_options.openai_compatibility.custom_tool_namespaces
+        )
+
       state
       |> Map.put(:public_response_task_pid, pid)
-      |> Map.put(
-        :public_responses_websocket_state,
-        Adapter.public_responses_turn_state(Map.get(state, :public_response_stream_id))
-      )
+      |> Map.put(:public_responses_websocket_state, turn_state)
       |> Map.put(:public_turn_task_done?, false)
       |> Map.put(:public_turn_owner_complete?, false)
       |> Map.put(:public_owner_retarget_error?, false)

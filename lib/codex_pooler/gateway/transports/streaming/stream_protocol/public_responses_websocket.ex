@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket do
   @moduledoc false
 
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
@@ -8,7 +9,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:max_seen) => integer() | nil,
           required(:terminal_latched?) => boolean(),
           required(:overflow_latched?) => boolean(),
-          optional(:stream_id) => String.t()
+          optional(:stream_id) => String.t(),
+          optional(:custom_tool_namespaces) => map()
         }
   @type result ::
           {:push, binary(), state()}
@@ -40,6 +42,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
             normalized =
               type
               |> PublicResponses.normalize_terminal_errors(normalized)
+              |> Responses.restore_custom_tool_call_namespaces(
+                Map.get(state, :custom_tool_namespaces, %{})
+              )
               |> maybe_put_stream_id(stream_id)
 
             {:push, CodexPooler.JSON.encode!(normalized), state}

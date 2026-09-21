@@ -1342,6 +1342,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       assert :queue.len(turn_two_state.queued_response_payloads) == 0
 
       assert turn_two_state.public_responses_websocket_state == %{
+               custom_tool_namespaces: %{},
                max_seen: nil,
                terminal_latched?: false,
                overflow_latched?: false
