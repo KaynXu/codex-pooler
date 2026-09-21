@@ -77,7 +77,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
       </section>
 
       <p id="api-key-admission-estimate-hint" class="px-3 text-xs leading-5 text-base-content/60">
-        Token limits use admission estimates, including the 512-token input and 2,048-token output fallbacks.
+        Output estimate floors are 512 tokens for ordinary requests and 2,048 tokens for opaque-context requests.
         Output limits are admission checks, not guaranteed provider output caps.
       </p>
       <.budget_breakdown :if={@budget_usage} usage={@budget_usage} />
