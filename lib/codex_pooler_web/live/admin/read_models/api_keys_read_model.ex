@@ -105,10 +105,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   def selected_pool(_pools, _pool_id), do: nil
 
   @spec budget_usage(APIKey.t()) :: map() | nil
-  def budget_usage(%APIKey{} = api_key) do
-    case Accounting.build_api_key_self_usage(api_key.pool_id, api_key.id,
-           as_of: DateTime.utc_now()
-         ) do
+  def budget_usage(%APIKey{pool_id: pool_id, id: api_key_id}),
+    do: budget_usage(pool_id, api_key_id)
+
+  @spec budget_usage(Ecto.UUID.t(), Ecto.UUID.t()) :: map() | nil
+  def budget_usage(pool_id, api_key_id) do
+    case Accounting.build_api_key_self_usage(pool_id, api_key_id, as_of: DateTime.utc_now()) do
       {:ok, usage} -> usage.budget_usage
       {:error, _reason} -> nil
     end

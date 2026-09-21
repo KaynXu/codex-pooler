@@ -1749,6 +1749,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
       assert has_element?(
                view,
+               "#upstream-event-summary-loading-state",
+               "Loading recent activity"
+             )
+
+      refute has_element?(view, "#upstream-event-summary-empty")
+
+      assert has_element?(
+               view,
                "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
                "…"
              )
@@ -1766,6 +1774,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(view, "#upstream-cockpit[aria-busy='false']")
     refute has_element?(view, "#request-health-loading-state")
+    refute has_element?(view, "#upstream-event-summary-loading-state")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
 
     assert has_element?(
@@ -5183,6 +5192,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "/admin/request-logs?request_id=#{failed_request.request.id}&upstream_identity_id=#{identity.id}"
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
 
     assert has_element?(view, "#upstream-event-summary")
     assert has_element?(view, "#upstream-event-summary [data-role='recent-event-row']")
@@ -5307,6 +5317,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert cockpit.recent_events.items == []
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
 
     assert has_element?(view, "#upstream-event-summary")
     assert has_element?(view, "#upstream-event-summary-empty")

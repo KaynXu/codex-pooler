@@ -406,8 +406,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
       capture_repo_queries(
         fn ->
           view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+          _ = render_async(view, 5_000)
         end,
-        &(&1 == view.pid),
+        fn _query_pid -> true end,
         page_reads_only?: false,
         details?: true
       )
@@ -466,6 +467,66 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
       end)
 
     assert_no_ledger_reads(cancel_queries)
+  end
+
+  test "edit renders before the budget snapshot finishes", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "async-edit", name: "Async Edit Pool"})
+
+    {:ok, %{api_key: api_key}} =
+      Access.create_api_key(scope, pool, %{display_name: "Async edit key"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    test_pid = self()
+    handler_id = {__MODULE__, :api_key_budget_query, make_ref()}
+    key_id = Ecto.UUID.dump!(api_key.id)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               is_binary(metadata[:query]) and
+               String.starts_with?(metadata.query, "WITH bounds AS") and
+               match?([^key_id | _rest], metadata[:params]) and
+               is_nil(Process.get(handler_id)) do
+            Process.put(handler_id, true)
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    click_pid =
+      spawn(fn ->
+        html = view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+        send(test_pid, {handler_id, :click_finished, html})
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(click_pid), do: Process.exit(click_pid, :kill)
+    end)
+
+    assert_receive {^handler_id, query_pid}, 1_000
+
+    try do
+      assert_receive {^handler_id, :click_finished, _html}, 2_000
+      assert has_element?(view, "#api-key[open]")
+      assert has_element?(view, "#api-key-budget-loading", "Loading current usage")
+    after
+      send(query_pid, {handler_id, :release})
+    end
+
+    _ = render_async(view, 5_000)
+    refute has_element?(view, "#api-key-budget-loading")
   end
 
   test "mount batches API key and visible model reads across Pools", %{conn: conn, scope: scope} do
@@ -719,9 +780,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   end
 
   defp assert_budget_snapshot_queries(queries, api_key, other_key) do
-    assert Enum.frequencies_by(queries, & &1.source) == %{
+    frequencies = queries |> Enum.frequencies_by(& &1.source) |> Map.delete("memberships")
+
+    assert frequencies == %{
              "api_keys" => 1,
-             "memberships" => 3,
              "pools" => 1,
              "api_key_policy_bindings" => 2,
              "daily_rollups" => 1,

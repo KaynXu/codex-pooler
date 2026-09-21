@@ -95,7 +95,16 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
 
   test "sparse recent failures do not aggregate the full attempt history", context do
     now = DateTime.utc_now()
-    request = insert_request(context, "failed", now)
+
+    %{identity: other_identity, assignment: other_assignment} =
+      upstream_assignment_fixture(context.pool)
+
+    target_requests =
+      for offset <- 1..5 do
+        insert_request(context, "failed", DateTime.add(now, -20_000 - offset, :second))
+      end
+
+    request = hd(target_requests)
     attempt = Repo.one!(from attempt in Attempt, where: attempt.request_id == ^request.id)
     request_fields = Request.__schema__(:fields)
     attempt_fields = Attempt.__schema__(:fields)
@@ -121,10 +130,72 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
         for request <- requests do
           attempt
           |> Map.take(attempt_fields)
-          |> Map.merge(%{id: Ecto.UUID.generate(), request_id: request.id})
+          |> Map.merge(%{
+            id: Ecto.UUID.generate(),
+            request_id: request.id,
+            upstream_identity_id: other_identity.id,
+            pool_upstream_assignment_id: other_assignment.id
+          })
         end
 
       Repo.insert_all(Attempt, attempts)
+    end
+
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE attempts")
+    {rows, query, params} = capture_event_query(context)
+    assert Enum.map(rows, & &1.id) == Enum.map(target_requests, & &1.id)
+
+    %{rows: [[[explain]]]} =
+      Repo.query!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " <> query, params)
+
+    attempt_reads =
+      explain["Plan"]
+      |> plan_nodes()
+      |> Enum.filter(&(&1["Relation Name"] == "attempts"))
+      |> Enum.sum_by(fn node ->
+        (node["Actual Rows"] + Map.get(node, "Rows Removed by Filter", 0)) * node["Actual Loops"]
+      end)
+
+    assert attempt_reads < 1000,
+           "five sparse events read #{attempt_reads} attempt tuples across 10,005 attempts: #{inspect(explain)}"
+  end
+
+  test "dense identity history keeps recent-event probes bounded", context do
+    now = DateTime.utc_now()
+    seed_request = insert_request(context, "failed", now)
+
+    seed_attempt =
+      Repo.one!(from attempt in Attempt, where: attempt.request_id == ^seed_request.id)
+
+    request_fields = Request.__schema__(:fields)
+    attempt_fields = Attempt.__schema__(:fields)
+
+    for batch <- 0..9 do
+      requests =
+        for offset <- 1..1000 do
+          ordinal = batch * 1000 + offset
+
+          seed_request
+          |> Map.take(request_fields)
+          |> Map.merge(%{
+            id: Ecto.UUID.generate(),
+            correlation_id: "dense-scale-#{System.unique_integer([:positive])}",
+            status: if(rem(ordinal, 100) == 0, do: "failed", else: "succeeded"),
+            admitted_at: DateTime.add(now, -ordinal, :second)
+          })
+        end
+
+      Repo.insert_all(Request, requests)
+
+      Repo.insert_all(
+        Attempt,
+        Enum.map(requests, fn request ->
+          seed_attempt
+          |> Map.take(attempt_fields)
+          |> Map.merge(%{id: Ecto.UUID.generate(), request_id: request.id})
+        end)
+      )
     end
 
     Repo.query!("ANALYZE requests")
@@ -144,7 +215,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
       end)
 
     assert attempt_reads < 1000,
-           "five sparse events read #{attempt_reads} attempt tuples across 10,001 attempts: #{inspect(explain)}"
+           "five dense events read #{attempt_reads} attempt tuples across 10,001 attempts: #{inspect(explain)}"
   end
 
   def handle_query(_event, _measurements, metadata, owner) do

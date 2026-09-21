@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
   attr :form, :any, required: true
   attr :limit_fields, :list, required: true
   attr :budget_usage, :map, default: nil
+  attr :budget_usage_loading?, :boolean, default: false
 
   def api_key_limits_step(assigns) do
     ~H"""
@@ -80,6 +81,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Limits do
         Output estimate floors are 512 tokens for ordinary requests and 2,048 tokens for opaque-context requests.
         Output limits are admission checks, not guaranteed provider output caps.
       </p>
+      <div
+        :if={@budget_usage_loading?}
+        id="api-key-budget-loading"
+        class="flex items-center gap-2 px-3 text-xs text-base-content/60"
+        role="status"
+      >
+        <.icon name="hero-arrow-path" class="admin-loading-icon size-4" />
+        <span>Loading current usage</span>
+      </div>
       <.budget_breakdown :if={@budget_usage} usage={@budget_usage} />
     </section>
     """

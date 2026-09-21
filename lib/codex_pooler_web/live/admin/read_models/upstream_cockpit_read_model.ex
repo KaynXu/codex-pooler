@@ -171,7 +171,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   @spec load_visible_without_request_metrics(term(), Ecto.UUID.t()) :: {:ok, t()} | :error
   def load_visible_without_request_metrics(scope, identity_id) when is_binary(identity_id) do
-    load_visible(scope, identity_id, request_metrics?: false)
+    load_visible(scope, identity_id, request_metrics?: false, request_events?: false)
+  end
+
+  @spec deferred_request_data(Scope.t(), t()) :: %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution(),
+          recent_events: recent_events()
+        }
+  def deferred_request_data(%Scope{} = scope, %{identity: %{id: identity_id}} = cockpit) do
+    scope
+    |> request_metrics(cockpit)
+    |> Map.put(:recent_events, recent_events(identity_id, scope, cockpit.oauth_flows))
   end
 
   @spec request_metrics(Scope.t(), Ecto.UUID.t(), assignments()) :: %{
@@ -228,6 +239,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
+  @spec merge_deferred_request_data(t(), %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution(),
+          recent_events: recent_events()
+        }) :: t()
+  def merge_deferred_request_data(cockpit, %{recent_events: recent_events} = data) do
+    cockpit = merge_request_metrics(cockpit, data)
+
+    %{
+      cockpit
+      | recent_events: recent_events,
+        sections:
+          sections(
+            cockpit.flags,
+            cockpit.assignments,
+            cockpit.charts,
+            recent_events,
+            cockpit.actions
+          )
+    }
+  end
+
   defp load_visible(scope, identity_id, options) when is_binary(identity_id) do
     pools = Pools.list_visible_pools(scope)
 
@@ -270,7 +303,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     flags = flags(account, assignments, quota_health, request_health)
     charts = charts(flags, quota_health, request_health, pool_contribution)
     oauth_flows = oauth_flows(account, scope)
-    recent_events = recent_events(account.identity, scope, oauth_flows)
+    recent_events = recent_events(account.identity.id, scope, oauth_flows, options)
     actions = actions(account, header)
     saved_resets = saved_resets(account)
     saved_reset_policy = saved_reset_policy(account)
@@ -480,11 +513,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   defp datetime_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
   defp datetime_sort_value(_datetime), do: 0
 
-  defp recent_events(%UpstreamIdentity{} = identity, scope, oauth_flows) do
+  defp recent_events(identity_id, scope, oauth_flows, options \\ [])
+       when is_binary(identity_id) do
+    request_items =
+      if Keyword.get(options, :request_events?, true) do
+        request_recent_event_items(identity_id, scope)
+      else
+        []
+      end
+
     items =
-      identity.id
-      |> request_recent_event_items(scope)
-      |> Enum.concat(audit_recent_event_items(scope, identity.id))
+      request_items
+      |> Enum.concat(audit_recent_event_items(scope, identity_id))
       |> Enum.concat(oauth_recent_event_items(oauth_flows))
       |> Enum.sort_by(&datetime_sort_value(&1.timestamp), :desc)
       |> Enum.take(@recent_event_limit)

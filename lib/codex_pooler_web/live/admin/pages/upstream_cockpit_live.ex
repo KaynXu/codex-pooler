@@ -312,7 +312,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       {:noreply,
        socket
        |> assign(cockpit_metrics_loaded?: true, cockpit_metrics_loading?: false)
-       |> merge_cockpit_metrics(metrics)
+       |> merge_cockpit_deferred_data(metrics)
        |> maybe_restart_cockpit_metrics()}
     else
       {:noreply, start_cockpit_metrics_task(socket, socket.assigns.cockpit_metrics_generation)}
@@ -449,7 +449,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       cockpit_metrics_rerun?: false
     )
     |> start_async({:cockpit_metrics, generation}, fn ->
-      UpstreamCockpitReadModel.request_metrics(scope, cockpit)
+      UpstreamCockpitReadModel.deferred_request_data(scope, cockpit)
     end)
   end
 
@@ -461,20 +461,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     end
   end
 
-  defp merge_cockpit_metrics(socket, metrics) do
+  defp merge_cockpit_deferred_data(socket, data) do
     assign(
       socket,
       :cockpit,
-      UpstreamCockpitReadModel.merge_request_metrics(socket.assigns.cockpit, metrics)
+      UpstreamCockpitReadModel.merge_deferred_request_data(socket.assigns.cockpit, data)
     )
   end
 
   defp preserve_request_metrics(socket, cockpit) do
     current = socket.assigns.cockpit.charts
 
-    UpstreamCockpitReadModel.merge_request_metrics(cockpit, %{
+    UpstreamCockpitReadModel.merge_deferred_request_data(cockpit, %{
       request_health: current.request_health,
-      pool_contribution: current.pool_contribution
+      pool_contribution: current.pool_contribution,
+      recent_events: socket.assigns.cockpit.recent_events
     })
   end
 
