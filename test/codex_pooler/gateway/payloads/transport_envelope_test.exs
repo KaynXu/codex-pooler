@@ -103,7 +103,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   describe "headers/4" do
-    test "preserves header order, server account identity, and allowed forwarded metadata" do
+    test "preserves header order, server account identity, and allowlisted forwarded metadata" do
       headers =
         TransportEnvelope.headers(
           identity(),
@@ -116,11 +116,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
           ]
         )
 
+      # An unlisted `x-openai-*` name is dropped by the envelope itself.
       assert headers == [
                {"authorization", "Bearer upstream-token"},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
-               {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-codex-turn-state", "safe-turn-state"}
              ]
     end
@@ -153,7 +153,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"version", version},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
-               {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-codex-turn-state", "safe-turn-state"}
              ]
     end
@@ -186,10 +185,18 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       token = access_token(%{"chatgpt_compute_residency" => "region-trimmed"})
 
       headers =
-        TransportEnvelope.headers(identity(), " \t#{token}\n", [], forwarded_headers: [{"x-openai-unrelated", "preserved"}])
+        TransportEnvelope.headers(identity(), " \t#{token}\n", [],
+          forwarded_headers: [
+            {"x-openai-unrelated", "dropped-by-allowlist"},
+            {"x-codex-window-id", "window-redacted"}
+          ]
+        )
 
       assert {"authorization", "Bearer #{token}"} in headers
-      assert {"x-openai-unrelated", "preserved"} in headers
+      # Negative control: a prefix alone never forwards a header (findings#240).
+      refute {"x-openai-unrelated", "dropped-by-allowlist"} in headers
+      refute inspect(headers) =~ "x-openai-unrelated"
+      assert {"x-codex-window-id", "window-redacted"} in headers
 
       assert List.last(headers) ==
                {"x-openai-internal-codex-residency", "region-trimmed"}
@@ -230,7 +237,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"authorization", "Bearer #{token}"},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
-               {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-openai-internal-codex-residency", "region-server"}
              ]
     end
@@ -295,6 +301,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-codex-parent-thread-id", "thread-redacted"},
                {"x-codex-turn-state", "turn-state-redacted"},
                {"x-openai-subagent", "subagent-redacted"},
+               {"x-openai-memgen-request", "true"},
+               {"x-codex-guardian", "reviewer"},
+               {"x-codex-inference-call-id", "0199365e-2f2a-7d3c-9b4e-6f1a2b3c4d5e"},
                {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
                {"thread-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
                {"x-client-request-id", "019a0c74-e494-7162-b789-1ba499fad58e"}
@@ -334,6 +343,71 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
                {"thread-id", "thread_01.a:b"}
              ]
+    end
+
+    # findings#240: the three per-request client flags are forwarded on native
+    # HTTP only within their bounds; an out-of-bound value is dropped, never
+    # fingerprinted, because it travels to the provider and is not persisted.
+    # The installation id is a websocket frame `client_metadata` key only, so
+    # its header form is never forwarded.
+    test "bounds the per-request client flags on native routes and drops them on /v1" do
+      call_id = "0199365e-2f2a-7d3c-9b4e-6f1a2b3c4d5e"
+      overlong_call_id = String.duplicate("a", 129)
+
+      input_headers = [
+        {"X-OpenAI-Memgen-Request", "true"},
+        {"x-openai-memgen-request", "TRUE"},
+        {"x-openai-memgen-request", "false"},
+        {"x-openai-memgen-request", "1"},
+        {"x-codex-guardian", "reviewer"},
+        {"X-Codex-Guardian", "classifier"},
+        {"x-codex-guardian", "Reviewer"},
+        {"x-codex-guardian", "auditor"},
+        {"x-codex-guardian", ""},
+        {"x-codex-inference-call-id", call_id},
+        {"x-codex-inference-call-id", "trace_01.a:b-c"},
+        {"x-codex-inference-call-id", String.duplicate("b", 128)},
+        {"x-codex-inference-call-id", overlong_call_id},
+        {"x-codex-inference-call-id", "spaced value"},
+        {"x-codex-inference-call-id", "café"},
+        {"x-codex-inference-call-id", ""},
+        {"x-codex-installation-id", "installation-redacted"},
+        {"x-codex-beta-features", "beta-key-redacted"},
+        {"x-codex-routing-hint", "model=forged"}
+      ]
+
+      expected = [
+        {"x-openai-memgen-request", "true"},
+        {"x-codex-guardian", "reviewer"},
+        {"x-codex-guardian", "classifier"},
+        {"x-codex-inference-call-id", call_id},
+        {"x-codex-inference-call-id", "trace_01.a:b-c"},
+        {"x-codex-inference-call-id", String.duplicate("b", 128)}
+      ]
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses", forwarded_headers: input_headers)) == expected
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses/compact", forwarded_headers: input_headers)) == expected
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/v1/responses", forwarded_headers: input_headers)) == []
+
+      # One list and one set of bounds live in the envelope, and `headers/4`
+      # applies them to every `:forwarded_headers` option, so a caller that
+      # skips the runtime pre-filter cannot forward anything else.
+      assert TransportEnvelope.bounded_forwarded_metadata_headers(input_headers) == expected
+      assert TransportEnvelope.bounded_forwarded_metadata_headers(nil) == []
+
+      envelope_headers =
+        TransportEnvelope.headers(identity(), "upstream-token", [], forwarded_headers: input_headers)
+
+      assert Enum.filter(envelope_headers, fn {name, _value} ->
+               name in [
+                 "x-openai-memgen-request",
+                 "x-codex-guardian",
+                 "x-codex-inference-call-id",
+                 "x-codex-installation-id",
+                 "x-codex-beta-features",
+                 "x-codex-routing-hint"
+               ]
+             end) == expected
     end
 
     test "synthesizes the provider session-id from prompt_cache_key on public /v1 origins only" do
@@ -480,7 +554,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         {"x-codex-window-id", "window-redacted"},
         {"x-codex-turn-metadata", duplicate},
         {"x-codex-parent-thread-id", "thread-redacted"},
-        {"x-codex-installation-id", "installation-redacted"},
         {"x-codex-turn-state", "turn-state-redacted"},
         {"x-openai-subagent", "subagent-redacted"}
       ]
@@ -495,7 +568,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-codex-window-id", "window-redacted"},
                {"x-codex-turn-metadata", projected_duplicate},
                {"x-codex-parent-thread-id", "thread-redacted"},
-               {"x-codex-installation-id", "installation-redacted"},
                {"x-codex-turn-state", "turn-state-redacted"},
                {"x-openai-subagent", "subagent-redacted"}
              ] = forwarded_headers
@@ -821,6 +893,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       {"x-codex-parent-thread-id", "thread-redacted"},
       {"x-codex-turn-state", "turn-state-redacted"},
       {"x-openai-subagent", "subagent-redacted"},
+      {"x-openai-memgen-request", "true"},
+      {"x-codex-guardian", "reviewer"},
+      {"x-codex-inference-call-id", "0199365e-2f2a-7d3c-9b4e-6f1a2b3c4d5e"},
       {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
       {"thread-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
       {"x-client-request-id", "019a0c74-e494-7162-b789-1ba499fad58e"}

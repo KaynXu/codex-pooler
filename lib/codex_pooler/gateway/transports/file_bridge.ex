@@ -439,6 +439,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     )
   end
 
+  # The captured headers go to `TransportEnvelope.headers/4` as they were
+  # captured; the envelope itself applies the closed metadata allowlist and
+  # value bounds shared with native Responses and compact dispatch, so a
+  # client routing hint, beta feature key or unbounded flag never reaches the
+  # upstream files endpoint. The Codex client sends only its auth headers on
+  # `/backend-api/files` (openai/codex main c11ed24c2, codex-api/src/files.rs
+  # `authorized_request`), so nothing an upload needs lies outside that list
+  # (findings#240).
   defp forwarded_headers(%RequestOptions{} = request_options),
     do: request_options.file_bridge.forwarded_headers
 

@@ -3676,7 +3676,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(attempt.response_metadata["payload_compression"]) =~ call_id
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/responses forwards only approved lineage metadata headers",
        %{conn: conn} do
     upstream =
@@ -3712,6 +3712,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_approved_lineage_headers_forwarded!(captured, metadata)
     assert_disallowed_client_headers_not_forwarded!(captured, setup)
     assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  @tag :lineage_metadata_forwarding
+  test "POST /backend-api/codex/responses drops out-of-vocabulary guardian, overlong inference call id and non-true memgen values",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_bounded_flag_headers",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    overlong_call_id = String.duplicate("c", 129)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/responses",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic bounded flag header request")
+        },
+        [
+          {"x-openai-subagent", "bounded-flags-control-subagent"},
+          {"x-openai-memgen-request", "false"},
+          {"x-codex-guardian", "auditor"},
+          {"x-codex-inference-call-id", overlong_call_id},
+          {"x-codex-installation-id", "bounded-flags-installation"}
+        ]
+      )
+
+    assert %{"id" => "resp_backend_bounded_flag_headers"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    captured_headers = Map.new(captured.headers)
+
+    assert captured_headers["x-openai-subagent"] == "bounded-flags-control-subagent"
+    refute Map.has_key?(captured_headers, "x-openai-memgen-request")
+    refute Map.has_key?(captured_headers, "x-codex-guardian")
+    refute Map.has_key?(captured_headers, "x-codex-inference-call-id")
+    refute Map.has_key?(captured_headers, "x-codex-installation-id")
+    refute inspect(captured.headers) =~ "auditor"
+    refute inspect(captured.headers) =~ overlong_call_id
+    refute inspect(captured.headers) =~ "bounded-flags-installation"
   end
 
   @tag :client_metadata
@@ -4167,7 +4218,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-internal-unapproved")
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/v1/responses forwards approved lineage metadata with trusted Codex identity",
        %{conn: conn} do
     upstream =
@@ -12760,7 +12811,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/responses/compact forwards approved lineage metadata headers and redacts metadata",
        %{conn: conn} do
     upstream =
@@ -12798,8 +12849,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-turn-metadata" => metadata.turn_metadata,
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
-             "x-codex-installation-id" => metadata.installation_id,
              "x-openai-subagent" => metadata.subagent,
+             "x-openai-memgen-request" => metadata.memgen_request,
+             "x-codex-guardian" => metadata.guardian,
+             "x-codex-inference-call-id" => metadata.inference_call_id,
              "session-id" => "lineage-session-id",
              "thread-id" => "lineage-thread-id",
              "x-client-request-id" => "lineage-thread-id"
@@ -12846,7 +12899,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-internal-unapproved")
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/v1/responses/compact forwards approved lineage metadata with trusted Codex identity",
        %{conn: conn} do
     upstream =
@@ -12884,8 +12937,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-turn-metadata" => metadata.turn_metadata,
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
-             "x-codex-installation-id" => metadata.installation_id,
              "x-openai-subagent" => metadata.subagent,
+             "x-openai-memgen-request" => metadata.memgen_request,
+             "x-codex-guardian" => metadata.guardian,
+             "x-codex-inference-call-id" => metadata.inference_call_id,
              "session-id" => "lineage-session-id",
              "thread-id" => "lineage-thread-id",
              "x-client-request-id" => "lineage-thread-id"
@@ -15328,6 +15383,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       installation_id: installation_id,
       parent_thread_id: "parent-#{forked_thread_id}",
       subagent: "subagent-#{forked_thread_id}",
+      memgen_request: "true",
+      guardian: "reviewer",
+      inference_call_id: "inference-call-#{forked_thread_id}",
       compaction_source_window_id: compaction_source_window_id,
       compaction_target_window_id: compaction_target_window_id,
       compaction_strategy: compaction_strategy,
@@ -15531,6 +15589,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {"x-codex-parent-thread-id", metadata.parent_thread_id},
       {"x-codex-installation-id", metadata.installation_id},
       {"x-openai-subagent", metadata.subagent},
+      {"x-openai-memgen-request", metadata.memgen_request},
+      {"x-codex-guardian", metadata.guardian},
+      {"x-codex-inference-call-id", metadata.inference_call_id},
       {"session-id", "lineage-session-id"},
       {"thread-id", "lineage-thread-id"},
       {"x-client-request-id", "lineage-thread-id"},
@@ -15546,8 +15607,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "x-codex-turn-metadata",
       "x-codex-window-id",
       "x-codex-parent-thread-id",
-      "x-codex-installation-id",
       "x-openai-subagent",
+      "x-openai-memgen-request",
+      "x-codex-guardian",
+      "x-codex-inference-call-id",
       "session-id",
       "thread-id",
       "x-client-request-id"
@@ -15573,8 +15636,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["x-codex-turn-metadata"] =~ metadata.compaction_target_window_id
     assert captured_headers["x-codex-window-id"] == metadata.window_id
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
-    assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
+    assert captured_headers["x-openai-memgen-request"] == metadata.memgen_request
+    assert captured_headers["x-codex-guardian"] == metadata.guardian
+    assert captured_headers["x-codex-inference-call-id"] == metadata.inference_call_id
+    # The client sends the installation id only as a websocket frame
+    # `client_metadata` key; its header form is not in the allowlist.
+    refute Map.has_key?(captured_headers, "x-codex-installation-id")
     assert_provider_session_headers_forwarded!(captured_headers)
   end
 
@@ -15583,8 +15651,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert captured_headers["x-codex-window-id"] == metadata.window_id
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
-    assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
+    assert captured_headers["x-openai-memgen-request"] == metadata.memgen_request
+    assert captured_headers["x-codex-guardian"] == metadata.guardian
+    assert captured_headers["x-codex-inference-call-id"] == metadata.inference_call_id
+    # The client sends the installation id only as a websocket frame
+    # `client_metadata` key; its header form is not in the allowlist.
+    refute Map.has_key?(captured_headers, "x-codex-installation-id")
     assert_provider_session_headers_forwarded!(captured_headers)
   end
 
@@ -15789,6 +15862,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute text =~ metadata.installation_id
     refute text =~ metadata.parent_thread_id
     refute text =~ metadata.subagent
+    refute text =~ metadata.inference_call_id
     refute text =~ metadata.compaction_source_window_id
     refute text =~ metadata.compaction_target_window_id
     refute text =~ metadata.compaction_strategy

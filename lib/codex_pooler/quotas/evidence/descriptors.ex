@@ -3,6 +3,16 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
   Quota descriptor and canonical naming rules for normalized evidence.
   """
 
+  alias CodexPooler.Accounting.Metadata, as: AccountingMetadata
+
+  # A usage-body or rate-limit-error `limit_name` or `display_label` is the
+  # provider's display string for a meter (`Shared weekly limit`), not a model
+  # id like the `x-<limit>-limit-name` header, so it takes a printable-ASCII
+  # label bound of at most 80 bytes; anything else is fingerprinted, never
+  # erased, and a blank label is absent (findings#238, findings#240).
+  @limit_label_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9 _.:\/()+-]*\z/
+  @limit_label_max_bytes 80
+
   @account_quota_key "account"
   @spark_quota_key "codex_spark"
   @spark_model "gpt-5.3-codex-spark"
@@ -103,9 +113,13 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
 
   def canonical_logical_window_key(logical_key), do: logical_key
 
+  @spec bounded_limit_label(term()) :: String.t() | nil
+  def bounded_limit_label(value),
+    do: AccountingMetadata.bounded_string(value, @limit_label_pattern, @limit_label_max_bytes)
+
   @spec additional_display_label(map(), term()) :: String.t() | nil
   def additional_display_label(limit, limit_id) do
-    present_string(limit["display_label"]) || model_limit_display_label(limit["limit_name"]) ||
+    bounded_limit_label(limit["display_label"]) || model_limit_display_label(limit["limit_name"]) ||
       model_limit_display_label(limit["model"]) || model_limit_display_label(limit["model_id"]) ||
       model_limit_display_label(limit["model_identifier"]) ||
       present_string(limit["metered_feature"]) ||

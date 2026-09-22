@@ -2052,7 +2052,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~ "request-scoped x-codex-turn-state"
       assert responses_chat.contract =~ "relay upstream x-codex-turn-state response headers"
       assert responses_chat.contract =~ "x-codex-window-id"
-      assert responses_chat.contract =~ "x-codex-installation-id"
+      assert responses_chat.contract =~ "x-openai-memgen-request"
+      assert responses_chat.contract =~ "x-codex-guardian"
+      assert responses_chat.contract =~ "x-codex-inference-call-id"
+      refute responses_chat.contract =~ "x-codex-installation-id"
       assert responses_chat.contract =~ "public /v1 and websocket request-header lanes do not"
       assert responses_chat.contract =~ "context-overflow recovery stays client/upstream-owned"
       assert responses_chat.contract =~ "no server-side hidden replay"
@@ -2400,12 +2403,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "x-codex-turn-metadata",
                  "x-codex-window-id",
                  "x-codex-parent-thread-id",
-                 "x-codex-installation-id",
                  "x-openai-subagent",
+                 "x-openai-memgen-request",
+                 "x-codex-guardian",
+                 "x-codex-inference-call-id",
                  "session-id",
                  "thread-id",
                  "x-client-request-id"
                ],
+               bounded_header_values: %{
+                 "x-openai-memgen-request" => %{accepted: ["true"], otherwise: "dropped"},
+                 "x-codex-guardian" => %{accepted: ["reviewer", "classifier"], otherwise: "dropped"},
+                 "x-codex-inference-call-id" => %{accepted: "ascii_identifier_max_128_bytes", otherwise: "dropped"}
+               },
+               client_metadata_only_names: ["x-codex-installation-id"],
+               file_bridge: %{
+                 routes: ["/backend-api/files", "/backend-api/files/:file_id/uploaded"],
+                 policy: "same_allowlist_and_value_bounds_as_native_responses",
+                 never_forwarded: ["x-codex-routing-hint", "x-codex-beta-features"]
+               },
                provider_session_headers: %{
                  names: ["session-id", "thread-id", "x-client-request-id"],
                  value_contract: "ascii_identifier_max_128_bytes",

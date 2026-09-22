@@ -249,6 +249,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DispatchTest do
       {"x-codex-parent-thread-id", "ws-forwarded-metadata-parent"},
       {"x-codex-installation-id", "ws-forwarded-metadata-installation"},
       {"x-openai-subagent", "ws-forwarded-metadata-subagent"},
+      {"x-openai-memgen-request", "true"},
+      {"x-codex-guardian", "reviewer"},
+      {"x-codex-inference-call-id", "ws-forwarded-metadata-inference-call"},
       {"x-codex-extra-websocket", "ws-forwarded-metadata-extra"}
     ]
 
@@ -316,6 +319,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.DispatchTest do
     refute persistence_text =~ "ws-forwarded-metadata-parent"
     refute persistence_text =~ "ws-forwarded-metadata-installation"
     refute persistence_text =~ "ws-forwarded-metadata-subagent"
+    refute persistence_text =~ "ws-forwarded-metadata-inference-call"
     refute persistence_text =~ "ws-forwarded-metadata-extra"
     refute persistence_text =~ setup.authorization
   end

@@ -399,8 +399,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     |> put_req_header("x-codex-turn-metadata", "turn-metadata-redacted")
     |> put_req_header("x-codex-window-id", "window-redacted")
     |> put_req_header("x-codex-parent-thread-id", "thread-redacted")
-    |> put_req_header("x-codex-installation-id", "installation-redacted")
     |> put_req_header("x-openai-subagent", "subagent-redacted")
+    |> put_req_header("x-openai-memgen-request", "true")
+    |> put_req_header("x-codex-guardian", "reviewer")
+    |> put_req_header("x-codex-inference-call-id", "public-inference-call-redacted")
     |> put_req_header("x-codex-extra", "extra-redacted")
     |> put_req_header("x-openai-extra", "extra-redacted")
     |> put_req_header("cookie", "public-client-cookie")
@@ -7280,7 +7282,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /v1/responses does not forward public metadata headers upstream", %{conn: conn} do
     upstream =
       start_upstream(
@@ -7324,8 +7326,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(captured_headers, "x-codex-turn-metadata")
     refute Map.has_key?(captured_headers, "x-codex-window-id")
     refute Map.has_key?(captured_headers, "x-codex-parent-thread-id")
-    refute Map.has_key?(captured_headers, "x-codex-installation-id")
     refute Map.has_key?(captured_headers, "x-openai-subagent")
+    refute Map.has_key?(captured_headers, "x-openai-memgen-request")
+    refute Map.has_key?(captured_headers, "x-codex-guardian")
+    refute Map.has_key?(captured_headers, "x-codex-inference-call-id")
     refute Map.has_key?(captured_headers, "x-codex-extra")
     refute Map.has_key?(captured_headers, "x-openai-extra")
     assert captured_headers["x-codex-routing-hint"] == "model=#{setup.model.upstream_model_id}"

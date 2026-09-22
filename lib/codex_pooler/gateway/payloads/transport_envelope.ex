@@ -20,6 +20,42 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   @provider_session_header_names ["session-id", "thread-id", "x-client-request-id"]
   @provider_session_header_max_bytes 128
 
+  # Per-request client metadata headers the Codex client stamps on its native
+  # HTTP Responses and compact calls (openai/codex main c11ed24c2:
+  # core/src/responses_metadata.rs `compatibility_headers`, core/src/client.rs
+  # `build_responses_compatibility_headers` and `build_subagent_headers`,
+  # ext/guardian-v2 sync reviewer and classifier sampler, rollout-trace
+  # `add_request_headers`). `x-codex-installation-id` is deliberately absent:
+  # the client sends it only as a websocket frame `client_metadata` key, never
+  # as a request header (findings#240). This is the one closed allowlist for
+  # every upstream envelope; `UpstreamDispatch` gates it by endpoint and the
+  # files bridge relies on `headers/4` applying it.
+  @forwarded_metadata_header_names [
+    "x-codex-turn-metadata",
+    "x-codex-window-id",
+    "x-codex-parent-thread-id",
+    "x-codex-turn-state",
+    "x-openai-subagent",
+    "x-openai-memgen-request",
+    "x-codex-guardian",
+    "x-codex-inference-call-id"
+  ]
+  # Value bounds for the flags above. A memory-consolidation session sends
+  # exactly `true`; guardian review and classifier turns send one of a closed
+  # vocabulary; the rollout-trace call id is a client-generated UUID string, so
+  # any ASCII identifier within the provider session length is accepted.
+  # Anything else is dropped rather than fingerprinted: these values travel to
+  # the provider and are never persisted, so a fingerprint would only send the
+  # provider garbage.
+  @memgen_request_header_name "x-openai-memgen-request"
+  @memgen_request_header_value "true"
+  @guardian_header_name "x-codex-guardian"
+  @guardian_header_values ["reviewer", "classifier"]
+  @inference_call_id_header_name "x-codex-inference-call-id"
+  @inference_call_id_max_bytes 128
+  @inference_call_id_pattern ~r/\A[A-Za-z0-9_.:-]+\z/
+  @turn_metadata_header_name "x-codex-turn-metadata"
+
   # Fixed namespace for the `session-id` the Pooler synthesizes on public
   # `/v1` routes from the client's `prompt_cache_key`. OpenAI-compatible
   # clients never send the provider's session headers, so the derived id is
@@ -105,6 +141,94 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   end
 
   def provider_session_header_value?(_value), do: false
+
+  @doc """
+  Bounds a client's captured metadata headers to the one closed allowlist every
+  upstream envelope applies: names are lowercased, unknown names are dropped
+  whatever their prefix, the provider session names are bounded identifiers,
+  the per-request flags are bounded to their vocabulary, and direct turn
+  metadata keeps only its bounded projection. `headers/4` applies it to every
+  `:forwarded_headers` option, so no caller can forward an arbitrary
+  `x-openai-*` or `x-codex-*` header by skipping a pre-filter. It is
+  idempotent, so an already bounded list passes unchanged.
+  """
+  @spec bounded_forwarded_metadata_headers(term()) :: [{String.t(), String.t()}]
+  def bounded_forwarded_metadata_headers(headers) when is_list(headers) do
+    Enum.flat_map(headers, fn
+      {name, value} when is_binary(name) and is_binary(value) ->
+        bounded_forwarded_metadata_header(String.downcase(name), value)
+
+      _other ->
+        []
+    end)
+  end
+
+  def bounded_forwarded_metadata_headers(_headers), do: []
+
+  @doc """
+  One header through the same bounds as `bounded_forwarded_metadata_headers/1`;
+  `name` must already be lowercase. Returns the header as a one-element list
+  or an empty list.
+  """
+  @spec bounded_forwarded_metadata_header(term(), term()) :: [{String.t(), String.t()}]
+  def bounded_forwarded_metadata_header(name, value) when is_binary(name) and is_binary(value) do
+    cond do
+      name in @provider_session_header_names ->
+        if provider_session_header_value?(value), do: [{name, value}], else: []
+
+      name in @forwarded_metadata_header_names ->
+        bounded_metadata_header(name, value)
+
+      true ->
+        []
+    end
+  end
+
+  def bounded_forwarded_metadata_header(_name, _value), do: []
+
+  defp bounded_metadata_header(@memgen_request_header_name = name, @memgen_request_header_value = value),
+    do: [{name, value}]
+
+  defp bounded_metadata_header(@memgen_request_header_name, _value), do: []
+
+  defp bounded_metadata_header(@guardian_header_name = name, value) when value in @guardian_header_values,
+    do: [{name, value}]
+
+  defp bounded_metadata_header(@guardian_header_name, _value), do: []
+
+  defp bounded_metadata_header(@inference_call_id_header_name = name, value) do
+    if byte_size(value) in 1..@inference_call_id_max_bytes and Regex.match?(@inference_call_id_pattern, value),
+      do: [{name, value}],
+      else: []
+  end
+
+  defp bounded_metadata_header(@turn_metadata_header_name = name, value),
+    do: [{name, project_turn_metadata_header(value)}]
+
+  defp bounded_metadata_header(name, value), do: [{name, value}]
+
+  # Direct turn metadata is compatibility output: the unbounded code-mode tool
+  # inventory travels in the frame `client_metadata`, so the header keeps
+  # everything but that top-level key. A second pass finds no key and returns
+  # the value unchanged.
+  defp project_turn_metadata_header(value) do
+    case CodexPooler.JSON.decode(value) do
+      {:ok, %{"code_mode_tool_names" => _value} = metadata} ->
+        encode_projected_turn_metadata(metadata, value)
+
+      _other ->
+        value
+    end
+  end
+
+  defp encode_projected_turn_metadata(metadata, original) do
+    case metadata
+         |> Map.delete("code_mode_tool_names")
+         |> CodexPooler.JSON.encode(escape: :unicode_safe) do
+      {:ok, projected} -> projected
+      {:error, _error} -> original
+    end
+  end
 
   @doc """
   The fixed namespace UUID behind `prompt_cache_session_id/2`.
@@ -202,32 +326,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
 
   defp codex_account_headers(_identity), do: []
 
-  defp safe_forwarded_headers(headers) when is_list(headers) do
-    headers
-    |> Enum.flat_map(fn
-      {name, value} when is_binary(name) and is_binary(value) ->
-        name = String.downcase(name)
-
-        cond do
-          String.starts_with?(name, "x-openai-") or String.starts_with?(name, "x-codex-") ->
-            [{name, value}]
-
-          name in @provider_session_header_names and provider_session_header_value?(value) ->
-            [{name, value}]
-
-          true ->
-            []
-        end
-
-      _other ->
-        []
-    end)
-    |> Enum.reject(fn {name, _value} ->
-      name in ["authorization", "accept", "content-type", @codex_residency_header]
-    end)
-  end
-
-  defp safe_forwarded_headers(_headers), do: []
+  # The structural guarantee of every envelope: whatever a caller passes as
+  # `:forwarded_headers` goes through the closed allowlist and value bounds,
+  # never a prefix rule, so authorization, accept, content-type, the residency
+  # header and any unlisted `x-openai-*`/`x-codex-*` name cannot pass.
+  defp safe_forwarded_headers(headers), do: bounded_forwarded_metadata_headers(headers)
 
   defp codex_residency_headers(token) do
     case CodexAuth.compute_residency(token) do

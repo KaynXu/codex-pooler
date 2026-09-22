@@ -55,14 +55,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
   ]
-  @regular_runtime_metadata_header_names [
-    "x-codex-turn-metadata",
-    "x-codex-window-id",
-    "x-codex-parent-thread-id",
-    "x-codex-installation-id",
-    "x-codex-turn-state",
-    "x-openai-subagent"
-  ]
+  # The closed client metadata header allowlist and its value bounds live in
+  # `TransportEnvelope` (findings#240); this module only gates them by endpoint.
   @responses_lite_header_name "x-openai-internal-codex-responses-lite"
   @routing_hint_header_name "x-codex-routing-hint"
   @stable_downstream_keys [:active_turn_reconnect?, :correlation_id, :epoch, :pid]
@@ -294,7 +288,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         _payload
       )
       when endpoint in @regular_runtime_metadata_endpoints and is_list(forwarded_headers) do
-    filter_regular_runtime_forwarded_metadata_headers(forwarded_headers)
+    TransportEnvelope.bounded_forwarded_metadata_headers(forwarded_headers)
   end
 
   # Public `/v1` origin: the client's continuity headers stay local, and the
@@ -328,51 +322,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp prompt_cache_tenant_scope(%RequestOptions{runtime: %{tenant_scope: scope}}), do: scope
   defp prompt_cache_tenant_scope(%RequestOptions{}), do: nil
 
-  defp filter_regular_runtime_forwarded_metadata_headers(headers) do
-    Enum.flat_map(headers, fn
-      {name, value} when is_binary(name) and is_binary(value) ->
-        forwarded_metadata_header(String.downcase(name), value)
-
-      _other ->
-        []
-    end)
-  end
-
-  # Runtime lookup: the envelope owns the provider session header names and a
-  # compile-time reference would add a forbidden xref edge.
-  defp forwarded_metadata_header(name, value) do
-    cond do
-      name in TransportEnvelope.provider_session_header_names() ->
-        if TransportEnvelope.provider_session_header_value?(value), do: [{name, value}], else: []
-
-      name in @regular_runtime_metadata_header_names ->
-        [{name, maybe_project_turn_metadata_header(name, value)}]
-
-      true ->
-        []
-    end
-  end
-
-  defp maybe_project_turn_metadata_header("x-codex-turn-metadata", value) do
-    case CodexPooler.JSON.decode(value) do
-      {:ok, %{"code_mode_tool_names" => _value} = metadata} ->
-        encode_projected_turn_metadata(metadata, value)
-
-      _other ->
-        value
-    end
-  end
-
-  defp maybe_project_turn_metadata_header(_name, value), do: value
-
-  defp encode_projected_turn_metadata(metadata, original) do
-    case metadata
-         |> Map.delete("code_mode_tool_names")
-         |> CodexPooler.JSON.encode(escape: :unicode_safe) do
-      {:ok, projected} -> projected
-      {:error, _error} -> original
-    end
-  end
+  # Runtime lookup only: the envelope owns the allowlist, the provider session
+  # names and every value bound, and a compile-time reference to it would add
+  # a forbidden xref edge. `name` must already be lowercase.
+  defp forwarded_metadata_header(name, value),
+    do: TransportEnvelope.bounded_forwarded_metadata_header(name, value)
 
   @spec http_request(DispatchRequest.t()) :: {:ok, Req.Response.t()} | {:error, map()}
   def http_request(%DispatchRequest{
@@ -1511,13 +1465,23 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   # The Codex client sends `session-id`, `thread-id` and `x-client-request-id`
-  # on its websocket handshake exactly as on HTTP (rust-v0.154.0
-  # core/src/client.rs `build_websocket_headers`). A native Codex-backend
-  # handshake forwards the values the authenticated downstream native upgrade
-  # carried, under the same bounds as the HTTP route and keeping the first valid
-  # value per name. They stay in the upstream websocket reuse key: a connection
-  # opened with one client's values never serves a turn carrying other values or
-  # none. `/v1` origins (translated, bridged, public websocket) send none.
+  # on its websocket handshake exactly as on HTTP (openai/codex main c11ed24c2,
+  # core/src/client.rs `build_websocket_headers`, the websocket connect path).
+  # That handshake also carries the client's `x-oai-attestation`,
+  # `OpenAI-Beta`, `x-responsesapi-include-timing-metrics`,
+  # `x-codex-beta-features`, its routing hint and the same compatibility
+  # metadata headers as an HTTP turn. The Pooler sets its own `openai-beta`
+  # value and derives its own routing hint, and deliberately copies none of
+  # the client's per-turn handshake headers onto a reused upstream connection:
+  # one owner socket serves many turns, downstream sockets and API keys of a
+  # Pool, and the attestation is bound to the client's own account. The frame
+  # `client_metadata` carries the per-turn values instead. A native
+  # Codex-backend handshake forwards only the three provider session names the
+  # authenticated downstream native upgrade carried, under the same bounds as
+  # the HTTP route and keeping the first valid value per name. They stay in
+  # the upstream websocket reuse key: a connection opened with one client's
+  # values never serves a turn carrying other values or none. `/v1` origins
+  # (translated, bridged, public websocket) send none.
   defp websocket_provider_session_headers(
          %RequestOptions{
            transport: %{upstream_endpoint: endpoint, forwarded_metadata_headers: headers},

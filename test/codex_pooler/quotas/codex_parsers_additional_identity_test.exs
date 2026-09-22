@@ -201,6 +201,129 @@ defmodule CodexPooler.Quotas.CodexParsersAdditionalIdentityTest do
     assert clear.raw_limit_name == "Error dialect label"
   end
 
+  # findings#240: a usage-body display_label takes the same printable-label
+  # bound as limit_name before it becomes the operator-facing label.
+  test "a usage-body display_label inside the label bound stays cleartext" do
+    label = "Vendor label (beta) v2.1"
+    limit = "meter_display_clear" |> additional_limit(44) |> Map.put("display_label", label)
+
+    assert {:ok, [evidence]} =
+             CodexParsers.parse_codex_usage_payload(
+               %{"additional_rate_limits" => [limit]},
+               @observed_at
+             )
+
+    assert evidence.display_label == label
+    assert evidence.raw_limit_name == "Shared weekly limit"
+    assert evidence.raw_metered_feature == "meter_display_clear"
+  end
+
+  test "a usage-body display_label outside the label bound is fingerprinted" do
+    overlong = "Vendor label " <> String.duplicate("q", 80)
+    control_characters = "Vendor label"
+
+    for label <- [overlong, control_characters] do
+      limit = "meter_display_bounded" |> additional_limit(44) |> Map.put("display_label", label)
+
+      assert {:ok, [evidence]} =
+               CodexParsers.parse_codex_usage_payload(
+                 %{"additional_rate_limits" => [limit]},
+                 @observed_at
+               )
+
+      assert evidence.display_label == fingerprint(label)
+      assert evidence.raw_limit_name == "Shared weekly limit"
+      assert evidence.raw_metered_feature == "meter_display_bounded"
+      refute inspect(evidence) =~ "Vendor"
+    end
+  end
+
+  # findings#240: with no limit_name, the meter's identity falls back to the
+  # body's model, model_id or model_identifier. Those are provider-controlled
+  # strings, so they take the model-identifier bound: an ASCII identifier of
+  # at most 80 bytes stays cleartext, anything else is fingerprinted, never
+  # erased, and a blank one is absent.
+  test "a model fallback inside the identifier bound stays cleartext" do
+    for {key, model} <- [
+          {"model", "gpt-5.6-terra"},
+          {"model_id", "gpt_6.astra:v2"},
+          {"model_identifier", "example-org/model-1"}
+        ] do
+      limit =
+        "meter_model_clear"
+        |> additional_limit(44)
+        |> Map.delete("limit_name")
+        |> Map.put(key, model)
+
+      assert {:ok, [evidence]} =
+               CodexParsers.parse_codex_usage_payload(
+                 %{"additional_rate_limits" => [limit]},
+                 @observed_at
+               )
+
+      assert evidence.limit_name == model
+      assert evidence.raw_limit_name == model
+      assert evidence.model == model
+      assert evidence.raw_metered_feature == "meter_model_clear"
+    end
+  end
+
+  test "a model fallback outside the identifier bound is fingerprinted" do
+    overlong = "gpt-leak" <> String.duplicate("x", 76)
+    spaced = "gpt 5.6 terra"
+    control_characters = "gpt- terra"
+
+    # The display label derives from the same field, so the raw content must
+    # not survive there in capitalized or split form either; hex fingerprints
+    # cannot contain these markers.
+    for {key, model, leak_marker} <- [
+          {"model", overlong, ~r/leakx/i},
+          {"model_id", spaced, ~r/5\.6 terra/i},
+          {"model_identifier", control_characters, ~r/terra/i}
+        ] do
+      limit =
+        "meter_model_bounded"
+        |> additional_limit(44)
+        |> Map.delete("limit_name")
+        |> Map.put(key, model)
+
+      assert {:ok, [evidence]} =
+               CodexParsers.parse_codex_usage_payload(
+                 %{"additional_rate_limits" => [limit]},
+                 @observed_at
+               )
+
+      assert evidence.limit_name == fingerprint(model)
+      assert evidence.raw_limit_name == fingerprint(model)
+      assert evidence.model == fingerprint(model)
+      assert evidence.raw_metered_feature == "meter_model_bounded"
+      refute inspect(evidence) =~ model
+      refute inspect(evidence) =~ leak_marker
+    end
+  end
+
+  test "the model fallback keeps first-present precedence and treats a blank model as absent" do
+    limit =
+      "meter_model_precedence"
+      |> additional_limit(44)
+      |> Map.delete("limit_name")
+      |> Map.merge(%{
+        "model" => "   ",
+        "model_id" => "gpt-precedence",
+        "model_identifier" => "gpt-ignored"
+      })
+
+    assert {:ok, [evidence]} =
+             CodexParsers.parse_codex_usage_payload(
+               %{"additional_rate_limits" => [limit]},
+               @observed_at
+             )
+
+    assert evidence.limit_name == "gpt-precedence"
+    assert evidence.model == "gpt-precedence"
+    refute inspect(evidence) =~ "gpt-ignored"
+  end
+
   defp fingerprint(value) do
     "sha256_" <>
       (:crypto.hash(:sha256, value)

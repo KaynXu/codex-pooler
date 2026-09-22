@@ -316,17 +316,6 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
 
   defp valid_additional_limit?(_malformed), do: false
 
-  # A usage-body or rate-limit-error `limit_name` is the provider's display
-  # label for a meter (`Shared weekly limit`), not a model id like the
-  # `x-<limit>-limit-name` header, so it takes a printable-ASCII label bound
-  # of at most 80 bytes; anything else is fingerprinted, never erased, and a
-  # blank label is absent (findings#238).
-  @limit_name_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9 _.:\/()+-]*\z/
-  @limit_name_max_bytes 80
-
-  defp bounded_limit_name(value),
-    do: AccountingMetadata.bounded_string(value, @limit_name_pattern, @limit_name_max_bytes)
-
   defp valid_additional_rate_limit?(:error), do: true
   defp valid_additional_rate_limit?({:ok, nil}), do: true
 
@@ -367,7 +356,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   # Reason: parser accepts several upstream rate-limit error dialects.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   def parse_rate_limit_error(%{} = payload, observed_at) do
-    limit_name = bounded_limit_name(payload["limit_name"])
+    limit_name = Descriptors.bounded_limit_label(payload["limit_name"])
 
     family =
       present_string(payload["limit_id"] || limit_name || payload["metered_feature"]) ||
@@ -473,25 +462,34 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
        ) do
     raw_metered_feature = present_string(limit["metered_feature"])
     raw_limit_id = present_string(limit["limit_id"]) || raw_metered_feature
-    bounded_label = bounded_limit_name(limit["limit_name"])
+    bounded_label = Descriptors.bounded_limit_label(limit["limit_name"])
 
-    descriptor_id =
-      raw_metered_feature || raw_limit_id ||
-        bounded_label || present_string(limit["model"]) ||
-        present_string(limit["model_id"]) || present_string(limit["model_identifier"]) ||
-        "additional"
+    # The model fallbacks are provider-controlled strings that become the
+    # meter's persisted identity when no label is present, so they take the
+    # model-identifier bound (findings#240): an ASCII identifier stays
+    # cleartext, anything else is fingerprinted, and a blank one is absent.
+    bounded_model =
+      AccountingMetadata.bounded_model_identifier(limit["model"]) ||
+        AccountingMetadata.bounded_model_identifier(limit["model_id"]) ||
+        AccountingMetadata.bounded_model_identifier(limit["model_identifier"])
 
-    limit_name =
-      bounded_label || present_string(limit["model"]) ||
-        present_string(limit["model_id"]) || present_string(limit["model_identifier"])
+    descriptor_id = raw_metered_feature || raw_limit_id || bounded_label || bounded_model || "additional"
+    limit_name = bounded_label || bounded_model
+
+    # The display label derives from the same fields, so it reads the bounded
+    # values: the first present model key, already bounded, replaces the raw
+    # three with the same precedence.
+    display_label_limit =
+      Map.merge(limit, %{
+        "limit_name" => bounded_label,
+        "model" => bounded_model,
+        "model_id" => nil,
+        "model_identifier" => nil
+      })
 
     descriptor =
       Descriptors.limit_descriptor(descriptor_id, limit_name, %{
-        display_label:
-          Descriptors.additional_display_label(
-            Map.put(limit, "limit_name", bounded_label),
-            descriptor_id
-          ),
+        display_label: Descriptors.additional_display_label(display_label_limit, descriptor_id),
         metered_feature: raw_metered_feature || raw_limit_id,
         raw_limit_id: raw_limit_id,
         raw_metered_feature: raw_metered_feature
