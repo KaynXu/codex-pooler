@@ -3,6 +3,7 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
 
   alias CodexPooler.MCP.MetadataSanitizer
   alias CodexPooler.MCP.PrivacyMatrix
+  alias CodexPooler.Upstreams.Reconciliation.UsagePollCooldown
 
   @entity_families [
     :operators,
@@ -241,6 +242,27 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
     sanitized_metadata = MetadataSanitizer.safe_metadata(projected.metadata)
 
     refute inspect(sanitized_metadata) =~ sentinel
+  end
+
+  # codex-pooler#390. The provider-requested polling pause is internal
+  # bookkeeping on the identity, not an operator-facing quota fact, and its
+  # origin digests say which hosts an account is configured against.
+  test "metadata sanitizer omits the internal usage polling cooldown record" do
+    sentinel = "usage-poll-cooldown-origin-must-not-leak"
+
+    sanitized =
+      MetadataSanitizer.safe_metadata(%{
+        "credential_epoch" => 3,
+        UsagePollCooldown.metadata_key() => %{
+          "version" => 1,
+          "credential_epoch" => 3,
+          "origins" => %{sentinel => %{"not_before" => "2026-09-22T13:00:00.000000Z"}}
+        }
+      })
+
+    refute Map.has_key?(sanitized, UsagePollCooldown.metadata_key())
+    refute inspect(sanitized) =~ sentinel
+    assert sanitized["credential_epoch"] == 3
   end
 
   test "quota projections keep DTO fields and omit raw upstream material" do

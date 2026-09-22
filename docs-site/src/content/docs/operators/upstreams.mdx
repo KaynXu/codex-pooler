@@ -187,6 +187,23 @@ Common upstream states are:
 
 Readiness is intentionally conservative. Missing, stale, unknown, malformed, credential-mismatched, or exhausted quota evidence can keep an account out of routing even when the card still exists and the account is assigned to a Pool. A no-window account is routeable only through the narrow provider-attested state described above.
 
+### Provider-Requested Polling Pauses
+
+Codex Pooler reads an account's usage endpoints on a short cycle to keep quota evidence fresh. If the provider answers one of those reads with `429 Too Many Requests` or `503 Service Unavailable` and a `Retry-After` header it can act on, Codex Pooler stops reading that account's usage endpoints until the time the provider named.
+
+The pause applies to one account's credentials at one provider host. It covers the alternative usage endpoints, the optional reset-credit detail read, the scheduled reconciliation cycle, a manual refresh, and the confirmation read after a saved reset is applied. Every Codex Pooler replica honours the same pause, and it ends on its own when the deadline passes - there is nothing to clear.
+
+What a pause does not do:
+
+- It is not a quota fact. The account is not marked exhausted, and no reset or window is inferred from it.
+- It does not block generation requests. Pool routing keeps using quota evidence that is still fresh, and keeps failing closed when evidence is missing or stale, exactly as it does otherwise.
+- It does not spend or re-apply a saved reset. A reset already applied stays pending until valid evidence arrives.
+- It does not affect other accounts, or the same account at a different usage host.
+
+If the provider sends no `Retry-After`, or sends one Codex Pooler cannot read, nothing changes: a `429` still tries the alternative endpoint and a `503` still stops that read, both without a pause. A read already in flight when a pause is recorded is allowed to finish.
+
+An account whose usage reads are paused can look like an account whose evidence is simply going stale. The difference is that the pause is deliberate and self-limiting; if quota evidence for an account has not moved for longer than the provider's stated interval, treat it as an ordinary refresh problem rather than a pause.
+
 ## Import auth.json
 
 Click `Import` to open the upstream credentials dialog when an existing Codex `auth.json` is the right source of account credentials.

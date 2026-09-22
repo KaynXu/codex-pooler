@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
 
   alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Upstreams.CloudflareCookies
+  alias CodexPooler.Upstreams.Reconciliation.UsagePollCooldown
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -15,9 +16,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
           String.t(),
           DateTime.t(),
           timeout(),
-          [{String.t(), String.t()}]
+          [{String.t(), String.t()}],
+          map()
         ) :: term()
-  def enrich(%UpstreamIdentity{} = identity, payload, usage_url, observed_at, timeout, headers)
+  def enrich(%UpstreamIdentity{} = identity, payload, usage_url, observed_at, timeout, headers, cooldown)
       when is_map(payload) do
     case SavedResets.count_from_usage_payload(payload) do
       {:reported, count} when count > 0 ->
@@ -28,6 +30,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
           observed_at,
           timeout,
           headers,
+          cooldown,
           count
         )
 
@@ -36,7 +39,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
     end
   end
 
-  def enrich(_identity, payload, _usage_url, _observed_at, _timeout, _headers), do: payload
+  def enrich(_identity, payload, _usage_url, _observed_at, _timeout, _headers, _cooldown), do: payload
 
   defp maybe_refresh_reset_credit_expirations(
          identity,
@@ -45,6 +48,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
          observed_at,
          timeout,
          headers,
+         cooldown,
          count
        ) do
     if SavedResets.reset_credit_list_refresh_due?(identity, count, observed_at) do
@@ -54,7 +58,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
         usage_url,
         observed_at,
         timeout,
-        headers
+        headers,
+        cooldown
       )
     else
       SavedResets.reuse_expiration_metadata(payload, identity)
@@ -67,38 +72,95 @@ defmodule CodexPooler.Upstreams.Reconciliation.SavedResetUsageEnrichment do
          usage_url,
          observed_at,
          timeout,
-         headers
+         headers,
+         cooldown
        ) do
-    case fetch_reset_credits_payload(usage_url, observed_at, timeout, headers) do
-      {:ok, reset_credits} -> merge_reset_credit_snapshot(payload, reset_credits)
-      :error -> SavedResets.reuse_expiration_metadata(payload, identity, observed_at)
+    case fetch_reset_credits_payload(usage_url, observed_at, timeout, headers, cooldown) do
+      {:ok, reset_credits} ->
+        merge_reset_credit_snapshot(payload, reset_credits)
+
+      # A read the provider told us not to make is not a read that failed:
+      # nothing was attempted, so the cached expirations keep the time they
+      # were actually observed rather than being restamped as fresh.
+      :deferred ->
+        SavedResets.reuse_expiration_metadata(payload, identity)
+
+      :error ->
+        SavedResets.reuse_expiration_metadata(payload, identity, observed_at)
     end
   end
 
-  defp fetch_reset_credits_payload(usage_url, observed_at, timeout, headers) do
+  defp fetch_reset_credits_payload(usage_url, observed_at, timeout, headers, cooldown) do
     usage_url
     |> reset_credits_urls()
-    |> Enum.reduce_while(:error, fn url, _last_result ->
-      case OutboundHTTP.get(url,
-             headers: CloudflareCookies.request_headers(url, headers),
-             decode_body: false,
-             into: &collect_bounded_body/2,
-             retry: false,
-             receive_timeout: timeout,
-             finch: OutboundHTTP.pool_options_for_url(url)
-           ) do
-        {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-          handle_successful_reset_credits_response(url, response, observed_at)
-
-        {:ok, %Req.Response{} = response} ->
-          CloudflareCookies.store_from_response(url, response)
-          {:cont, :error}
-
-        {:error, _reason} ->
-          {:cont, :error}
+    |> Enum.reduce_while(:error, fn url, last_result ->
+      case admit_detail_read(cooldown, observed_at) do
+        :ok -> read_reset_credits_url(url, observed_at, timeout, headers, cooldown)
+        {:deferred, _not_before} -> {:halt, deferred_detail_read(last_result)}
       end
     end)
   end
+
+  defp read_reset_credits_url(url, observed_at, timeout, headers, cooldown) do
+    case OutboundHTTP.get(url,
+           headers: CloudflareCookies.request_headers(url, headers),
+           decode_body: false,
+           into: &collect_bounded_body/2,
+           retry: false,
+           receive_timeout: timeout,
+           finch: OutboundHTTP.pool_options_for_url(url)
+         ) do
+      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        handle_successful_reset_credits_response(url, response, observed_at)
+
+      {:ok, %Req.Response{status: status} = response} ->
+        CloudflareCookies.store_from_response(url, response)
+        maybe_record_detail_cooldown(response, status, cooldown)
+
+      {:error, _reason} ->
+        {:cont, :error}
+    end
+  end
+
+  # The detail read shares the usage endpoints' origin, so a pause either of
+  # them is told about applies to both. Recording it here is what stops the
+  # next usage probe as well, not only the rest of this optional read.
+  defp maybe_record_detail_cooldown(response, status, cooldown) do
+    received_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    with true <- is_binary(UsagePollCooldown.status_name(status)),
+         {:retry_after, not_before} <- UsagePollCooldown.instruction(response, received_at),
+         origin_key when is_binary(origin_key) <- Map.get(cooldown, :origin_key),
+         {:ok, _deadline} <-
+           UsagePollCooldown.record(
+             cooldown.identity_id,
+             cooldown.credential_epoch,
+             origin_key,
+             status,
+             not_before,
+             received_at
+           ) do
+      {:halt, :deferred}
+    else
+      _no_usable_instruction -> {:cont, :error}
+    end
+  end
+
+  defp admit_detail_read(%{origin_key: nil}, _observed_at), do: :ok
+
+  defp admit_detail_read(%{} = cooldown, observed_at) do
+    UsagePollCooldown.admit_current(
+      cooldown.identity_id,
+      cooldown.credential_epoch,
+      cooldown.origin_key,
+      observed_at
+    )
+  end
+
+  defp admit_detail_read(_cooldown, _observed_at), do: :ok
+
+  defp deferred_detail_read({:ok, _reset_credits} = read), do: read
+  defp deferred_detail_read(_last_result), do: :deferred
 
   defp handle_successful_reset_credits_response(url, response, observed_at) do
     CloudflareCookies.store_from_response(url, response)

@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @account_id "acct_usage_header_contract"
   @probe_detection_timeout_ms 15_000
@@ -63,6 +64,259 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeRequestTest do
       assert headers["chatgpt-account-id"] == @account_id
       refute Map.has_key?(headers, "accept")
     end)
+  end
+
+  # codex-pooler#390. A throttled usage read used to fall straight through to
+  # the alternative endpoint and then repeat both on the next probe, so a
+  # provider asking for an hour got four requests in under a second.
+  test "a valid Retry-After stops the fallback chain and the reads that would follow" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" => {:json_headers, 429, %{}, [{"retry-after", "3600"}]},
+           "/backend-api/codex/usage" => {200, usage_payload(observed_at)}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: @account_id,
+        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+      })
+
+    assert {:error, {:usage_poll_deferred, %DateTime{} = not_before}} =
+             UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+
+    assert DateTime.diff(not_before, observed_at, :second) in 3_500..3_601
+
+    assert Enum.map(FakeUpstream.requests(fake), & &1.path) == ["/backend-api/wham/usage"]
+
+    # The pause is committed, so a second probe of the same identity does not
+    # reach the provider at all - including the endpoint that never answered.
+    assert {:error, {:usage_poll_deferred, ^not_before}} =
+             UsageProbe.fetch_from_identity(
+               Repo.get!(UpstreamIdentity, identity.id),
+               assignment,
+               DateTime.add(observed_at, 30, :second),
+               []
+             )
+
+    assert length(FakeUpstream.requests(fake)) == 1
+  end
+
+  test "a throttled read with no usable instruction keeps the existing fallback" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    for {label, header} <- [{"absent", []}, {"malformed", [{"retry-after", "later please"}]}] do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/usage" => {:json_headers, 429, %{}, header},
+             "/backend-api/codex/usage" => {200, usage_payload(observed_at)}
+           }}
+        )
+
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool_fixture(), %{
+          chatgpt_account_id: "#{@account_id}_#{label}",
+          metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+        })
+
+      assert {:ok, %UsageProbe.Result{usage_path: "/backend-api/codex/usage"}} =
+               UsageProbe.fetch_from_identity(identity, assignment, observed_at, []),
+             "expected a #{label} Retry-After to keep falling back"
+
+      assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+               "/backend-api/wham/usage",
+               "/backend-api/codex/usage"
+             ]
+    end
+  end
+
+  test "an unavailable upstream that says when to come back is deferred, not just halted" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" => {:json_headers, 503, %{}, [{"retry-after", "900"}]},
+           "/backend-api/codex/usage" => {200, usage_payload(observed_at)}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: "#{@account_id}_503",
+        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+      })
+
+    assert {:error, {:usage_poll_deferred, %DateTime{} = not_before}} =
+             UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+
+    assert DateTime.diff(not_before, observed_at, :second) in 800..901
+
+    assert {:error, {:usage_poll_deferred, ^not_before}} =
+             UsageProbe.fetch_from_identity(
+               Repo.get!(UpstreamIdentity, identity.id),
+               assignment,
+               observed_at,
+               []
+             )
+
+    assert length(FakeUpstream.requests(fake)) == 1
+  end
+
+  test "a throttled reset-credit read keeps the usage result and still pauses the next probe" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    payload =
+      observed_at
+      |> usage_payload()
+      |> Map.put("rate_limit_reset_credits", %{"available_count" => 1})
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" => {200, payload},
+           "/backend-api/wham/rate-limit-reset-credits" => {:json_headers, 429, %{}, [{"retry-after", "1800"}]}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: "#{@account_id}_detail",
+        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+      })
+
+    # The usage read succeeded, so its result stands: only the optional detail
+    # read was refused.
+    assert {:ok, %UsageProbe.Result{usage_path: "/backend-api/wham/usage"}} =
+             UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+
+    assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+             "/backend-api/wham/usage",
+             "/backend-api/wham/rate-limit-reset-credits"
+           ]
+
+    # The pause the detail read was told about covers the whole origin, so the
+    # next usage probe does not go out either.
+    assert {:error, {:usage_poll_deferred, %DateTime{}}} =
+             UsageProbe.fetch_from_identity(
+               Repo.get!(UpstreamIdentity, identity.id),
+               assignment,
+               DateTime.add(observed_at, 30, :second),
+               []
+             )
+
+    assert length(FakeUpstream.requests(fake)) == 2
+  end
+
+  test "two usage hosts of one identity keep their own pauses" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, throttled} =
+      FakeUpstream.start_link({:path_json, %{"/backend-api/wham/usage" => {:json_headers, 429, %{}, [{"retry-after", "3600"}]}}})
+
+    {:ok, healthy} =
+      FakeUpstream.start_link({:path_json, %{"/backend-api/wham/usage" => {200, usage_payload(observed_at)}}})
+
+    on_exit(fn ->
+      FakeUpstream.stop(throttled)
+      FakeUpstream.stop(healthy)
+    end)
+
+    %{identity: identity, assignment: throttled_assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: "#{@account_id}_origins",
+        metadata: %{"usage_base_url" => FakeUpstream.url(throttled)}
+      })
+
+    healthy_assignment = %{
+      throttled_assignment
+      | metadata: %{"usage_base_url" => FakeUpstream.url(healthy)}
+    }
+
+    assert {:error, {:usage_poll_deferred, %DateTime{}}} =
+             UsageProbe.fetch_from_identity(identity, throttled_assignment, observed_at, [])
+
+    # The pause belongs to the host that asked for it. The same identity
+    # reading a different usage host is untouched.
+    assert {:ok, %UsageProbe.Result{}} =
+             UsageProbe.fetch_from_identity(
+               Repo.get!(UpstreamIdentity, identity.id),
+               healthy_assignment,
+               observed_at,
+               []
+             )
+
+    assert length(FakeUpstream.requests(throttled)) == 1
+    assert length(FakeUpstream.requests(healthy)) == 1
+  end
+
+  test "an auth rejection before a throttled read keeps its result and still records the pause" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" => {403, %{"error" => "forbidden"}},
+           "/backend-api/codex/usage" => {:json_headers, 429, %{}, [{"retry-after", "3600"}]}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool_fixture(), %{
+        chatgpt_account_id: "#{@account_id}_mixed",
+        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+      })
+
+    # The auth rejection is the stronger fact about this credential and keeps
+    # its existing precedence in the result.
+    assert {:error, {:mixed_auth_rejection, {:usage_poll_deferred, %DateTime{}}}} =
+             UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+
+    assert length(FakeUpstream.requests(fake)) == 2
+
+    # The pause was still committed, so the next probe does not retry either.
+    assert {:error, {:usage_poll_deferred, %DateTime{}}} =
+             UsageProbe.fetch_from_identity(
+               Repo.get!(UpstreamIdentity, identity.id),
+               assignment,
+               DateTime.add(observed_at, 30, :second),
+               []
+             )
+
+    assert length(FakeUpstream.requests(fake)) == 2
+  end
+
+  defp usage_payload(observed_at) do
+    %{
+      "rate_limit" => %{
+        "primary_window" => %{
+          "used_percent" => 1,
+          "limit_window_seconds" => 18_000,
+          "reset_after_seconds" => 3_600,
+          "reset_at" => DateTime.to_unix(DateTime.add(observed_at, 3_600, :second))
+        }
+      }
+    }
   end
 
   test "usage and reset-credit GETs carry the upstream connection idle bound from settings" do
