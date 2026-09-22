@@ -62,6 +62,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         model_default_reasoning?(log) && @reasoning_not_sent
       ),
       service_tier_rows(log),
+      price_bucket_rows(log),
       detail("request-log-detail-transport", "Transport", protocol_label(log.transport)),
       detail("request-log-detail-response-status", "Response status", log.response_status_code),
       detail("request-log-detail-error-code", "Error code", log.denial_reason, mono: true),
@@ -128,6 +129,29 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     do: ServiceTier.canonicalize(Map.get(log, :service_tier))
 
   defp priced_service_tier(_log), do: nil
+
+  # Settlement reports the bucket a turn was charged at, so an ordinary turn
+  # and a long-context turn that found no long-context snapshot both read
+  # `default`. Pricing resolution records the substitution it made; this row
+  # exists only when it made one, and names the requested bucket beside the
+  # one that was priced.
+  defp price_bucket_rows(log) do
+    case Map.get(metadata_section(log, "pricing"), "price_bucket_fallback") do
+      %{"requested" => requested, "selected" => selected}
+      when is_binary(requested) and is_binary(selected) ->
+        [
+          detail(
+            "request-log-detail-price-bucket",
+            "Price bucket",
+            "#{selected} (#{requested} requested)",
+            mono: true
+          )
+        ]
+
+      _no_fallback ->
+        []
+    end
+  end
 
   @spec routing_rows(map()) :: [detail_row()]
   def routing_rows(log) do

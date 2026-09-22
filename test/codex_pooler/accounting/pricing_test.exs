@@ -1432,7 +1432,60 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert result.settlement.pricing_snapshot_id == long_context_pricing.id
       assert result.settlement.details["pricing_status"] == "priced"
       assert result.settlement.details["price_bucket"] == "long_context"
+      refute Map.has_key?(result.settlement.details, "price_bucket_fallback")
+      refute Map.has_key?(result.request.request_metadata["pricing"], "price_bucket_fallback")
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(5_440_080))
+    end
+
+    # The gap findings#236 names: the settled bucket alone cannot distinguish a
+    # long-context turn priced at default rates from an ordinary one. The
+    # substitution is recorded beside the bucket, and it changes nothing else.
+    test "long-context usage with no long-context snapshot records the default-bucket substitution" do
+      setup = accounting_setup()
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id},
+                 %{correlation_id: "corr-long-context-exact-fallback"}
+               )
+
+      assert reserved.pricing_status == "priced"
+      assert reserved.reservation.details["price_bucket"] == "default"
+      refute Map.has_key?(reserved.reservation.details, "price_bucket_fallback")
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 272_001,
+                   output_tokens: 2,
+                   total_tokens: 272_003
+                 },
+                 %{response_status_code: 200}
+               )
+
+      expected_fallback = %{
+        "requested" => "long_context",
+        "selected" => "default",
+        "reason" => "long_context_pricing_absent"
+      }
+
+      assert result.settlement.pricing_snapshot_id == setup.pricing.id
+      assert result.settlement.details["pricing_status"] == "priced"
+      assert result.settlement.details["price_bucket"] == "default"
+      assert result.settlement.details["price_bucket_fallback"] == expected_fallback
+      refute Map.has_key?(result.settlement.details, "alias")
+
+      assert result.request.request_metadata["pricing"]["price_bucket_fallback"] ==
+               expected_fallback
+
+      assert result.request.request_metadata["pricing"]["price_bucket"] == "default"
     end
 
     test "explicit unavailable default bucket overrides older priced snapshot" do
@@ -1527,6 +1580,11 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert result.settlement.details["pricing_status"] == "unpriced_unavailable_price_bucket"
       assert result.settlement.details["price_bucket"] == "long_context"
       assert result.settlement.details["settled_cost_micros"] == nil
+
+      # The requested bucket is the one that was resolved, so nothing was
+      # substituted: an explicitly unavailable bucket is its own status.
+      refute Map.has_key?(result.settlement.details, "price_bucket_fallback")
+
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
     end
 
@@ -1587,6 +1645,18 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert result.settlement.details["pricing_status"] == "priced"
       assert result.settlement.details["price_bucket"] == "default"
       assert result.settlement.details["alias"] == expected_alias
+
+      # A suffix-inferred fallback carries both provenance facts: the alias
+      # says which identifier was priced, the substitution says which bucket.
+      assert result.settlement.details["price_bucket_fallback"] == %{
+               "requested" => "long_context",
+               "selected" => "default",
+               "reason" => "long_context_pricing_absent"
+             }
+
+      assert result.request.request_metadata["pricing"]["price_bucket_fallback"] ==
+               result.settlement.details["price_bucket_fallback"]
+
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(27_200_500))
     end
 
