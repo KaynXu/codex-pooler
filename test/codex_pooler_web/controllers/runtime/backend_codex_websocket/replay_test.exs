@@ -1309,6 +1309,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ReplayTest do
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     assert byte_size(turn.semantic_turn_digest) == 32
     assert get_in(request.request_metadata, ["websocket_owner_forwarding", "enabled"]) == true
+
+    # The admitted request carries its own native retry witness on both claim
+    # shapes, the ordinary tool continuation (`codex-request:`) and the
+    # post-compaction resume (`codex-resume:`). Production images up to
+    # `afe8dfd9` stored none for the first ordinary websocket turn after a
+    # native compaction; the range that shipped with `7346e8ac` restored it
+    # (findings#225).
+    assert request.native_client_retry_version == 1
+    assert byte_size(request.native_client_retry_digest) == 32
+    assert is_integer(request.native_client_retry_auth_epoch)
+
     assert String.starts_with?(request.correlation_id, expected_claim_prefix)
 
     assert String.replace_prefix(request.correlation_id, expected_claim_prefix, "") =~
