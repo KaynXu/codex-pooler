@@ -17,6 +17,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
   @saved_reset_auto_redeem_trigger_modes ~w(blocked threshold)
   @plan_family_format ~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/
   @codex_chatgpt_oauth "codex_chatgpt_oauth"
+  @synthetic_account_id_prefixes ~w(email_ local_)
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -131,6 +132,46 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
       name: :upstream_identities_chatgpt_user_workspace_slot_uq
     )
   end
+
+  @doc """
+  The provider-routable `chatgpt-account-id` scope for a stored account id, or `nil`.
+
+  This is the read-side counterpart of the `:chatgpt_account_id` trim above, and
+  it lives here so every caller that has to decide whether an account id can be
+  put on the wire asks the same question in the same place.
+
+  The value is provider-supplied, never minted by us: `Upstreams.Auth.CodexAuth`
+  reads it from the `chatgpt_account_id` id-token claim, and
+  `Upstreams.Auth.CodexAuthJson` reads `account_id` out of an imported Codex
+  `auth.json`. Some credentials carry a synthetic placeholder there instead of a
+  real account identifier — an `email_`-prefixed value derived from the signed-in
+  address, or a `local_`-prefixed value minted for a local login. Those are not
+  identifiers the provider can resolve, so sending one as `chatgpt-account-id`
+  scopes the request to an account the provider does not know instead of letting
+  the bearer token speak for itself. They are therefore not a scope at all, and
+  this returns `nil` for them.
+
+  The prefix test is deliberately case-sensitive: it matches the exact lowercase
+  spellings the provider mints, and anything else stays routable rather than
+  being guessed at.
+
+  Returns the trimmed binary when the id is routable, and `nil` for a non-binary
+  value, a blank value, or a synthetic placeholder. What `nil` means is the
+  caller's decision — omitting the header and substituting an empty scope are
+  both legitimate, and neither belongs in here.
+  """
+  @spec account_scope(term()) :: String.t() | nil
+  def account_scope(account_id) when is_binary(account_id) do
+    trimmed = String.trim(account_id)
+
+    if trimmed == "" or String.starts_with?(trimmed, @synthetic_account_id_prefixes) do
+      nil
+    else
+      trimmed
+    end
+  end
+
+  def account_scope(_account_id), do: nil
 
   @spec statuses() :: [status()]
   defdelegate statuses(), to: IdentityStatus

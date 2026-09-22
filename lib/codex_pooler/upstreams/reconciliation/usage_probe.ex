@@ -912,24 +912,15 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   defp usage_headers(access_token, chatgpt_account_id) do
     headers = [{"authorization", "Bearer " <> String.trim(access_token)}]
 
-    if send_chatgpt_account_header?(chatgpt_account_id) do
+    if account_scope = UpstreamIdentity.account_scope(chatgpt_account_id) do
       headers ++
         [
-          {"chatgpt-account-id", chatgpt_account_id}
+          {"chatgpt-account-id", account_scope}
         ]
     else
       headers
     end
   end
-
-  defp send_chatgpt_account_header?(chatgpt_account_id) when is_binary(chatgpt_account_id) do
-    chatgpt_account_id = String.trim(chatgpt_account_id)
-
-    chatgpt_account_id != "" and not String.starts_with?(chatgpt_account_id, "email_") and
-      not String.starts_with?(chatgpt_account_id, "local_")
-  end
-
-  defp send_chatgpt_account_header?(_chatgpt_account_id), do: false
 
   defp access_token_refresh_due_after_usage_auth_failure?(
          %UpstreamIdentity{} = identity,

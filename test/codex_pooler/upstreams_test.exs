@@ -290,6 +290,38 @@ defmodule CodexPooler.UpstreamsTest do
     end
   end
 
+  describe "provider-routable account scope" do
+    test "returns the trimmed account id when the provider can route on it" do
+      assert UpstreamIdentity.account_scope("2f1c6b1e-7a5d-4c93-9f2b-8d5a1c3e7b40") ==
+               "2f1c6b1e-7a5d-4c93-9f2b-8d5a1c3e7b40"
+
+      assert UpstreamIdentity.account_scope("  2f1c6b1e-7a5d-4c93-9f2b-8d5a1c3e7b40\t\n") ==
+               "2f1c6b1e-7a5d-4c93-9f2b-8d5a1c3e7b40"
+    end
+
+    test "has no scope for blank, missing, or non-binary account ids" do
+      assert UpstreamIdentity.account_scope("") == nil
+      assert UpstreamIdentity.account_scope("   \t\n ") == nil
+      assert UpstreamIdentity.account_scope(nil) == nil
+      assert UpstreamIdentity.account_scope(:acct_atom) == nil
+      assert UpstreamIdentity.account_scope(42) == nil
+      assert UpstreamIdentity.account_scope(%{"chatgpt_account_id" => "acct_map"}) == nil
+    end
+
+    test "has no scope for synthetic email_ and local_ placeholder account ids" do
+      assert UpstreamIdentity.account_scope("email_sentinel@example.com") == nil
+      assert UpstreamIdentity.account_scope("local_provider_identity") == nil
+      assert UpstreamIdentity.account_scope("  email_sentinel@example.com  ") == nil
+      assert UpstreamIdentity.account_scope("  local_provider_identity  ") == nil
+    end
+
+    test "matches the synthetic prefixes case-sensitively" do
+      assert UpstreamIdentity.account_scope("Email_x@example.com") == "Email_x@example.com"
+      assert UpstreamIdentity.account_scope("Local_provider_identity") == "Local_provider_identity"
+      assert UpstreamIdentity.account_scope("EMAIL_x@example.com") == "EMAIL_x@example.com"
+    end
+  end
+
   describe "pool assignment lifecycle" do
     test "counts visible pool assignments by pool id and excludes deleted rows" do
       pool = pool_fixture()

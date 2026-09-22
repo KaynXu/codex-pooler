@@ -2559,20 +2559,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp send_chatgpt_account_header?(chatgpt_account_id) when is_binary(chatgpt_account_id) do
-    chatgpt_account_id = String.trim(chatgpt_account_id)
-
-    chatgpt_account_id != "" and not String.starts_with?(chatgpt_account_id, "email_") and
-      not String.starts_with?(chatgpt_account_id, "local_")
-  end
-
-  defp send_chatgpt_account_header?(_chatgpt_account_id), do: false
-
-  defp emitted_chatgpt_account_scope(chatgpt_account_id) do
-    if send_chatgpt_account_header?(chatgpt_account_id),
-      do: String.trim(chatgpt_account_id),
-      else: nil
-  end
+  defp emitted_chatgpt_account_scope(chatgpt_account_id),
+    do: UpstreamIdentity.account_scope(chatgpt_account_id)
 
   defp put_provider_replay_contract(metadata, claim, identity, assignment, started_at) do
     snapshot = SavedResets.snapshot(identity, started_at)

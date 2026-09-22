@@ -314,13 +314,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
 
   defp codex_account_headers(%UpstreamIdentity{chatgpt_account_id: account_id})
        when is_binary(account_id) do
-    account_id = String.trim(account_id)
-
-    if account_id == "" or String.starts_with?(account_id, "email_") or
-         String.starts_with?(account_id, "local_") do
-      []
-    else
-      [{"chatgpt-account-id", account_id}]
+    case UpstreamIdentity.account_scope(account_id) do
+      nil -> []
+      account_scope -> [{"chatgpt-account-id", account_scope}]
     end
   end
 
