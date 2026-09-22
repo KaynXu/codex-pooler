@@ -1847,6 +1847,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       raw_decoded
       |> maybe_put_terminal_upstream_error(receive_state)
       |> maybe_put_response_id(raw_decoded)
+      |> maybe_put_served_model(raw_decoded)
       |> put_websocket_frame_headers(raw_decoded)
       |> increment_text_frame_count()
       |> capture_terminal_usage(raw_decoded, terminal_discriminator)
@@ -1907,7 +1908,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp capture_terminal_usage(receive_state, decoded, %TerminalDiscriminator{terminal: terminal})
        when is_binary(terminal) do
-    %{receive_state | response_usage: ResponseUsage.from_stream_event(decoded)}
+    usage = ResponseUsage.from_stream_event(decoded)
+
+    # The first response object declared the served model; the terminal event
+    # repeats it, so the earlier declaration wins when both exist.
+    usage =
+      case receive_state.served_model do
+        nil -> usage
+        model -> Map.put(usage, :served_model, model)
+      end
+
+    %{receive_state | response_usage: usage}
   end
 
   defp capture_terminal_usage(receive_state, _decoded, _discriminator), do: receive_state
@@ -2173,6 +2184,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp maybe_put_response_id(%ReceiveState{} = receive_state, _decoded), do: receive_state
+
+  defp maybe_put_served_model(%ReceiveState{served_model: nil} = receive_state, %{} = decoded) do
+    served_model =
+      case Map.fetch(decoded, "type") do
+        {:ok, type} when type in @response_identity_event_types -> ResponseUsage.served_model(decoded)
+        :error -> ResponseUsage.served_model(decoded)
+        _typed_or_invalid -> nil
+      end
+
+    case served_model do
+      nil -> receive_state
+      model -> %{receive_state | served_model: model}
+    end
+  end
+
+  defp maybe_put_served_model(%ReceiveState{} = receive_state, _decoded), do: receive_state
 
   defp bounded_response_id(response_id) when is_binary(response_id) do
     response_id = String.trim(response_id)

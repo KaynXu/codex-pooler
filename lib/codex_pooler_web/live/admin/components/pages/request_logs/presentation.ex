@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       format_record_id: 1,
       format_requested_tier_detail: 1,
       format_requested_reasoning_detail: 1,
+      format_served_model_detail: 1,
       format_route_latency: 1,
       format_route_metadata: 1,
       format_total: 1,
@@ -423,6 +424,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         {format_model_name(@request_log)}
       </span>
       <span class="h-5 min-w-0 items-center gap-1 truncate whitespace-nowrap leading-5 text-base-content/60 max-lg:inline lg:flex">
+        <%!-- The provider declared a different model on its response than the
+        one this request was sent as: a substitution, not a Pooler alias. --%>
+        <span
+          :if={served = format_served_model_detail(@request_log)}
+          id={"#{@prefix}-#{@request_log.id}-served-model"}
+          data-role="served-model"
+          class="text-warning"
+          title="Model the upstream declared on its response; it differs from the model this request was sent as"
+        >
+          {served}
+        </span>
         <span :if={reasoning = format_model_reasoning(@request_log)} data-role="model-reasoning">
           {reasoning}
         </span>

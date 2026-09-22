@@ -37,6 +37,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         api_key_display_name: log.api_key_display_name,
         api_key_prefix: log.api_key_prefix,
         requested_model: log.requested_model,
+        upstream_model: log.upstream_model,
+        served_model: log.served_model,
         transport: log.transport,
         status: log.status,
         usage_status: log.usage_status,
@@ -129,6 +131,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       "endpoint",
       "status",
       "requested_model",
+      "served_model",
       "transport",
       "usage_status",
       "latency_ms"
@@ -144,6 +147,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> text_row()
     |> maybe_put_value("response", Map.get(item, "response_status_code"))
     |> Map.put("upstream", upstream_text(item))
+    |> maybe_put_value("upstream_model", Map.get(item, "upstream_model"))
     |> maybe_put_terminal_diagnostics_text(Map.get(item, "debug"))
     |> maybe_put_rejection_metadata_text(Map.get(item, "debug"))
     |> maybe_put_compaction_bridge_text(Map.get(item, "compaction_bridge"))
@@ -160,6 +164,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       {"endpoint", "route"},
       {"status", "status"},
       {"requested_model", "model"},
+      {"served_model", "served_model"},
       {"transport", "transport"},
       {"usage_status", "usage"},
       {"latency_ms", "latency_ms"},
@@ -185,6 +190,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       [
         {"response", "response"},
         {"upstream", "upstream", required: true},
+        {"upstream_model", "upstream_model"},
         {"upstream_error_code", "upstream_error_code"},
         {"stream_terminal_type", "stream_terminal_type"},
         {"compaction_invalid_reason", "compaction_invalid_reason"},

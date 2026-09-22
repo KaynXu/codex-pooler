@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
           usage: ResponseUsage.usage() | nil,
           previous_usage: ResponseUsage.usage() | nil,
           previous_terminal?: boolean(),
+          served_model: String.t() | nil,
           classification: String.t(),
           marker_seen: boolean(),
           valid_object_seen: boolean(),
@@ -46,6 +47,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
       usage: nil,
       previous_usage: nil,
       previous_terminal?: false,
+      served_model: nil,
       classification: "missing",
       marker_seen: false,
       valid_object_seen: false,
@@ -72,11 +74,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   @spec result(t() | term()) :: ResponseUsage.usage()
   def result(%{envelope: envelope, previous_terminal?: false} = state) do
     if incomplete_or_invalid?(envelope) or (terminal_event?(state) and envelope.usage == nil),
-      do: %{status: "usage_unknown", source: "sse_usage_missing"},
-      else: usage(state) || %{status: "usage_unknown", source: "sse_usage_missing"}
+      do: put_served_model(%{status: "usage_unknown", source: "sse_usage_missing"}, state),
+      else: usage(state) || put_served_model(%{status: "usage_unknown", source: "sse_usage_missing"}, state)
   end
 
-  def result(state), do: usage(state) || %{status: "usage_unknown", source: "sse_usage_missing"}
+  def result(state),
+    do: usage(state) || put_served_model(%{status: "usage_unknown", source: "sse_usage_missing"}, state)
+
+  @doc """
+  The bounded model identifier the first response object of the stream
+  declared, or `nil` when no event has declared one yet.
+  """
+  @spec served_model(t() | term()) :: String.t() | nil
+  def served_model(%{served_model: model}) when is_binary(model), do: model
+  def served_model(_state), do: nil
+
+  defp put_served_model(usage, %{served_model: model}) when is_binary(model),
+    do: Map.put(usage, :served_model, model)
+
+  defp put_served_model(usage, _state), do: usage
 
   @spec resolve(t() | term(), ResponseUsage.usage()) :: ResponseUsage.usage()
   def resolve(%{envelope: %UsageEnvelope{}} = state, _fallback), do: result(state)
@@ -214,7 +230,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
       | candidate: candidate,
         marker_seen: state.marker_seen or envelope.marker_seen?,
         counted?: state.counted? or count?,
-        candidate_count: min(state.candidate_count + if(count?, do: 1, else: 0), 255)
+        candidate_count: min(state.candidate_count + if(count?, do: 1, else: 0), 255),
+        served_model: state.served_model || ResponseUsage.bounded_served_model(envelope.model)
     }
 
     apply_envelope(state, envelope)
@@ -234,7 +251,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   defp apply_envelope(state, _envelope), do: state
 
   defp accept(state) do
-    decoded = %{"usage" => state.envelope.usage, "service_tier" => state.envelope.tier}
+    decoded = %{
+      "usage" => state.envelope.usage,
+      "service_tier" => state.envelope.tier,
+      "model" => state.served_model || state.envelope.model
+    }
 
     case ResponseUsage.from_stream_event(decoded) do
       %{status: "usage_known"} = usage -> accept_usage(state, usage)

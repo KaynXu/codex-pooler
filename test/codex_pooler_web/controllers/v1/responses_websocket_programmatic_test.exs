@@ -125,6 +125,94 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  # codex issue 46632: the provider answered `gpt-6-astra` with a response
+  # object declaring `gpt-5.6-luna`. The attempt keeps the model it sent and
+  # the one the first lifecycle event declared, so the substitution is visible.
+  test "GET /v1/responses websocket records the model the upstream declared it served" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.created",
+             %{
+               "type" => "response.created",
+               "response" => %{
+                 "id" => "resp_v1_websocket_served",
+                 "status" => "in_progress",
+                 "model" => "gpt-served-variant",
+                 "output" => []
+               }
+             }},
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_v1_websocket_served",
+                 "status" => "completed",
+                 "model" => "gpt-served-variant",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "served-model-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic served model websocket request"
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.created", "response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["model"] == setup.model.upstream_model_id
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.requested_model == setup.model.exposed_model_id
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.transport == "websocket"
+      assert attempt.status == "succeeded"
+      assert attempt.upstream_model_id == setup.model.upstream_model_id
+      assert attempt.served_model == "gpt-served-variant"
+
+      assert %{items: [log], total: 1} =
+               RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+      assert log.upstream_model == setup.model.upstream_model_id
+      assert log.served_model == "gpt-served-variant"
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   @tag :ultrafast_service_tier
   test "GET /v1/responses websocket forwards and settles an advertised ultrafast terminal" do
     upstream =

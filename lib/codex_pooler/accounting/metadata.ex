@@ -172,6 +172,37 @@ defmodule CodexPooler.Accounting.Metadata do
 
   def merge_request_metadata(_request, _metadata, _opts), do: {:error, :invalid_request}
 
+  # A provider-declared model identifier is bounded, never erased: a plain
+  # ASCII identifier of at most 80 bytes stays cleartext, the shape every
+  # catalog model id has, and anything else records a 12-character SHA-256
+  # fingerprint so the declaration survives without persisting its content.
+  @model_identifier_max_bytes 80
+  @model_identifier_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_.:\/-]*\z/
+  @model_identifier_fingerprint_length 12
+
+  @spec bounded_model_identifier(term()) :: String.t() | nil
+  def bounded_model_identifier(value) when is_binary(value) do
+    case String.trim(value) do
+      "" ->
+        nil
+
+      trimmed ->
+        if byte_size(trimmed) <= @model_identifier_max_bytes and
+             Regex.match?(@model_identifier_pattern, trimmed),
+           do: :binary.copy(trimmed),
+           else: model_identifier_fingerprint(trimmed)
+    end
+  end
+
+  def bounded_model_identifier(_value), do: nil
+
+  defp model_identifier_fingerprint(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, @model_identifier_fingerprint_length))
+  end
+
   @spec sanitize_metadata(term()) :: term()
   def sanitize_metadata(value), do: sanitize_value(value, nil)
 

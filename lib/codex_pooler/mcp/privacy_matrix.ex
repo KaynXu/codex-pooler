@@ -98,6 +98,8 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :api_key_prefix,
         :key_prefix,
         :requested_model,
+        :upstream_model,
+        :served_model,
         :transport,
         :status,
         :usage_status,

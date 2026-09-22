@@ -283,6 +283,35 @@ The ChatGPT Codex backend reports <code>service_tier</code> as <code>auto</code>
 
 A <code>default</code> report on a <code>priority</code> request is not evidence that priority processing was skipped. To judge whether it was applied, compare latency across requests for the same account, model, and transport.
 
+### Served model
+
+The list's model column shows the model the client requested. The upstream can answer with a different model than the one the request was sent as, for example while the provider runs an A/B test or substitutes a faster model. Codex Pooler records the model the upstream declared on its response object separately from the model it sent, so that substitution stays visible:
+
+<table>
+  <thead>
+    <tr>
+      <th>Row</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Model</td>
+      <td>The model the client requested.</td>
+    </tr>
+    <tr>
+      <td>Sent upstream</td>
+      <td>The upstream model identifier the latest attempt sent, after Pool aliases and catalog mapping.</td>
+    </tr>
+    <tr>
+      <td>Upstream served</td>
+      <td>The <code>model</code> value the upstream declared on the first response event of the latest attempt (or on the JSON body for non-streamed responses). Omitted when the upstream declared none.</td>
+    </tr>
+  </tbody>
+</table>
+
+When the served model differs from the one sent, the list shows a <code>served &lt;model&gt;</code> token under the model name. A row without the token either received the model it sent or received no declaration. The served model is recorded for observability only; pricing keeps using the model the request was sent as. Values that are not plain model identifiers are stored as a short fingerprint rather than verbatim.
+
 ## Operational Checklist
 
 When investigating a client report, check request logs in this order:

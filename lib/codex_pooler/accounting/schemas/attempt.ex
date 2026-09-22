@@ -14,6 +14,7 @@ defmodule CodexPooler.Accounting.Attempt do
     field :pricing_snapshot_id, :binary_id
     field :model_id, :binary_id
     field :upstream_model_id, :string
+    field :served_model, :string
     field :transport, :string
     field :owner_instance_id, :string
     field :owner_instance_boot_id, :string

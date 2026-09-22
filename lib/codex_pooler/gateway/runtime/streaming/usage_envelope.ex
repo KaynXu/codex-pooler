@@ -26,8 +26,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
           response_tier: binary() | nil,
           root_type: binary() | nil,
           response_type: binary() | nil,
+          root_model: binary() | nil,
+          response_model: binary() | nil,
           tier: binary() | nil,
           type: binary() | nil,
+          model: binary() | nil,
           error: :malformed | :limit | :null | nil,
           usage_error: :malformed | :limit | :null | nil,
           done?: boolean(),
@@ -45,8 +48,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
             response_tier: nil,
             root_type: nil,
             response_type: nil,
+            root_model: nil,
+            response_model: nil,
             tier: nil,
             type: nil,
+            model: nil,
             error: nil,
             usage_error: nil,
             done?: false,
@@ -116,7 +122,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
              ["type"],
              ["response", "type"],
              ["service_tier"],
-             ["response", "service_tier"]
+             ["response", "service_tier"],
+             ["model"],
+             ["response", "model"]
            ] ->
         %{state | capture: ""}
 
@@ -135,11 +143,20 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
         tier: nil,
         response_tier: nil,
         response_type: nil,
-        type: state.root_type
+        response_model: nil,
+        type: state.root_type,
+        model: state.root_model
     }
 
   defp reset_response(state),
-    do: %{state | response_tier: nil, response_type: nil, type: state.root_type}
+    do: %{
+      state
+      | response_tier: nil,
+        response_type: nil,
+        response_model: nil,
+        type: state.root_type,
+        model: state.root_model
+    }
 
   defp capture(state, byte) do
     key = capture_key(state, byte)
@@ -253,7 +270,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
 
   defp value_path(_state), do: nil
 
-  defp tracked_key(frame, key) when key in ["usage", "response", "type", "service_tier"] do
+  defp tracked_key(frame, key)
+       when key in ["usage", "response", "type", "service_tier", "model"] do
     if frame.path in [[], ["response"]] do
       if key in frame.seen,
         do: %{frame | key: nil},
@@ -297,6 +315,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.UsageEnvelope do
 
   defp put_context(state, ["response", "service_tier"], value),
     do: %{state | response_tier: tier(value), tier: owned_tier(state, :response, tier(value))}
+
+  # The response object's own `model` names what was served; a root `model`
+  # only stands in when no response object declares one.
+  defp put_context(state, ["model"], value),
+    do: %{state | root_model: value, model: state.response_model || value}
+
+  defp put_context(state, ["response", "model"], value),
+    do: %{state | response_model: value, model: value || state.root_model}
 
   defp put_context(state, _path, _value), do: state
 

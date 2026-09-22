@@ -2753,6 +2753,136 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert Accounting.list_request_log_models(pool) == ["gpt-alpha", "gpt-beta"]
   end
 
+  test "request logs expose the model the latest attempt sent and the one the upstream served" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-6-astra",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_sse",
+        status: "succeeded",
+        correlation_id: "served-model-log"
+      })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 1,
+      upstream_model_id: "gpt-6-astra",
+      served_model: "gpt-6-astra",
+      status: "retryable_failed"
+    })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 2,
+      upstream_model_id: "gpt-6-astra",
+      served_model: "gpt-5.6-luna"
+    })
+
+    assert %{items: [log], total: 1} =
+             Accounting.list_request_logs(pool, filters: %{request_id: request.id})
+
+    assert log.requested_model == "gpt-6-astra"
+    assert log.upstream_model == "gpt-6-astra"
+    assert log.served_model == "gpt-5.6-luna"
+
+    blank =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-6-astra",
+        status: "succeeded",
+        correlation_id: "served-model-blank"
+      })
+
+    attempt_fixture(blank, assignment, %{upstream_model_id: " ", served_model: ""})
+
+    assert %{items: [blank_log], total: 1} =
+             Accounting.list_request_logs(pool, filters: %{request_id: blank.id})
+
+    assert blank_log.upstream_model == nil
+    assert blank_log.served_model == nil
+
+    unattempted =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-6-astra",
+        status: "rejected",
+        correlation_id: "served-model-unattempted"
+      })
+
+    assert %{items: [unattempted_log], total: 1} =
+             Accounting.list_request_logs(pool, filters: %{request_id: unattempted.id})
+
+    assert unattempted_log.upstream_model == nil
+    assert unattempted_log.served_model == nil
+  end
+
+  test "settlement persists the bounded served model on the attempt" do
+    setup = accounting_setup()
+
+    for {declared, persisted} <- [
+          {"gpt-5.6-luna", "gpt-5.6-luna"},
+          {"  gpt-5.6-luna  ", "gpt-5.6-luna"},
+          {nil, nil},
+          {"", nil},
+          {%{"id" => "gpt"}, nil}
+        ] do
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "input" => "redacted by policy"},
+                 %{correlation_id: "served-model-#{System.unique_integer([:positive])}"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, _result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 2,
+                   output_tokens: 1,
+                   total_tokens: 3,
+                   served_model: declared
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert Repo.get!(Attempt, attempt.id).served_model == persisted
+    end
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id, "input" => "redacted by policy"},
+               %{correlation_id: "served-model-fingerprint"}
+             )
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    unbounded = "gpt " <> String.duplicate("x", 120) <> " secret-looking value"
+
+    assert {:ok, _result} =
+             Accounting.finalize_success(
+               reserved.request,
+               attempt,
+               %{
+                 status: "usage_known",
+                 input_tokens: 2,
+                 output_tokens: 1,
+                 total_tokens: 3,
+                 served_model: unbounded
+               },
+               %{response_status_code: 200}
+             )
+
+    persisted = Repo.get!(Attempt, attempt.id)
+    assert "sha256_" <> digest = persisted.served_model
+    assert String.length(digest) == 12
+    refute inspect(persisted) =~ "secret-looking"
+  end
+
   test "request rows persist non-nil snapshot fields" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
 

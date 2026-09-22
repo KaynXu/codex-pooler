@@ -12,8 +12,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
           optional(:output_tokens) => non_neg_integer(),
           optional(:reasoning_tokens) => non_neg_integer(),
           optional(:total_tokens) => non_neg_integer(),
-          optional(:service_tier) => String.t() | nil
+          optional(:service_tier) => String.t() | nil,
+          optional(:served_model) => String.t()
         }
+
+  alias CodexPooler.Accounting.Metadata
 
   @spec from_json(binary()) :: usage()
   def from_json(body) when is_binary(body) do
@@ -37,7 +40,34 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   def from_stream_event(%{"response" => %{"usage" => usage} = response}) when is_map(usage),
     do: normalize_stream_usage(usage, response)
 
+  def from_stream_event(event) when is_map(event),
+    do: maybe_put_served_model(%{status: "usage_unknown", source: "usage_missing"}, event)
+
   def from_stream_event(_event), do: %{status: "usage_unknown", source: "usage_missing"}
+
+  @doc """
+  The bounded model identifier a response object declares, from `model` at the
+  root or under `response`, or `nil` when it declares none.
+  """
+  @spec served_model(term()) :: String.t() | nil
+  def served_model(%{"model" => model}) when is_binary(model), do: bounded_served_model(model)
+
+  def served_model(%{"response" => %{"model" => model}}) when is_binary(model),
+    do: bounded_served_model(model)
+
+  def served_model(_envelope), do: nil
+
+  # The model identifier the provider declares on its response object, bounded
+  # by the accounting rule that owns the column it lands in.
+  @spec bounded_served_model(term()) :: String.t() | nil
+  defdelegate bounded_served_model(model), to: Metadata, as: :bounded_model_identifier
+
+  defp maybe_put_served_model(usage, envelope) do
+    case served_model(envelope) do
+      nil -> usage
+      model -> Map.put(usage, :served_model, model)
+    end
+  end
 
   defp normalize_stream_usage(usage, envelope) do
     case normalize_usage(usage, envelope) do
@@ -48,10 +78,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
         if cached + written <= normalized.input_tokens and
              normalized.reasoning_tokens <= normalized.output_tokens,
            do: Map.put(normalized, :service_tier, stream_service_tier(envelope["service_tier"])),
-           else: %{status: "usage_unknown", source: "invalid_usage_tokens"}
+           else: maybe_put_served_model(%{status: "usage_unknown", source: "invalid_usage_tokens"}, envelope)
 
       unknown ->
-        unknown
+        maybe_put_served_model(unknown, envelope)
     end
   end
 
@@ -73,15 +103,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     do: decode_stream_body(body, "websocket_usage_missing", true)
 
   defp decode_stream_body(body, missing_source, websocket?) do
-    usage =
-      body
-      |> stream_records(websocket?)
-      |> Enum.reduce_while(nil, &stream_record_usage/2)
+    records = stream_records(body, websocket?)
+    usage = Enum.reduce_while(records, nil, &stream_record_usage/2)
 
-    case usage do
-      nil -> %{status: "usage_unknown", source: missing_source}
-      %{source: "usage_missing"} -> %{status: "usage_unknown", source: missing_source}
-      usage -> usage
+    usage =
+      case usage do
+        nil -> %{status: "usage_unknown", source: missing_source}
+        %{source: "usage_missing"} -> %{status: "usage_unknown", source: missing_source}
+        usage -> usage
+      end
+
+    # The first response object of a stream declares the served model before
+    # any usage exists, so an interrupted stream still records it, and that
+    # first declaration is the one every transport keeps.
+    case Enum.find_value(records, &stream_record_served_model/1) do
+      nil -> usage
+      model -> Map.put(usage, :served_model, model)
+    end
+  end
+
+  defp stream_record_served_model({json, _event_type}) do
+    case CodexPooler.JSON.decode(json) do
+      {:ok, decoded} when is_map(decoded) -> served_model(decoded)
+      _malformed -> nil
     end
   end
 
@@ -184,8 +228,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
       }
       |> maybe_put_cached_input_tokens(cached_input_tokens)
       |> maybe_put_cache_write_tokens(cache_write_tokens)
+      |> maybe_put_served_model(envelope)
     else
-      _invalid -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
+      _invalid ->
+        maybe_put_served_model(%{status: "usage_unknown", source: "invalid_usage_tokens"}, envelope)
     end
   end
 

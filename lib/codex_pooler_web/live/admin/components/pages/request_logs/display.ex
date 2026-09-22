@@ -254,6 +254,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
     [
       format_model_name(log),
+      format_served_model_detail(log),
       reasoning,
       format_requested_reasoning_detail(log),
       service_tier_phrase(format_model_service_tier(log), reasoning),
@@ -321,6 +322,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     else
       nil
     end
+  end
+
+  @doc """
+  The model the upstream declared it served, when it is not the model the
+  latest attempt sent. `requested_model` stands in for rows written before the
+  attempt recorded what it sent. A provider that substitutes a model (A/B
+  testing, safety buffering) is otherwise invisible in the list.
+  """
+  def format_served_model_detail(log) do
+    served = present_string(Map.get(log, :served_model))
+
+    basis =
+      present_string(Map.get(log, :upstream_model)) ||
+        present_string(Map.get(log, :requested_model))
+
+    if served && !same_model?(served, basis), do: "served #{served}"
   end
 
   def format_model_service_tier(log) do
@@ -472,6 +489,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   # `default` is the provider's name for the tier that pricing calls `standard`.
   defp same_service_tier?(left, right), do: comparable_tier(left) == comparable_tier(right)
+
+  # Catalog model ids are unique case-insensitively, so the comparison is too.
+  defp same_model?(left, right) when is_binary(left) and is_binary(right),
+    do: String.downcase(left) == String.downcase(right)
+
+  defp same_model?(_left, _right), do: false
 
   defp comparable_tier(tier) do
     case ServiceTier.canonicalize(tier) do

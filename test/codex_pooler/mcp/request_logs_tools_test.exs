@@ -2605,6 +2605,66 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     item["debug"]
   end
 
+  test "request-log items name the model the upstream served next to the one sent", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-served-model", name: "MCP Served Model"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP served key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "served-model-upstream",
+        assignment_label: "served-model-assignment"
+      })
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-6-astra",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "mcp-served-model",
+        response_status_code: 200
+      })
+
+    attempt_fixture(request, assignment, %{
+      upstream_model_id: "gpt-6-astra",
+      served_model: "gpt-5.6-luna",
+      latency_ms: 120
+    })
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "limit" => 5},
+               %{auth: auth}
+             )
+
+    assert result["isError"] == false
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+    assert [item] = result["structuredContent"]["items"]
+    assert item["requested_model"] == "gpt-6-astra"
+    assert item["upstream_model"] == "gpt-6-astra"
+    assert item["served_model"] == "gpt-5.6-luna"
+
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert text =~ "gpt-5.6-luna"
+
+    assert {:ok, detail} =
+             ToolDispatch.call(
+               "codex_pooler_get_request_log",
+               %{"id" => request.id},
+               %{auth: auth}
+             )
+
+    assert detail["isError"] == false
+    assert :ok = Redaction.assert_mcp_output_safe!(detail)
+    assert detail["structuredContent"]["item"]["served_model"] == "gpt-5.6-luna"
+    assert detail["structuredContent"]["item"]["upstream_model"] == "gpt-6-astra"
+    assert [%{"type" => "text", "text" => detail_text}] = detail["content"]
+    assert detail_text =~ "gpt-5.6-luna"
+    assert detail_text =~ "gpt-6-astra"
+  end
+
   defp attempt_with_latency(request, assignment, latency_ms, response_metadata \\ %{}) do
     attempt_fixture(request, assignment, %{
       latency_ms: latency_ms,

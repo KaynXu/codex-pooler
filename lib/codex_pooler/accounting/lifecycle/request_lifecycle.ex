@@ -1038,6 +1038,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           error_message: finalization.error_message,
           latency_ms: Map.get(attrs, :latency_ms),
           usage_status: usage.status,
+          served_model: usage.served_model,
           response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :attempt_metadata, %{}))
         }
       end
@@ -1235,6 +1236,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           else: "invalid_usage_tokens"
         ),
       service_tier: attr(usage, :service_tier),
+      served_model: Metadata.bounded_model_identifier(attr(usage, :served_model)),
       recorded_at: attr(usage, :recorded_at) || now()
     }
   end

@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       detail("request-log-detail-status", "Status", status_label(log.status || "unknown")),
       detail("request-log-detail-endpoint", "Endpoint", log.endpoint, mono: true),
       detail("request-log-detail-model", "Model", log.requested_model),
+      model_rows(log),
       reasoning_detail(
         "request-log-detail-requested-reasoning",
         "Requested reasoning",
@@ -80,6 +81,23 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     ]
     |> List.flatten()
     |> present_rows()
+  end
+
+  # `Model` is what the client asked for. The latest attempt also records the
+  # model the Pooler sent upstream and the one the provider declared on its
+  # response object; they differ when the provider substitutes a model.
+  defp model_rows(log) do
+    sent = Map.get(log, :upstream_model)
+    served = Map.get(log, :served_model)
+
+    if blank?(sent) and blank?(served) do
+      []
+    else
+      [
+        detail("request-log-detail-upstream-model", "Sent upstream", sent, mono: true),
+        detail("request-log-detail-served-model", "Upstream served", served, mono: true)
+      ]
+    end
   end
 
   # The ChatGPT Codex backend reports `default` for `priority` requests and

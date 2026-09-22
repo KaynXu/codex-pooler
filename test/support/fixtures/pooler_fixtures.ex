@@ -516,6 +516,7 @@ defmodule CodexPooler.PoolerFixtures do
         pool_upstream_assignment_id: assignment.id,
         upstream_identity_id: assignment.upstream_identity_id,
         upstream_model_id: Map.get(attrs, :upstream_model_id, "upstream-gpt-5.4-mini"),
+        served_model: Map.get(attrs, :served_model),
         transport: Map.get(attrs, :transport, request.transport),
         status: Map.get(attrs, :status, "succeeded"),
         started_at: now(),

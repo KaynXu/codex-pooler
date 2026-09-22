@@ -1761,6 +1761,175 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert log.cost.status == "priced"
   end
 
+  # codex issue 46632: the provider answered `gpt-6-astra` with a response
+  # object declaring `gpt-5.6-luna`. The attempt keeps the model it sent and
+  # the one the first response object declared, on every upstream body shape.
+  test "POST /v1/responses SSE records the model the upstream declared it served", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "response" => %{
+               "id" => "resp_v1_served_sse",
+               "status" => "in_progress",
+               "model" => "gpt-served-variant",
+               "output" => []
+             }
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_served_sse",
+               "status" => "completed",
+               "model" => "gpt-served-variant",
+               "output" => [],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic served model SSE request",
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "event: response.completed\n"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["model"] == setup.model.upstream_model_id
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.requested_model == setup.model.exposed_model_id
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "http_sse"
+    assert attempt.status == "succeeded"
+    assert attempt.upstream_model_id == setup.model.upstream_model_id
+    assert attempt.served_model == "gpt-served-variant"
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.requested_model == setup.model.exposed_model_id
+    assert log.upstream_model == setup.model.upstream_model_id
+    assert log.served_model == "gpt-served-variant"
+  end
+
+  test "POST /v1/responses JSON records the model the upstream declared it served", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_served_json",
+          "object" => "response",
+          "status" => "completed",
+          "model" => "gpt-served-variant",
+          "output" => [],
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic served model JSON request"
+      })
+
+    assert %{"id" => "resp_v1_served_json", "model" => "gpt-served-variant"} =
+             json_response(conn, 200)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.upstream_model_id == setup.model.upstream_model_id
+    assert attempt.served_model == "gpt-served-variant"
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.upstream_model == setup.model.upstream_model_id
+    assert log.served_model == "gpt-served-variant"
+  end
+
+  test "POST /v1/responses records the served model even when it echoes the sent one, and none when undeclared", %{conn: conn} do
+    echoing =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_served_echo",
+          "object" => "response",
+          "status" => "completed",
+          "model" => nil,
+          "output" => [],
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    setup = gateway_setup(echoing)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic undeclared model request"
+      })
+
+    assert %{"id" => "resp_v1_served_echo"} = json_response(conn, 200)
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.served_model == nil
+
+    FakeUpstream.set_mode(
+      echoing,
+      FakeUpstream.json_response(%{
+        "id" => "resp_v1_served_echo_2",
+        "object" => "response",
+        "status" => "completed",
+        "model" => setup.model.upstream_model_id,
+        "output" => [],
+        "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+      })
+    )
+
+    conn =
+      build_conn()
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic echoed model request"
+      })
+
+    assert %{"id" => "resp_v1_served_echo_2"} = json_response(conn, 200)
+
+    assert [echoed] =
+             Repo.all(
+               from(a in Attempt,
+                 join: r in Request,
+                 on: r.id == a.request_id,
+                 where: r.pool_id == ^setup.pool.id and a.request_id != ^request.id
+               )
+             )
+
+    assert echoed.served_model == setup.model.upstream_model_id
+    assert echoed.served_model == echoed.upstream_model_id
+  end
+
   test "POST /v1/responses relays standalone-CR upstream SSE through the live HTTP endpoint" do
     terminal = %{
       "type" => "response.completed",
