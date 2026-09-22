@@ -14,19 +14,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
   alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Repo
 
-  @type summary :: %{dead_execution_attempts_recovered: non_neg_integer()}
+  @type summary :: %{
+          required(:dead_execution_attempts_recovered) => non_neg_integer(),
+          optional(:after_commit_markers) => [map()]
+        }
   @spec recover(DateTime.t(), keyword()) :: {:ok, summary()} | {:error, term(), summary()}
   def recover(now, opts \\ []) do
     cutoff = DateTime.add(now, -Keyword.get(opts, :minimum_age_seconds, 120), :second)
     limit = Keyword.get(opts, :limit, 100)
+    caller_owned_transaction? = Repo.in_transaction?()
 
-    {summary, failures} =
+    {summary, failures, markers} =
       cutoff
       |> candidates(limit)
       |> Enum.reduce(
-        {%{dead_execution_attempts_recovered: 0}, []},
-        &recover_candidate(&1, &2, now)
+        {%{dead_execution_attempts_recovered: 0}, [], []},
+        &recover_candidate(&1, &2, now, caller_owned_transaction?)
       )
+
+    summary = put_after_commit_markers(summary, markers)
 
     if failures == [],
       do: {:ok, summary},
@@ -103,19 +109,34 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     )
   end
 
-  defp recover_candidate({request, attempt}, {summary, failures}, now) do
+  # A recovered candidate's `interrupted` outcome is emitted here only when
+  # this call owns no transaction. Inside a caller-owned transaction the
+  # recovery has released a savepoint, not committed, so the marker is handed
+  # back on the summary for the outermost commit to publish through
+  # `Interruption.emit_committed_deferred_outcomes/1` — the shape
+  # `AbsentInstanceRecovery` uses. It used to be dropped on that path with no
+  # marker returned, which a future transactional caller would have paid for
+  # as silently missing `interrupted` counts (findings#224).
+  defp recover_candidate({request, attempt}, {summary, failures, markers}, now, caller_owned_transaction?) do
     case recover_candidate(request, attempt, now) do
-      {:ok, :recovered} ->
-        {%{
-           summary
-           | dead_execution_attempts_recovered: summary.dead_execution_attempts_recovered + 1
-         }, failures}
+      {:ok, :recovered, marker} ->
+        summary = %{
+          summary
+          | dead_execution_attempts_recovered: summary.dead_execution_attempts_recovered + 1
+        }
+
+        if caller_owned_transaction? do
+          {summary, failures, [marker | markers]}
+        else
+          emit_recovery_outcome(marker)
+          {summary, failures, markers}
+        end
 
       {:ok, :noop} ->
-        {summary, failures}
+        {summary, failures, markers}
 
       {:error, reason} ->
-        {summary, [{attempt.id, reason} | failures]}
+        {summary, [{attempt.id, reason} | failures], markers}
     end
   end
 
@@ -127,32 +148,37 @@ defmodule CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery do
     )
     |> Repo.update_all(set: [owner_execution_checked_at: now])
 
-    caller_owned_transaction? = Repo.in_transaction?()
-
     result =
       if ExecutionTerminalProofs.terminal?(attempt),
         do: RequestLifecycle.recover_dead_execution(request, attempt, now),
         else: {:ok, :noop}
 
     case result do
-      {:ok, :recovered} ->
-        unless caller_owned_transaction? do
-          InterruptionOutcome.emit(
-            bounded_transport(request.transport),
-            bounded_transport(attempt.transport)
-          )
-        end
-
-        result
-
-      other ->
-        other
+      {:ok, :recovered} -> {:ok, :recovered, recovery_outcome_marker(request, attempt)}
+      other -> other
     end
   rescue
     exception -> {:error, exception.__struct__}
   catch
     :exit, _reason -> {:error, :execution_recovery_unavailable}
   end
+
+  defp put_after_commit_markers(summary, []), do: summary
+
+  defp put_after_commit_markers(summary, markers),
+    do: Map.put(summary, :after_commit_markers, Enum.reverse(markers))
+
+  defp recovery_outcome_marker(request, attempt) do
+    %{
+      kind: :stream_outcome,
+      outcome: "interrupted",
+      downstream_transport: bounded_transport(request.transport),
+      upstream_transport: bounded_transport(attempt.transport)
+    }
+  end
+
+  defp emit_recovery_outcome(marker),
+    do: InterruptionOutcome.emit(marker.downstream_transport, marker.upstream_transport)
 
   defp bounded_transport(transport) when transport in ["http_sse", "websocket"], do: transport
   defp bounded_transport(_), do: "unknown"

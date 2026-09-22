@@ -7,6 +7,7 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounting.RequestLifecycle.DeadExecutionRecovery
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, RuntimeCleanup}
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.Platform.{ExecutionIdentity, InstancePresence}
   alias CodexPooler.UnboxedFixture
@@ -315,6 +316,147 @@ defmodule CodexPooler.Accounting.DeadExecutionRecoveryTest do
              DeadExecutionRecovery.recover(DateTime.add(now, 1), minimum_age_seconds: 0)
 
     assert Repo.reload!(request).status == "failed"
+  end
+
+  # The recovered execution's `interrupted` outcome follows the after-commit
+  # rule every other recovery path follows: a caller-owned transaction has not
+  # committed, so the marker is handed back for the outermost commit instead
+  # of being emitted early — or, as it used to be here, dropped (findings#224).
+  describe "interrupted outcome inside a caller-owned transaction" do
+    test "a caller-owned rollback emits nothing and leaves the execution unrecovered" do
+      setup = accounting_setup()
+      {request, attempt} = proven_dead_candidate!(setup)
+      now = DateTime.utc_now()
+
+      capture_stream_outcomes(fn ->
+        assert {:error, :caller_rollback} =
+                 Repo.transaction(fn ->
+                   assert {:ok,
+                           %{
+                             dead_execution_attempts_recovered: 1,
+                             after_commit_markers: [marker]
+                           }} =
+                            DeadExecutionRecovery.recover(DateTime.add(now, 1), minimum_age_seconds: 0)
+
+                   assert marker == %{
+                            kind: :stream_outcome,
+                            outcome: "interrupted",
+                            downstream_transport: "http_sse",
+                            upstream_transport: "http_sse"
+                          }
+
+                   Repo.rollback(:caller_rollback)
+                 end)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      assert Repo.reload!(request).status == "in_progress"
+      assert Repo.reload!(attempt).status == "in_progress"
+    end
+
+    test "a caller-owned commit hands back one marker, emitted once by the commit owner and never again" do
+      setup = accounting_setup()
+      {request, attempt} = proven_dead_candidate!(setup)
+      now = DateTime.utc_now()
+
+      capture_stream_outcomes(fn ->
+        assert {:ok,
+                {:ok,
+                 %{
+                   dead_execution_attempts_recovered: 1,
+                   after_commit_markers: [marker]
+                 }}} =
+                 Repo.transaction(fn ->
+                   DeadExecutionRecovery.recover(DateTime.add(now, 1), minimum_age_seconds: 0)
+                 end)
+
+        refute_received {:stream_outcome, _metadata}
+
+        assert Interruption.emit_committed_deferred_outcomes([marker]) == :ok
+        assert_receive {:stream_outcome, %{outcome: "interrupted", downstream_transport: "http_sse"}}
+        assert_receive {:stream_outcome_transaction, false}
+
+        # The recovered execution is settled; a repeated pass is a no-op with
+        # no marker to hand back.
+        assert {:ok, %{dead_execution_attempts_recovered: 0} = summary} =
+                 DeadExecutionRecovery.recover(DateTime.add(now, 2), minimum_age_seconds: 0)
+
+        refute Map.has_key?(summary, :after_commit_markers)
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      assert Repo.reload!(request).status == "failed"
+      assert Repo.reload!(attempt).status == "failed"
+    end
+
+    test "a bare recovery emits its outcome itself, after its own commit" do
+      setup = accounting_setup()
+      {request, _attempt} = proven_dead_candidate!(setup)
+      now = DateTime.utc_now()
+
+      capture_stream_outcomes(fn ->
+        assert {:ok, %{dead_execution_attempts_recovered: 1} = summary} =
+                 DeadExecutionRecovery.recover(DateTime.add(now, 1), minimum_age_seconds: 0)
+
+        refute Map.has_key?(summary, :after_commit_markers)
+        assert_receive {:stream_outcome, %{outcome: "interrupted", downstream_transport: "http_sse"}}
+        assert_receive {:stream_outcome_transaction, false}
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      assert Repo.reload!(request).status == "failed"
+    end
+  end
+
+  # One attempt whose owning process reserved it and then exited normally, with
+  # its terminal proof published: exactly the candidate the cleanup job recovers.
+  defp proven_dead_candidate!(setup) do
+    parent = self()
+
+    pid =
+      start_supervised!(
+        {Task,
+         fn ->
+           pair = reserve_attempt(setup)
+           send(parent, {:dead_candidate, pair})
+
+           receive do
+             :finish -> :ok
+           end
+         end}
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:dead_candidate, {request, attempt}}, 15_000
+    send(pid, :finish)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 15_000
+    CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
+    {request, attempt}
+  end
+
+  defp capture_stream_outcomes(fun) do
+    handler_id = "dead-execution-outcome-#{System.unique_integer([:positive, :monotonic])}"
+    parent = self()
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+          send(parent, {:stream_outcome_transaction, Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
   end
 
   defp reserve_attempt(setup) do
