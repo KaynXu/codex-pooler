@@ -137,6 +137,65 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     assert response.body == "ok"
   end
 
+  # The Codex backend names its server-assigned request id `x-oai-request-id`;
+  # a fake that only ever emitted `x-request-id` could not make a local lane go
+  # red when the product stopped reading the backend's real name (findings#218
+  # row 218-44). The arm is bounded to the product's own allowlist.
+  test "the upstream request id header arm is bounded to the names the product reads" do
+    assert GatewayPerfFakeUpstream.upstream_request_id_header_names() == [
+             "x-request-id",
+             "x-oai-request-id",
+             "openai-request-id"
+           ]
+
+    assert GatewayPerfFakeUpstream.default_upstream_request_id_header() == "x-request-id"
+
+    assert {:ok, "x-oai-request-id"} =
+             GatewayPerfFakeUpstream.normalize_upstream_request_id_header(" X-OAI-Request-Id ")
+
+    assert {:error, message} =
+             GatewayPerfFakeUpstream.parse_args([
+               "--run-id",
+               "test-run",
+               "--upstream-request-id-header",
+               "x-openai-request-id"
+             ])
+
+    assert message =~ "--upstream-request-id-header must be one of"
+
+    assert {:ok, %{upstream_request_id_header: "x-oai-request-id"}} =
+             GatewayPerfFakeUpstream.parse_args([
+               "--run-id",
+               "test-run",
+               "--upstream-request-id-header",
+               "x-oai-request-id"
+             ])
+
+    assert {:ok, %{upstream_request_id_header: "x-request-id"}} =
+             GatewayPerfFakeUpstream.parse_args(["--run-id", "test-run"])
+  end
+
+  test "the synthetic upstream request id travels on the configured backend header and reaches the product's reader" do
+    alias CodexPooler.Gateway.Payloads.RequestOptions
+    alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+
+    opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{})
+
+    default_server = start_server!("short-ok")
+    default_response = Req.get!(default_server.url <> "/backend-api/codex/models")
+    assert [default_id] = default_response.headers["x-request-id"]
+    refute Map.has_key?(default_response.headers, "x-oai-request-id")
+    assert String.starts_with?(default_id, "perfreq_")
+    assert Metadata.response_metadata(default_response, nil, opts)["upstream_request_id"] == default_id
+
+    backend_server = start_server!("short-ok", upstream_request_id_header: "x-oai-request-id")
+    backend_response = Req.get!(backend_server.url <> "/backend-api/codex/models")
+    assert [backend_id] = backend_response.headers["x-oai-request-id"]
+    refute Map.has_key?(backend_response.headers, "x-request-id")
+    assert String.starts_with?(backend_id, "perfreq_")
+    assert Metadata.response_metadata(backend_response, nil, opts)["upstream_request_id"] == backend_id
+  end
+
   test "Full catalog entry is canonical-source eligible and explicitly non-Lite" do
     model = GatewayPerfFakeUpstream.full_catalog_model()
 
@@ -561,15 +620,17 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     refute File.read!(manifest_path) =~ "authorization"
   end
 
-  defp start_server!(selector) do
+  defp start_server!(selector, opts \\ []) do
     assert {:ok, profiles} = GatewayPerfFakeUpstream.profiles_from_selector(selector)
 
     assert {:ok, server} =
              GatewayPerfFakeUpstream.start_link(
-               host: "127.0.0.1",
-               port: 0,
-               profiles: profiles,
-               run_id: "test-run"
+               [
+                 host: "127.0.0.1",
+                 port: 0,
+                 profiles: profiles,
+                 run_id: "test-run"
+               ] ++ opts
              )
 
     on_exit(fn -> GatewayPerfFakeUpstream.stop(server) end)
