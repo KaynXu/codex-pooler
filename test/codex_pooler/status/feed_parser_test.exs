@@ -25,6 +25,10 @@ defmodule CodexPooler.Status.FeedParserTest do
     assert {:ok, %{items: [item]}} = FeedParser.parse(feed([xml]))
     assert String.starts_with?(item.component, "Responses (Operational)")
     assert String.length(item.component) <= 512
+
+    # The cut is marked, so a truncated list reads as truncated rather than as
+    # a component name that ends mid-word.
+    assert String.ends_with?(item.component, "\u2026")
   end
 
   test "rejects DTD, custom entities and malformed XML while accepting UTF-8 BOM" do

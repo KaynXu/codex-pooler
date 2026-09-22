@@ -11,6 +11,7 @@ defmodule CodexPooler.Status.FeedParser do
   @max_items 300
   @max_text 4_000
   @max_guid 512
+  @max_component 512
   @max_link 2_048
   @future_skew_seconds 300
 
@@ -297,12 +298,26 @@ defmodule CodexPooler.Status.FeedParser do
     end
   end
 
+  # The bound is deliberate, but a hard cut lands mid-component name and shows
+  # an operator something like "... Codex in ChatGPT Desktop (O". Mark the cut
+  # so a truncated list reads as truncated rather than as a mangled name.
+  defp bounded_component(value) do
+    if String.length(value) <= @max_component do
+      value
+    else
+      value
+      |> String.slice(0, @max_component - 1)
+      |> String.trim_trailing()
+      |> Kernel.<>("\u2026")
+    end
+  end
+
   defp extract_component(description) do
     plain = strip_html(description)
 
     case Regex.run(~r/affected\s+components?\s*:?\s+(.+)\z/iu, plain) do
       [_, value] ->
-        value |> String.trim() |> String.slice(0, 512) |> blank_to_nil()
+        value |> String.trim() |> bounded_component() |> blank_to_nil()
 
       _ ->
         nil
