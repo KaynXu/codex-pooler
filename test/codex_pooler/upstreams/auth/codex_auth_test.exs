@@ -771,7 +771,46 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
                CodexAuth.HTTPClient.refresh_token(refresh_token)
 
       refute inspect(error) =~ refresh_token
+      refute Map.has_key?(error, :retry_after_seconds)
       assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    # findings#243. A throttled refresh is the case a fixed exponential backoff
+    # handles worst: it burns attempts against an interval the provider already
+    # stated. The classification is unchanged; only the interval is carried.
+    test "a provider-stated retry interval travels with the rejection" do
+      for {status, code} <- [{429, :codex_oauth_refresh_failed}, {503, :codex_auth_transient}] do
+        provider =
+          start_provider!(%{
+            "/oauth/token" => {:json_headers, status, %{"error" => "slow_down"}, [{"retry-after", "900"}]}
+          })
+
+        assert {:error, %{code: ^code, retry_after_seconds: seconds}} =
+                 CodexAuth.HTTPClient.refresh_token("refresh-token-must-not-leak")
+
+        assert seconds in 895..900
+
+        FakeOpenAIAuthProvider.stop(provider)
+      end
+    end
+
+    # A duplicated header is covered where it can actually be built:
+    # `Plug.Conn.put_resp_header/3` replaces, so this harness cannot emit one.
+    # `usage_poll_cooldown_test.exs` pins that case against the parser directly.
+    test "an unreadable retry interval carries nothing and changes nothing" do
+      for header <- [[], [{"retry-after", "whenever"}], [{"retry-after", "-30"}]] do
+        provider =
+          start_provider!(%{
+            "/oauth/token" => {:json_headers, 429, %{"error" => "slow_down"}, header}
+          })
+
+        assert {:error, %{code: :codex_oauth_refresh_failed} = error} =
+                 CodexAuth.HTTPClient.refresh_token("refresh-token-must-not-leak")
+
+        refute Map.has_key?(error, :retry_after_seconds), "expected #{inspect(header)} to be ignored"
+
+        FakeOpenAIAuthProvider.stop(provider)
+      end
     end
   end
 

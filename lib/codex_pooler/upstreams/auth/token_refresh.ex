@@ -309,11 +309,11 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
       {:error, %{code: :codex_refresh_token_revoked}} ->
         {:reauth_required, "refresh_token_revoked"}
 
-      {:error, %{code: code}} ->
-        {:transient_error, to_string(code)}
+      {:error, %{code: code} = error} ->
+        {:transient_error, to_string(code), Map.get(error, :retry_after_seconds)}
 
       {:error, _reason} ->
-        {:transient_error, "provider refresh request failed"}
+        {:transient_error, "provider refresh request failed", nil}
     end
   end
 
@@ -492,13 +492,23 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
   end
 
   defp do_finalize_token_refresh(
-         {:transient_error, code},
+         {:transient_error, code, retry_after_seconds},
          %UpstreamIdentity{} = identity,
          trigger_kind,
          attempt
        ) do
-    finalize_refresh_failure(identity, trigger_kind, attempt, code, now())
+    identity
+    |> finalize_refresh_failure(trigger_kind, attempt, code, now())
+    |> put_retry_after(retry_after_seconds)
   end
+
+  # The provider's own interval travels with the result so the worker can wait
+  # exactly that long instead of guessing. It is a hint, not a state change:
+  # nothing about the failure classification depends on it.
+  defp put_retry_after(%{} = result, seconds) when is_integer(seconds) and seconds > 0,
+    do: Map.put(result, :retry_after_seconds, seconds)
+
+  defp put_retry_after(result, _seconds), do: result
 
   defp finalize_refresh_failure(identity, trigger_kind, attempt, code, timestamp) do
     expiry =

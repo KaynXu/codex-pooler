@@ -1395,6 +1395,44 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
     # Only 400, 401 and 403 are classified. The allowlisted grant code below is
     # the same one that is terminal at 400; at 429 it stays retryable, so the
     # status gate is what decides, not the body.
+    # findings#243. The provider's own interval reaches the result so the Oban
+    # worker can wait exactly that long instead of running its fixed backoff
+    # against a deadline it was already given. The failure classification and
+    # the assignment cascade are untouched.
+    test "a provider-stated retry interval reaches the refresh result" do
+      refresh_token = secret("refresh", "throttled-interval")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {:json_headers, 429, %{"error" => "slow_down"}, [{"retry-after", "900"}]}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :refresh_failed, retryable?: true, retry_after_seconds: seconds} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      assert seconds in 895..900
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "active"
+      assert cascaded.eligibility_status == "eligible"
+
+      refute inspect(result) =~ refresh_token
+
+      # And the worker waits that long rather than starting its own backoff.
+      assert {:snooze, snoozed} =
+               TokenRefreshWorker.perform(%Oban.Job{
+                 args: %{"upstream_identity_id" => identity.id, "trigger_kind" => "unit_test"}
+               })
+
+      assert snoozed in 895..900
+    end
+
     test "a throttled refresh rejection stays retryable without reaching the classifier" do
       refresh_token = secret("refresh", "throttled-rejection")
 

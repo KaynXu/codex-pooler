@@ -296,6 +296,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     alias CodexPooler.Platform.OutboundHTTP
     alias CodexPooler.Upstreams.Auth.CodexAuth
     alias CodexPooler.Upstreams.CloudflareCookies
+    alias CodexPooler.Upstreams.Reconciliation.UsagePollCooldown
 
     @browser_user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     @browser_sec_ch_ua ~S("Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99")
@@ -454,16 +455,39 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
         {:ok, %{status: status, body: body}} when status in [400, 401, 403] ->
           refresh_error(body, status)
 
-        {:ok, %{status: status}} when status >= 500 ->
-          auth_error(:codex_auth_transient, "Codex token refresh returned a temporary error", 502)
+        {:ok, %{status: status} = response} when status >= 500 ->
+          :codex_auth_transient
+          |> auth_error("Codex token refresh returned a temporary error", 502)
+          |> with_retry_after(response)
 
-        {:ok, _response} ->
-          auth_error(:codex_oauth_refresh_failed, "Codex token refresh failed", 502)
+        {:ok, %{} = response} ->
+          :codex_oauth_refresh_failed
+          |> auth_error("Codex token refresh failed", 502)
+          |> with_retry_after(response)
 
         {:error, reason} ->
           auth_error(:codex_auth_transient, Exception.message(reason), 502)
       end
     end
+
+    # The provider saying when it will answer again is worth more than a fixed
+    # exponential backoff, and a refresh that is merely throttled is the case
+    # that backoff handles worst: it burns attempts against a deadline the
+    # provider already told us. Classification is untouched -- this only adds
+    # the interval, and only when the header is readable.
+    defp with_retry_after({:error, %{} = error}, %{} = response) do
+      received_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      case UsagePollCooldown.instruction(response, received_at) do
+        {:retry_after, not_before} ->
+          {:error, Map.put(error, :retry_after_seconds, DateTime.diff(not_before, received_at))}
+
+        _no_instruction ->
+          {:error, error}
+      end
+    end
+
+    defp with_retry_after(result, _response), do: result
 
     defp post_with_cloudflare(url, opts) do
       headers =
