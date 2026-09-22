@@ -18,6 +18,9 @@ defmodule CodexPooler.Accounting.Metadata do
   @redacted "[REDACTED]"
   @sensitive_key_fragments ~w(api_key apikey authorization bearer token access_token refresh_token upstream_token upstream_secret cookie set-cookie secret password prompt messages input output completion content raw_request raw_response body payload file filename audio image transcript transcription upload_url download_url sas_url signed_url auth_json chatgpt_account_id)
   @public_openai_responses_stream_modes ~w(normalized passthrough)
+  # Mirrors CodexPooler.Accounting.ClientRetry.authority_poison_reasons/0; the
+  # agreement is pinned by metadata_test.exs so the two never drift apart.
+  @native_client_retry_authority_lost_reasons ~w(malformed_event unknown_completed_item unknown_response_event)
   @public_openai_responses_stream_terminal_values ~w(completed failed incomplete)
   @public_openai_responses_stream_boolean_keys ~w(
     created_seen
@@ -387,6 +390,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "native_client_retry_observation" ->
         sanitize_native_client_retry_observation(value)
 
+      normalized == "native_client_retry_authority_loss" ->
+        sanitize_native_client_retry_authority_loss(value)
+
       normalized == "native_http_resume_progress" ->
         sanitize_native_http_resume_progress(value)
 
@@ -555,6 +561,15 @@ defmodule CodexPooler.Accounting.Metadata do
         sanitized
     end)
   end
+
+  # The bounded reason a native client-retry observation lost its authority.
+  # It is never an admission witness, so the shape is fixed at exactly the
+  # version and one known reason; anything else is dropped whole.
+  defp sanitize_native_client_retry_authority_loss(%{"version" => 1, "authority_lost_reason" => reason} = value)
+       when map_size(value) == 2 and reason in @native_client_retry_authority_lost_reasons,
+       do: value
+
+  defp sanitize_native_client_retry_authority_loss(_value), do: %{}
 
   defp sanitize_native_http_resume_progress(
          %{

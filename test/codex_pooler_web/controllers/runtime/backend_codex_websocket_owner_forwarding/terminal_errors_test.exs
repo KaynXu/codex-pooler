@@ -353,6 +353,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TerminalEr
              "websocket_fragment_open" => false
            }
 
+    # The turn carried a native client-retry witness, so the receive loop was
+    # observing frames for resend authority. The unknown event above cost that
+    # observation its authority: finalization keeps the bounded reason instead
+    # of the witness, and the resend witness itself is absent.
+    assert attempt.response_metadata["native_client_retry_authority_loss"] == %{
+             "version" => 1,
+             "authority_lost_reason" => "unknown_response_event"
+           }
+
+    refute Map.has_key?(attempt.response_metadata, "native_client_retry_observation")
+
     metadata_text = inspect(attempt.response_metadata)
     refute metadata_text =~ raw_event_type
     refute metadata_text =~ @sentinel

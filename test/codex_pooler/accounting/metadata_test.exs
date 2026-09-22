@@ -2,6 +2,7 @@ defmodule CodexPooler.Accounting.MetadataTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
@@ -53,6 +54,34 @@ defmodule CodexPooler.Accounting.MetadataTest do
         assert Accounting.sanitize_metadata(%{"usage_observation" => observation}) == %{
                  "usage_observation" => observation
                }
+      end
+    end
+
+    # The authority-loss key records why an observation was disqualified. It is
+    # not an admission witness, so the persisted shape is exactly the version
+    # and one reason the observation itself can produce; anything else is
+    # dropped whole rather than stored half-understood.
+    test "native client retry authority loss persists exactly the reasons the observation can produce" do
+      for reason <- ClientRetry.authority_poison_reasons() do
+        value = %{"version" => 1, "authority_lost_reason" => Atom.to_string(reason)}
+
+        assert Accounting.sanitize_metadata(%{"native_client_retry_authority_loss" => value}) ==
+                 %{"native_client_retry_authority_loss" => value}
+      end
+
+      invalid = [
+        %{"version" => 1, "authority_lost_reason" => "something_else"},
+        %{"version" => 2, "authority_lost_reason" => "malformed_event"},
+        %{"version" => 1, "authority_lost_reason" => "malformed_event", "authority_complete" => true},
+        %{"version" => 1, "authority_lost_reason" => nil},
+        %{"version" => 1},
+        %{}
+      ]
+
+      for value <- invalid do
+        assert Accounting.sanitize_metadata(%{"native_client_retry_authority_loss" => value}) ==
+                 %{"native_client_retry_authority_loss" => %{}},
+               "expected #{inspect(value)} to be dropped"
       end
     end
 

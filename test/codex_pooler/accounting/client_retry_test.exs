@@ -162,6 +162,68 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
       assert poisoned.first_visible_at == nil
       assert :ineligible = ClientRetry.final_observation_metadata(poisoned)
     end
+
+    test "each way of losing authority names itself without carrying frame content" do
+      frames = [
+        {:unknown_response_event, %{"type" => "response.future_event_sentinel", "delta" => "private frame body"}},
+        {:unknown_completed_item,
+         %{
+           "type" => "response.output_item.done",
+           "item" => %{"type" => "future_device_call", "call_id" => "private-call-id"}
+         }},
+        {:malformed_event, %{"unexpected" => "private frame body"}}
+      ]
+
+      for {reason, frame} <- frames do
+        observation =
+          ClientRetry.new_observation()
+          |> ClientRetry.observe_frame(frame, ~U[2026-09-22 09:00:00Z])
+          |> ClientRetry.complete_without_terminal()
+
+        expected_reason = Atom.to_string(reason)
+
+        assert :ineligible = ClientRetry.final_observation_metadata(observation)
+
+        assert {:ok, diagnostics} = ClientRetry.authority_loss_metadata(observation),
+               "expected #{expected_reason} to be retained"
+
+        assert diagnostics == %{"version" => 1, "authority_lost_reason" => expected_reason}
+        refute inspect(diagnostics) =~ "private frame body"
+        refute inspect(diagnostics) =~ "private-call-id"
+      end
+
+      assert Enum.sort(Enum.map(frames, &elem(&1, 0))) ==
+               Enum.sort(ClientRetry.authority_poison_reasons())
+    end
+
+    test "the first frame to poison an observation is the one that explains it" do
+      observation =
+        ClientRetry.new_observation()
+        |> ClientRetry.observe_frame(%{"type" => "response.future_event_sentinel"}, ~U[2026-09-22 09:00:00Z])
+        |> ClientRetry.observe_frame(%{"unexpected" => "frame"}, ~U[2026-09-22 09:00:01Z])
+        |> ClientRetry.observe_frame(
+          %{"type" => "response.output_item.done", "item" => %{"type" => "future_device_call"}},
+          ~U[2026-09-22 09:00:02Z]
+        )
+        |> ClientRetry.complete_without_terminal()
+
+      assert {:ok, %{"authority_lost_reason" => "unknown_response_event"}} =
+               ClientRetry.authority_loss_metadata(observation)
+    end
+
+    test "an eligible observation carries no authority-loss diagnostics" do
+      observation =
+        ClientRetry.new_observation()
+        |> ClientRetry.observe_frame(
+          %{"type" => "response.reasoning_summary_text.delta", "delta" => "fragment"},
+          ~U[2026-09-22 09:00:00Z]
+        )
+        |> ClientRetry.complete_without_terminal()
+
+      assert {:ok, _metadata} = ClientRetry.final_observation_metadata(observation)
+      assert :none = ClientRetry.authority_loss_metadata(observation)
+      assert :none = ClientRetry.authority_loss_metadata(ClientRetry.new_observation())
+    end
   end
 
   describe "native HTTP resume progress" do
@@ -307,6 +369,44 @@ defmodule CodexPooler.Accounting.ClientRetryTest do
 
       refute ClientRetry.verified_partial_reasoning_cut?(nil, request, reasoning)
       refute ClientRetry.verified_partial_reasoning_cut?(turn, request, nil)
+    end
+
+    # The diagnostics finalization persists for an observation that lost its
+    # authority explain a fail-closed decision. They must never relax one, and
+    # they must never block a cut the witness itself admits.
+    test "authority-loss diagnostics never stand in for the witness and never veto it" do
+      {turn, request, attempt} = lifecycle_cut_rows()
+
+      assert ClientRetry.verified_lifecycle_cut?(turn, request, attempt)
+
+      assert {:ok, diagnostics} =
+               ClientRetry.new_observation()
+               |> ClientRetry.observe_frame(
+                 %{"type" => "response.future_event_sentinel"},
+                 ~U[2026-09-11 09:00:00Z]
+               )
+               |> ClientRetry.complete_without_terminal()
+               |> ClientRetry.authority_loss_metadata()
+
+      refute Map.has_key?(diagnostics, "authority_complete")
+
+      instead_of_witness = %{
+        attempt
+        | response_metadata:
+            attempt.response_metadata
+            |> Map.delete("native_client_retry_observation")
+            |> Map.put("native_client_retry_authority_loss", diagnostics)
+      }
+
+      refute ClientRetry.verified_lifecycle_cut?(turn, request, instead_of_witness)
+      refute ClientRetry.verified_partial_reasoning_cut?(turn, request, instead_of_witness)
+
+      alongside_witness = %{
+        attempt
+        | response_metadata: Map.put(attempt.response_metadata, "native_client_retry_authority_loss", diagnostics)
+      }
+
+      assert ClientRetry.verified_lifecycle_cut?(turn, request, alongside_witness)
     end
   end
 

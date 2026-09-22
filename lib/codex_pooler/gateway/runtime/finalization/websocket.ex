@@ -1050,11 +1050,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
        ) do
     case ClientRetry.final_observation_metadata(observation) do
       {:ok, summary} -> Map.put(metadata, "native_client_retry_observation", summary)
-      :ineligible -> metadata
+      :ineligible -> put_native_client_retry_authority_loss(metadata, observation)
     end
   end
 
   defp maybe_put_native_client_retry_observation(metadata, _finalization), do: metadata
+
+  # An ineligible observation is still evidence, just not admission evidence.
+  # It keeps its own key so no resend path can mistake it for the witness, and
+  # it carries only the bounded reason authority was lost.
+  defp put_native_client_retry_authority_loss(metadata, observation) do
+    case ClientRetry.authority_loss_metadata(observation) do
+      {:ok, summary} -> Map.put(metadata, "native_client_retry_authority_loss", summary)
+      :none -> metadata
+    end
+  end
 
   defp finalize_failed_after_health(
          %SelectedCandidateContext{allow_retry?: true, reserved: reserved, attempt: attempt} =

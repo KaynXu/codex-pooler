@@ -31,6 +31,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @turn_interrupted_phase PreAttemptRelease.turn_interrupted()
   @stream_error_code "upstream_stream_error"
   @compaction_retry_window_seconds 330
+  @authority_poison_reasons [:malformed_event, :unknown_completed_item, :unknown_response_event]
 
   defmodule SuccessorClaim do
     @moduledoc false
@@ -102,6 +103,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
     defstruct version: 1,
               authority_complete?: false,
               authority_poisoned?: false,
+              authority_poison_reason: nil,
               output_item_done_count: 0,
               output_item_done_count_saturated?: false,
               partial_reasoning_seen?: false,
@@ -109,10 +111,13 @@ defmodule CodexPooler.Accounting.ClientRetry do
               terminal_seen?: false,
               terminal_candidate_seen?: false
 
+    @type poison_reason :: :malformed_event | :unknown_completed_item | :unknown_response_event
+
     @type t :: %__MODULE__{
             version: pos_integer(),
             authority_complete?: boolean(),
             authority_poisoned?: boolean(),
+            authority_poison_reason: poison_reason() | nil,
             output_item_done_count: non_neg_integer(),
             output_item_done_count_saturated?: boolean(),
             partial_reasoning_seen?: boolean(),
@@ -136,6 +141,10 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   @type observation_metadata :: %{
           required(String.t()) => boolean() | non_neg_integer() | String.t() | nil
+        }
+
+  @type authority_loss_metadata :: %{
+          required(String.t()) => pos_integer() | String.t()
         }
 
   @type reclaimable_successor :: %{
@@ -738,6 +747,28 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   def final_observation_metadata(%Observation{}), do: :ineligible
 
+  # Why an observation lost its authority, kept separately from the witness it
+  # is no longer allowed to be. A poisoned observation is omitted from the
+  # attempt entirely today, so an operator reading a failed websocket turn
+  # cannot tell a malformed frame from a response event this build does not
+  # know yet. The reason travels under its own key, carries no
+  # `authority_complete`, and no admission path reads it: it explains a
+  # fail-closed decision, it never relaxes one.
+  @spec authority_loss_metadata(Observation.t()) :: {:ok, authority_loss_metadata()} | :none
+  def authority_loss_metadata(%Observation{
+        version: @version,
+        authority_poisoned?: true,
+        authority_poison_reason: reason
+      })
+      when reason in @authority_poison_reasons do
+    {:ok, %{"version" => @version, "authority_lost_reason" => Atom.to_string(reason)}}
+  end
+
+  def authority_loss_metadata(%Observation{}), do: :none
+
+  @spec authority_poison_reasons() :: [Observation.poison_reason()]
+  def authority_poison_reasons, do: @authority_poison_reasons
+
   defp first_visible_at_metadata(nil), do: nil
   defp first_visible_at_metadata(%DateTime{} = at), do: DateTime.to_iso8601(at)
 
@@ -808,7 +839,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   defp observe_decoded_frame(observation, _decoded),
-    do: %{observation | authority_poisoned?: true}
+    do: poison_authority(observation, :malformed_event)
 
   defp mark_first_visible(%Observation{first_visible_at: nil} = observation, decoded, observed_at) do
     if visible_frame?(decoded),
@@ -857,7 +888,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: increment_done_count(observation)
 
   defp maybe_count_completed_item(observation, "response.output_item.done", _decoded),
-    do: %{increment_done_count(observation) | authority_poisoned?: true}
+    do: observation |> increment_done_count() |> poison_authority(:unknown_completed_item)
 
   defp maybe_count_completed_item(observation, _type, _decoded), do: observation
 
@@ -885,10 +916,21 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defp maybe_poison_unknown_response_event(observation, "response." <> _suffix = type) do
     if known_response_type?(type),
       do: observation,
-      else: %{observation | authority_poisoned?: true}
+      else: poison_authority(observation, :unknown_response_event)
   end
 
   defp maybe_poison_unknown_response_event(observation, _type), do: observation
+
+  # Authority is lost once. The first frame that poisons an observation is the
+  # one that explains the loss; later frames on an already poisoned stream
+  # describe consequences, so the first reason wins.
+  @spec poison_authority(Observation.t(), Observation.poison_reason()) :: Observation.t()
+  defp poison_authority(%Observation{authority_poisoned?: true} = observation, _reason),
+    do: observation
+
+  defp poison_authority(%Observation{} = observation, reason)
+       when reason in @authority_poison_reasons,
+       do: %{observation | authority_poisoned?: true, authority_poison_reason: reason}
 
   defp known_response_type?(type) do
     type in [

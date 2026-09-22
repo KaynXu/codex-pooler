@@ -2188,6 +2188,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute_received :t7_frame_sql_query
   end
 
+  test "close after an unknown response event returns the bounded reason authority was lost" do
+    raw_event_type = "response.private_event_sentinel_deadbeef"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close([
+          {raw_event_type, %{"type" => raw_event_type, "delta" => "private frame sentinel"}}
+        ])
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | native_client_retry_observation: ClientRetry.new_observation()
+    }
+
+    assert {:error,
+            %{
+              reason: :upstream_websocket_closed_before_terminal,
+              native_client_retry_observation: observation
+            }} = UpstreamWebsocketSession.request(session, request)
+
+    assert :ineligible = ClientRetry.final_observation_metadata(observation)
+
+    assert {:ok, diagnostics} = ClientRetry.authority_loss_metadata(observation)
+    assert diagnostics == %{"version" => 1, "authority_lost_reason" => "unknown_response_event"}
+    refute inspect(diagnostics) =~ raw_event_type
+    refute inspect(diagnostics) =~ "private frame sentinel"
+  end
+
   test "peer close after an arbitrary nonterminal event records only bounded protocol buckets" do
     raw_event_type = "response.private_event_sentinel_deadbeef"
     raw_payload = "private-frame-sentinel-cafefeed"
