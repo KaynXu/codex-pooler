@@ -422,6 +422,14 @@ defmodule CodexPooler.Accounting.PricingResolution do
     end
   end
 
+  # `pricing_identifiers/2` is a precedence, not a set: an explicit
+  # `pricing_ref` is what an operator set this model to be priced as, the
+  # upstream model id is what was actually served, and the requested model is
+  # only what the client typed — under an enforced-model key it need not name
+  # this model at all. Recency is the tie-break *within* one identifier; on its
+  # own it lets a newer snapshot for a lower-precedence identifier decide, and
+  # a pricing import writes one `effective_at` for every model it holds, so
+  # ties were the ordinary case and row id settled them.
   @spec latest_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
           PricingSnapshot.t() | nil
   defp latest_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
@@ -438,6 +446,12 @@ defmodule CodexPooler.Accounting.PricingResolution do
             fragment("?->>'price_bucket'", ps.config) == ^price_bucket and
             fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens",
         order_by: [
+          asc:
+            fragment(
+              "array_position(?, lower(?))",
+              type(^normalized_identifiers, {:array, :string}),
+              ps.model_identifier
+            ),
           desc: ps.effective_at,
           desc: ps.captured_at,
           asc:

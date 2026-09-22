@@ -253,6 +253,111 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert reserved.pricing_snapshot.model_identifier == "gpt-unmapped"
     end
 
+    # findings#236 item 11: `pricing_identifiers/2` is a precedence, not a set.
+    # A pricing import stamps one `effective_at` on every model it writes, so
+    # a model whose explicit ref and whose upstream model are both in the
+    # catalog used to tie, and row id picked the winner.
+    test "an explicit pricing ref outranks the upstream model identifier at every relative age" do
+      for {label, ref_offset, upstream_offset} <- [
+            {"equal", -60, -60},
+            {"ref-newer", -30, -60},
+            {"ref-older", -60, -30}
+          ] do
+        setup = accounting_setup()
+        unique = System.unique_integer([:positive])
+        now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        ref_identifier = "pricing-ref-#{unique}"
+        upstream_identifier = "upstream-model-#{unique}"
+
+        model =
+          setup.pool
+          |> model_fixture(%{
+            exposed_model_id: "exposed-model-#{unique}",
+            upstream_model_id: upstream_identifier
+          })
+          |> Ecto.Changeset.change(pricing_ref: ref_identifier)
+          |> Repo.update!()
+
+        ref_pricing =
+          pricing_snapshot_fixture(setup.pricing, %{
+            model_identifier: ref_identifier,
+            input_token_micros: Decimal.new(1000),
+            output_token_micros: Decimal.new(2000),
+            effective_at: DateTime.add(now, ref_offset, :second),
+            captured_at: DateTime.add(now, ref_offset, :second)
+          })
+
+        pricing_snapshot_fixture(setup.pricing, %{
+          model_identifier: upstream_identifier,
+          input_token_micros: Decimal.new(1),
+          output_token_micros: Decimal.new(2),
+          effective_at: DateTime.add(now, upstream_offset, :second),
+          captured_at: DateTime.add(now, upstream_offset, :second)
+        })
+
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   model,
+                   %{"model" => model.exposed_model_id},
+                   %{correlation_id: "corr-pricing-ref-#{label}-#{unique}"}
+                 )
+
+        assert reserved.pricing_snapshot.id == ref_pricing.id,
+               "expected the explicit pricing ref to win with #{label} snapshots"
+
+        assert reserved.request.request_metadata["pricing"]["snapshot"]["model_identifier"] ==
+                 ref_identifier
+      end
+    end
+
+    # Under an enforced-model key the requested model is only what the client
+    # typed; it need not name the model that was served, and it must never
+    # outrank the served model's own identifiers.
+    test "the requested model never outprices the model that was actually served" do
+      setup = accounting_setup()
+      unique = System.unique_integer([:positive])
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      served_identifier = "served-model-#{unique}"
+      asked_identifier = "asked-model-#{unique}"
+
+      served_model =
+        model_fixture(setup.pool, %{
+          exposed_model_id: served_identifier,
+          upstream_model_id: served_identifier
+        })
+
+      served_pricing =
+        pricing_snapshot_fixture(setup.pricing, %{
+          model_identifier: served_identifier,
+          input_token_micros: Decimal.new(1000),
+          output_token_micros: Decimal.new(2000),
+          effective_at: DateTime.add(now, -120, :second),
+          captured_at: DateTime.add(now, -120, :second)
+        })
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        model_identifier: asked_identifier,
+        input_token_micros: Decimal.new(1),
+        output_token_micros: Decimal.new(2),
+        effective_at: DateTime.add(now, -30, :second),
+        captured_at: DateTime.add(now, -30, :second)
+      })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 served_model,
+                 %{"model" => asked_identifier},
+                 %{correlation_id: "corr-enforced-model-#{unique}", requested_model: asked_identifier}
+               )
+
+      assert reserved.pricing_snapshot.id == served_pricing.id
+
+      assert reserved.request.request_metadata["pricing"]["snapshot"]["model_identifier"] ==
+               served_identifier
+    end
+
     test "exact pricing wins when both exact and suffix-inferred snapshots exist" do
       setup = accounting_setup()
       unique = System.unique_integer([:positive])
