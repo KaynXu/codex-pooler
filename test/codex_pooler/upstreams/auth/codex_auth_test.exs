@@ -627,7 +627,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
     # (401) is the terminal reauthorization verdict; `:codex_oauth_refresh_failed`
     # (502) is the retryable one.
 
-    test "an unauthorized_client rejection reaches the reauthorization verdict through its prose" do
+    test "an unauthorized_client rejection stays retryable regardless of its prose" do
       refresh_token = "refresh-token-must-not-leak"
 
       provider =
@@ -642,9 +642,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
 
       assert {:error,
               %{
-                code: :codex_refresh_token_revoked,
-                message: "Codex refresh token requires reauthorization",
-                status: 401
+                code: :codex_oauth_refresh_failed,
+                message: "Codex token refresh failed",
+                status: 502
               } = error} = CodexAuth.HTTPClient.refresh_token(refresh_token)
 
       refute inspect(error) =~ refresh_token
@@ -652,7 +652,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
       assert [_request] = FakeOpenAIAuthProvider.requests(provider)
     end
 
-    test "a request-error code echoed into its own description reaches the reauthorization verdict" do
+    test "a request-error code echoed into its own description stays retryable" do
       refresh_token = "refresh-token-must-not-leak"
 
       provider =
@@ -665,7 +665,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
              }}
         })
 
-      assert {:error, %{code: :codex_refresh_token_revoked, status: 401} = error} =
+      assert {:error, %{code: :codex_oauth_refresh_failed, status: 502} = error} =
                CodexAuth.HTTPClient.refresh_token(refresh_token)
 
       refute inspect(error) =~ refresh_token
@@ -673,7 +673,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
       assert [_request] = FakeOpenAIAuthProvider.requests(provider)
     end
 
-    test "a non-OAuth message envelope reaches the reauthorization verdict" do
+    test "a non-OAuth message envelope stays retryable" do
       refresh_token = "refresh-token-must-not-leak"
 
       provider =
@@ -681,7 +681,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
           "/oauth/token" => {400, %{"message" => "Invalid request: refresh_token parameter missing"}}
         })
 
-      assert {:error, %{code: :codex_refresh_token_revoked, status: 401} = error} =
+      assert {:error, %{code: :codex_oauth_refresh_failed, status: 502} = error} =
                CodexAuth.HTTPClient.refresh_token(refresh_token)
 
       refute inspect(error) =~ refresh_token
@@ -689,7 +689,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
       assert [_request] = FakeOpenAIAuthProvider.requests(provider)
     end
 
-    test "a nested provider envelope whose code is not allowlisted is classified by its prose" do
+    test "a nested provider envelope whose code is not allowlisted stays retryable" do
       refresh_token = "refresh-token-must-not-leak"
 
       provider =
@@ -705,12 +705,46 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
              }}
         })
 
-      assert {:error, %{code: :codex_refresh_token_revoked, status: 401} = error} =
+      assert {:error, %{code: :codex_oauth_refresh_failed, status: 502} = error} =
                CodexAuth.HTTPClient.refresh_token(refresh_token)
 
       refute inspect(error) =~ refresh_token
       refute inspect(error) =~ "invalid_api_key"
       assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    for http_status <- [400, 401, 403],
+        code <- ~w(invalid_grant revoked invalid_refresh_token token_expired refresh_token_expired refresh_token_invalidated refresh_token_reused),
+        envelope <- [:flat, :nested] do
+      test "structured #{code} at #{http_status} in #{envelope} requires reauthorization" do
+        code = unquote(code)
+        body = if unquote(envelope) == :flat, do: %{"error" => code}, else: %{"error" => %{"code" => code}}
+        provider = start_provider!(%{"/oauth/token" => {unquote(http_status), body}})
+
+        assert {:error, %{code: :codex_refresh_token_revoked, status: 401}} =
+                 CodexAuth.HTTPClient.refresh_token("refresh-token-must-not-leak")
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
+
+    for http_status <- [400, 401, 403],
+        {label, body} <- [
+          {"client rejection", %{"error" => %{"code" => "invalid_client", "message" => "Invalid client for refresh token exchange"}}},
+          {"missing parameter", %{"error" => %{"code" => "missing_required_parameter", "message" => "Missing refresh_token"}}},
+          {"bare unauthorized detail", %{"detail" => "Unauthorized"}},
+          {"revocation prose", %{"error_description" => "The refresh token has been revoked"}},
+          {"nested negated prose", %{"error" => %{"message" => "The refresh token is not invalid"}}},
+          {"revocation detail", %{"detail" => "The refresh token is revoked"}}
+        ] do
+      test "#{label} at #{http_status} stays retryable without a recognized credential code" do
+        provider = start_provider!(%{"/oauth/token" => {unquote(http_status), unquote(Macro.escape(body))}})
+
+        assert {:error, %{code: :codex_oauth_refresh_failed, status: 502}} =
+                 CodexAuth.HTTPClient.refresh_token("refresh-token-must-not-leak")
+
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
     end
 
     test "keyword matches split across separate fields stay retryable" do

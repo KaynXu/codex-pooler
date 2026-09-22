@@ -510,6 +510,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
       end
     end
 
+    # Status and provider prose cannot prove credential revocation: OAuth 401
+    # also covers invalid_client, and request errors can mention refresh tokens.
+    # Only explicit credential-rejection codes authorize the terminal transition.
     defp refresh_error(%{} = body, _status) do
       if refresh_token_reauth_error?(body) do
         auth_error(
@@ -531,6 +534,8 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
                 "revoked",
                 "invalid_refresh_token",
                 "token_expired",
+                "refresh_token_expired",
+                "refresh_token_invalidated",
                 "refresh_token_reused"
               ],
          do: true
@@ -541,35 +546,13 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
                 "revoked",
                 "invalid_refresh_token",
                 "token_expired",
+                "refresh_token_expired",
+                "refresh_token_invalidated",
                 "refresh_token_reused"
               ],
          do: true
 
-    defp refresh_token_reauth_error?(%{} = body) do
-      body
-      |> refresh_error_texts()
-      |> Enum.any?(&refresh_token_reauth_text?/1)
-    end
-
-    defp refresh_error_texts(%{"error" => %{} = error} = body),
-      do: refresh_error_texts(error) ++ refresh_error_texts(Map.delete(body, "error"))
-
-    defp refresh_error_texts(%{} = body) do
-      body
-      |> Map.take(["error", "error_description", "error_message", "message"])
-      |> Map.values()
-      |> Enum.filter(&is_binary/1)
-    end
-
-    defp refresh_token_reauth_text?(text) when is_binary(text) do
-      normalized = String.downcase(text)
-
-      String.contains?(normalized, "refresh") and
-        String.contains?(normalized, "token") and
-        Enum.any?(["revoked", "expired", "invalid"], &String.contains?(normalized, &1))
-    end
-
-    defp refresh_token_reauth_text?(_text), do: false
+    defp refresh_token_reauth_error?(%{}), do: false
 
     defp decode_authorization_code_token_response(%{} = body) do
       with {:ok, access_token} <- nonblank_token(body["access_token"]),
