@@ -36,6 +36,7 @@ defmodule CodexPooler.Status.FeedParser do
              items: [item()],
              content_hash: String.t(),
              skipped_count: non_neg_integer(),
+             skipped_guids: [String.t()],
              complete?: boolean()
            }}
           | {:error, map()}

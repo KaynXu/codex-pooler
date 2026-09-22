@@ -487,8 +487,6 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
       end
     end
 
-    defp with_retry_after(result, _response), do: result
-
     defp post_with_cloudflare(url, opts) do
       headers =
         opts
