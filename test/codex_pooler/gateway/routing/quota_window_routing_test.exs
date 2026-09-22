@@ -177,6 +177,45 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                  routing_scope_opts()
                )
     end
+
+    # The positive-credit monthly-primary rule relaxes the percentage reading
+    # only: a credit-backed monthly window is not exhausted at 100% because
+    # `credits` still carries the real remaining capacity. It is not a routing
+    # permission. Provider denial is consulted before ordinary window
+    # eligibility, so a current account blocker still vetoes an upstream whose
+    # monthly credits are intact.
+    test "positive monthly credits never outrank a current account availability blocker" do
+      credit_backed_monthly =
+        monthly_account_primary_window(used_percent: Decimal.new("100"), credits: 3817)
+
+      assert %{eligible?: true, routing_state: :precise, exclusions: []} =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:available, [credit_backed_monthly]),
+                 routing_scope_opts()
+               )
+
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [
+                 %{
+                   code: "quota_window_unusable",
+                   message: "recorded quota evidence is not usable for routing",
+                   reason_codes: ["exhausted"],
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account"
+                 } = exclusion
+               ]
+             } =
+               Windows.routing_quota_eligibility_from_snapshot(
+                 routing_snapshot(:blocked, [credit_backed_monthly]),
+                 routing_scope_opts()
+               )
+
+      refute Map.has_key?(exclusion, :window_kind)
+      refute Map.has_key?(exclusion, :reset_at)
+    end
   end
 
   describe "lifecycle routing eligibility" do
