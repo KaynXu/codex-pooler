@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
         }
 
   alias CodexPooler.Accounting.Metadata
+  alias CodexPooler.ServiceTier
 
   @spec from_json(binary()) :: usage()
   def from_json(body) when is_binary(body) do
@@ -77,7 +78,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
 
         if cached + written <= normalized.input_tokens and
              normalized.reasoning_tokens <= normalized.output_tokens,
-           do: Map.put(normalized, :service_tier, stream_service_tier(envelope["service_tier"])),
+           do: Map.put(normalized, :service_tier, bounded_service_tier(envelope["service_tier"])),
            else: maybe_put_served_model(%{status: "usage_unknown", source: "invalid_usage_tokens"}, envelope)
 
       unknown ->
@@ -85,10 +86,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     end
   end
 
-  defp stream_service_tier(tier) when tier in ~w(auto default flex priority scale ultrafast),
-    do: :binary.copy(tier)
+  # The provider's spelling is canonicalized before it is bounded, not after:
+  # the catalog's own name for the priority tier is `fast`, and matching the
+  # raw value dropped it to nil -- which then priced a priority response at
+  # standard rates, because an absent reported tier falls back to the request.
+  # The allowlist itself stays: this value reaches grouped read models, so an
+  # arbitrary provider string would be a cardinality problem, and the copy is
+  # what keeps a two-word tier from retaining the whole decoded frame.
+  @reported_service_tiers ~w(auto default flex priority scale ultrafast)
 
-  defp stream_service_tier(_tier), do: nil
+  defp bounded_service_tier(tier) when is_binary(tier) do
+    case ServiceTier.canonicalize(tier) do
+      canonical when canonical in @reported_service_tiers -> :binary.copy(canonical)
+      _unreported -> nil
+    end
+  end
+
+  defp bounded_service_tier(_tier), do: nil
 
   @spec from_sse(binary()) :: usage()
   def from_sse(body) when is_binary(body) do
@@ -235,8 +249,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     end
   end
 
-  defp service_tier(%{"service_tier" => tier}) when is_binary(tier), do: tier
-  defp service_tier(%{"response" => %{"service_tier" => tier}}) when is_binary(tier), do: tier
+  # Same field, same contract on both transports: the non-streaming path used
+  # to take any binary at all, so the two disagreed about the same provider
+  # answer.
+  defp service_tier(%{"service_tier" => tier}) when is_binary(tier), do: bounded_service_tier(tier)
+
+  defp service_tier(%{"response" => %{"service_tier" => tier}}) when is_binary(tier),
+    do: bounded_service_tier(tier)
+
   defp service_tier(_envelope), do: nil
 
   defp cached_input_tokens_value(usage) do
