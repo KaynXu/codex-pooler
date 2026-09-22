@@ -105,10 +105,23 @@ defmodule CodexPooler.Status.FeedParserTest do
              FeedParser.parse(~s(<?xml version="1.0" encoding="ISO-8859-1"?>) <> xml)
   end
 
-  defp feed(entries), do: "<rss><channel>#{Enum.join(entries)}</channel></rss>"
+  defp feed(entries),
+    do: ~s(<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>#{Enum.join(entries)}</channel></rss>)
 
   defp entry(guid, date) do
     "<item><guid>#{guid}</guid><title>Incident</title><description><![CDATA[<p>Status: Investigating</p><p>Affected components: API</p>]]></description><link>https://status.openai.com/incidents/#{guid}</link><pubDate>#{DateTime.to_iso8601(date)}</pubDate></item>"
+  end
+
+  # Mirrors one https://status.openai.com/feed.rss item: CDATA title/description, a
+  # duplicated content:encoded body, an RFC822 GMT pubDate, and a double slash source URL
+  # in both guid and link.
+  defp live_item(opts) do
+    id = Keyword.get(opts, :id, "01M2VA7X37P1ASADSNZ1CG4N4D")
+    source = "https://status.openai.com//incidents/#{id}"
+    body = Keyword.get(opts, :body, "<b>Status: Monitoring</b><br/><br/>We are monitoring the recovery.")
+    encoded = Keyword.get(opts, :encoded, body)
+
+    ~s(<item><title><![CDATA[Elevated errors in the Responses API]]></title><link>#{source}</link><guid>#{source}</guid><pubDate>Wed, 09 Sep 2026 12:00:00 GMT</pubDate><description><![CDATA[#{body}]]></description><content:encoded><![CDATA[#{encoded}]]></content:encoded></item>)
   end
 
   test "normalizes numeric RSS timezone offsets to UTC" do
@@ -192,5 +205,72 @@ defmodule CodexPooler.Status.FeedParserTest do
                  now: @now
                )
     end
+  end
+
+  test "the live resolved wording clears the active flag" do
+    body =
+      "<b>Status: Resolved</b><br/><br/>All impacted services have now fully recovered.<br/><br/><b>Affected components</b>\n<ul>\n<li>Responses (Operational)</li>\n<li>Codex (Operational)</li>\n</ul>"
+
+    assert {:ok, %{items: [item]}} = FeedParser.parse(feed([live_item(body: body)]), now: @now)
+    assert item.status == "Resolved"
+    assert item.active? == false
+    assert item.component == "Responses (Operational) Codex (Operational)"
+  end
+
+  test "keeps the provider double slash guid while normalizing the link" do
+    id = "01M2V76GEPJB0HQGRA0QERRZ3T"
+
+    assert {:ok, %{items: [item]}} = FeedParser.parse(feed([live_item(id: id)]), now: @now)
+    assert item.guid == "https://status.openai.com//incidents/#{id}"
+    assert item.link == "https://status.openai.com/incidents/#{id}"
+    assert item.guid != item.link
+  end
+
+  test "a later status mention in the prose does not override the description header" do
+    for {body, expected} <- [
+          {"<b>Status: Monitoring</b><br/><br/>Recovery is underway and we will post another status update in 30 minutes.", "Monitoring"},
+          {"<b>Status: Investigating</b><br/><br/>We are investigating elevated error rates; follow our status page for updates.", "Investigating"}
+        ] do
+      assert {:ok, %{items: [%{status: ^expected, active?: true}]}} =
+               FeedParser.parse(feed([live_item(body: body)]), now: @now)
+    end
+  end
+
+  test "an unrecognized description header is unknown and active without any status element" do
+    xml = feed([live_item(body: "<b>Status: Scheduled</b><br/><br/>Planned maintenance will begin at 02:00 UTC.")])
+
+    refute xml =~ "<status>"
+
+    assert {:ok, %{items: [%{status: "Unknown", active?: true}]}} = FeedParser.parse(xml, now: @now)
+  end
+
+  test "a description without a status header is unknown, and one without the word is skipped" do
+    unknown = live_item(body: "Subscribe to our status page for updates on this incident.")
+
+    silent =
+      live_item(
+        id: "01M2VBZB1RYSMXHZNRA25ZJ36X",
+        body: "<b>Elevated error rates</b><br/><br/>We are looking into elevated error rates for API requests."
+      )
+
+    assert {:ok, %{items: [%{status: "Unknown", active?: true}], skipped_count: 0, complete?: true}} =
+             FeedParser.parse(feed([unknown]), now: @now)
+
+    assert {:error, %{code: :missing_field}} = FeedParser.parse(feed([silent]), now: @now)
+
+    assert {:ok, %{items: [%{status: "Unknown"}], skipped_count: 1, complete?: false}} =
+             FeedParser.parse(feed([unknown, silent]), now: @now)
+  end
+
+  test "falls back to the content:encoded body when the description is blank" do
+    body = "<b>Status: Monitoring</b><br/><br/>We are monitoring the recovery."
+    xml = feed([live_item(body: "", encoded: body)])
+
+    assert xml =~ "<description><![CDATA[]]></description>"
+
+    assert {:ok, %{items: [item]}} = FeedParser.parse(xml, now: @now)
+    assert item.status == "Monitoring"
+    assert item.active? == true
+    assert item.summary == "Status: Monitoring We are monitoring the recovery."
   end
 end
