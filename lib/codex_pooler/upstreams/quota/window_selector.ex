@@ -85,10 +85,14 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # their pessimistic pressure keeps winning the merge and masks the restart
   # from operators and routing alike (observed live: a stale rate-limit-event
   # row at 94 percent from the ended cycle displayed as 6 percent remaining
-  # while the account was genuinely unused). Fresh rows are never rejected —
-  # same-cycle resets legitimately drift up to the window's own duration across
-  # provider surfaces — and groups without any fresh reset-bearing row are left
-  # untouched, so an all-stale exhausted group keeps its fail-closed pessimism.
+  # while the account was genuinely unused). Without a confirmed anchor a fresh
+  # row is never rejected — same-cycle resets legitimately drift up to the
+  # window's own duration across provider surfaces. A provider-confirmed reset
+  # outranks that drift, so once `CycleConfirmation` has anchored the running
+  # cycle every row more than a margin behind it is rejected, fresh included
+  # (`reject_fresh?`). Groups with neither a confirmation nor a fresh
+  # reset-bearing row are left untouched, so an all-stale exhausted group keeps
+  # its fail-closed pessimism.
   @prior_cycle_margin_seconds 60 * 60
 
   defp reject_prior_cycle_windows(candidates, as_of) do
