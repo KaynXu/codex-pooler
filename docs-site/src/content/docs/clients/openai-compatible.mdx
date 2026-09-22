@@ -454,8 +454,12 @@ No released client branches on `error.type` for retries. openai-node,
 openai-python and the Vercel AI SDK retry on the HTTP status (`408`, `409`,
 `429`, `5xx`) and on connection errors, and the first two honour an
 `x-should-retry` response header that overrides the status in both directions.
-Codex retries `429`, `5xx` and transport errors at its HTTP client and decides
-stream and turn retries from its own error variant, not from the type. Keep that behaviour and use the type and `error.code` for diagnosis,
+Codex's HTTP client retries `5xx` and transport errors, not `429`, with a
+default budget of four retries on a 200 ms doubling backoff; its sampling loop
+then retries any retryable turn error, including an unexpected status such as
+`409` and a `429` rate limit, up to five more times from its own error variant,
+surfacing each as a stream disconnect and falling back from websocket to HTTPS
+once that budget is spent. None of that reads the type. Keep that behaviour and use the type and `error.code` for diagnosis,
 treating `error.code` as an open string as described below; on the
 `GET /v1/responses` frame surface there is no HTTP status, and the type is what
 a reader sees. The status and the type never disagree: a `5xx` response or frame

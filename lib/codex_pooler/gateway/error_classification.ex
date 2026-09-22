@@ -8,9 +8,15 @@ defmodule CodexPooler.Gateway.ErrorClassification do
   # earlier rationale in findings#184/#191). openai-node, openai-python and
   # the Vercel AI SDK retry on the HTTP status (408, 409, 429, 5xx) and on
   # connection errors, the first two also honouring an `x-should-retry`
-  # header; Codex retries 429, 5xx and transport errors at its HTTP client and
-  # decides stream and turn retries from its own error variant, not from the
-  # type. The type still matters: it is what a person reading the body or
+  # header. Codex's HTTP client retries 5xx and transport errors only — its
+  # provider retry policy sets `retry_429: false` with a `request_max_retries`
+  # default of 4 — and its sampling loop then retries any retryable turn error
+  # (an unexpected status such as 409, a 429 rate limit, a cut stream) up to
+  # `stream_max_retries` (default 5) more times from its own error variant,
+  # surfacing each as a stream disconnect and falling back from websocket to
+  # HTTPS once that budget is spent (rust-v0.155.1 `codex-client/src/retry.rs`,
+  # `core/src/responses_retry.rs`; findings#221 row 221-100). None of that
+  # reads the type. The type still matters: it is what a person reading the body or
   # frame sees, and it must agree with the status the envelope carries.
   # `invalid_request_error` is the terminal, do-not-retry class: it says the
   # caller's request was malformed and will fail identically forever. Both
