@@ -810,6 +810,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
 
   defp positive_credits?(_window), do: false
 
+  # Whether a window may be routed to at all. `WindowSelector` has its own
+  # narrower predicate, `used_percent_exhausted?/1`, which asks only whether
+  # the percentage is spent and is used to rank candidates this one has already
+  # admitted; the carve-out below for a credit-backed monthly primary is
+  # exactly where they part company. Keep both: `select_current_account_primary_variant/2`
+  # filters with this one and ranks with that one, on purpose.
   defp exhausted?(%Quota.AccountQuotaWindow{
          quota_scope: scope,
          metadata: %{"rate_limit_allowed" => false}

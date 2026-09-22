@@ -267,7 +267,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   defp usable_rank(%Quota.AccountQuotaWindow{} = window, as_of) do
     if fresh?(window, as_of) and reset_bearing?(window) and not expired?(window, as_of) and
-         not exhausted?(window) do
+         not used_percent_exhausted?(window) do
       1
     else
       0
@@ -324,9 +324,23 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   defp reset_bearing?(%Quota.AccountQuotaWindow{} = window), do: Evidence.reset_bearing?(window)
   defp expired?(%Quota.AccountQuotaWindow{} = window, as_of), do: Evidence.expired?(window, as_of)
 
-  defp exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}) do
+  # Deliberately the percentage alone, and deliberately not the same question
+  # `Windows.Routing.exhausted?/1` answers. That one decides whether a window
+  # may be routed to at all, and forgives a monthly primary at 100% when it
+  # still holds credits, because the provider reports the included percentage
+  # while the credits carry the real capacity. This one only ranks windows that
+  # are already candidates, and there a window with real percentage headroom
+  # should outrank one relying on credits.
+  #
+  # The two are consulted by one call: `Routing.select_current_account_primary_variant/2`
+  # filters with the routing predicate and then ranks with this one. Merging
+  # them breaks one of the two tests that pin the difference --
+  # `upstreams_test.exs` requires a credit-backed monthly at 100% to stay
+  # eligible, `window_selector_test.exs` requires it to lose to a usable 5h
+  # window.
+  defp used_percent_exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}) do
     Decimal.compare(used_percent, Decimal.new(100)) != :lt
   end
 
-  defp exhausted?(%Quota.AccountQuotaWindow{}), do: false
+  defp used_percent_exhausted?(%Quota.AccountQuotaWindow{}), do: false
 end
