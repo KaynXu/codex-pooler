@@ -967,7 +967,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         {:ok, finalized}
 
       {:ok, _finalized} = result ->
-        emit_settlement_outcome(result, "failed", transports)
+        # A drained, lost or crashed owner interrupted the turn; a forwarding
+        # refusal or a superseded downstream failed it (findings#228).
+        emit_settlement_outcome(result, InterruptionOutcome.outcome_for_code(owner_payload.code), transports)
 
         {:error,
          error(owner_payload.status, owner_payload.code, owner_payload.message, nil, %{

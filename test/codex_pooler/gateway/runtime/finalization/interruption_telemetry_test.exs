@@ -464,6 +464,42 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.InterruptionTelemetryTest do
     end)
   end
 
+  # The websocket owner-failure finalizer reads the same vocabulary as the SSE
+  # finalizer and the turn status: an owner that crashed interrupted the turn,
+  # a forwarding refusal failed it (findings#228).
+  for {reason, outcome} <- [owner_crashed: "interrupted", owner_busy: "failed"] do
+    test "a websocket turn finalized on #{reason} settles with the #{outcome} stream outcome" do
+      fixture = committed_interruption_fixture!(:active_attempt)
+
+      capture_outcomes(fn ->
+        result =
+          run_unboxed(fn ->
+            Finalization.finalize_failed_websocket_response(fixture.selected_context, %{
+              body: "",
+              headers: [],
+              reason: unquote(reason),
+              started: System.monotonic_time(:millisecond)
+            })
+          end)
+
+        assert {:error, %{code: unquote(Atom.to_string(reason))}} = result
+
+        assert_receive {:stream_outcome,
+                        %{
+                          outcome: unquote(outcome),
+                          downstream_transport: "websocket",
+                          upstream_transport: "websocket"
+                        }}
+
+        assert_receive {:stream_outcome_transaction, false}
+        refute_received {:stream_outcome, _other}
+      end)
+
+      assert %{request_status: "failed", attempt_status: "failed"} =
+               committed_interruption_state(fixture)
+    end
+  end
+
   test "outermost no-attempt interruption emits unknown upstream after commit" do
     fixture = committed_interruption_fixture!(:without_attempt)
 

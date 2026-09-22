@@ -35,6 +35,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   @type finalization_result :: AttemptSettlement.settlement_result()
   @type health_result :: DispatchLifecycle.success_result()
 
+  # The bridge reasons unwrapped as our own loss of the turn's owner or client:
+  # the interrupted vocabulary, as atoms, so the SSE bridge cannot drift from
+  # the websocket surface (findings#228).
+  @interrupted_bridge_reasons Enum.map(
+                                InterruptionOutcome.interrupted_error_codes(),
+                                &String.to_atom/1
+                              )
+
   @spec finalize_success(binary(), ResponseContext.t(), callbacks()) ::
           finalization_result()
   @spec finalize_success(binary(), ResponseContext.t(), callbacks(), term()) ::
@@ -309,8 +317,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   end
 
   defp emit_current_terminal_outcome(result, code, transports) do
-    outcome =
-      if code in ["client_disconnected", "owner_drained"], do: "interrupted", else: "failed"
+    outcome = InterruptionOutcome.outcome_for_code(code)
 
     case result do
       {:ok, _finalized} -> emit_settlement_outcome(result, outcome, transports)
@@ -466,12 +473,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   # error before the deferred-stream drain signal fell through to
   # `upstream_stream_error`, which also cost it its 499 and its `interrupted`
   # turn status (both keyed off this code) and blamed the upstream for our own
-  # rollout. Only the drain is unwrapped: every other bridge reason keeps its
-  # existing classification.
-  def error_code({:upstream_websocket_bridge, :owner_drained}), do: "owner_drained"
+  # rollout. The unwrapped reasons are exactly the interrupted vocabulary: a
+  # drained, lost or crashed owner is our own loss on any downstream transport,
+  # so the bridged HTTP turn records the same code, status and outcome as a
+  # websocket turn cut the same way (findings#228). Every other bridge reason
+  # keeps its existing classification.
+  def error_code({:upstream_websocket_bridge, reason})
+      when reason in @interrupted_bridge_reasons,
+      do: Atom.to_string(reason)
 
-  def error_code({:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}}),
-    do: "owner_drained"
+  def error_code({:upstream_stream_interrupted, {:upstream_websocket_bridge, reason}})
+      when reason in @interrupted_bridge_reasons,
+      do: Atom.to_string(reason)
 
   def error_code({:upstream_stream_interrupted, _reason}), do: "upstream_stream_error"
 
@@ -537,28 +550,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
        ),
        do: DispatchLifecycle.neutral_completion(context)
 
-  # The bridged drain reaches health classification under the same two wrapped
-  # shapes `error_code/1` now unwraps. It used to land here only by way of the
-  # generic `{:upstream_stream_interrupted, _}` + `"upstream_stream_error"`
-  # clause below; now that its code is `owner_drained`, that clause no longer
-  # matches and the drain would otherwise demote the upstream and open its
-  # circuit.
+  # A bridged owner loss reaches health classification under the same two
+  # wrapped shapes `error_code/1` unwraps. It used to land here only by way of
+  # the generic `{:upstream_stream_interrupted, _}` + `"upstream_stream_error"`
+  # clause below; now that its code is the owner-loss code, that clause no
+  # longer matches and the loss would otherwise demote the upstream and open
+  # its circuit for our own drain, lease loss or crash.
   defp record_stream_failure_health(
-         {:upstream_websocket_bridge, :owner_drained},
+         {:upstream_websocket_bridge, reason},
          _code,
          nil,
          _headers,
          context
-       ),
+       )
+       when reason in @interrupted_bridge_reasons,
        do: DispatchLifecycle.neutral_completion(context)
 
   defp record_stream_failure_health(
-         {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
+         {:upstream_stream_interrupted, {:upstream_websocket_bridge, reason}},
          _code,
          nil,
          _headers,
          context
-       ),
+       )
+       when reason in @interrupted_bridge_reasons,
        do: DispatchLifecycle.neutral_completion(context)
 
   defp record_stream_failure_health(
@@ -704,13 +719,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp failure_response_status({:upstream_stream_interrupted, :owner_drained}, _upstream_status),
     do: 499
 
-  defp failure_response_status({:upstream_websocket_bridge, :owner_drained}, _upstream_status),
-    do: 499
+  defp failure_response_status({:upstream_websocket_bridge, reason}, _upstream_status)
+       when reason in @interrupted_bridge_reasons,
+       do: 499
 
   defp failure_response_status(
-         {:upstream_stream_interrupted, {:upstream_websocket_bridge, :owner_drained}},
+         {:upstream_stream_interrupted, {:upstream_websocket_bridge, reason}},
          _upstream_status
-       ),
+       )
+       when reason in @interrupted_bridge_reasons,
        do: 499
 
   defp failure_response_status(_reason, upstream_status), do: upstream_status

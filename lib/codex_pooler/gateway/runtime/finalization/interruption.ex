@@ -1292,12 +1292,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp terminal_turn_status(%Request{status: "succeeded"}), do: @turn_succeeded
 
-  defp terminal_turn_status(%Request{status: "failed", last_error_code: error_code})
-       when error_code in ["client_disconnected", "owner_drained", "owner_unavailable"],
-       do: @turn_interrupted
+  # One vocabulary with the stream finalizers: a turn whose request failed
+  # because it lost its client or its owner is interrupted, any other failure
+  # is failed (findings#228).
+  defp terminal_turn_status(%Request{status: "failed", last_error_code: error_code}) do
+    if InterruptionOutcome.interrupted_error_code?(error_code),
+      do: @turn_interrupted,
+      else: @turn_failed
+  end
 
   defp terminal_turn_status(%Request{status: status})
-       when status in ["failed", "rejected", "cancelled"],
+       when status in ["rejected", "cancelled"],
        do: @turn_failed
 
   defp terminal_turn_status(_request), do: @turn_interrupted

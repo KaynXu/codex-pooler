@@ -571,9 +571,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
             end
           end)
 
+        # A malformed owner reply is settled as `owner_crashed`, and a crashed
+        # owner is an interruption like a drained or lost one (findings#228).
         assert_receive {:stream_outcome,
                         %{
-                          outcome: "failed",
+                          outcome: "interrupted",
                           downstream_transport: "websocket",
                           upstream_transport: "websocket"
                         }}

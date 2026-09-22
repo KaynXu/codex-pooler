@@ -1418,6 +1418,86 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert Repo.aggregate(from(c in RoutingCircuitState), :count) == 0
   end
 
+  # One vocabulary decides the SSE terminal outcome: an owner that crashed
+  # interrupted the bridged turn exactly like an owner that drained, keeping
+  # its own code and the owner-side 499, while a forwarding refusal such as
+  # backpressure keeps the generic bridge classification and fails the turn
+  # (findings#228).
+  for {reason, outcome, code, status} <- [
+        {:owner_crashed, "interrupted", "owner_crashed", 499},
+        {:owner_unavailable, "interrupted", "owner_unavailable", 499},
+        {:owner_busy, "failed", "upstream_stream_error", 200}
+      ] do
+    test "a bridge stream cut by #{reason} settles with the #{outcome} stream outcome" do
+      {setup, _first_upstream, _second_upstream} =
+        stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      payload = payload(setup)
+
+      request_options =
+        request_options(auth, payload, setup,
+          endpoint: @public_responses_endpoint,
+          public_openai_responses_stream: true
+        )
+
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @public_responses_endpoint,
+                 transport: "http_sse",
+                 correlation_id: "bridged-#{unquote(reason)}-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      context =
+        retry_context(setup, auth, request_options, reserved.request,
+          endpoint: @public_responses_endpoint,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        )
+
+      state = DownstreamStream.initial_state(:relay, request_options, :websocket_bridge)
+
+      assert {synthetic_terminal, state} =
+               DownstreamStream.synthetic_terminal_failure(
+                 state,
+                 {:upstream_websocket_bridge, unquote(reason)}
+               )
+
+      response_context = %ResponseContext{context: context, response: sse_response()}
+
+      capture_stream_outcome_telemetry(fn ->
+        assert {:ok, _finalized} =
+                 Streaming.finalize_failure(
+                   synthetic_terminal,
+                   {:upstream_stream_interrupted, {:upstream_websocket_bridge, unquote(reason)}},
+                   response_context,
+                   state
+                 )
+
+        assert_received {:stream_outcome, %{outcome: unquote(outcome), downstream_transport: "http_sse"}}
+        refute_received {:stream_outcome, _other}
+      end)
+
+      request = Repo.reload!(reserved.request)
+      assert request.status == "failed"
+      assert request.last_error_code == unquote(code)
+      assert request.response_status_code == unquote(status)
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.network_error_code == unquote(code)
+
+      # An owner loss is our own lifecycle event and never demotes the upstream
+      # or opens its circuit; the refusal control keeps the generic path.
+      if unquote(outcome) == "interrupted" do
+        assert Repo.aggregate(from(d in BridgeDemotion), :count) == 0
+        assert Repo.aggregate(from(c in RoutingCircuitState), :count) == 0
+      end
+    end
+  end
+
   test "stream partial failure prefers known observer usage over a truncated retained body" do
     {setup, _first_upstream, _second_upstream} =
       stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
