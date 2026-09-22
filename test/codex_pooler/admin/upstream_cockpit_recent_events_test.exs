@@ -109,7 +109,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
     request_fields = Request.__schema__(:fields)
     attempt_fields = Attempt.__schema__(:fields)
 
-    for batch <- 0..9 do
+    # Two batches already exceed the tuple-read budget; a full-history aggregate must fail it.
+    for batch <- 0..1 do
       requests =
         for offset <- 1..1000 do
           ordinal = batch * 1000 + offset
@@ -158,10 +159,9 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
       end)
 
     assert attempt_reads < 1000,
-           "five sparse events read #{attempt_reads} attempt tuples across 10,005 attempts: #{inspect(explain)}"
+           "five sparse events read #{attempt_reads} attempt tuples across 2,005 attempts: #{inspect(explain)}"
   end
 
-  @tag slow: "seeds 10001 real request/attempt rows and proves bounded dense-history SQL plans"
   test "dense identity history keeps recent-event probes bounded", context do
     now = DateTime.utc_now()
     seed_request = insert_request(context, "failed", now)
@@ -172,7 +172,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
     request_fields = Request.__schema__(:fields)
     attempt_fields = Attempt.__schema__(:fields)
 
-    for batch <- 0..9 do
+    # Keep twenty failures and enough history to reject a full scan at the unchanged budget.
+    for batch <- 0..1 do
       requests =
         for offset <- 1..1000 do
           ordinal = batch * 1000 + offset
@@ -216,7 +217,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitRecentEventsTest do
       end)
 
     assert attempt_reads < 1000,
-           "five dense events read #{attempt_reads} attempt tuples across 10,001 attempts: #{inspect(explain)}"
+           "five dense events read #{attempt_reads} attempt tuples across 2,001 attempts: #{inspect(explain)}"
   end
 
   def handle_query(_event, _measurements, metadata, owner) do

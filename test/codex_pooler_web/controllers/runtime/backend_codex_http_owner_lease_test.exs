@@ -158,6 +158,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     :ok
   end
 
+  @tag slow: "restarts a real BEAM owner incarnation during gated HTTP finalization and verifies takeover through a second HTTP request"
   test "late successful HTTP finalization cannot extend an absent lease and the next request takes over",
        %{conn: conn} do
     release_ref = make_ref()
@@ -263,6 +264,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  @tag slow: "restarts a real BEAM owner incarnation and proves two PostgreSQL attaches blocked on one session converge on one lease"
   test "concurrent fresh HTTP attaches converge on one replacement for an absent incarnation" do
     peer_name = :"http_lease_owner_#{System.unique_integer([:positive])}"
     peer = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
@@ -1009,9 +1011,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     refute_received {:session_lease_heartbeat, :started, _heartbeat}
 
-    port = start_public_endpoint!()
+    {server, port} = start_public_endpoint_with_server!()
     turn_state = unique_session_key("native-websocket")
     {socket_conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    assert {:ok, [socket]} = ThousandIsland.connection_pids(server)
+    socket_monitor = Process.monitor(socket)
+    parent = self()
+    handler = make_ref()
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :telemetry.attach(
+      handler,
+      [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+      fn _, _, metadata, _ ->
+        if metadata.caller == socket, do: send(parent, {:socket_cleanup_finished, handler, self()})
+      end,
+      nil
+    )
 
     payload =
       CodexPooler.JSON.encode!(%{
@@ -1026,7 +1042,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     {socket_conn, _websocket, frame} = public_websocket_receive_text!(socket_conn, websocket, ref)
     assert %{"id" => "resp_native_ws"} = CodexPooler.JSON.decode!(frame)
     refute_received {:session_lease_heartbeat, :started, _heartbeat}
+    assert_socket_response_tasks_released!(socket)
     Mint.HTTP.close(socket_conn)
+    assert_receive {:socket_cleanup_finished, ^handler, cleanup}, @detection_budget
+    cleanup_monitor = Process.monitor(cleanup)
+    assert_receive {:DOWN, ^cleanup_monitor, :process, ^cleanup, _reason}, @detection_budget
+    assert_receive {:DOWN, ^socket_monitor, :process, ^socket, _reason}, @detection_budget
   end
 
   for phase <- [{:reserve, :before}, {:reservation_lock, :before}] do

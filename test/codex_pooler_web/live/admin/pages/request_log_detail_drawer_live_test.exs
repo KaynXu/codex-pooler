@@ -171,12 +171,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
 
     older_at = DateTime.add(DateTime.utc_now(), -2, :hour)
 
-    %{request: selected_request} =
+    selected =
       request_log_fixture(pool, %{
         correlation_id: "req-refresh-selected",
         requested_model: "gpt-refresh-selected",
         admitted_at: older_at
       })
+
+    selected_request = selected.request
 
     {:ok, view, _html} =
       live(
@@ -190,16 +192,19 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     assert has_element?(view, "#request-log-detail-correlation-id", "req-refresh-selected")
     assert has_element?(view, "#request-log-row-#{selected_request.id}")
 
-    for index <- 1..50 do
-      request_log_fixture(pool, %{
-        correlation_id: "req-refresh-newer-#{index}",
-        requested_model: "gpt-refresh-newer-#{index}"
-      })
-    end
+    # Pagination needs fifty newer requests, not fifty independent keys and upstreams.
+    newer_requests =
+      for index <- 1..50 do
+        insert_request_log_fixture(selected, %{
+          correlation_id: "req-refresh-newer-#{index}",
+          requested_model: "gpt-refresh-newer-#{index}"
+        }).request
+      end
 
     send(view.pid, :refresh_request_logs_from_events)
     _ = await_request_logs(view)
 
+    assert has_element?(view, "#request-log-row-#{List.last(newer_requests).id}")
     refute has_element?(view, "#request-log-row-#{selected_request.id}")
     assert has_element?(view, "#request-log-detail-drawer[checked]")
     assert has_element?(view, "#request-log-detail-correlation-id", "req-refresh-selected")
@@ -669,6 +674,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
         assignment_label: Map.get(attrs, :assignment_label, "Request log assignment")
       })
 
+    insert_request_log_fixture(%{pool: pool, api_key: api_key, identity: identity, assignment: assignment}, attrs)
+  end
+
+  defp insert_request_log_fixture(%{pool: pool, api_key: api_key, identity: identity, assignment: assignment} = context, attrs) do
     request =
       request_fixture(%{pool: pool, api_key: api_key}, %{
         requested_model: Map.get(attrs, :requested_model, "gpt-request-log"),
@@ -714,7 +723,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
       details: Map.get(attrs, :settlement_details, %{})
     })
 
-    %{request: request, attempt: attempt, identity: identity, assignment: assignment}
+    Map.merge(context, %{request: request, attempt: attempt})
   end
 
   defp open_selected_request(conn, pool, request) do

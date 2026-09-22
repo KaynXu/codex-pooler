@@ -81,7 +81,10 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert has_element?(account_view, "#settings-account-datetime-format")
     assert has_element?(account_view, "#settings-account-timezone")
 
-    {:ok, security_view, _html} = live(conn, ~p"/admin/settings?tab=security")
+    account_view |> element("#settings-tab-security") |> render_click()
+    assert_patch(account_view, ~p"/admin/settings?tab=security")
+    security_view = account_view
+    refute has_element?(security_view, "#settings-tab-account[aria-selected='true']")
 
     assert has_element?(security_view, "#settings-tab-security[aria-selected='true']")
     assert has_element?(security_view, "#settings-security-panel")

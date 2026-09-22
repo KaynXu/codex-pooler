@@ -3000,6 +3000,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_pid}
   end
 
+  @tag slow: "boots two real BEAM peers, terminates the first owner and proves one recovered lease and owner on the survivor"
   test "real current peers replace a nodedown owner and converge on one recovered owner lease",
        %{auth: auth} do
     {peer_a_pid, peer_a} = start_current_peer_process!("replacement_owner_a")

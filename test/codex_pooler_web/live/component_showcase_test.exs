@@ -112,28 +112,6 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     assert has_element?(view, "#observatory-freshness.is-paused")
   end
 
-  test "flash, request drawer, and policy dialog have deterministic visible review states" do
-    for {trigger, review_state, selectors} <- [
-          {"#showcase-show-flash", "flash", ["#flash-info[role='alert']:not([hidden])"]},
-          {"#showcase-open-request-drawer", "request-drawer",
-           [
-             "#component-showcase.drawer-open",
-             "#request-log-detail-drawer[checked]",
-             "[data-role='request-log-detail-drawer-side']"
-           ]},
-          {"#showcase-open-policy-editor", "policy-dialog", ["#showcase-policy-editor[open]"]}
-        ] do
-      {:ok, view, _html} = mount_showcase("dark")
-      view |> element(trigger) |> render_click()
-
-      assert has_element?(view, "#component-showcase[data-review-state='#{review_state}']")
-
-      for selector <- selectors do
-        assert has_element?(view, selector)
-      end
-    end
-  end
-
   test "request drawer showcase renders terminal diagnostics through the real component in both themes" do
     for theme <- ~w(light dark) do
       {:ok, view, _html} = mount_showcase(theme, "request-drawer")

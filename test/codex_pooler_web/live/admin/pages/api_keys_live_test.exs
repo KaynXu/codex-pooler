@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
+  alias Phoenix.LiveViewTest.ClientProxy
 
   setup :register_and_log_in_user
 
@@ -584,10 +585,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
       Access.create_api_key(scope, pool, %{display_name: "Event scope key"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    on_exit(fn -> stop_lifecycle_view(view) end)
 
     view
     |> element("#edit-api-key-#{api_key.id}")
     |> render_click()
+
+    _ = render_async(view, 15_000)
 
     draft_name = "Updated event scope key"
 
@@ -656,12 +660,85 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     |> element("#edit-api-key-#{api_key.id}")
     |> render_click()
 
+    # This test owns lifecycle reload and draft preservation, not cancellation
+    # of a task holding the shared sandbox checkout.
+    _ = render_async(view, 15_000)
+
     view
     |> element("#api-key-cancel-edit")
     |> render_click()
 
     refute has_element?(view, "#api-key-form")
     assert has_element?(view, "#api-key-row-#{api_key.id}", draft_name)
+    stop_lifecycle_view(view)
+    refute Process.alive?(view.pid), "the lifecycle test must stop its LiveView before sandbox teardown"
+  end
+
+  defp stop_lifecycle_view(view) do
+    {_ref, _topic, proxy} = view.proxy
+    processes = [view.pid, proxy]
+    monitors = Enum.map(processes, &{Process.monitor(&1), &1})
+
+    try do
+      ClientProxy.stop(proxy, {:shutdown, :test_complete})
+    catch
+      :exit, {:noproc, _call} -> :ok
+    end
+
+    # Proxy termination orders shutdown, but only the view's own DOWN proves
+    # its database work has stopped before DataCase releases the sandbox.
+    for {monitor, pid} <- monitors do
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 15_000
+    end
+
+    :ok
+  end
+
+  test "lifecycle teardown observes the view exit even when a Pool reload is still running", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "reload-teardown", name: "Reload teardown"})
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    on_exit(fn -> stop_lifecycle_view(view) end)
+    parent = self()
+    handler = {__MODULE__, :reload_teardown, make_ref()}
+    view_pid = view.pid
+
+    # Release first during failure cleanup; never leave the Repo consumer
+    # parked while the later callback is waiting for its shutdown.
+    on_exit(fn ->
+      send(view_pid, {handler, :release})
+      :telemetry.detach(handler)
+    end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == view_pid and metadata[:source] == "api_keys" and not Process.get(handler, false) do
+            Process.put(handler, true)
+            send(parent, {handler, :reload_read})
+
+            receive do
+              {^handler, :release} -> :ok
+            after
+              15_000 -> raise "reload teardown barrier was not released"
+            end
+          end
+        end,
+        nil
+      )
+
+    assert {:ok, _event} = Events.broadcast_pools(pool.id, "pool_changed")
+    assert_receive {^handler, :reload_read}, 15_000
+    {_ref, _topic, proxy} = view.proxy
+    proxy_monitor = Process.monitor(proxy)
+    cleanup = Task.async(fn -> stop_lifecycle_view(view) end)
+    assert_receive {:DOWN, ^proxy_monitor, :process, ^proxy, _reason}, 15_000
+    assert Process.alive?(view_pid)
+    send(view_pid, {handler, :release})
+    assert :ok = Task.await(cleanup, 15_000)
+    refute Process.alive?(view_pid)
+    assert %{rows: [[1]]} = Repo.query!("SELECT 1")
   end
 
   defp open_create_dialog(view) do

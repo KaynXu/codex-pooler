@@ -429,50 +429,31 @@ defmodule CodexPooler.Accounting.APIKeyActiveRequestsTest do
     end)
   end
 
-  test "three interleaved cap arms keep nil query cost and indexed retained-history authority",
+  test "sixteen admissions retain the exact query budget with and without an active cap",
        context do
-    for sample <- 1..3 do
-      for cap <- [nil, 32] do
-        fixture = fixture(context, cap)
+    for cap <- [nil, 32] do
+      fixture = fixture(context, cap)
 
-        unboxed(fn ->
-          # Warm the same real reserve path; a committed release ends the warmup slot.
-          {:ok, warmup} = reserve(fixture)
+      unboxed(fn ->
+        # A committed release ends the warmup slot. One pass preserves the
+        # query-count contract; repeated latency samples belong in benchmarks.
+        {:ok, warmup} = reserve(fixture)
 
-          {:ok, _} =
-            Accounting.finalize_reservation_failure(
-              warmup.request,
-              %{last_error_code: "dispatch_unavailable"}
-            )
-
-          {results, queries} =
-            capture_queries(fn ->
-              for _ <- 1..16 do
-                {elapsed, result} = :timer.tc(fn -> reserve(fixture) end)
-                assert {:ok, _} = result
-                elapsed
-              end
-            end)
-
-          assert length(queries) == 16 * if(is_nil(cap), do: 10, else: 11)
-          assert Accounting.LedgerReads.outstanding_reservation_count(fixture.api_key.id) == 16
-          sorted = Enum.sort(results)
-
-          CodexPooler.TestDiagnostics.puts(
-            inspect(%{
-              scenario: :interleaved_cap_cost,
-              sample: sample,
-              cap: cap,
-              admissions: 16,
-              statements: length(queries),
-              p50_us: Enum.at(sorted, 7),
-              p95_us: Enum.at(sorted, 15),
-              p99_us: Enum.at(sorted, 15),
-              total_us: Enum.sum(results)
-            })
+        {:ok, _} =
+          Accounting.finalize_reservation_failure(
+            warmup.request,
+            %{last_error_code: "dispatch_unavailable"}
           )
-        end)
-      end
+
+        {_results, queries} =
+          capture_queries(fn ->
+            for _ <- 1..16, do: assert({:ok, _} = reserve(fixture))
+          end)
+
+        assert length(queries) == 16 * if(is_nil(cap), do: 10, else: 11)
+        assert Enum.count(queries, &active_count_query?/1) == if(is_nil(cap), do: 0, else: 16)
+        assert Accounting.LedgerReads.outstanding_reservation_count(fixture.api_key.id) == 16
+      end)
     end
   end
 

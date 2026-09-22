@@ -904,164 +904,106 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-vitals-token-refresh dd[title]")
   end
 
-  @tag :credential_expiry_cockpit
-  test "cockpit uses canonical credential expiry for vitals and recovery actions", %{
-    conn: conn,
-    scope: scope
-  } do
-    configure_upstream_secret_key!()
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    future = DateTime.add(now, 2, :hour)
-    past = DateTime.add(now, -2, :hour)
-    raw_expiry_value = runtime_secret("cockpit-expiry-raw-metadata")
+  for {scenario, status, expiry_state, expected_value, replacement?} <- [
+        {:future, "paused", "known_future", "expires", false},
+        {:past, "paused", "known_past", "expired", true},
+        {:unknown, "paused", "unavailable", "expiry unavailable", false},
+        {:mixed, "paused", "unavailable", "expiry unavailable", false},
+        {:legacy, "refresh_failed", "known_past", "expired", true},
+        {:missing_secret, "paused", "known_future", "expires", true},
+        {:reauth, "reauth_required", "known_future", "expires", true}
+      ] do
+    @tag :credential_expiry_cockpit
+    @tag credential_expiry_scenario: scenario
+    test "cockpit uses canonical #{scenario} credential expiry for vitals and recovery actions", %{conn: conn, scope: scope, credential_expiry_scenario: scenario} do
+      configure_upstream_secret_key!()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      future = DateTime.add(now, 2, :hour)
+      past = DateTime.add(now, -2, :hour)
+      raw_expiry_value = runtime_secret("cockpit-expiry-raw-metadata")
 
-    future_account =
-      status_fixture!(scope, "expiry-future", %{
-        identity_status: "paused",
-        identity_metadata: canonical_known_expiry_metadata(future)
-      })
+      metadata =
+        case scenario do
+          kind when kind in [:future, :missing_secret] ->
+            canonical_known_expiry_metadata(future)
 
-    past_account =
-      status_fixture!(scope, "expiry-past", %{
-        identity_status: "paused",
-        identity_metadata: canonical_known_expiry_metadata(past)
-      })
+          :past ->
+            canonical_known_expiry_metadata(past)
 
-    unknown_account =
-      status_fixture!(scope, "expiry-unknown", %{
-        identity_status: "paused",
-        identity_metadata: canonical_unknown_expiry_metadata()
-      })
+          :unknown ->
+            canonical_unknown_expiry_metadata()
 
-    mixed_account =
-      status_fixture!(scope, "expiry-mixed", %{
-        identity_status: "paused",
-        identity_metadata: %{
-          "credential_epoch" => 2,
-          "access_token_expires_at" => DateTime.to_iso8601(past),
-          "token_refresh" => %{
-            "status" => "succeeded",
-            "access_token_expiry" => %{
-              "version" => 1,
-              "credential_epoch" => 1,
-              "state" => "known",
-              "source" => "explicit"
+          :mixed ->
+            %{
+              "credential_epoch" => 2,
+              "access_token_expires_at" => DateTime.to_iso8601(past),
+              "token_refresh" => %{
+                "status" => "succeeded",
+                "access_token_expiry" => %{
+                  "version" => 1,
+                  "credential_epoch" => 1,
+                  "state" => "known",
+                  "source" => "explicit"
+                }
+              },
+              "raw_expiry_value" => raw_expiry_value
             }
-          },
-          "raw_expiry_value" => raw_expiry_value
-        }
-      })
 
-    legacy_account =
-      status_fixture!(scope, "expiry-legacy", %{
-        identity_status: "refresh_failed",
-        identity_metadata: %{"access_token_expires_at" => DateTime.to_iso8601(past)}
-      })
+          :legacy ->
+            %{"access_token_expires_at" => DateTime.to_iso8601(past)}
 
-    missing_secret_account =
-      status_fixture!(scope, "expiry-missing-secret", %{
-        identity_status: "paused",
-        identity_metadata: canonical_known_expiry_metadata(future)
-      })
+          :reauth ->
+            canonical_known_expiry_metadata(future, %{
+              "status" => "reauth_required",
+              "reason" => %{
+                "code" => "credential_refresh_failed",
+                "message" => "credential refresh was rejected"
+              }
+            })
+        end
 
-    reauth_account =
-      status_fixture!(scope, "expiry-reauth", %{
-        identity_status: "reauth_required",
-        identity_metadata:
-          canonical_known_expiry_metadata(future, %{
-            "status" => "reauth_required",
-            "reason" => %{
-              "code" => "credential_refresh_failed",
-              "message" => "credential refresh was rejected"
-            }
-          })
-      })
+      slug_suffix = scenario |> Atom.to_string() |> String.replace("_", "-")
 
-    for %{identity: identity} <- [
-          future_account,
-          past_account,
-          unknown_account,
-          mixed_account,
-          legacy_account,
-          reauth_account
-        ] do
-      assert {:ok, _secret} =
-               Upstreams.store_encrypted_secret(identity, %{
-                 secret_kind: "access_token",
-                 plaintext: runtime_secret("cockpit-expiry-#{identity.id}")
-               })
-    end
+      %{identity: identity} =
+        status_fixture!(scope, "expiry-#{slug_suffix}", %{
+          identity_status: unquote(status),
+          identity_metadata: metadata
+        })
 
-    assert {:ok, future_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, future_account.identity.id)
+      if scenario != :missing_secret do
+        assert {:ok, _secret} =
+                 Upstreams.store_encrypted_secret(identity, %{
+                   secret_kind: "access_token",
+                   plaintext: runtime_secret("cockpit-expiry-#{identity.id}")
+                 })
+      end
 
-    assert future_cockpit.header.credential_expiry.state == "known_future"
-    assert future_cockpit.header.secret_status == :present
-    assert future_cockpit.header.refresh_status == "succeeded"
+      assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+      assert cockpit.header.credential_expiry.state == unquote(expiry_state)
 
-    assert future_cockpit.actions.replace_auth_json == %{
-             available?: false,
-             reason: "credential replacement is not needed"
-           }
+      if scenario == :future do
+        assert cockpit.header.secret_status == :present
+        assert cockpit.header.refresh_status == "succeeded"
+      end
 
-    assert {:ok, past_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, past_account.identity.id)
+      if scenario == :reauth do
+        assert cockpit.actions.refresh_token == %{available?: false, reason: "token refresh is unavailable"}
+      end
 
-    assert past_cockpit.header.credential_expiry.state == "known_past"
-    assert past_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
+      expected_action =
+        if unquote(replacement?),
+          do: %{available?: true, reason: nil},
+          else: %{available?: false, reason: "credential replacement is not needed"}
 
-    for account <- [unknown_account, mixed_account] do
-      assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, account.identity.id)
-      assert cockpit.header.credential_expiry.state == "unavailable"
+      assert cockpit.actions.replace_auth_json == expected_action
+      {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+      action_id = "#cockpit-replace-auth-json-upstream-account-#{identity.id}"
 
-      assert cockpit.actions.replace_auth_json == %{
-               available?: false,
-               reason: "credential replacement is not needed"
-             }
-    end
-
-    assert {:ok, legacy_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, legacy_account.identity.id)
-
-    assert legacy_cockpit.header.credential_expiry.state == "known_past"
-    assert legacy_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
-
-    assert {:ok, missing_secret_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, missing_secret_account.identity.id)
-
-    assert missing_secret_cockpit.header.credential_expiry.state == "known_future"
-
-    assert missing_secret_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
-
-    assert {:ok, reauth_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, reauth_account.identity.id)
-
-    assert reauth_cockpit.header.credential_expiry.state == "known_future"
-    assert reauth_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
-
-    assert reauth_cockpit.actions.refresh_token == %{
-             available?: false,
-             reason: "token refresh is unavailable"
-           }
-
-    for {account, expected_value} <- [
-          {future_account, "expires"},
-          {past_account, "expired"},
-          {unknown_account, "expiry unavailable"},
-          {mixed_account, "expiry unavailable"},
-          {legacy_account, "expired"},
-          {missing_secret_account, "expires"},
-          {reauth_account, "expires"}
-        ] do
-      {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{account.identity.id}")
-      action_id = "#cockpit-replace-auth-json-upstream-account-#{account.identity.id}"
-
-      assert has_element?(view, "#upstream-vitals-access-token", expected_value)
+      assert has_element?(view, "#upstream-vitals-access-token", unquote(expected_value))
       assert has_element?(view, "#upstream-vitals-access-token dd[title]")
       refute render(view) =~ raw_expiry_value
 
-      if account == past_account or account == legacy_account or account == missing_secret_account or
-           account == reauth_account do
+      if unquote(replacement?) do
         refute has_element?(view, "#{action_id}[disabled]")
         refute has_element?(view, "#{action_id}[title]")
       else
