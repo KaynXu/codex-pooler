@@ -964,6 +964,12 @@ defmodule CodexPooler.Accounting.PricingResolution do
   defp mapped_service_tier("priority"), do: {:ok, "priority"}
   defp mapped_service_tier("ultrafast"), do: {:ok, "ultrafast"}
   defp mapped_service_tier("batch"), do: {:ok, "batch"}
+
+  # Scale is a recognized service tier. Resolve only matching snapshots;
+  # without one, leave pricing explicitly unpriced rather than borrowing
+  # another tier's rate.
+  defp mapped_service_tier("scale"), do: {:ok, "scale"}
+
   defp mapped_service_tier(_tier), do: {:unpriced, "unpriced_unsupported_tier"}
 
   defp normalize_service_tier(tier), do: ServiceTier.canonicalize(tier)

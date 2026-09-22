@@ -6,6 +6,7 @@ defmodule CodexPooler.Accounting.PricingTest do
   alias CodexPooler.Accounting.{LedgerEntry, RequestLogFact}
   alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.ApiKeyPolicyForm
 
   import CodexPooler.AccountingTestSupport
   import CodexPooler.PoolerFixtures
@@ -1340,6 +1341,165 @@ defmodule CodexPooler.Accounting.PricingTest do
                legacy_fast.id
 
       assert Repo.get!(PricingSnapshot, legacy_fast.id).config["service_tier"] == "fast"
+    end
+
+    # findings#244. With no scale snapshot and no tier reported on the response,
+    # the resolver keeps tier isolation instead of borrowing standard or
+    # priority rates. The settled zero is only readable alongside its unpriced
+    # status; it does not mean the usage was free.
+    test "a requested scale tier with no snapshot and no reported tier settles unpriced" do
+      setup = accounting_setup()
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        config: pricing_config(%{"service_tier" => "priority"}),
+        input_token_micros: Decimal.new(50),
+        output_token_micros: Decimal.new(75)
+      })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "service_tier" => "scale"},
+                 %{correlation_id: "corr-scale-unpriced"}
+               )
+
+      # Not `unpriced_unsupported_tier`: the tier is understood, the rate is
+      # simply not published.
+      assert reserved.pricing_status == "unpriced_missing_tier"
+      assert is_nil(reserved.pricing_snapshot)
+      assert reserved.reservation.details["service_tier"] == "scale"
+      assert reserved.reservation.details["requested_service_tier"] == "scale"
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{status: "usage_known", input_tokens: 100, output_tokens: 10, total_tokens: 110},
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.details["pricing_status"] == "unpriced_missing_tier"
+      assert is_nil(result.settlement.pricing_snapshot_id)
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
+    end
+
+    # Snapshot lookup and settlement only: the snapshot is inserted directly, so
+    # this says nothing about whether the importer accepts a scale tier.
+    test "a stored scale snapshot is the one a scale request resolves and settles against" do
+      setup = accounting_setup()
+
+      scale_pricing =
+        pricing_snapshot_fixture(setup.pricing, %{
+          config: pricing_config(%{"service_tier" => "scale"}),
+          input_token_micros: Decimal.new(10),
+          output_token_micros: Decimal.new(20)
+        })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "service_tier" => "scale"},
+                 %{correlation_id: "corr-scale-priced"}
+               )
+
+      assert reserved.pricing_status == "priced"
+      assert reserved.pricing_snapshot.id == scale_pricing.id
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{status: "usage_known", input_tokens: 100, output_tokens: 10, total_tokens: 110},
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.pricing_snapshot_id == scale_pricing.id
+      assert result.settlement.details["pricing_status"] == "priced"
+      assert result.settlement.details["service_tier"] == "scale"
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(1200))
+    end
+
+    # Requesting scale does not by itself decide the priced tier: a tier the
+    # response reports takes precedence, exactly as it does for every other
+    # requested tier.
+    test "a reported tier outranks a requested scale tier at settlement" do
+      setup = accounting_setup()
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "service_tier" => "scale"},
+                 %{correlation_id: "corr-scale-actual-precedence"}
+               )
+
+      assert reserved.pricing_status == "unpriced_missing_tier"
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 100,
+                   output_tokens: 10,
+                   total_tokens: 110,
+                   service_tier: "default"
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.details["requested_service_tier"] == "scale"
+      assert result.settlement.details["actual_service_tier"] == "default"
+      assert result.settlement.details["service_tier"] == "standard"
+      assert result.settlement.details["pricing_status"] == "priced"
+      assert result.settlement.pricing_snapshot_id == setup.pricing.id
+    end
+
+    # The guard that makes this class of drift impossible rather than fixing
+    # this instance of it: a tier an operator can pin must never reach pricing
+    # as an unknown one.
+    test "every service tier an operator can pin is a tier pricing understands" do
+      for {label, tier} <- ApiKeyPolicyForm.service_tier_options(), tier != "" do
+        setup = accounting_setup()
+
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id},
+                   %{
+                     correlation_id: "corr-pinned-#{tier}-#{System.unique_integer([:positive])}",
+                     api_key_policy: %{enforced_service_tier: tier}
+                   }
+                 )
+
+        refute reserved.pricing_status == "unpriced_unsupported_tier",
+               "#{label} (#{tier}) reaches pricing as an unsupported tier"
+      end
+    end
+
+    test "only a tier pricing has never heard of reports an unsupported tier" do
+      setup = accounting_setup()
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "service_tier" => "turbocharged"},
+                 %{correlation_id: "corr-unknown-tier"}
+               )
+
+      assert reserved.pricing_status == "unpriced_unsupported_tier"
+      assert is_nil(reserved.pricing_snapshot)
     end
 
     test "auto service tier is unpriced until actual response tier is known" do
