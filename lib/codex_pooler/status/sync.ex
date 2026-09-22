@@ -61,7 +61,14 @@ defmodule CodexPooler.Status.Sync do
     reject_stale(previous, now)
     existing = Repo.all(Incident)
     by_guid = Map.new(existing, &{&1.guid, &1})
-    seen = MapSet.new(items, & &1.guid)
+    # Incidents we could not parse are still present in the feed, so they count
+    # as seen: omission means the provider stopped publishing them, not that we
+    # failed to read them.
+    seen =
+      items
+      |> MapSet.new(& &1.guid)
+      |> MapSet.union(MapSet.new(Map.get(parsed, :skipped_guids) || []))
+
     changed_count = upsert_items(items, by_guid, now)
 
     omission_count =

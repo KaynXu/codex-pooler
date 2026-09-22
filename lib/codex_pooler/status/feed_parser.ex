@@ -2,11 +2,21 @@ defmodule CodexPooler.Status.FeedParser do
   @moduledoc "Bounded, metadata-only parser for the OpenAI status RSS feed."
 
   @max_bytes 1_000_000
-  @max_items 100
+  # Crossing this cap is not a soft degradation: a truncated read cannot tell an
+  # omitted incident from an unseen one, so `complete?` goes false and
+  # retirement stops until the feed shrinks again. The live feed carries ~91
+  # items over the provider's ~90-day window, so 100 left almost no headroom.
+  # This stays well inside the 500-incident store cap in `OpenAIStatus`, and
+  # `@max_bytes` still bounds the read regardless.
+  @max_items 300
   @max_text 4_000
   @max_guid 512
   @max_link 2_048
   @future_skew_seconds 300
+
+  @doc "The newest-item cap a poll can still account for."
+  @spec max_items() :: pos_integer()
+  def max_items, do: @max_items
 
   @type item :: %{
           guid: String.t(),
@@ -104,9 +114,11 @@ defmodule CodexPooler.Status.FeedParser do
   defp sax_event(_, _, state), do: state
 
   defp parse_nodes(nodes, now) do
-    with {:ok, parsed, skipped} <- parse_items(nodes, now),
+    with {:ok, parsed, skipped, skipped_guids, unnamed} <- parse_items(nodes, now),
          {:ok, items} <- deduplicate(parsed) do
-      complete? = skipped == 0 and length(items) <= @max_items
+      # Two separate questions: did every item we saw get accounted for, and did
+      # we see the whole feed at all. Retirement needs both.
+      complete? = unnamed == 0 and length(items) <= @max_items
       items = Enum.take(items, @max_items)
 
       hash_fields =
@@ -128,27 +140,55 @@ defmodule CodexPooler.Status.FeedParser do
          items: Enum.map(items, &Map.delete(&1, :hash_published_at)),
          content_hash: hash(hash_fields),
          skipped_count: skipped,
+         skipped_guids: skipped_guids,
          complete?: complete?
        }}
     end
   end
 
+  # An item we cannot parse is still an item the provider is publishing. When
+  # its guid survives, it is recorded as seen-but-not-updatable so retirement
+  # can run for everything else without retiring an incident that is plainly
+  # still in the feed. Only an item we cannot even name leaves the poll unable
+  # to account for the feed.
   defp parse_items(nodes, now) do
-    {valid, errors} =
-      Enum.reduce(nodes, {[], []}, fn children, {acc, errors} ->
+    {valid, errors, skipped_guids, unnamed} =
+      Enum.reduce(nodes, {[], [], [], 0}, fn children, {acc, errors, guids, unnamed} ->
         case parse_fields(children, now) do
-          {:ok, item} -> {[item | acc], errors}
-          {:error, reason} -> {acc, [reason | errors]}
+          {:ok, item} ->
+            {[item | acc], errors, guids, unnamed}
+
+          {:error, reason, nil} ->
+            {acc, [reason | errors], guids, unnamed + 1}
+
+          {:error, reason, guid} ->
+            {acc, [reason | errors], [guid | guids], unnamed}
         end
       end)
 
     case {valid, errors} do
       {[], [error | _]} -> {:error, error}
-      _ -> {:ok, valid, length(errors)}
+      _ -> {:ok, valid, length(errors), Enum.uniq(skipped_guids), unnamed}
     end
   end
 
+  # The guid is read on its own so a failure further down the chain still names
+  # the item it happened to. Error precedence is unchanged: this only observes.
   defp parse_fields(fields, now) do
+    case parse_item_fields(fields, now) do
+      {:ok, item} -> {:ok, item}
+      {:error, reason} -> {:error, reason, identified_guid(fields)}
+    end
+  end
+
+  defp identified_guid(fields) do
+    case required(fields, "guid", @max_guid) do
+      {:ok, guid} -> guid
+      {:error, _unnamed} -> nil
+    end
+  end
+
+  defp parse_item_fields(fields, now) do
     with :ok <- validate_explicit_status(fields),
          {:ok, guid} <- required(fields, "guid", @max_guid),
          {:ok, title} <- required(fields, "title", @max_text),

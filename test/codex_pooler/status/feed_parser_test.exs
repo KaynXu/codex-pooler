@@ -63,12 +63,13 @@ defmodule CodexPooler.Status.FeedParserTest do
     assert_raise ArgumentError, fn -> String.to_existing_atom("external_name_200") end
   end
 
-  test "selects newest 100 independently of feed order and marks truncation" do
-    entries = for n <- 1..105, do: entry("item-#{n}", DateTime.add(@now, -n, :second))
+  test "selects the newest items independently of feed order and marks truncation" do
+    cap = FeedParser.max_items()
+    entries = for n <- 1..(cap + 5), do: entry("item-#{n}", DateTime.add(@now, -n, :second))
     assert {:ok, parsed} = FeedParser.parse(feed(Enum.reverse(entries)), now: @now)
-    assert length(parsed.items) == 100
+    assert length(parsed.items) == cap
     assert hd(parsed.items).guid == "item-1"
-    assert List.last(parsed.items).guid == "item-100"
+    assert List.last(parsed.items).guid == "item-#{cap}"
     assert parsed.complete? == false
     assert parsed.skipped_count == 0
   end
@@ -258,8 +259,48 @@ defmodule CodexPooler.Status.FeedParserTest do
 
     assert {:error, %{code: :missing_field}} = FeedParser.parse(feed([silent]), now: @now)
 
-    assert {:ok, %{items: [%{status: "Unknown"}], skipped_count: 1, complete?: false}} =
-             FeedParser.parse(feed([unknown, silent]), now: @now)
+    # The silent item is skipped but its guid still names it, so the poll can
+    # still account for the whole feed and retirement stays safe to run.
+    assert {:ok,
+            %{
+              items: [%{status: "Unknown"}],
+              skipped_count: 1,
+              skipped_guids: [skipped_guid],
+              complete?: true
+            }} = FeedParser.parse(feed([unknown, silent]), now: @now)
+
+    assert skipped_guid =~ "01M2VBZB1RYSMXHZNRA25ZJ36X"
+  end
+
+  # findings#246. The cap is the one condition that must still stop retirement,
+  # because a truncated read genuinely cannot see the whole feed.
+  test "a feed past the item cap is truncated and cannot account for itself" do
+    cap = FeedParser.max_items()
+    within = for i <- 1..cap, do: live_item(id: "01M2VBZB1RYSMXHZNRA25ZJ#{1000 + i}")
+
+    assert {:ok, %{items: items, complete?: true, skipped_count: 0}} =
+             FeedParser.parse(feed(within), now: @now)
+
+    assert length(items) == cap
+
+    over = within ++ [live_item(id: "01M2VBZB1RYSMXHZNRA25ZJ0999")]
+
+    assert {:ok, %{items: truncated, complete?: false}} = FeedParser.parse(feed(over), now: @now)
+    assert length(truncated) == cap
+  end
+
+  # findings#246. An item we cannot even name is the only thing that should
+  # stop retirement: there is no guid to record, so the feed cannot be fully
+  # accounted for and an incident omitted this poll might just be unreadable.
+  test "an item with no usable guid is what leaves a poll unable to account for the feed" do
+    readable = live_item(body: "<b>Status: Monitoring</b><br/><br/>We are monitoring.")
+
+    nameless =
+      live_item(id: "01M2VBZB1RYSMXHZNRA25ZJ36X", body: "<b>Status: Monitoring</b><br/><br/>Ok.")
+      |> String.replace(~r{<guid>.*?</guid>}, "<guid></guid>")
+
+    assert {:ok, %{skipped_count: 1, skipped_guids: [], complete?: false}} =
+             FeedParser.parse(feed([readable, nameless]), now: @now)
   end
 
   test "falls back to the content:encoded body when the description is blank" do

@@ -67,6 +67,33 @@ defmodule CodexPooler.Status.SyncTest do
              OpenAIStatus.active_incidents()
   end
 
+  # findings#246. One unreadable item used to stall retirement for the whole
+  # poll. Now a skipped item the parser could still name is counted as seen, so
+  # it is not retired and everything genuinely gone still is.
+  test "an unreadable but named incident is preserved while a truly omitted one retires" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+
+    seed = fn _, _ -> {:ok, %{items: [item("unreadable"), item("departed")]}} end
+    assert {:ok, _} = Sync.sync(fetcher: seed, now: now)
+
+    # Every later poll reads neither: one is present but unparseable, the other
+    # has genuinely left the feed.
+    partial = fn _, _ ->
+      {:ok, %{items: [], skipped_count: 1, skipped_guids: ["unreadable"], complete?: true}}
+    end
+
+    for seconds <- 1..4 do
+      assert {:ok, _} = Sync.sync(fetcher: partial, now: DateTime.add(now, seconds, :second))
+    end
+
+    guids = OpenAIStatus.active_incidents() |> Enum.map(& &1.guid)
+    assert "unreadable" in guids
+    refute "departed" in guids
+
+    assert [%{guid: "unreadable", omission_count: 0, retired_at: nil}] =
+             OpenAIStatus.active_incidents()
+  end
+
   test "non-feed XML polls preserve active incidents and record the failure" do
     now = ~U[2026-09-10 10:00:00.000000Z]
     seed = fn _state, _opts -> {:ok, %{items: [item("preserved")], content_hash: "feed"}} end
