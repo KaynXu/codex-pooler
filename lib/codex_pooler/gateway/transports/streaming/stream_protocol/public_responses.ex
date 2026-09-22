@@ -547,8 +547,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   # Public /v1 events carry no provider header objects: `headers` and the
   # nested `response.headers` are dropped from every decoded event before it
   # is shaped and re-encoded, on SSE and on the public websocket alike
-  # (findings#239). An event without them is returned as is.
+  # (findings#239). The one exemption is `codex.response.metadata`, whose
+  # header object is the event's payload (the owner-forwarded Pooler ETag
+  # event on a public turn); the session already strips an untrusted
+  # provider ETag from it. An event without header objects is returned as is.
   @spec drop_provider_event_headers(map()) :: map()
+  def drop_provider_event_headers(%{"type" => "codex.response.metadata"} = decoded), do: decoded
+
   def drop_provider_event_headers(%{} = decoded) do
     case NativeCodexResponseControl.drop_event_headers(decoded) do
       {:changed, dropped} -> dropped

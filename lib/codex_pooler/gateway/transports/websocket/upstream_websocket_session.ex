@@ -2351,24 +2351,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   # Without a Pooler snapshot the turn is a public /v1 origin (the snapshot is
   # built only for native Responses origins), and the public contract carries
   # no native controls: `headers` and `response.headers` are dropped on every
-  # relayed event, not only the terminal (findings#239). A relayed
-  # `codex.response.metadata` keeps only its ETag strip because its header
-  # object is the event's payload and public surfaces drop codex.* events
-  # before delivery. Bytes are re-encoded only when something was dropped.
+  # relayed event, not only the terminal (findings#239). A terminal event is
+  # always re-encoded canonically, dropped headers or not, because the
+  # retained terminal body is pinned to `encode!(decode!(text))` (usage
+  # attribution); a non-terminal event keeps its bytes when nothing was
+  # dropped. A relayed `codex.response.metadata` keeps only its ETag strip
+  # because its header object is the event's payload.
   defp sanitize_downstream_text({text, %{} = decoded}, _native_snapshot) when is_binary(text) do
-    sanitization =
-      case Map.get(decoded, "type") do
-        "codex.response.metadata" -> NativeCodexResponseControl.strip_untrusted_models_etag(decoded)
-        _other -> NativeCodexResponseControl.drop_event_headers(decoded)
-      end
+    case Map.get(decoded, "type") do
+      type
+      when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
+        sanitized = public_event_without_headers(decoded)
+        {CodexPooler.JSON.encode!(sanitized), sanitized}
 
-    case sanitization do
-      {:changed, sanitized} -> {CodexPooler.JSON.encode!(sanitized), sanitized}
-      _unchanged -> {text, decoded}
+      "codex.response.metadata" ->
+        decoded
+        |> NativeCodexResponseControl.strip_untrusted_models_etag()
+        |> reencode_when_changed(text, decoded)
+
+      _other ->
+        decoded
+        |> NativeCodexResponseControl.drop_event_headers()
+        |> reencode_when_changed(text, decoded)
     end
   end
 
   defp sanitize_downstream_text({text, decoded}, _native_snapshot), do: {text, decoded}
+
+  defp public_event_without_headers(decoded) do
+    case NativeCodexResponseControl.drop_event_headers(decoded) do
+      {:changed, sanitized} -> sanitized
+      _unchanged -> decoded
+    end
+  end
+
+  defp reencode_when_changed({:changed, sanitized}, _text, _decoded),
+    do: {CodexPooler.JSON.encode!(sanitized), sanitized}
+
+  defp reencode_when_changed(_unchanged, text, decoded), do: {text, decoded}
 
   defp decode_text_frame(text) do
     case CodexPooler.JSON.decode(text) do
