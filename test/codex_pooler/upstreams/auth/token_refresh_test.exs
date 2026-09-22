@@ -1162,6 +1162,272 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       refute inspect(result) =~ refresh_token
     end
 
+    # Characterization, not endorsement. The prose fallback is an unordered
+    # conjunction: one field containing "refresh", "token" and any one of
+    # revoked/expired/invalid is enough, in any order and without regard to what
+    # the sentence actually says. An `unauthorized_client` rejection is a client
+    # configuration fault that is identical for every account, yet it lands on
+    # the terminal verdict below, and that verdict disables the identity and all
+    # of its assignments and is not locally reversible. A provider-side client
+    # configuration regression classified this way would therefore irreversibly
+    # disable every identity that refreshes while it lasts. Narrowing the
+    # predicate is blocked on an observed provider body (findings#236); this test
+    # pins today's contract so that narrowing it is a deliberate, visible diff.
+    test "an unauthorized_client rejection marks the account reauth_required through its prose" do
+      refresh_token = secret("refresh", "unauthorized-client")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => "unauthorized_client",
+               "error_description" => "The client is not authorized to use grant type refresh_token; token exchange is invalid for this client."
+             }}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :reauth_required, retryable?: false} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "reauth_required"
+      assert persisted.metadata["token_refresh"]["status"] == "reauth_required"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "refresh_token_revoked"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "disabled"
+      assert cascaded.eligibility_status == "ineligible"
+      assert %DateTime{} = cascaded.disabled_at
+
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "unauthorized_client"
+    end
+
+    test "a request-error code echoed into its own description marks the account reauth_required" do
+      refresh_token = secret("refresh", "echoed-request-code")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => "invalid_request",
+               "error_description" => "invalid_request: refresh_token is a required parameter"
+             }}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :reauth_required, retryable?: false} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "reauth_required"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "refresh_token_revoked"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "disabled"
+      assert cascaded.eligibility_status == "ineligible"
+
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "required parameter"
+    end
+
+    test "a non-OAuth message envelope marks the account reauth_required" do
+      refresh_token = secret("refresh", "message-envelope")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {400, %{"message" => "Invalid request: refresh_token parameter missing"}}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :reauth_required, retryable?: false} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "reauth_required"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "refresh_token_revoked"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "disabled"
+      assert cascaded.eligibility_status == "ineligible"
+
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "parameter missing"
+    end
+
+    # The fallback doing the job it was written for: a provider envelope that
+    # carries no allowlisted grant code, only prose that names this credential.
+    test "a nested provider envelope with an unlisted code marks the account reauth_required" do
+      refresh_token = secret("refresh", "nested-unlisted-code")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => %{
+                 "message" => "Invalid refresh token provided.",
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_api_key"
+               }
+             }}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :reauth_required, retryable?: false} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "reauth_required"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "refresh_token_revoked"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "disabled"
+      assert cascaded.eligibility_status == "ineligible"
+
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "invalid_api_key"
+    end
+
+    # The conjunction is evaluated per string, never over their union: no single
+    # field here carries all three required words.
+    test "keyword matches split across separate fields stay retryable" do
+      refresh_token = secret("refresh", "split-keywords")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => "invalid_grant_type",
+               "error_description" => "refresh token mismatch"
+             }}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :refresh_failed, retryable?: true, reason: reason} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      assert reason == "token refresh failed: codex_oauth_refresh_failed"
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "refresh_failed"
+      assert persisted.metadata["token_refresh"]["status"] == "failed"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "codex_oauth_refresh_failed"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.status == "active"
+      assert cascaded.health_status == "active"
+      assert cascaded.eligibility_status == "eligible"
+      assert is_nil(cascaded.disabled_at)
+
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "mismatch"
+    end
+
+    # A body that is not a decoded object never reaches the classifier at all,
+    # even at a status that would otherwise be classified and even when its prose
+    # would satisfy the conjunction.
+    test "a non-JSON refresh rejection stays retryable" do
+      refresh_token = secret("refresh", "non-json-rejection")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" =>
+            FakeUpstream.raw_response(
+              "<html><body>Your refresh token is invalid and has been revoked.</body></html>",
+              status: 403,
+              headers: [{"content-type", "text/html; charset=utf-8"}]
+            )
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :refresh_failed, retryable?: true, reason: reason} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      assert reason == "token refresh failed: codex_oauth_refresh_failed"
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "refresh_failed"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "codex_oauth_refresh_failed"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "active"
+      assert cascaded.eligibility_status == "eligible"
+      assert is_nil(cascaded.disabled_at)
+
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "revoked"
+    end
+
+    # Only 400, 401 and 403 are classified. The allowlisted grant code below is
+    # the same one that is terminal at 400; at 429 it stays retryable, so the
+    # status gate is what decides, not the body.
+    test "a throttled refresh rejection stays retryable without reaching the classifier" do
+      refresh_token = secret("refresh", "throttled-rejection")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {429, %{"error" => "invalid_grant"}}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      assignment = active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, %{status: :refresh_failed, retryable?: true, reason: reason} = result} =
+               TokenRefresh.refresh_access_token(identity, trigger_kind: "unit_test")
+
+      assert reason == "token refresh failed: codex_oauth_refresh_failed"
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "refresh_failed"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "codex_oauth_refresh_failed"
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "active"
+      assert cascaded.eligibility_status == "eligible"
+      assert is_nil(cascaded.disabled_at)
+
+      assert FakeUpstream.count(upstream) == 1
+      refute inspect(result) =~ refresh_token
+      refute inspect(persisted.metadata) =~ "invalid_grant"
+    end
+
     test "unrecognized refresh failures stay retryable" do
       refresh_token = secret("refresh", "unknown-oauth-error")
 

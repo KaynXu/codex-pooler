@@ -2,6 +2,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.FakeOpenAIAuthProvider
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.UpstreamConnPoolTelemetry
   alias CodexPooler.Upstreams.Auth.CodexAuth
 
@@ -617,6 +618,160 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
 
         assert [_request] = FakeOpenAIAuthProvider.requests(provider)
       end
+    end
+  end
+
+  describe "refresh rejection classification" do
+    # The same rejection table the TokenRefresh lifecycle acts on, pinned at the
+    # HTTP boundary so it is readable without a database. `:codex_refresh_token_revoked`
+    # (401) is the terminal reauthorization verdict; `:codex_oauth_refresh_failed`
+    # (502) is the retryable one.
+
+    test "an unauthorized_client rejection reaches the reauthorization verdict through its prose" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => "unauthorized_client",
+               "error_description" => "The client is not authorized to use grant type refresh_token; token exchange is invalid for this client."
+             }}
+        })
+
+      assert {:error,
+              %{
+                code: :codex_refresh_token_revoked,
+                message: "Codex refresh token requires reauthorization",
+                status: 401
+              } = error} = CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      refute inspect(error) =~ "unauthorized_client"
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "a request-error code echoed into its own description reaches the reauthorization verdict" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => "invalid_request",
+               "error_description" => "invalid_request: refresh_token is a required parameter"
+             }}
+        })
+
+      assert {:error, %{code: :codex_refresh_token_revoked, status: 401} = error} =
+               CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      refute inspect(error) =~ "required parameter"
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "a non-OAuth message envelope reaches the reauthorization verdict" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" => {400, %{"message" => "Invalid request: refresh_token parameter missing"}}
+        })
+
+      assert {:error, %{code: :codex_refresh_token_revoked, status: 401} = error} =
+               CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      refute inspect(error) =~ "parameter missing"
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "a nested provider envelope whose code is not allowlisted is classified by its prose" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => %{
+                 "message" => "Invalid refresh token provided.",
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_api_key"
+               }
+             }}
+        })
+
+      assert {:error, %{code: :codex_refresh_token_revoked, status: 401} = error} =
+               CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      refute inspect(error) =~ "invalid_api_key"
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "keyword matches split across separate fields stay retryable" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" =>
+            {400,
+             %{
+               "error" => "invalid_grant_type",
+               "error_description" => "refresh token mismatch"
+             }}
+        })
+
+      assert {:error,
+              %{
+                code: :codex_oauth_refresh_failed,
+                message: "Codex token refresh failed",
+                status: 502
+              } = error} = CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      refute inspect(error) =~ "mismatch"
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "a non-JSON refresh rejection body stays retryable" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" =>
+            FakeUpstream.raw_response(
+              "<html><body>Your refresh token is invalid and has been revoked.</body></html>",
+              status: 403,
+              headers: [{"content-type", "text/html; charset=utf-8"}]
+            )
+        })
+
+      assert {:error, %{code: :codex_oauth_refresh_failed, status: 502} = error} =
+               CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      refute inspect(error) =~ "revoked"
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "a 429 refresh rejection never reaches the classifier" do
+      refresh_token = "refresh-token-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/oauth/token" => {429, %{"error" => "invalid_grant"}}
+        })
+
+      assert {:error, %{code: :codex_oauth_refresh_failed, status: 502} = error} =
+               CodexAuth.HTTPClient.refresh_token(refresh_token)
+
+      refute inspect(error) =~ refresh_token
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
     end
   end
 
