@@ -181,7 +181,8 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
              port: non_neg_integer(),
              run_id: String.t(),
              profile_manifest: String.t(),
-             profiles: [profile()]
+             profiles: [profile()],
+             upstream_request_id_header: String.t()
            }}
           | {:error, String.t()}
   @type server :: %{server: pid(), url: String.t(), profiles: [profile()], run_id: String.t()}
