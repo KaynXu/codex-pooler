@@ -1,12 +1,14 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @moduledoc false
 
+  alias CodexPooler.Accounting.Metadata, as: AccountingMetadata
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.RejectionBody
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
@@ -80,7 +82,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   def response_metadata(response, error_kind, opts) do
     metadata =
       %{
-        "content_type" => header(response, "content-type"),
+        "content_type" => bounded_content_type(header(response, "content-type")),
         "status_code" => response.status,
         "rate_limit_reached_type" => RateLimitReachedType.parse_header(response.headers),
         "upstream_request_id" => upstream_request_id(response)
@@ -573,11 +575,38 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     end
   end
 
+  # Frame-carried header values are persisted under the request-id bound:
+  # every allowlisted name carries an id, a marker, a number or a timestamp,
+  # all within `[A-Za-z0-9_.:-]`. The allowlist admits wildcard quota names,
+  # so the persisted map is also capped at @max_persisted_frame_headers
+  # entries, kept by sorted name so the persisted subset is deterministic;
+  # the cap fits the request id, the reached-type marker, the six
+  # x-ratelimit names, the account window pair and two per-model window
+  # sets. Quota evidence reads the in-memory map, never this copy, so no
+  # window is lost by bounding here (findings#238).
+  @max_persisted_frame_headers 32
+
   defp maybe_put_websocket_frame_headers(metadata, headers) when map_size(headers) > 0 do
-    Map.put(metadata, "websocket_frame_headers", headers)
+    case bounded_frame_headers(headers) do
+      bounded when map_size(bounded) > 0 -> Map.put(metadata, "websocket_frame_headers", bounded)
+      _blank -> metadata
+    end
   end
 
   defp maybe_put_websocket_frame_headers(metadata, _headers), do: metadata
+
+  defp bounded_frame_headers(headers) do
+    headers
+    |> Enum.sort_by(fn {name, _value} -> name end)
+    |> Enum.take(@max_persisted_frame_headers)
+    |> Enum.flat_map(fn {name, value} ->
+      case bounded_request_id(value) do
+        nil -> []
+        bounded -> [{name, bounded}]
+      end
+    end)
+    |> Map.new()
+  end
 
   defp public_openai_responses_stream_metadata(state) do
     stream_metadata =
@@ -638,21 +667,41 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   # The Codex backend names its server-assigned request id `x-oai-request-id`
   # (observed directly against the provider); `x-request-id` and
-  # `openai-request-id` are the names other OpenAI surfaces use. The order
-  # matches the released Codex client (`x-request-id` first, then
-  # `x-oai-request-id`), so the id the Pooler stores is the one a user reads in
-  # their Codex log when both are present. Reading only the last two names
-  # had left every attempt without a provider id. A blank value is absent.
-  @upstream_request_id_headers ~w(x-request-id x-oai-request-id openai-request-id)
-
+  # `openai-request-id` are the names other OpenAI surfaces use. The names and
+  # their order live in `StreamProtocol.upstream_request_id_header_names/0`
+  # (`x-request-id` first, like the released Codex client), which is also the
+  # websocket error-frame allowlist, so the id the Pooler stores is the one a
+  # user reads in their Codex log when both are present. Reading only the last
+  # two names had left every attempt without a provider id. A blank value is
+  # absent; a value outside the request-id bound is fingerprinted, never
+  # erased, so a non-identifier first choice still wins over a later name.
   defp upstream_request_id(response_or_headers) do
-    Enum.find_value(@upstream_request_id_headers, fn name ->
-      case header(response_or_headers, name) do
-        value when is_binary(value) and value != "" -> value
-        _blank -> nil
-      end
+    Enum.find_value(StreamProtocol.upstream_request_id_header_names(), fn name ->
+      response_or_headers
+      |> header(name)
+      |> bounded_request_id()
     end)
   end
+
+  # A provider request id is an opaque UUID-like token (`req_…` prefixes, hex
+  # UUIDs, `.`/`:`-joined segments); 128 bytes is generous for every observed
+  # shape and small enough that a body-sized header cannot land in jsonb
+  # (findings#238).
+  @request_id_pattern ~r/\A[A-Za-z0-9_.:-]+\z/
+  @request_id_max_bytes 128
+
+  defp bounded_request_id(value),
+    do: AccountingMetadata.bounded_string(value, @request_id_pattern, @request_id_max_bytes)
+
+  # A media type is `type/subtype` followed by `;`-separated parameters such
+  # as `charset=utf-8` (RFC 7231 token characters plus the space after `;`);
+  # 120 bytes covers every real content type with its parameters, and a
+  # quoted parameter value or anything longer is fingerprinted (findings#238).
+  @content_type_pattern ~r/\A[A-Za-z0-9!#$&^_.+\/;= -]+\z/
+  @content_type_max_bytes 120
+
+  defp bounded_content_type(value),
+    do: AccountingMetadata.bounded_string(value, @content_type_pattern, @content_type_max_bytes)
 
   defp header(%Req.Response{headers: headers}, key) do
     headers

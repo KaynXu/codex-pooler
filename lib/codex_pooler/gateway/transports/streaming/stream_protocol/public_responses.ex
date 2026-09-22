@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   alias CodexPooler.Gateway.OpenAICompatibility.{PublicResponse, Responses}
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
@@ -346,7 +347,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {event_type, decoded} = stream_block_event(block)
 
     decoded =
-      Responses.restore_custom_tool_call_namespaces(decoded, state.custom_tool_namespaces)
+      decoded
+      |> drop_provider_event_headers()
+      |> Responses.restore_custom_tool_call_namespaces(state.custom_tool_namespaces)
 
     source_type = effective_source_public_type(event_type, decoded)
     source_terminal_outcome = source_terminal_outcome(source_type, decoded)
@@ -538,6 +541,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       |> then(&normalize_terminal_errors(type, &1))
     else
       decoded
+    end
+  end
+
+  # Public /v1 events carry no provider header objects: `headers` and the
+  # nested `response.headers` are dropped from every decoded event before it
+  # is shaped and re-encoded, on SSE and on the public websocket alike
+  # (findings#239). An event without them is returned as is.
+  @spec drop_provider_event_headers(map()) :: map()
+  def drop_provider_event_headers(%{} = decoded) do
+    case NativeCodexResponseControl.drop_event_headers(decoded) do
+      {:changed, dropped} -> dropped
+      _unchanged -> decoded
     end
   end
 

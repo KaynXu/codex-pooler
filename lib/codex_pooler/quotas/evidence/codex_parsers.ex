@@ -6,6 +6,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   `Evidence` module remains the normalized value, validation, and freshness API.
   """
 
+  alias CodexPooler.Accounting.Metadata, as: AccountingMetadata
   alias CodexPooler.Quotas.{AccountAvailability, Evidence}
 
   alias CodexPooler.Quotas.Evidence.CodexParsers.{
@@ -315,6 +316,17 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
 
   defp valid_additional_limit?(_malformed), do: false
 
+  # A usage-body or rate-limit-error `limit_name` is the provider's display
+  # label for a meter (`Shared weekly limit`), not a model id like the
+  # `x-<limit>-limit-name` header, so it takes a printable-ASCII label bound
+  # of at most 80 bytes; anything else is fingerprinted, never erased, and a
+  # blank label is absent (findings#238).
+  @limit_name_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9 _.:\/()+-]*\z/
+  @limit_name_max_bytes 80
+
+  defp bounded_limit_name(value),
+    do: AccountingMetadata.bounded_string(value, @limit_name_pattern, @limit_name_max_bytes)
+
   defp valid_additional_rate_limit?(:error), do: true
   defp valid_additional_rate_limit?({:ok, nil}), do: true
 
@@ -355,11 +367,12 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   # Reason: parser accepts several upstream rate-limit error dialects.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   def parse_rate_limit_error(%{} = payload, observed_at) do
+    limit_name = bounded_limit_name(payload["limit_name"])
+
     family =
-      present_string(payload["limit_id"] || payload["limit_name"] || payload["metered_feature"]) ||
+      present_string(payload["limit_id"] || limit_name || payload["metered_feature"]) ||
         "codex"
 
-    limit_name = present_string(payload["limit_name"])
     descriptor = Descriptors.limit_descriptor(family, limit_name, %{})
     reset_at = ResetTimes.reset_at_from(payload, observed_at)
 
@@ -460,20 +473,25 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
        ) do
     raw_metered_feature = present_string(limit["metered_feature"])
     raw_limit_id = present_string(limit["limit_id"]) || raw_metered_feature
+    bounded_label = bounded_limit_name(limit["limit_name"])
 
     descriptor_id =
       raw_metered_feature || raw_limit_id ||
-        present_string(limit["limit_name"]) || present_string(limit["model"]) ||
+        bounded_label || present_string(limit["model"]) ||
         present_string(limit["model_id"]) || present_string(limit["model_identifier"]) ||
         "additional"
 
     limit_name =
-      present_string(limit["limit_name"]) || present_string(limit["model"]) ||
+      bounded_label || present_string(limit["model"]) ||
         present_string(limit["model_id"]) || present_string(limit["model_identifier"])
 
     descriptor =
       Descriptors.limit_descriptor(descriptor_id, limit_name, %{
-        display_label: Descriptors.additional_display_label(limit, descriptor_id),
+        display_label:
+          Descriptors.additional_display_label(
+            Map.put(limit, "limit_name", bounded_label),
+            descriptor_id
+          ),
         metered_feature: raw_metered_feature || raw_limit_id,
         raw_limit_id: raw_limit_id,
         raw_metered_feature: raw_metered_feature

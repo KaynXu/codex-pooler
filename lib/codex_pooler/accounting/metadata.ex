@@ -7,6 +7,7 @@ defmodule CodexPooler.Accounting.Metadata do
   alias CodexPooler.Events
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.ReplayPreparation
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
@@ -178,29 +179,41 @@ defmodule CodexPooler.Accounting.Metadata do
   # fingerprint so the declaration survives without persisting its content.
   @model_identifier_max_bytes 80
   @model_identifier_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9_.:\/-]*\z/
-  @model_identifier_fingerprint_length 12
 
   @spec bounded_model_identifier(term()) :: String.t() | nil
-  def bounded_model_identifier(value) when is_binary(value) do
+  def bounded_model_identifier(value),
+    do: bounded_string(value, @model_identifier_pattern, @model_identifier_max_bytes)
+
+  # The one rule for every provider-controlled string that is persisted or
+  # promoted to a code (findings#238): a trimmed value that matches the
+  # caller's pattern within the caller's byte length stays cleartext,
+  # anything else becomes a 12-character SHA-256 fingerprint, and a blank or
+  # non-binary value is absent. The fact is never erased and a value outside
+  # its pattern is never stored verbatim; the caller chooses the pattern and
+  # length for its value class.
+  @bounded_string_fingerprint_length 12
+
+  @spec bounded_string(term(), Regex.t(), pos_integer()) :: String.t() | nil
+  def bounded_string(value, %Regex{} = pattern, max_bytes)
+      when is_binary(value) and is_integer(max_bytes) and max_bytes > 0 do
     case String.trim(value) do
       "" ->
         nil
 
       trimmed ->
-        if byte_size(trimmed) <= @model_identifier_max_bytes and
-             Regex.match?(@model_identifier_pattern, trimmed),
-           do: :binary.copy(trimmed),
-           else: model_identifier_fingerprint(trimmed)
+        if byte_size(trimmed) <= max_bytes and Regex.match?(pattern, trimmed),
+          do: :binary.copy(trimmed),
+          else: bounded_string_fingerprint(trimmed)
     end
   end
 
-  def bounded_model_identifier(_value), do: nil
+  def bounded_string(_value, _pattern, _max_bytes), do: nil
 
-  defp model_identifier_fingerprint(value) do
+  defp bounded_string_fingerprint(value) do
     "sha256_" <>
       (:crypto.hash(:sha256, value)
        |> Base.encode16(case: :lower)
-       |> String.slice(0, @model_identifier_fingerprint_length))
+       |> String.slice(0, @bounded_string_fingerprint_length))
   end
 
   @spec sanitize_metadata(term()) :: term()
@@ -386,6 +399,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "routing" ->
         sanitize_routing_map(value)
 
+      normalized == "websocket_frame_headers" ->
+        sanitize_websocket_frame_headers_map(value)
+
       sensitive_key?(normalized) ->
         @redacted
 
@@ -417,6 +433,33 @@ defmodule CodexPooler.Accounting.Metadata do
   defp sanitize_value(value, key) do
     if public_openai_responses_stream_key?(key), do: %{}, else: value
   end
+
+  # Frame-carried headers are name-allowlisted when the frame is read
+  # (`StreamProtocol.websocket_error_frame_header_allowed?/1`) and
+  # value-bounded when persisted, so an allowlisted name keeps its value even
+  # when the name carries a redaction fragment (`x-ratelimit-*-tokens`), the
+  # way `content_type` is exempt from key redaction. Any other name under the
+  # map, and every value, still takes the ordinary rules (findings#238).
+  defp sanitize_websocket_frame_headers_map(value) do
+    Enum.reduce(value, %{}, fn {child_key, child_value}, sanitized ->
+      Map.put(sanitized, child_key, sanitize_frame_header_value(child_key, child_value))
+    end)
+  end
+
+  defp sanitize_frame_header_value(name, value) when is_binary(value) do
+    cond do
+      not StreamProtocol.websocket_error_frame_header_allowed?(to_string(name)) ->
+        sanitize_value(value, name)
+
+      sensitive_binary?(value) ->
+        @redacted
+
+      true ->
+        value
+    end
+  end
+
+  defp sanitize_frame_header_value(name, value), do: sanitize_value(value, name)
 
   defp sanitize_map(value) do
     Enum.reduce(value, %{}, fn

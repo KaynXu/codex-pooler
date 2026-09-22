@@ -1502,6 +1502,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
           }
         })
 
+      # `X-OpenAI-Request-ID` stays in the input as a negative control: the
+      # allowlist admits only the request id names the metadata writer reads,
+      # and that name was never one of them.
       assert websocket_error_frame_headers(frame) == %{
                "openai-request-id" => "openai-req",
                "x-codex-primary-reset-at" => "2026-05-25T12:00:00Z",
@@ -1511,7 +1514,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "x-codex-secondary-reset-at" => "2026-05-25T12:30:00Z",
                "x-codex-secondary-used-percent" => "true",
                "x-codex-secondary-window-minutes" => "false",
-               "x-openai-request-id" => "x-openai-req",
                "x-ratelimit-limit-requests" => "1200",
                "x-ratelimit-remaining-requests" => "0",
                "x-ratelimit-reset-requests" => "1717171717",

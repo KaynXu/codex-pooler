@@ -213,6 +213,103 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  # findings#239: the public websocket carries no native controls, so a
+  # provider `headers` object is dropped from every relayed event, top-level
+  # and nested under `response`, not only from the terminal.
+  test "GET /v1/responses websocket relays no provider event header objects" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.created",
+             %{
+               "type" => "response.created",
+               "headers" => %{
+                 "openai-model" => "gpt-event-header-sentinel",
+                 "x-codex-primary-used-percent" => "42"
+               },
+               "response" => %{
+                 "id" => "resp_v1_websocket_event_headers",
+                 "status" => "in_progress",
+                 "output" => [],
+                 "headers" => %{"openai-model" => "gpt-nested-header-sentinel"}
+               }
+             }},
+            {"response.output_text.delta",
+             %{
+               "type" => "response.output_text.delta",
+               "delta" => "hello",
+               "headers" => %{"x-reasoning-included" => "delta-header-sentinel"}
+             }},
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_v1_websocket_event_headers",
+                 "status" => "completed",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "event-headers-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic event header websocket request",
+          "stream" => true
+        })
+
+      {conn, websocket, frames} = receive_raw_websocket_until_terminal!(conn, websocket, ref, [])
+      decoded = Enum.map(frames, &CodexPooler.JSON.decode!/1)
+
+      assert Enum.map(decoded, & &1["type"]) == [
+               "response.created",
+               "response.output_text.delta",
+               "response.completed"
+             ]
+
+      for frame <- frames do
+        refute frame =~ ~s("headers")
+        refute frame =~ "-sentinel"
+      end
+
+      for event <- decoded do
+        refute Map.has_key?(event, "headers")
+
+        case event["response"] do
+          %{} = response -> refute Map.has_key?(response, "headers")
+          _absent -> :ok
+        end
+      end
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   @tag :ultrafast_service_tier
   test "GET /v1/responses websocket forwards and settles an advertised ultrafast terminal" do
     upstream =
@@ -3884,6 +3981,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
   defp strip_sse_prefix(nil, _prefix), do: nil
   defp strip_sse_prefix(line, prefix), do: String.replace_prefix(line, prefix, "")
+
+  defp receive_raw_websocket_until_terminal!(conn, websocket, ref, frames) do
+    {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+    frames = [frame | frames]
+
+    if CodexPooler.JSON.decode!(frame)["type"] == "response.completed" do
+      {conn, websocket, Enum.reverse(frames)}
+    else
+      receive_raw_websocket_until_terminal!(conn, websocket, ref, frames)
+    end
+  end
 
   defp receive_websocket_until_terminal!(conn, websocket, ref, frames) do
     {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)

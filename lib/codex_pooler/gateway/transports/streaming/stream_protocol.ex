@@ -136,6 +136,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec websocket_error_frame_headers(binary() | map()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
 
+  @spec upstream_request_id_header_names() :: [String.t()]
+  defdelegate upstream_request_id_header_names(), to: WebsocketErrorHeaders
+
+  @spec websocket_error_frame_header_allowed?(term()) :: boolean()
+  defdelegate websocket_error_frame_header_allowed?(name),
+    to: WebsocketErrorHeaders,
+    as: :allowed_header_name?
+
   @spec new_sse_block_state() :: sse_block_state()
   defdelegate new_sse_block_state(), to: SSEParser, as: :new_block_state
 

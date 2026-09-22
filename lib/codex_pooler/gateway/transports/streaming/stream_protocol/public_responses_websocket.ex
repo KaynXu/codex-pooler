@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     case CodexPooler.JSON.decode(data) do
       {:ok, %{} = source_decoded} ->
         {_data, decoded} = PublicResponses.normalize_json_message(data, source_decoded)
+        decoded = PublicResponses.drop_provider_event_headers(decoded)
         event_type = string_value(decoded, "type")
 
         case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do

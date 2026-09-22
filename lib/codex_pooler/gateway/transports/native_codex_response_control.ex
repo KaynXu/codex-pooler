@@ -48,6 +48,28 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
 
   def sanitize_websocket_event(_event), do: {:error, :invalid_event}
 
+  # Public surfaces carry no native controls, so every provider event header
+  # object is dropped whatever the event: the top-level `headers` and the
+  # nested `response.headers` (findings#239). `:unchanged` lets callers keep
+  # the original wire bytes when nothing was dropped.
+  @spec drop_event_headers(term()) :: sanitization_result()
+  def drop_event_headers(event) when is_map(event) do
+    dropped =
+      event
+      |> Map.delete("headers")
+      |> drop_response_headers()
+
+    if dropped == event, do: :unchanged, else: {:changed, dropped}
+  end
+
+  def drop_event_headers(_event), do: {:error, :invalid_event}
+
+  defp drop_response_headers(%{"response" => %{} = response} = event)
+       when is_map_key(response, "headers"),
+       do: Map.put(event, "response", Map.delete(response, "headers"))
+
+  defp drop_response_headers(event), do: event
+
   # A turn without a Pooler snapshot relays provider metadata with its other
   # headers intact, but a provider x-models-etag must never reach the client
   # (compatibility matrix backend_responses_etag.upstream_etag_relay).

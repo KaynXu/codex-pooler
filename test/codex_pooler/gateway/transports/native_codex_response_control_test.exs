@@ -367,4 +367,41 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
       end
     end
   end
+
+  # findings#239: public surfaces drop every provider event header object.
+  describe "drop_event_headers/1" do
+    test "drops the top-level and nested response header objects" do
+      event = %{
+        "type" => "response.created",
+        "headers" => %{"openai-model" => "gpt-event-header"},
+        "response" => %{"id" => "resp_1", "headers" => %{"openai-model" => "gpt-nested-header"}}
+      }
+
+      assert NativeCodexResponseControl.drop_event_headers(event) ==
+               {:changed, %{"type" => "response.created", "response" => %{"id" => "resp_1"}}}
+    end
+
+    test "drops a non-map header value and leaves other fields alone" do
+      assert NativeCodexResponseControl.drop_event_headers(%{
+               "type" => "response.output_text.delta",
+               "delta" => "hi",
+               "headers" => "not-a-map"
+             }) == {:changed, %{"type" => "response.output_text.delta", "delta" => "hi"}}
+    end
+
+    test "reports an event without header objects as unchanged" do
+      assert NativeCodexResponseControl.drop_event_headers(%{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_2", "status" => "completed"}
+             }) == :unchanged
+
+      assert NativeCodexResponseControl.drop_event_headers(%{"type" => "response.in_progress"}) ==
+               :unchanged
+    end
+
+    test "rejects a non-map event" do
+      assert NativeCodexResponseControl.drop_event_headers("frame") == {:error, :invalid_event}
+      assert NativeCodexResponseControl.drop_event_headers(nil) == {:error, :invalid_event}
+    end
+  end
 end

@@ -1762,6 +1762,95 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   # codex issue 46632: the provider answered `gpt-6-astra` with a response
+  # findings#239: the public SSE surface carries no native controls, so a
+  # provider `headers` object is dropped from every relayed event, top-level
+  # and nested under `response`, while a block without one keeps the bytes
+  # the upstream sent.
+  test "POST /v1/responses SSE relays no provider event header objects and keeps header-free blocks byte-identical",
+       %{conn: conn} do
+    control_delta = %{
+      "type" => "response.output_text.delta",
+      "delta" => " world",
+      "sequence_number" => 2
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "headers" => %{
+               "openai-model" => "gpt-event-header-sentinel",
+               "x-codex-primary-used-percent" => "42"
+             },
+             "response" => %{
+               "id" => "resp_v1_sse_event_headers",
+               "status" => "in_progress",
+               "output" => [],
+               "headers" => %{"openai-model" => "gpt-nested-header-sentinel"}
+             }
+           }},
+          {"response.output_text.delta",
+           %{
+             "type" => "response.output_text.delta",
+             "delta" => "hello",
+             "headers" => %{"x-reasoning-included" => "delta-header-sentinel"}
+           }},
+          {"response.output_text.delta", control_delta},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_sse_event_headers",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic event header SSE request",
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    refute conn.resp_body =~ ~s("headers")
+    refute conn.resp_body =~ "-sentinel"
+
+    events = public_sse_events(conn.resp_body)
+
+    assert Enum.map(events, & &1["event"]) == [
+             "response.created",
+             "response.output_text.delta",
+             "response.output_text.delta",
+             "response.completed"
+           ]
+
+    for %{"data" => data} <- events do
+      refute Map.has_key?(data, "headers")
+
+      case data["response"] do
+        %{} = response -> refute Map.has_key?(response, "headers")
+        _absent -> :ok
+      end
+    end
+
+    control_block =
+      "event: response.output_text.delta\ndata: " <>
+        CodexPooler.JSON.encode!(control_delta) <> "\n\n"
+
+    assert String.contains?(conn.resp_body, control_block)
+  end
+
   # object declaring `gpt-5.6-luna`. The attempt keeps the model it sent and
   # the one the first response object declared, on every upstream body shape.
   test "POST /v1/responses SSE records the model the upstream declared it served", %{conn: conn} do

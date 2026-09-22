@@ -233,6 +233,79 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     end
   end
 
+  # findings#239 control: a native turn with a Pooler snapshot keeps
+  # projecting provider event header objects through the native control
+  # allowlist, on the top-level and the nested `response` placement.
+  test "native websocket keeps projecting provider event headers with a snapshot" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "headers" => %{
+               "openai-model" => "synthetic-provider-model",
+               "x-hostile-control" => "hostile-top-sentinel"
+             },
+             "response" => %{
+               "id" => "resp_ws_native_event_headers",
+               "status" => "in_progress",
+               "headers" => %{
+                 "openai-model" => "synthetic-nested-model",
+                 "x-hostile-nested" => "hostile-nested-sentinel"
+               }
+             }
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_ws_native_event_headers",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               CodexPooler.JSON.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("synthetic native event header request"),
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-native-event-headers"},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    frames = received_provider_metadata_frames([])
+    decoded = Enum.map(frames, &CodexPooler.JSON.decode!/1)
+
+    assert [
+             %{
+               "type" => "response.created",
+               "headers" => %{"openai-model" => "synthetic-provider-model"} = top_level,
+               "response" => %{"headers" => %{"openai-model" => "synthetic-nested-model"} = nested}
+             },
+             %{"type" => "response.completed"} = completed
+           ] = decoded
+
+    assert map_size(top_level) == 1
+    assert map_size(nested) == 1
+    refute Map.has_key?(completed, "headers")
+
+    for frame <- frames do
+      refute frame =~ "-sentinel"
+    end
+  end
+
   @tag :prompt_cache_adaptation
   test "GET /backend-api/codex/responses adapts prompt cache controls in a response.create frame" do
     upstream =

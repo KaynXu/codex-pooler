@@ -376,6 +376,24 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
     end
 
+    test "states that public /v1 surfaces relay no provider event header objects" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+      fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)
+
+      assert feature.contract =~ "relay no provider event header objects"
+      assert feature.contract =~ "dropped from every relayed event, terminal or not"
+
+      assert fixture.provider_event_headers == %{
+               surfaces: [
+                 %{method: :post, path: "/v1/responses", transport: "http_sse"},
+                 %{method: :get, path: "/v1/responses", transport: "responses_websocket"}
+               ],
+               dropped_keys: ["headers", "response.headers"],
+               scope: "every_relayed_event",
+               native_websocket_with_snapshot: "projected_native_controls_only"
+             }
+    end
+
     @tag :hosted_shell_history
     test "makes hosted shell history replay boundaries machine-readable" do
       feature = CompatibilityMatrix.by_slug!(:responses_chat)

@@ -2348,21 +2348,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
+  # Without a Pooler snapshot the turn is a public /v1 origin (the snapshot is
+  # built only for native Responses origins), and the public contract carries
+  # no native controls: `headers` and `response.headers` are dropped on every
+  # relayed event, not only the terminal (findings#239). A relayed
+  # `codex.response.metadata` keeps only its ETag strip because its header
+  # object is the event's payload and public surfaces drop codex.* events
+  # before delivery. Bytes are re-encoded only when something was dropped.
   defp sanitize_downstream_text({text, %{} = decoded}, _native_snapshot) when is_binary(text) do
-    case Map.get(decoded, "type") do
-      type
-      when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
-        sanitized = Map.drop(decoded, ["headers"])
-        {CodexPooler.JSON.encode!(sanitized), sanitized}
+    sanitization =
+      case Map.get(decoded, "type") do
+        "codex.response.metadata" -> NativeCodexResponseControl.strip_untrusted_models_etag(decoded)
+        _other -> NativeCodexResponseControl.drop_event_headers(decoded)
+      end
 
-      "codex.response.metadata" ->
-        case NativeCodexResponseControl.strip_untrusted_models_etag(decoded) do
-          {:changed, sanitized} -> {CodexPooler.JSON.encode!(sanitized), sanitized}
-          _unchanged -> {text, decoded}
-        end
-
-      _other ->
-        {text, decoded}
+    case sanitization do
+      {:changed, sanitized} -> {CodexPooler.JSON.encode!(sanitized), sanitized}
+      _unchanged -> {text, decoded}
     end
   end
 

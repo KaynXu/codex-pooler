@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DirectCleanup
 
@@ -624,15 +625,27 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     }
   end
 
+  # The handshake header is promoted to the failure's `code`/`upstream_code`,
+  # so it takes the websocket diagnostic code bound (`DiagnosticTaxonomy`): a
+  # known code or an ASCII identifier of at most 80 bytes stays cleartext,
+  # anything else is fingerprinted rather than used as a code, and a blank
+  # value is absent so the `unauthorized` fallback applies (findings#238).
   defp auth_header_error_code(headers) when is_list(headers) do
     Enum.find_value(headers, fn {name, value} ->
       if String.downcase(to_string(name)) == "x-openai-authorization-error" do
-        to_string(value)
+        bounded_auth_error_code(to_string(value))
       end
     end)
   end
 
   defp auth_header_error_code(_headers), do: nil
+
+  defp bounded_auth_error_code(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> DiagnosticTaxonomy.identifier(trimmed)
+    end
+  end
 
   defp create_same_assignment_retry_context(context) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{

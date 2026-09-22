@@ -9,6 +9,36 @@ defmodule CodexPooler.Accounting.MetadataTest do
   import CodexPooler.AccountingTestSupport
 
   describe "sanitize_metadata/1" do
+    # findings#238: this is the sanitizer attempt settlement applies to
+    # response metadata. An allowlisted frame header name keeps its bounded
+    # value even when it carries a redaction fragment; a name outside the
+    # allowlist under the same map, and a key carrying the fragment anywhere
+    # else, are still redacted.
+    test "keeps allowlisted websocket frame header values while redacting token keys elsewhere" do
+      sanitized =
+        Accounting.sanitize_metadata(%{
+          "websocket_frame_headers" => %{
+            "x-ratelimit-limit-tokens" => "100000",
+            "x-ratelimit-reset-tokens" => "1717171717",
+            "x-oai-request-id" => "req_frame",
+            "x-custom-token-hint" => "must-not-persist-child"
+          },
+          "refresh_token_state" => "must-not-persist-top",
+          "nested" => %{"token" => "must-not-persist-nested"}
+        })
+
+      assert sanitized["websocket_frame_headers"] == %{
+               "x-ratelimit-limit-tokens" => "100000",
+               "x-ratelimit-reset-tokens" => "1717171717",
+               "x-oai-request-id" => "req_frame",
+               "x-custom-token-hint" => "[REDACTED]"
+             }
+
+      assert sanitized["refresh_token_state"] == "[REDACTED]"
+      assert sanitized["nested"]["token"] == "[REDACTED]"
+      refute inspect(sanitized) =~ "must-not-persist"
+    end
+
     test "preserves only complete versioned usage observation diagnostics" do
       for classification <- ~w(known missing null malformed candidate_limit parser_discontinuity),
           count <- [0, 255] do
