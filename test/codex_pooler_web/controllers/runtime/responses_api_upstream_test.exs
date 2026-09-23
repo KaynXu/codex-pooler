@@ -17,7 +17,9 @@ defmodule CodexPoolerWeb.Runtime.ResponsesAPIUpstreamTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{LedgerEntry, Request}
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefresh
@@ -96,9 +98,7 @@ defmodule CodexPoolerWeb.Runtime.ResponsesAPIUpstreamTest do
     key = active_api_key_fixture()
 
     server =
-      start_supervised!(
-        {Bandit, plug: {Provider, self()}, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-      )
+      start_supervised!({Bandit, plug: {Provider, self()}, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
@@ -149,6 +149,45 @@ defmodule CodexPoolerWeb.Runtime.ResponsesAPIUpstreamTest do
              )
 
     assert url == ctx.attrs.base_url <> "/responses"
+  end
+
+  test "API credential discovery uses the configured forward proxy", ctx do
+    CodexPooler.TestAppEnv.restore_on_exit(OutboundHTTP)
+    body = JSON.encode!(%{"data" => [%{"id" => "api-model"}]})
+    {:ok, proxy} = FakeUpstream.start_link({:raw_body, 200, body, [{"content-type", "application/json"}]})
+    on_exit(fn -> FakeUpstream.stop(proxy) end)
+    proxy_uri = URI.parse(FakeUpstream.url(proxy))
+
+    Application.put_env(:codex_pooler, OutboundHTTP,
+      proxy_config: %{
+        http: [proxy: {:http, proxy_uri.host, proxy_uri.port, []}],
+        https: [],
+        no_proxy: []
+      }
+    )
+
+    attrs = %{ctx.attrs | base_url: "http://localhost:9"}
+    assert {:ok, result} = Upstreams.import_responses_api(ctx.scope, ctx.key.pool, attrs)
+    assert UpstreamIdentity.responses_api?(result.identity)
+    assert FakeUpstream.count(proxy) > 0
+  end
+
+  test "API credential discovery honors the proxy bypass list", ctx do
+    CodexPooler.TestAppEnv.restore_on_exit(OutboundHTTP)
+    {:ok, proxy} = FakeUpstream.start_link({:raw_body, 502, "", []})
+    on_exit(fn -> FakeUpstream.stop(proxy) end)
+    proxy_uri = URI.parse(FakeUpstream.url(proxy))
+
+    Application.put_env(:codex_pooler, OutboundHTTP,
+      proxy_config: %{
+        http: [proxy: {:http, proxy_uri.host, proxy_uri.port, []}],
+        https: [],
+        no_proxy: ["127.0.0.1"]
+      }
+    )
+
+    assert {:ok, _result} = Upstreams.import_responses_api(ctx.scope, ctx.key.pool, ctx.attrs)
+    assert FakeUpstream.count(proxy) == 0
   end
 
   test "rejects invalid credentials or missing models before storing identities", ctx do

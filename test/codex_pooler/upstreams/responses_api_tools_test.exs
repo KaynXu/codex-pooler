@@ -145,4 +145,50 @@ defmodule CodexPooler.Upstreams.ResponsesAPIToolsTest do
     done = List.last(decoded)["response"]["output"] |> hd()
     assert done["name"] == "exec" and done["namespace"] == "functions" and done["input"] == input
   end
+
+  test "EOF completes a fragmented custom tool response without a final blank line" do
+    {_lowered, bindings} = Tools.prepare(payload())
+    name = Enum.find_value(bindings, fn {name, binding} -> if binding.custom?, do: name end)
+
+    event = %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => "resp_eof",
+        "status" => "completed",
+        "output" => [
+          %{
+            "type" => "function_call",
+            "name" => name,
+            "arguments" => JSON.encode!(%{"input" => "await run()"})
+          }
+        ]
+      }
+    }
+
+    for ending <- ["", "\n", "\r", "\r\n"] do
+      bytes = "event: response.completed\ndata: " <> JSON.encode!(event) <> ending
+
+      {parts, state} =
+        Enum.map_reduce(:binary.bin_to_list(bytes), nil, fn byte, state ->
+          Tools.stream(<<byte>>, bindings, state)
+        end)
+
+      assert IO.iodata_to_binary(parts) == ""
+      assert {output, state} = Tools.finish(bindings, state)
+      assert output =~ "response.completed"
+
+      assert [%{"type" => "custom_tool_call", "input" => "await run()"}] =
+               state.completed_response["output"]
+
+      assert {"", ^state} = Tools.finish(bindings, state)
+    end
+  end
+
+  test "EOF keeps malformed or incomplete JSON withheld and does not fabricate completion" do
+    for data <- [~s({"type":"response.completed","response":), "{not-json}"] do
+      assert {"", state} = Tools.stream("data: " <> data, %{})
+      assert {"", ^state} = Tools.finish(%{}, state)
+      assert state.completed_response == nil
+    end
+  end
 end

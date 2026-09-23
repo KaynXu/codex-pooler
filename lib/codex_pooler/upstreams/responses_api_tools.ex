@@ -82,9 +82,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPITools do
     stem <> "_" <> digest
   end
 
-  defp lower_choice(
-         %{"tool_choice" => %{"type" => "function", "name" => name} = choice} = payload
-       ) do
+  defp lower_choice(%{"tool_choice" => %{"type" => "function", "name" => name} = choice} = payload) do
     Map.put(
       payload,
       "tool_choice",
@@ -181,28 +179,52 @@ defmodule CodexPooler.Upstreams.ResponsesAPITools do
 
     {blocks, sse} = StreamProtocol.complete_sse_blocks(state.sse, data, bounded?: true)
 
+    translate_blocks(blocks, bindings, %{state | sse: sse})
+  end
+
+  def finish(bindings, %{sse: %{buffer: buffer}} = state) when buffer != "" do
+    {blocks, sse} = StreamProtocol.complete_sse_blocks(state.sse, "\n\n", bounded?: true)
+
+    if blocks != [] and String.trim(sse.buffer) == "" and
+         Enum.all?(blocks, &complete_event?/1) do
+      translate_blocks(blocks, bindings, %{state | sse: sse})
+    else
+      {"", state}
+    end
+  end
+
+  def finish(_bindings, state), do: {"", state}
+
+  defp complete_event?(block) do
+    case block_data(block) do
+      "[DONE]" -> true
+      data -> match?({:ok, %{"type" => type}} when is_binary(type), JSON.decode(data))
+    end
+  end
+
+  defp translate_blocks(blocks, bindings, state) do
     {parts, state} =
-      Enum.map_reduce(blocks, %{state | sse: sse}, &translate_block(&1, bindings, &2))
+      Enum.map_reduce(blocks, state, &translate_block(&1, bindings, &2))
 
     {IO.iodata_to_binary(parts), state}
   end
 
-  defp translate_block(block, bindings, state) do
-    data =
-      block
-      |> String.split("\n")
-      |> Enum.filter(&String.starts_with?(&1, "data:"))
-      |> Enum.map_join("\n", &(String.replace_prefix(&1, "data:", "") |> String.trim_leading()))
+  defp block_data(block) do
+    block
+    |> String.split("\n")
+    |> Enum.filter(&String.starts_with?(&1, "data:"))
+    |> Enum.map_join("\n", &(String.replace_prefix(&1, "data:", "") |> String.trim_leading()))
+  end
 
-    case JSON.decode(data) do
+  defp translate_block(block, bindings, state) do
+    case JSON.decode(block_data(block)) do
       {:ok, %{} = event} ->
         {events, state} = translate_event(event, bindings, state)
 
         Enum.map_reduce(events, state, fn event, acc ->
           event = Map.put(event, "sequence_number", acc.sequence)
 
-          {"event: " <> event["type"] <> "\ndata: " <> JSON.encode!(event) <> "\n\n",
-           %{acc | sequence: acc.sequence + 1}}
+          {"event: " <> event["type"] <> "\ndata: " <> JSON.encode!(event) <> "\n\n", %{acc | sequence: acc.sequence + 1}}
         end)
 
       _other ->

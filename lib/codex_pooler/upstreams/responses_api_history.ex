@@ -51,8 +51,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPIHistory do
              %{
                status: 400,
                code: "previous_response_not_found",
-               message:
-                 "API continuation history expired or is unavailable; resend the full conversation."
+               message: "API continuation history expired or is unavailable; resend the full conversation."
              }}
         end
 
@@ -123,8 +122,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPIHistory do
       {:ok, entry} ->
         entry = %{entry | touched: now, order: state.clock + 1}
 
-        {:reply, {:ok, entry.payload},
-         %{state | entries: Map.put(state.entries, key, entry), clock: state.clock + 1}}
+        {:reply, {:ok, entry.payload}, %{state | entries: Map.put(state.entries, key, entry), clock: state.clock + 1}}
 
       :error ->
         {:reply, :missing, state}

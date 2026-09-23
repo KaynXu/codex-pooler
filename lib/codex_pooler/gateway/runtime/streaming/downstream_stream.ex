@@ -67,7 +67,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           {iodata(), state(), NativeSSEBlock.delivery() | nil}
   def normalize_delivery(data, endpoint, %RequestOptions{} = opts, state) do
     {data, state} = normalize_api_tools(data, opts.payload_context, state)
+    normalize_downstream_delivery(data, endpoint, opts, state)
+  end
 
+  defp normalize_downstream_delivery(data, endpoint, opts, state) do
     cond do
       public_openai_chat_stream?(opts) ->
         {data, state} = normalize_public_openai_chat_stream_data(data, state)
@@ -95,10 +98,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @spec flush_eof_delivery(String.t() | nil, RequestOptions.t(), state()) ::
           {iodata(), state(), NativeSSEBlock.delivery() | nil}
   def flush_eof_delivery(endpoint, %RequestOptions{} = opts, state) do
-    if codex_responses_stream_endpoint?(endpoint) do
-      flush_codex_responses_sse_eof(opts, state)
-    else
-      {"", state, nil}
+    {data, state} = flush_api_tools(opts.payload_context, state)
+
+    cond do
+      data != "" -> normalize_downstream_delivery(data, endpoint, opts, state)
+      codex_responses_stream_endpoint?(endpoint) -> flush_codex_responses_sse_eof(opts, state)
+      true -> {"", state, nil}
     end
   end
 
@@ -115,11 +120,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         Map.get(state, :responses_api_tools_state)
       )
 
-    ResponsesAPIHistory.remember(history, tool_state.completed_response)
-    {data, Map.put(state, :responses_api_tools_state, %{tool_state | completed_response: nil})}
+    remember_api_tools(data, tool_state, history, state)
   end
 
   defp normalize_api_tools(data, _bindings, state), do: {data, state}
+
+  defp flush_api_tools(
+         %{responses_api_tools: bindings, responses_api_history: history},
+         %{responses_api_tools_state: tool_state} = state
+       ) do
+    {data, tool_state} = ResponsesAPITools.finish(bindings, tool_state)
+    remember_api_tools(data, tool_state, history, state)
+  end
+
+  defp flush_api_tools(_payload_context, state), do: {"", state}
+
+  defp remember_api_tools(data, tool_state, history, state) do
+    ResponsesAPIHistory.remember(history, tool_state.completed_response)
+    {data, Map.put(state, :responses_api_tools_state, %{tool_state | completed_response: nil})}
+  end
 
   @spec keepalive_allowed?(state()) :: boolean()
   def keepalive_allowed?(%{

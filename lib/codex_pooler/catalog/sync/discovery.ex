@@ -66,10 +66,8 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   end
 
   @spec fetch_models_for_assignment(map()) :: {:ok, [map()]} | {:error, catalog_error() | term()}
-  def fetch_models_for_assignment(
-        %{identity: %{credential_provenance: "responses_api_key"}} = source
-      ),
-      do: ResponsesAPI.fetch_models(source)
+  def fetch_models_for_assignment(%{identity: %{credential_provenance: "responses_api_key"}} = source),
+    do: ResponsesAPI.fetch_models(source)
 
   def fetch_models_for_assignment(%{assignment: assignment, identity: identity}) do
     with {:ok, token} <-

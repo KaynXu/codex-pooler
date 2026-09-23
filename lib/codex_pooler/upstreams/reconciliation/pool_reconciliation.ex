@@ -70,8 +70,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     assignment_id = assignment_id(assignment_or_id)
 
     case load_active_assignment_with_identity(pool_id, assignment_id) do
-      {%PoolUpstreamAssignment{} = assignment,
-       %UpstreamIdentity{credential_provenance: "responses_api_key"} = identity} ->
+      {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{credential_provenance: "responses_api_key"} = identity} ->
         ResponsesAPI.reconcile(assignment, identity)
 
       {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity} ->

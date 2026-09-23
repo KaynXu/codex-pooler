@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Catalog.Sync
   alias CodexPooler.Events
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -34,8 +35,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
       persist_account(scope, pool, config)
     else
       false ->
-        {:error,
-         error(:model_not_available, "configured model is not advertised by the provider")}
+        {:error, error(:model_not_available, "configured model is not advertised by the provider")}
 
       {:error, _reason} = error ->
         error
@@ -220,8 +220,11 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
   end
 
   defp fetch_catalog(base_url, token) do
-    case Req.get(String.trim_trailing(base_url, "/") <> "/models",
+    url = String.trim_trailing(base_url, "/") <> "/models"
+
+    case OutboundHTTP.get(url,
            headers: [{"authorization", "Bearer " <> token}, {"accept", "application/json"}],
+           finch: OutboundHTTP.pool_options_for_url(url),
            retry: false,
            redirect: false,
            receive_timeout: 15_000
@@ -229,8 +232,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
       {:ok, %{status: 200, body: %{"data" => models}}} when is_list(models) ->
         if Enum.all?(models, &(is_map(&1) and is_binary(&1["id"]))),
           do: {:ok, models},
-          else:
-            {:error, error(:invalid_model_catalog, "provider returned an invalid model catalog")}
+          else: {:error, error(:invalid_model_catalog, "provider returned an invalid model catalog")}
 
       {:ok, %{status: status}} ->
         {:error, error(:api_provider_rejected, "provider model catalog returned HTTP #{status}")}
@@ -249,10 +251,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
 
       if current.status != "active" or
            current.metadata["credential_epoch"] != identity.metadata["credential_epoch"],
-         do:
-           Repo.rollback(
-             error(:credential_superseded, "API credential changed during verification")
-           )
+         do: Repo.rollback(error(:credential_superseded, "API credential changed during verification"))
 
       case result do
         {:ok, _models} ->

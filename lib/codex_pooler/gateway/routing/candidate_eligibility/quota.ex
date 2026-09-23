@@ -255,8 +255,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
         result
 
       {:ok, candidates, decision} ->
-        {:ok, candidates ++ api_candidates,
-         Map.put(decision, "api_key_upstream_count", length(api_candidates))}
+        {:ok, candidates ++ api_candidates, Map.put(decision, "api_key_upstream_count", length(api_candidates))}
 
       {:error, _exclusions, _refreshable} when api_candidates != [] ->
         {:ok, api_candidates, %{"api_key_upstream_count" => length(api_candidates)}}
@@ -267,10 +266,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   end
 
   defp classify_codex_quota_candidates(%Model{} = model, candidates, route_state) do
-    {precise_candidates, credit_backed_probe_candidates, weekly_probe_candidates,
-     reset_probe_candidates, windowless_candidates, exclusions, refreshable_candidates} =
-      Enum.reduce(candidates, {[], [], [], [], [], [], []}, fn {assignment, identity} = candidate,
-                                                               acc ->
+    {precise_candidates, credit_backed_probe_candidates, weekly_probe_candidates, reset_probe_candidates, windowless_candidates, exclusions, refreshable_candidates} =
+      Enum.reduce(candidates, {[], [], [], [], [], [], []}, fn {assignment, identity} = candidate, acc ->
         identity
         |> routing_quota_eligibility(model, route_state)
         |> add_classified_quota_candidate(candidate, assignment, acc)
