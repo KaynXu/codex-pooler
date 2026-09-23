@@ -19,6 +19,7 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Lifecycle.AccountAudit
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
 
@@ -263,7 +264,24 @@ defmodule CodexPooler.Upstreams.ResponsesAPI do
             )
             |> Repo.update!()
 
-          %{identity: updated, assignment: assignment, status: :verified}
+          %{
+            identity: updated,
+            assignment: assignment,
+            status: :succeeded,
+            health: %{
+              status: :succeeded,
+              code: "api_credentials_verified",
+              message: "API credential verified against the provider model catalog",
+              details: %{}
+            },
+            quota: %{
+              status: :skipped,
+              code: "quota_not_applicable",
+              message: "API-key upstreams do not expose Codex subscription quota",
+              details: %{},
+              expected_credential_epoch: CredentialFencing.credential_epoch(updated)
+            }
+          }
 
         {:error, reason} ->
           Repo.rollback(reason)

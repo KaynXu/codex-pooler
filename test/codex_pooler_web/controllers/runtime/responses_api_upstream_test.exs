@@ -19,11 +19,15 @@ defmodule CodexPoolerWeb.Runtime.ResponsesAPIUpstreamTest do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.EndpointMetadata
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
+  alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
 
@@ -207,6 +211,88 @@ defmodule CodexPoolerWeb.Runtime.ResponsesAPIUpstreamTest do
 
     assert Repo.aggregate(UpstreamIdentity, :count) == before
     assert {:error, _} = Upstreams.import_responses_api(nil, ctx.key.pool, ctx.attrs)
+  end
+
+  test "API account reconciliation and its worker succeed without Codex quota probes", ctx do
+    assert {:ok, imported} = Upstreams.import_responses_api(ctx.scope, ctx.key.pool, ctx.attrs)
+
+    assert {:ok, result} =
+             AccountReconciliation.run(ctx.key.pool.id, imported.assignment.id, "scheduled")
+
+    assert result.status == :succeeded
+    assert result.health.status == :succeeded
+    assert result.quota.status == :skipped
+    assert result.quota.code == "quota_not_applicable"
+
+    assert result.quota.expected_credential_epoch ==
+             CredentialFencing.credential_epoch(imported.identity)
+
+    assert Windows.list_evidence(imported.identity) == []
+
+    summary = Repo.reload!(imported.assignment).metadata["last_reconciliation"]
+    assert summary["status"] == "succeeded"
+
+    assert Enum.any?(summary["steps"], fn step ->
+             step["status"] == "skipped" and step["code"] == "quota_not_applicable"
+           end)
+
+    assert :ok =
+             AccountReconciliationWorker.perform(%Oban.Job{
+               args: %{
+                 "pool_id" => ctx.key.pool.id,
+                 "pool_upstream_assignment_id" => imported.assignment.id,
+                 "trigger_kind" => "scheduled"
+               }
+             })
+
+    assert Windows.list_evidence(imported.identity) == []
+
+    assert Repo.reload!(imported.assignment).metadata["last_reconciliation"]["status"] ==
+             "succeeded"
+
+    receive do
+      {:provider_request, _method, path, _headers} when path != "/models" ->
+        flunk("API reconciliation unexpectedly requested #{path}")
+    after
+      100 -> :ok
+    end
+  end
+
+  test "API reconciliation fences a credential replacement before its terminal summary", ctx do
+    assert {:ok, imported} = Upstreams.import_responses_api(ctx.scope, ctx.key.pool, ctx.attrs)
+
+    replace_credential = fn ->
+      current = Repo.reload!(imported.identity)
+
+      current
+      |> Ecto.Changeset.change(metadata: CredentialFencing.advance_credential_epoch(current))
+      |> Repo.update!()
+
+      DateTime.utc_now()
+    end
+
+    assert {:ok, result} =
+             AccountReconciliation.run(ctx.key.pool.id, imported.assignment.id, "scheduled", operation_clock: replace_credential)
+
+    assert result.quota.status == :skipped
+    assert result.quota.code == "quota_refresh_superseded"
+    assert Repo.reload!(imported.assignment).metadata["last_reconciliation"] == nil
+    assert Windows.list_evidence(imported.identity) == []
+  end
+
+  test "account reconciliation skips a deleted API identity without contacting the provider", ctx do
+    assert {:ok, imported} = Upstreams.import_responses_api(ctx.scope, ctx.key.pool, ctx.attrs)
+    assert_receive {:provider_request, "GET", "/models", _headers}
+    assert_receive {:provider_request, "GET", "/models", _headers}
+
+    imported.identity |> Ecto.Changeset.change(status: "deleted") |> Repo.update!()
+
+    assert {:ok, %{status: :skipped}} =
+             AccountReconciliation.run(ctx.key.pool.id, imported.assignment.id, "scheduled")
+
+    refute_receive {:provider_request, _method, _path, _headers}
+    assert Repo.reload!(imported.identity).status == "deleted"
+    assert Windows.list_evidence(imported.identity) == []
   end
 
   test "an existing client key can enforce the API model and receive an accounted SSE response",
