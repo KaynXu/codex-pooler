@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
   alias CodexPooler.Gateway.Runtime.Finalization.SettlementAttrs
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
+  alias CodexPooler.Upstreams.ResponsesAPICompaction
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   require Logger
@@ -42,10 +43,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
     @type upstream_url :: (UpstreamIdentity.t(), PoolUpstreamAssignment.t(), String.t() ->
                              {:ok, String.t()} | {:error, term()})
     @type owner_witness :: OwnerWitness.t() | nil
-    @type finalize_failure :: (Accounting.Request.t(),
-                               Accounting.Attempt.t(),
-                               map(),
-                               owner_witness() ->
+    @type finalize_failure :: (Accounting.Request.t(), Accounting.Attempt.t(), map(), owner_witness() ->
                                  term())
     @type neutral_completion :: (SelectedCandidateContext.t() -> term())
     @type accounting_failure :: (atom(), Accounting.Request.t(), Accounting.Attempt.t(), term() ->
@@ -151,7 +149,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
              context.payload,
              context.model,
              context.endpoint,
-             context.request_options
+             context.request_options,
+             assignment_id: context.assignment.id
            ),
          {:ok, context} <- persist_compaction_projection(context, request_options, operations),
          {:ok, token} <-
@@ -161,7 +160,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
              context.identity,
              context.assignment,
              context.request_options.transport.upstream_endpoint
-           ) do
+           ),
+         {:ok, upstream_payload, context} <-
+           ResponsesAPICompaction.prepare(upstream_payload, context) do
       request_options = context.request_options
 
       {upstream_payload, request_options} =
@@ -202,8 +203,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
 
   defp log_compact_terminal_decision(
          %SelectedCandidateContext{
-           request_options:
-             %{payload_context: %{compaction_trigger_bridge?: true}} = request_options
+           request_options: %{payload_context: %{compaction_trigger_bridge?: true}} = request_options
          } = context,
          source_stage,
          {:error, error},
@@ -433,8 +433,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
         {:error, neutral_error}
 
       {{:error, settlement_error}, {:error, neutral_error}} ->
-        {:accounting_failure, :merge_compaction_projection_cleanup,
-         {settlement_error, neutral_error}}
+        {:accounting_failure, :merge_compaction_projection_cleanup, {settlement_error, neutral_error}}
     end
   end
 

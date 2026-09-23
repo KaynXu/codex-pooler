@@ -35,8 +35,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
           route_state: RouteState.t(),
           route_plan: BridgeRing.route_plan(),
           route_class: String.t(),
-          client_retry_dispatch_authority:
-            CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil
+          client_retry_dispatch_authority: CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil
         }
 
   @type input :: %{
@@ -55,9 +54,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
     request_options =
       input
       |> Map.fetch!(:request_options)
-      |> RequestOptions.put_runtime_context(
-        compaction_retry_submit_hold: Map.get(input.reserved, :compaction_retry_submit_hold)
-      )
+      |> RequestOptions.put_runtime_context(compaction_retry_submit_hold: Map.get(input.reserved, :compaction_retry_submit_hold))
 
     route_plan =
       BridgeRing.plan_route(%{

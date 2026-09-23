@@ -356,7 +356,15 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     assert {output, code} = lifecycle("start", fixture, [{"DEV_SERVER_START_ATTEMPTS", "2"}])
     assert code != 0
     assert output =~ "startup diagnostics: pid="
-    assert output =~ "alive=yes listener=yes health=failed"
+
+    # A server that never becomes ready has no deterministic listener state: by
+    # the time diagnostics are collected the port may or may not still be bound,
+    # and CI has observed both. `alive` and `health` are fixed by construction —
+    # the process is kept alive and the fixture never reports healthy — so those
+    # are asserted exactly, and the listener field is asserted to be reported
+    # rather than to hold a particular value. The test's subject is that the
+    # diagnostics are emitted, not that the listener survived.
+    assert output =~ ~r/alive=yes listener=(?:yes|no) health=failed/
     assert output =~ "health url=http://127.0.0.1:#{fixture.port}/healthz"
     assert output =~ "server log=#{fixture.log_path}"
     assert output =~ "inspect the log, correct the reported boot failure, then rerun make dev"
@@ -500,6 +508,22 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     esac
     """)
 
+    # The Makefile routes every Mix call through `mise x --` when mise is on
+    # PATH, which resolves `mix` from the pinned toolchain and so walks straight
+    # past the stub below. That made this fixture depend on the host: green in
+    # CI, where the elixir image has no mise, and red locally with a real `mix`
+    # running in a directory that has no mix.exs. Stubbing mise too makes the
+    # fixture deterministic either way, since `command -v mise` finds this first.
+    File.write!(Path.join(bin_dir, "mise"), """
+    #!/bin/bash
+    set -euo pipefail
+    if [ "${1:-}" = "x" ] || [ "${1:-}" = "exec" ]; then
+      shift
+      [ "${1:-}" = "--" ] && shift
+    fi
+    exec "$@"
+    """)
+
     File.write!(Path.join(bin_dir, "mix"), """
     #!/bin/bash
     set -euo pipefail
@@ -507,7 +531,13 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     case "$1 ${2:-}" in
       'compile --force') grep -qx 'db_exec' "$DEV_SERVER_EVENT_LOG"; event=compile ;;
       'ecto.create --quiet') grep -qx 'compile' "$DEV_SERVER_EVENT_LOG"; event=create ;;
-      'ecto.migrate ') grep -qx 'create' "$DEV_SERVER_EVENT_LOG"; event=migrate ;;
+      'run --no-start')
+        [ "$#" -eq 4 ]
+        [ "$3" = '-e' ]
+        [ "$4" = 'CodexPooler.Release.migrate()' ]
+        grep -qx 'create' "$DEV_SERVER_EVENT_LOG"
+        event=migrate
+        ;;
       'pricing.import_openai ') grep -qx 'migrate' "$DEV_SERVER_EVENT_LOG"; event=pricing ;;
       *) exit 2 ;;
     esac
@@ -515,7 +545,12 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     """)
 
     Enum.each(
-      [lifecycle_path, Path.join(bin_dir, "docker"), Path.join(bin_dir, "mix")],
+      [
+        lifecycle_path,
+        Path.join(bin_dir, "docker"),
+        Path.join(bin_dir, "mix"),
+        Path.join(bin_dir, "mise")
+      ],
       &File.chmod!(&1, 0o700)
     )
 

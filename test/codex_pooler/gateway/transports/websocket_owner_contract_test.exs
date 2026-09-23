@@ -17,12 +17,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       control_ref = make_ref()
 
       ready =
-        {:websocket_owner_handoff_ready, "corr-control", 3, owner_turn_id, downstream_pid,
-         control_ref}
+        {:websocket_owner_handoff_ready, "corr-control", 3, owner_turn_id, downstream_pid, control_ref}
 
       failed =
-        {:websocket_owner_handoff_failed, "corr-control", 3, owner_turn_id, downstream_pid,
-         control_ref, :owner_drained}
+        {:websocket_owner_handoff_failed, "corr-control", 3, owner_turn_id, downstream_pid, control_ref, :owner_drained}
 
       assert WebsocketOwnerContract.accept_handoff_message(
                ready,
@@ -213,20 +211,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
 
   describe "downstream owner messages" do
     test "accepts only the permitted downstream tuple payload shapes" do
-      assert WebsocketOwnerContract.downstream_message?(
-               {:websocket_owner_frame, "corr-1", 1, {:data, "encoded text"}}
-             )
+      assert WebsocketOwnerContract.downstream_message?({:websocket_owner_frame, "corr-1", 1, {:data, "encoded text"}})
 
       assert {:ok, safe_payload} =
                WebsocketOwnerContract.safe_error_payload(:owner_busy, @sentinel)
 
-      assert WebsocketOwnerContract.downstream_message?(
-               {:websocket_owner_frame, "corr-1", 1, {:error, :owner_busy, safe_payload}}
-             )
+      assert WebsocketOwnerContract.downstream_message?({:websocket_owner_frame, "corr-1", 1, {:error, :owner_busy, safe_payload}})
 
-      assert WebsocketOwnerContract.downstream_message?(
-               {:websocket_owner_frame, "corr-1", 1, :complete}
-             )
+      assert WebsocketOwnerContract.downstream_message?({:websocket_owner_frame, "corr-1", 1, :complete})
     end
 
     test "rejects invalid downstream tuple shapes and mismatched error payloads" do
@@ -238,8 +230,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
         {:websocket_owner_frame, "corr-1", 0, :complete},
         {:websocket_owner_frame, :not_binary, 1, :complete},
         {:websocket_owner_frame, "corr-1", 1, {:error, :unknown_owner_error, %{}}},
-        {:websocket_owner_frame, "corr-1", 1,
-         {:error, :owner_busy, put_in(safe_payload.metadata.reason, "wrong_reason")}},
+        {:websocket_owner_frame, "corr-1", 1, {:error, :owner_busy, put_in(safe_payload.metadata.reason, "wrong_reason")}},
         {:websocket_owner_frame, "corr-1", 1, {:complete, @sentinel}},
         {:unexpected_owner_frame, "corr-1", 1, :complete}
       ]
@@ -271,8 +262,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
         {:websocket_owner_frame, "corr-public", 7, owner_turn_id, {:data, "encoded public text"}}
 
       stale_frame =
-        {:websocket_owner_frame, "corr-public", 7, old_owner_turn_id,
-         {:data, "encoded stale text"}}
+        {:websocket_owner_frame, "corr-public", 7, old_owner_turn_id, {:data, "encoded stale text"}}
 
       legacy_frame =
         {:websocket_owner_frame, "corr-public", 7, {:data, "encoded legacy text"}}
@@ -326,9 +316,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       assert WebsocketOwnerContract.accept_downstream_message(wrong_payload_type, 3, "corr-1") ==
                {:error, :invalid_downstream_message}
 
-      refute inspect(
-               WebsocketOwnerContract.accept_downstream_message(wrong_payload_type, 3, "corr-1")
-             ) =~ @sentinel
+      refute inspect(WebsocketOwnerContract.accept_downstream_message(wrong_payload_type, 3, "corr-1")) =~ @sentinel
     end
   end
 
@@ -339,8 +327,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       owner_turn_id = self()
 
       probe =
-        {:websocket_owner_output_commit_probe, "corr-probe", 3, owner_turn_id, active_turn_ref,
-         self(), probe_ref}
+        {:websocket_owner_output_commit_probe, "corr-probe", 3, owner_turn_id, active_turn_ref, self(), probe_ref}
 
       assert WebsocketOwnerContract.output_commit_probe?(probe)
 
@@ -365,8 +352,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       owner_turn_id = self()
 
       ack =
-        {:websocket_owner_output_commit_ack, "corr-ack", 5, owner_turn_id, active_turn_ref,
-         probe_ref, true}
+        {:websocket_owner_output_commit_ack, "corr-ack", 5, owner_turn_id, active_turn_ref, probe_ref, true}
 
       assert WebsocketOwnerContract.output_commit_ack?(ack)
 
@@ -390,15 +376,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
     end
 
     test "rejects malformed probe and acknowledgement values" do
-      refute WebsocketOwnerContract.output_commit_probe?(
-               {:websocket_owner_output_commit_probe, "corr", 1, self(), :not_ref, self(),
-                make_ref()}
-             )
+      refute WebsocketOwnerContract.output_commit_probe?({:websocket_owner_output_commit_probe, "corr", 1, self(), :not_ref, self(), make_ref()})
 
-      refute WebsocketOwnerContract.output_commit_ack?(
-               {:websocket_owner_output_commit_ack, "corr", 1, self(), make_ref(), make_ref(),
-                :not_boolean}
-             )
+      refute WebsocketOwnerContract.output_commit_ack?({:websocket_owner_output_commit_ack, "corr", 1, self(), make_ref(), make_ref(), :not_boolean})
     end
   end
 end

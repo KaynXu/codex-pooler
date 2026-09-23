@@ -107,29 +107,38 @@ defmodule CodexPooler.Dev.SeedsTest do
   end
 
   test "seeds refuse when development seed gate is disabled" do
-    previous = Application.get_env(:codex_pooler, :dev_seeds_enabled)
+    # `on_exit` rather than `after`, and `fetch_env/2` rather than `get_env/2`. A scoped restore
+    # runs only while the test process is alive, so a test killed by the ExUnit timeout would
+    # leave the gate disabled and every later `Seeds.*` call in the partition would raise. And
+    # restoring an absent key means deleting it: the gate is read through `get_env/3` with a
+    # `false` default that applies only to an absent key, so writing back the `nil` that
+    # `get_env/2` returns for one would pin it off instead of restoring it.
+    previous = Application.fetch_env(:codex_pooler, :dev_seeds_enabled)
+    on_exit(fn -> restore_dev_seeds_gate(previous) end)
     Application.put_env(:codex_pooler, :dev_seeds_enabled, false)
 
-    try do
-      assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
-        Seeds.compact()
-      end
+    assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
+      Seeds.compact()
+    end
 
-      assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
-        Seeds.full()
-      end
+    assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
+      Seeds.full()
+    end
 
-      assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
-        Seeds.docs_screenshots()
-      end
+    assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
+      Seeds.docs_screenshots()
+    end
 
-      assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
-        Seeds.perf()
-      end
-    after
-      Application.put_env(:codex_pooler, :dev_seeds_enabled, previous)
+    assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
+      Seeds.perf()
     end
   end
+
+  defp restore_dev_seeds_gate({:ok, value}),
+    do: Application.put_env(:codex_pooler, :dev_seeds_enabled, value)
+
+  defp restore_dev_seeds_gate(:error),
+    do: Application.delete_env(:codex_pooler, :dev_seeds_enabled)
 
   test "perf seed recreates isolated local gateway performance rows and private bootstrap files" do
     first = Seeds.perf()
@@ -341,9 +350,7 @@ defmodule CodexPooler.Dev.SeedsTest do
              quota_key == "account" and is_nil(display_label) and is_nil(limit_name)
            end)
 
-    refute Repo.exists?(
-             from window in AccountQuotaWindow, where: window.quota_key == "account_primary"
-           )
+    refute Repo.exists?(from window in AccountQuotaWindow, where: window.quota_key == "account_primary")
 
     ready_identity = Repo.get_by!(UpstreamIdentity, account_label: "Dev Ready Quota")
     exhausted_identity = Repo.get_by!(UpstreamIdentity, account_label: "Dev Exhausted Quota")
@@ -384,8 +391,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     windowless_states =
       for {label, _expected} <- [
-            {"Sample Provider Available",
-             {"provider_available_no_windows", "Provider available", :warning, true}},
+            {"Sample Provider Available", {"provider_available_no_windows", "Provider available", :warning, true}},
             {"Sample Provider Blocked", {"blocked", "Quota blocked", :warning, false}},
             {"Sample Provider Unknown", {"missing_evidence", "Quota missing", :warning, false}}
           ],
@@ -405,8 +411,7 @@ defmodule CodexPooler.Dev.SeedsTest do
       end
 
     assert windowless_states == %{
-             "Sample Provider Available" =>
-               {"provider_available_no_windows", "Provider available", :warning, true},
+             "Sample Provider Available" => {"provider_available_no_windows", "Provider available", :warning, true},
              "Sample Provider Blocked" => {"blocked", "Quota blocked", :warning, false},
              "Sample Provider Unknown" => {"missing_evidence", "Quota missing", :warning, false}
            }
@@ -557,8 +562,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert {length(result.upstream_identities), length(result.assignments)} == {8, 9}
 
-    assert {Repo.aggregate(UpstreamIdentity, :count),
-            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+    assert {Repo.aggregate(UpstreamIdentity, :count), Repo.aggregate(PoolUpstreamAssignment, :count)} ==
              {8, 9}
 
     refute Enum.any?(result.upstream_identities, &String.starts_with?(&1.account_label, "Dev "))
@@ -626,8 +630,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert {length(full.upstream_identities), length(full.assignments)} == {15, 16}
 
-    assert {Repo.aggregate(UpstreamIdentity, :count),
-            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+    assert {Repo.aggregate(UpstreamIdentity, :count), Repo.aggregate(PoolUpstreamAssignment, :count)} ==
              {15, 16}
 
     Seeds.docs_screenshots()
@@ -654,8 +657,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert {length(docs.upstream_identities), length(docs.assignments)} == {8, 9}
 
-    assert {Repo.aggregate(UpstreamIdentity, :count),
-            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+    assert {Repo.aggregate(UpstreamIdentity, :count), Repo.aggregate(PoolUpstreamAssignment, :count)} ==
              {8, 9}
   end
 

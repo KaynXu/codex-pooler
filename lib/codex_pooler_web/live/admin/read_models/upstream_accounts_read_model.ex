@@ -104,8 +104,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:auth_fresh_label) => String.t(),
           required(:auth_verified_label) => String.t(),
           required(:access_token_label) => String.t(),
-          required(:secret_status) =>
-            :present | :missing | :expired | :refresh_due | :reauth_required,
+          required(:secret_status) => :present | :missing | :expired | :refresh_due | :reauth_required,
           required(:reauth_required?) => boolean(),
           required(:reauth_reason_code) => String.t() | nil,
           required(:reauth_reason_message) => String.t() | nil,
@@ -174,8 +173,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     identities =
       scope
-      |> Upstreams.list_visible_upstream_identities()
-      |> Enum.filter(&Map.has_key?(assignments, &1.id))
+      |> Upstreams.list_visible_upstream_identities(
+        pool_ids: Enum.map(pools, & &1.id),
+        include_unassigned: Map.get(filters, "pool_id") in [nil, ""]
+      )
       |> narrow_to_identity(identity_id)
 
     assignments = narrow_assignments_to_identities(assignments, identities)
@@ -386,7 +387,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     snapshot_at = quota_snapshot.as_of
     raw_quota_windows = RoutingQuotaSnapshot.time_visible_raw_windows(quota_snapshot)
     quota_windows = RoutingQuotaSnapshot.effective_windows(quota_snapshot)
-    quota_readiness = QuotaProjection.readiness(quota_snapshot, snapshot_at)
+
+    quota_readiness =
+      if UpstreamIdentity.responses_api?(identity),
+        do: QuotaProjection.api_billing_readiness(),
+        else: QuotaProjection.readiness(quota_snapshot, snapshot_at)
+
     token_burn = Map.fetch!(token_burns, identity.id)
 
     identity_assignments =
@@ -450,8 +456,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           identity.auth_verified_at,
           datetime_preferences
         ),
-      access_token_label:
-        access_token_label(identity_observability.credential_expiry, datetime_preferences),
+      access_token_label: access_token_label(identity_observability.credential_expiry, datetime_preferences),
       secret_status: Secrets.secret_status(identity),
       reauth_required?: reauth_required?(identity),
       reauth_reason_code: reauth_reason_code(identity),

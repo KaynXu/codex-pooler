@@ -162,19 +162,15 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
       source_assignment_count: length(source_assignments.source_assignment_ids),
       first_seen_at: if(existing, do: existing.first_seen_at, else: timestamp),
       last_seen_at: timestamp,
-      stale_at:
-        if(match?(%Model{status: @suppressed}, existing), do: existing.stale_at, else: nil),
-      retired_at:
-        if(match?(%Model{status: @suppressed}, existing), do: existing.retired_at, else: nil),
-      suppressed_at:
-        if(match?(%Model{status: @suppressed}, existing), do: existing.suppressed_at, else: nil),
+      stale_at: if(match?(%Model{status: @suppressed}, existing), do: existing.stale_at, else: nil),
+      retired_at: if(match?(%Model{status: @suppressed}, existing), do: existing.retired_at, else: nil),
+      suppressed_at: if(match?(%Model{status: @suppressed}, existing), do: existing.suppressed_at, else: nil),
       last_sync_run_id: run.id,
       metadata: %{
         "owned_by" => aggregate.owned_by,
         "source_assignment_ids" => source_assignments.source_assignment_ids,
         "source_assignment_models" => source_assignments.source_assignment_models,
-        PreservedSources.missing_sync_metadata_key() =>
-          source_assignments.missing_source_assignment_syncs,
+        PreservedSources.missing_sync_metadata_key() => source_assignments.missing_source_assignment_syncs,
         "capabilities" => aggregate.capabilities,
         "upstream_model" => aggregate.upstream_model
       }

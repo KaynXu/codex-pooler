@@ -98,8 +98,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp) do
     with {:ok, evidence} <- Evidence.new(attrs, observed_at),
          identity_id when is_binary(identity_id) <- evidence_identity_id(identity_or_id, attrs) do
-      lock_evidence_identity_reference(identity_id)
       advisory_lock_evidence_identity(identity_id)
+      # Acquire the identity advisory mutex before any row lock. Import and
+      # lifecycle paths use the same order; taking FOR KEY SHARE first can
+      # deadlock with a writer that already owns the advisory lock and then
+      # waits for FOR UPDATE.
+      lock_evidence_identity_reference(identity_id)
 
       attrs =
         evidence
@@ -1933,9 +1937,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
-  defp account_weekly_zero_observation?(
-         %Evidence{used_percent: %Decimal{} = used_percent} = evidence
-       ) do
+  defp account_weekly_zero_observation?(%Evidence{used_percent: %Decimal{} = used_percent} = evidence) do
     account_weekly_evidence?(evidence) and zero_percent?(used_percent)
   end
 
@@ -2302,9 +2304,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     do:
       Map.get(metadata, "reset_at_source") != "explicit" and
         Map.get(metadata, :reset_at_source) != "explicit" and
-        not is_nil(
-          Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds)
-        )
+        not is_nil(Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds))
 
   defp relative_reset_metadata?(_metadata), do: false
 
@@ -2436,6 +2436,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           runtime_weekly_restart_corroborated?(evidence, existing, timestamp) ->
         lower_snapshot_decision(evidence, existing, timestamp)
 
+      bounded_safe_primary_zero_refresh?(evidence, existing, timestamp) ->
+        :same_cycle
+
       account_quota_identity?(evidence) ->
         :existing
 
@@ -2446,6 +2449,67 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         compare_confirmed_snapshot(evidence, existing, timestamp)
     end
   end
+
+  # Provider usage can correct an idle primary window's reset by a few minutes
+  # while continuing to report zero percent and no absolute capacity. Keeping
+  # the older values is correct, but freezing their observation time is not:
+  # after the freshness TTL routing rejects an account the provider just
+  # reaffirmed. Refresh only the same permitted zero window and keep its
+  # canonical reset pinned; a real later cycle still takes the normal forward
+  # reset path once the current reset expires.
+  defp bounded_safe_primary_zero_refresh?(
+         %Evidence{
+           source: "codex_usage_api",
+           quota_scope: "account",
+           window_kind: "primary",
+           used_percent: %Decimal{} = incoming_percent,
+           reset_at: %DateTime{} = incoming_reset,
+           observed_at: %DateTime{} = incoming_observed,
+           metadata: metadata
+         } = evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           quota_scope: "account",
+           window_kind: "primary",
+           used_percent: %Decimal{} = existing_percent,
+           reset_at: %DateTime{} = existing_reset,
+           observed_at: %DateTime{} = existing_observed
+         } = existing,
+         timestamp
+       ) do
+    reset_shift = DateTime.diff(incoming_reset, existing_reset, :second)
+
+    same_evidence_identity?(evidence, existing) and zero_percent?(incoming_percent) and
+      zero_percent?(existing_percent) and provider_status_safe?(metadata) and
+      newer_observation?(incoming_observed, existing_observed) and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      not Evidence.expired?(existing, timestamp) and
+      safe_primary_zero_reset_shift?(evidence, reset_shift)
+  end
+
+  defp bounded_safe_primary_zero_refresh?(_evidence, _existing, _timestamp), do: false
+
+  defp safe_primary_zero_reset_shift?(evidence, reset_shift) do
+    reset_shift > @account_snapshot_reset_tolerance_seconds and
+      (reset_shift <= @usage_reset_forward_tolerance_seconds or
+         full_window_idle_primary?(evidence))
+  end
+
+  # An unused 5h window may roll with every provider observation. Its reset
+  # stays one full window ahead of that observation, even after cumulative
+  # drift exceeds the small correction bound. Keep the canonical reset pinned
+  # while refreshing only the explicitly permitted zero-over-zero evidence.
+  defp full_window_idle_primary?(%Evidence{
+         window_minutes: 300,
+         reset_at: %DateTime{} = reset_at,
+         observed_at: %DateTime{} = observed_at,
+         metadata: %{"reset_after_seconds" => 18_000}
+       }) do
+    abs(DateTime.diff(reset_at, observed_at, :second) - 18_000) <=
+      @account_snapshot_reset_tolerance_seconds
+  end
+
+  defp full_window_idle_primary?(_evidence), do: false
 
   defp explicit_zero_capacity_upgrade?(
          %Evidence{

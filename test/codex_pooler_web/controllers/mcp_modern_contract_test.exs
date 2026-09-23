@@ -399,12 +399,9 @@ defmodule CodexPoolerWeb.McpModernContractTest do
 
       cases = [
         {nil, missing_protocol_conn, modern_request("header-case-1", "tools/list", %{})},
-        {"2025-11-25", mismatched_protocol_conn,
-         modern_request("header-case-2", "tools/list", %{})},
-        {nil, modern_request_conn(conn, raw_token, nil),
-         modern_request("header-case-1", "tools/list", %{})},
-        {"caller-method-marker", modern_request_conn(conn, raw_token, "caller-method-marker"),
-         modern_request("header-case-3", "tools/list", %{})},
+        {"2025-11-25", mismatched_protocol_conn, modern_request("header-case-2", "tools/list", %{})},
+        {nil, modern_request_conn(conn, raw_token, nil), modern_request("header-case-1", "tools/list", %{})},
+        {"caller-method-marker", modern_request_conn(conn, raw_token, "caller-method-marker"), modern_request("header-case-3", "tools/list", %{})},
         {nil, modern_request_conn(conn, raw_token, "tools/call"),
          modern_request("header-case-3", "tools/call", %{
            "name" => tool_name,
@@ -415,8 +412,7 @@ defmodule CodexPoolerWeb.McpModernContractTest do
            "name" => tool_name,
            "arguments" => %{}
          })},
-        {"not-base64",
-         modern_request_conn(conn, raw_token, "tools/call", "=?base64?not-base64?="),
+        {"not-base64", modern_request_conn(conn, raw_token, "tools/call", "=?base64?not-base64?="),
          modern_request("header-case-6", "tools/call", %{
            "name" => tool_name,
            "arguments" => %{}

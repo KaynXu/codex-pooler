@@ -140,8 +140,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RuntimeCoherenceStoreTest do
         source: source,
         source_precision: "observed",
         freshness_state: "fresh",
-        metadata:
-          Map.put(metadata, "reset_after_seconds", DateTime.diff(reset_at, observed_at, :second))
+        metadata: Map.put(metadata, "reset_after_seconds", DateTime.diff(reset_at, observed_at, :second))
       },
       observed_at,
       observed_at

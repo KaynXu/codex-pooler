@@ -17,9 +17,7 @@ defmodule CodexPooler.InstanceSettings.ForwardedClientPolicyTest do
   test "baseline characterization preserves existing ingress JSON through load and save" do
     settings = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'"
-    )
+    Repo.query!("UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'")
 
     loaded = InstanceSettings.get!()
     assert loaded.ingress.firewall_allowlist == settings.ingress.firewall_allowlist
@@ -69,8 +67,7 @@ defmodule CodexPooler.InstanceSettings.ForwardedClientPolicyTest do
              env_names: [],
              storage: :database,
              reloadability: :cached,
-             notes:
-               "Uses a fixed X-Forwarded-For proxy depth, while zero keeps trusted-CIDR walking."
+             notes: "Uses a fixed X-Forwarded-For proxy depth, while zero keeps trusted-CIDR walking."
            }
   end
 
@@ -114,9 +111,7 @@ defmodule CodexPooler.InstanceSettings.ForwardedClientPolicyTest do
   test "loads declared defaults from old ingress JSON and persists them on the next save" do
     InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'"
-    )
+    Repo.query!("UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'")
 
     InstanceSettings.reset_cache_for_test()
     loaded = InstanceSettings.get!()

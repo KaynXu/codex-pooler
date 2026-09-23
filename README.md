@@ -1,9 +1,15 @@
 <h1 align="center">Codex Pooler</h1>
 
+This fork adds optional Responses API-key upstream support. See
+[Responses API upstreams](docs-site/src/content/docs/operators/responses-api-upstreams.mdx)
+for configuration and compatibility boundaries. The original Elastic License 2.0
+and copyright notices remain in force.
+
 <p align="center">
   <strong>The full featured self-hosted Codex gateway, for teams, agents and you. Works with:</strong><br>
   <br>
-  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode"><img src=".github/assets/opencode-favicon.png" alt="OpenCode" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode-v2/" title="OpenCode v2"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode v1"><img src=".github/assets/opencode-favicon.png" alt="OpenCode v1" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
@@ -37,6 +43,10 @@
   <a href="#configuration">Configuration</a>
   ·
   <a href="#deployment">Deployment</a>
+  ·
+  <a href="https://x.com/icoretech_inc">X</a>
+  ·
+  <a href="https://reddit.com/r/CodexPooler">Reddit</a>
 </p>
 
 <p align="center">
@@ -154,7 +164,72 @@ For a deployed instance, replace `http://localhost:4000` with your deployed host
 for example `https://codex-pooler.example.com`.
 
 <details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2 logo" width="16" height="16"> OpenCode v2 <code>~/.config/opencode/opencode.jsonc</code></summary>
+
+OpenCode v2 supports Codex Pooler through the native Responses provider, including
+local tool execution and same-session resume. Set
+`CODEX_POOLER_API_KEY` in the environment of the OpenCode server, then merge:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "codex-pooler/gpt-5.6-terra",
+  "agents": { "title": { "model": "codex-pooler/gpt-5.6-luna" } },
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "buffer": 41420
+  },
+  "providers": {
+    "codex-pooler": {
+      "package": "@opencode/ai/providers/openai/responses",
+      "settings": {
+        "baseURL": "http://localhost:4000/v1",
+        "apiKey": "{env:CODEX_POOLER_API_KEY}",
+        "transport": "http",
+        "compaction": { "type": "summary" }
+      },
+      "models": {
+        "gpt-5.6-luna": {
+          "modelID": "gpt-5.6-luna",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+        },
+        "gpt-5.6-terra": {
+          "modelID": "gpt-5.6-terra",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        }
+      }
+    }
+  }
+}
+```
+
+Use your deployed `/v1` URL and only models assigned to your Pool. The context
+values are long-profile examples: copy each model's actual
+`/v1/models.context_length` into `limit.context` and `limit.input`. The
+[v2 guide](https://docs.codex-pooler.com/clients/opencode-v2/) includes Sol/Astra,
+context calculations, compaction choices, protocols and image limits.
+
+This configuration uses HTTP SSE and local summary checkpoints. Websocket
+transport and native provider checkpoints are available through provider
+settings; see the v2 guide for both compaction modes. Local tools
+and image input do not imply an enabled image-generation tool. Use
+`opencode run --standalone --model codex-pooler/gpt-5.6-terra` for an isolated
+client session; normal startup uses a shared background service.
+
+V2 uses `providers`, `modelID`, `settings` and `capabilities`; legacy model
+`reasoning`/`attachment` booleans and compaction `prune`/`tail_turns` are ignored
+with warnings. V1 plugins, including v1 OMO integrations, need their own v2
+migration. Keep the v1 configuration below for v1 installations.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode v1 <code>~/.config/opencode/opencode.jsonc</code></summary>
 
 ![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
 
@@ -698,6 +773,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -753,6 +830,19 @@ uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout:
 120-second compression budget. This is independent from the optional MCP server
 `timeout` and from an application output cap.
 
+Hermes generates session titles with a separate auxiliary call that sends no
+reasoning effort, so the model's default effort applies. Set
+`auxiliary.title_generation.reasoning_effort: low` to keep those short calls
+on a fixed, cheap effort.
+
+Hermes fast mode (`agent.service_tier: fast`, `/fast`) sends
+`service_tier: priority` only when the provider is `openai` on `api.openai.com`
+or `openai-codex` on `chatgpt.com`. Since the Hermes 0.21 releases, an
+`openai-api` provider pointed at Codex Pooler never sends it, even though
+`/fast` and its tip still report fast mode as on. Codex Pooler accepts
+`service_tier: priority` (and `fast` as an alias) whenever a client sends it,
+so this is a Hermes routing rule, not a Pooler limitation.
+
 Remote HTTP MCP servers require Hermes' `mcp` extra. If
 `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
 available`, install MCP support into the Hermes environment, following the
@@ -796,6 +886,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -834,6 +926,8 @@ change the MCP `url` to `https://codex-pooler.example.com/mcp`.
 
 <details>
 <summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
+
+![Codex Pooler Pi integration](.github/assets/codex-pooler-pi.png)
 
 Pi works best through a custom provider that uses Codex Pooler's narrow
 OpenAI-compatible `/v1` Responses surface. Put custom providers and models in
@@ -968,6 +1062,8 @@ operator MCP token.
 
 <details>
 <summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>~/.omp/agent/models.yml</code> and <code>config.yml</code></summary>
+
+![Codex Pooler OMP integration](.github/assets/codex-pooler-omp.png)
 
 Oh My Pi (OMP) is a Pi fork, but it should be treated as a separate Codex
 Pooler harness: it has its own package, `omp` binary, YAML config, and model
@@ -1146,6 +1242,8 @@ operator token separate from the Pool API key used for `/v1`.
 <details>
 <summary><img src=".github/assets/cursor-favicon.png" alt="Cursor logo" width="16" height="16"> Cursor <code>Settings → Models → API Keys</code></summary>
 
+![Codex Pooler Cursor integration](.github/assets/codex-pooler-cursor.png)
+
 Connect Cursor through **OpenAI API Key** and **Override OpenAI Base URL**,
 with both switches enabled. Use your Pool API key, a public HTTPS base URL
 such as `https://codex-pooler.example.com/v1`, and an explicit model such as
@@ -1162,6 +1260,8 @@ for prerequisites, model selection, and connection checks.
 
 <details>
 <summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
+
+![Codex Pooler Kilo Code integration](.github/assets/codex-pooler-kilo.png)
 
 Kilo Code should use a named OpenAI-compatible provider whose base URL ends at
 Codex Pooler's `/v1` surface. Kilo Code appends `/chat/completions` itself, so do
@@ -1382,6 +1482,8 @@ Pooler admin URL. Codex Pooler model use does not require MCP.
 <details>
 <summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
 
+![Codex Pooler Aider integration](.github/assets/codex-pooler-aider.png)
+
 Aider uses the OpenAI-compatible route with the `openai/` model prefix. Put the
 stable route settings in `.aider.conf.yml`; Aider loads this file from your home
 directory, then the git repo root, then the current directory, with later files
@@ -1479,6 +1581,8 @@ For deployed instances, change `openai-api-base` to
 
 <details>
 <summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+
+![Codex Pooler Continue integration](.github/assets/codex-pooler-continue.png)
 
 Continue can use Codex Pooler as an OpenAI-compatible provider by setting
 `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue
@@ -1606,6 +1710,8 @@ the operator metadata endpoint.
 <details>
 <summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
 
+![Codex Pooler Cline integration](.github/assets/codex-pooler-cline.png)
+
 Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and
 stores it as `openai-compatible`. Configure it with the Pool API key, the Codex
 Pooler `/v1` base URL, and the model id that your assigned Pool can serve.
@@ -1669,6 +1775,8 @@ Use a Pool API key for `/v1` model requests and an operator MCP token for
 
 <details>
 <summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+
+![Codex Pooler Goose integration](.github/assets/codex-pooler-goose.png)
 
 Configure Goose's OpenAI provider for Codex Pooler's OpenAI-compatible
 chat-completions path. Keep the Pool API key in `OPENAI_API_KEY` or Goose's
@@ -1744,6 +1852,8 @@ for `/mcp`. Do not reuse the Pool API key for MCP.
 <details>
 <summary><img src=".github/assets/windmill-favicon.png" alt="Windmill logo" width="16" height="16"> Windmill AI <code>customai</code> workspace provider</summary>
 
+![Codex Pooler Windmill AI integration](.github/assets/codex-pooler-windmill.png)
+
 Windmill AI can use Codex Pooler through Windmill's `customai` provider. Point
 the resource at Codex Pooler's OpenAI-compatible `/v1` surface, store the Pool
 API key as a Windmill secret variable, and make the workspace AI settings use
@@ -1806,6 +1916,8 @@ completion style requests.
 
 <details>
 <summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
+
+![Codex Pooler OpenHands integration](.github/assets/codex-pooler-openhands.png)
 
 OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1`
 surface. Keep the Pool API key in the environment, set the OpenHands base URL to

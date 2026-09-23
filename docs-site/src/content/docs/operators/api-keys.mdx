@@ -34,6 +34,7 @@ An API key controls:
 6. optional enforced request fields
 7. default request and token limits
 8. one optional model-scoped limit override
+9. an optional key-wide active request limit
 
 API key policy does not bypass Pool routing. The Pool still needs active upstream assignments, compatible models, fresh credentials, and usable quota evidence.
 
@@ -193,30 +194,54 @@ Enforced request fields let the key override selected client request values:
 The reasoning policy offers three modes:
 
 1. **Unrestricted** leaves omission absent and preserves any effort the route already accepts. This is the default for keys with neither reasoning value configured.
-2. **Allow up to** permits only known efforts through the selected ceiling: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. The selected model's available known levels can narrow the result further. An omitted request uses the permitted model default, or the highest permitted known level.
+2. **Allow up to** permits only known efforts through the selected ceiling: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. The Pool model's known levels (the union across the Pool's assignments) can narrow the result further; the assignment that finally serves may list fewer, so routing prefers an assignment whose own catalog lists the effort, and when no candidate lists it the effort is the upstream's to refuse. An omitted request uses the permitted model default, or the highest permitted known level.
 3. **Always use** applies one exact effort to every request. Existing keys that already have an enforced reasoning effort stay in this mode.
 
 Allow up to rejects rather than changes a disallowed request. An effort above the ceiling, an unknown or custom effort, or an omission with no permitted level returns `400 reasoning_effort_not_allowed` before upstream work. Backend Responses and public Responses identify `reasoning.effort`; Chat Completions identifies `reasoning_effort`.
 
-`none` is an explicit configured value. Leaving the policy Unrestricted is different because it leaves client control intact. `minimal` and `ultra` are evaluated as their own client-facing values, then backend dispatch rewrites them to `low` and `max` respectively when required by the upstream target. Safe policy and reasoning summaries can distinguish the requested, applied, and effective values.
+`none` is an explicit configured value. Leaving the policy Unrestricted is different because it leaves client control intact. `minimal` and `ultra` are evaluated as their own client-facing values, then backend dispatch rewrites `minimal` to `low` and `ultra` to `max`, or to the model's highest listed level when its catalog omits `max`. `none` is never a rewrite target and is forwarded unchanged. Safe policy and reasoning summaries can distinguish the requested, applied, and effective values.
 
 ## Limits
 
-The Limits step saves optional policy caps.
+The Limits step separates key-wide concurrency from the default policy and one optional model override.
 
 ![Create API key limits step](/operators/api-keys/api-keys-create-limits-dialog.png)
 
-Default limits can cap:
+Default policy fields check:
 
 1. requests per minute
 2. tokens per day
 3. tokens per week
-4. input tokens per request
-5. output tokens per request
+4. estimated input tokens per request
+5. estimated output tokens per request
 
 Leave a field blank when no cap should be saved. A blank limit is different from a zero limit.
 
-The model-scoped override is an optional single-model override. Use it when one model should be more constrained than the default policy. Additional model rows are not part of the current wizard.
+The model-scoped override is an optional single-model override. A matching active override replaces the default binding for that request; its blank fields do not inherit default limits. Its thresholds still compare against usage across the whole key, not a separate model allowance. Additional model rows are not part of the current wizard. Policy changes and moving the key between Pools do not reset its budget history.
+
+### Active request limit
+
+`max_active_requests` accepts a positive integer. Blank (`null`) disables it for existing and new keys. It counts outstanding execution reservations across every replica, route, and model using that key, independently of the default or model policy. It is not a count of open connections: idle websockets and accepted work without a reservation use no slot.
+
+Lowering the limit lets existing work finish and refuses new reservations until capacity is available. Replaying the same reserved execution reuses its slot; an eligible retry that creates a new successor needs a new slot. Finishing with unknown usage releases the slot even when a provisional token estimate remains.
+
+Saturation returns retryable `429 api_key_concurrency_limit_exceeded` with `rate_limit_error`. HTTP responses include `Retry-After: 1` as minimum backoff advice, not a promise that a slot will be free after one second. Websocket turns receive the corresponding error without requiring the socket to close. Authentication failures remain `401`; token or request-budget denials remain `403 api_key_policy_limit_exceeded`.
+
+### Token estimates and budget pressure
+
+Input and output fields are admission estimates, not provider-enforced generation limits. The output reservation has a floor of 512 tokens, or 2,048 for opaque context such as a continuation reference; higher accepted request or policy values can increase that estimate. Opaque input cannot be measured completely from the visible payload. A low configured output limit can therefore reject an estimate rather than reduce the upstream response.
+
+The upstream may refuse `max_output_tokens`. Neither these fields nor the concurrency limit guarantee an absolute per-response token or spend cap. Actual usage can exceed the reservation and is recorded in full; it is never clipped to make a budget appear satisfied. See [SDK output-budget behavior](/clients/openai-compatible/#output-budgets-and-local-usage).
+
+Daily and weekly admission use three distinct components:
+
+- **Known:** measured terminal usage, including a measured zero.
+- **Provisional:** the original reservation estimate for attempted work that ended without trustworthy usage, until a known correction replaces it or its original terminal time leaves the window. Proven pre-attempt failures add no provisional consumption.
+- **Pending:** every outstanding reservation, including work admitted before the current window began.
+
+Effective token pressure is their sum. Daily usage starts at midnight UTC; weekly usage covers the trailing seven days. A late correction keeps the original terminal attribution time and replaces provisional pressure once. Releasing a reservation cannot subtract another request's consumption. The remaining budget reflects effective pressure; measured token and cost reports exclude pending and provisional estimates. Costs calculated from measured usage and a pricing snapshot are reporting estimates, not provider invoices or proof of subscription quota charges.
+
+Requests per minute count each committed execution reservation once at its original admission time, with no refund after admission, including a later pre-attempt failure. Denials before reservation count zero. Corrections do not move this counter, and replaying the same reservation does not increment it again.
 
 ## Review
 
@@ -254,7 +279,7 @@ The current actions are:
   <tbody>
     <tr>
       <td>Edit</td>
-      <td>Opens the same policy wizard for an existing key. Stored secret material is not shown.</td>
+      <td>Opens the same policy wizard for an existing key. Stored secret material is not shown. Moving the key to another Pool or changing its expiry also affects connections already open with it. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
     <tr>
       <td>Pause</td>
@@ -270,26 +295,42 @@ The current actions are:
     </tr>
     <tr>
       <td>Revoke</td>
-      <td>Marks the key revoked. Revoked keys cannot be edited or resumed.</td>
+      <td>Marks the key revoked. Revoked keys cannot be edited or resumed. Revocation stops new authentication at once; a request already running finishes. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
     <tr>
       <td>Delete</td>
-      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key and related request history from this instance.</td>
+      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key. Request history is retained under its Pool without a link to the deleted key. Connections still open with the key close as well. See <a href="#responses-websocket-lifecycle">Responses WebSocket lifecycle</a>.</td>
     </tr>
   </tbody>
 </table>
 
-Prefer pause for temporary containment, rotate for suspected exposure, revoke for permanent credential retirement, and delete only when the key and its related local history should be removed.
+Prefer pause for temporary containment, rotate for suspected exposure, revoke for permanent credential retirement, and delete to permanently remove the credential. Deleting a key does not purge request history.
 
 ## Responses WebSocket lifecycle
 
-For supported Responses WebSocket routes, pausing or revoking a Pool API key blocks new runtime authentication and prompts existing WebSocket connections to close with policy code `1008`. The cluster notification is prompt-only delivery, not the authorization authority.
+For supported Responses WebSocket routes, every change that makes a Pool API key unusable also ends the WebSocket connections already open with it:
 
-A durable fence checks the key's persisted status and revocation generation before later work is admitted. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work.
+1. pausing or revoking the key
+2. deleting the key, or deleting the archived Pool it belongs to
+3. the key reaching its expiry time
+4. disabling or archiving the key's Pool
+5. moving the key to another Pool
 
-Only work admitted before the disabling change won the durable ordering may drain and finish once. Queued and later frames do not start after pause or revoke takes effect.
+The first four block new runtime authentication. A move does not: the key authenticates in its new Pool, but a connection opened before the move still belongs to the previous Pool. In every case the existing connections close with policy code `1008` and the reason `api key is no longer active`. The cluster notification only prompts that close; it is not the authorization authority.
 
-Resuming a paused key makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection.
+Before later work is admitted, a durable fence reads the key's persisted status, revocation generation, and expiry, together with its Pool's status. A move advances the revocation generation, so authorization from before the move no longer matches. A key that no longer exists fails the same fence. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work. That includes `response.processed` acknowledgements: one sent after the change is not passed on to the upstream account.
+
+Expiry sends no notification, because nothing is edited when the clock passes the expiry time. A connection whose key has an expiry time checks the key again when that time arrives and closes then, even if the client sends nothing. Editing the expiry, including moving it into the past, prompts the same check immediately.
+
+Only work admitted before the disabling change won the durable ordering may drain and finish once. Queued and later frames do not start after the change takes effect.
+
+That drain has no deadline of its own. A request already running when the change landed finishes under whatever timeout already governs it, and the connection closes when it ends, so the interval is the length of that one request rather than a separate bound you can configure. Everything else stops immediately: the key authenticates nothing new, later frames on an open connection are ignored rather than queued, and work already waiting behind the running request is discarded without being started.
+
+Draining rather than cutting is deliberate. Ending a response mid-stream would leave the client with a truncated answer and no terminal, and would leave its accounting unbalanced. If you are revoking a credential you believe is compromised and need certainty that nothing is still running, watch for the connection to close rather than assuming revocation alone ended it.
+
+Delete retains request history, including the record of a request that is still running, with the deleted key's association cleared. A request authenticated just before deletion is rechecked before reservation; if deletion wins that ordering, the request is rejected without upstream work and its rejection remains in the Pool's request history.
+
+Resuming a paused key, re-enabling its Pool, or moving its expiry later makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection. After a move, that fresh connection authenticates in the key's new Pool.
 
 During a rolling update, full cluster protection begins only after all application replicas run the release that contains this behavior. No new Helm value or runtime environment setting is required.
 
@@ -304,7 +345,7 @@ When client traffic is rejected or not behaving as expected, check API keys in t
 5. confirm model policy allows the requested model
 6. confirm enforced request fields are expected
 7. confirm request and token limits are not exceeded
-8. check the owning Pool for active upstream assignments
+8. confirm the owning Pool is active and has active upstream assignments
 9. use Request logs filtered by Pool or key metadata to inspect recent failures
 10. use Audit logs to confirm recent create, rotate, pause, revoke, or edit actions
 

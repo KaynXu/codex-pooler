@@ -376,6 +376,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     end
   end
 
+  @tag slow: "runs socket termination through pre-cleanup drain, upstream cancellation, and durable aborted receipt settlement"
   test "client disconnect before the terminal records an aborted downstream receipt" do
     release_ref = make_ref()
 
@@ -610,8 +611,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
 
     assert Repo.aggregate(
              from(entry in LedgerEntry,
-               where:
-                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+               where: entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
              ),
              :count
            ) == 1
@@ -643,7 +643,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
                  "status" => 500,
                  "error" => %{
                    "message" => "websocket response task failed",
-                   "type" => "invalid_request_error",
+                   # findings#184: a status-500 task failure is server class.
+                   "type" => "server_error",
                    "code" => "websocket_response_task_failed",
                    "param" => nil
                  }
@@ -706,7 +707,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
                  "status" => 502,
                  "error" => %{
                    "message" => "upstream request failed",
-                   "type" => "invalid_request_error",
+                   # findings#184: a 502 upstream failure is server class.
+                   "type" => "server_error",
                    "code" => "upstream_request_failed",
                    "param" => nil
                  }
@@ -830,11 +832,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     {_result, logs} =
       capture_native_turn_warning(fn ->
         CodexResponsesSocket.handle_info(
-          {:codex_response_done, current_task,
-           {:response_task_result,
-            {:error,
-             %{status: 502, code: "upstream_request_failed", message: "upstream request failed"}},
-            false}},
+          {:codex_response_done, current_task, {:response_task_result, {:error, %{status: 502, code: "upstream_request_failed", message: "upstream request failed"}}, false}},
           state_after_chunk
         )
       end)
@@ -867,11 +865,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     {_result, logs} =
       capture_native_turn_warning(fn ->
         CodexResponsesSocket.handle_info(
-          {:codex_response_done, output_task,
-           {:response_task_result,
-            {:error,
-             %{status: 502, code: "upstream_request_failed", message: "upstream request failed"}},
-            false}},
+          {:codex_response_done, output_task, {:response_task_result, {:error, %{status: 502, code: "upstream_request_failed", message: "upstream request failed"}}, false}},
           state
         )
       end)
@@ -1089,8 +1083,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
 
     assert Repo.aggregate(
              from(entry in LedgerEntry,
-               where:
-                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+               where: entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
              ),
              :count
            ) == 1
@@ -1156,8 +1149,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     task_monitor = Process.monitor(task)
     upstream_session_monitor = Process.monitor(upstream_websocket_session)
 
-    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_socket_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_socket_pid, ^release_ref},
                    1_000
 
     assert FakeUpstream.await_websocket_connection_count(upstream, 1, 1_000) == 1
@@ -1180,8 +1172,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
     assert_receive {:DOWN, ^task_monitor, :process, ^task, {:shutdown, :websocket_terminated}},
                    1_000
 
-    assert_receive {:DOWN, ^upstream_session_monitor, :process, ^upstream_websocket_session,
-                    :normal},
+    assert_receive {:DOWN, ^upstream_session_monitor, :process, ^upstream_websocket_session, :normal},
                    1_000
 
     assert_receive {:DOWN, ^upstream_socket_monitor, :process, ^upstream_socket_pid, _reason},
@@ -1208,8 +1199,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
 
     assert Repo.aggregate(
              from(entry in LedgerEntry,
-               where:
-                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+               where: entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
              ),
              :count
            ) == 1
@@ -1319,6 +1309,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.SocketLifecycleTest do
 
   defp capture_websocket_lifecycle_log(level, fun) when is_atom(level) and is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: level)
 
     try do

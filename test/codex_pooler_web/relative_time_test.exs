@@ -18,8 +18,7 @@ defmodule CodexPoolerWeb.RelativeTimeTest do
     preference_cases = [
       {%{datetime_format: "default", timezone: "Etc/UTC"}, "2026-10-25 02:30:00 UTC"},
       {%{datetime_format: "short", timezone: "Europe/Rome"}, "2026-10-25 03:30"},
-      {%{datetime_format: "long", timezone: "America/New_York"},
-       "Oct 24, 2026 22:30:00 America/New_York"},
+      {%{datetime_format: "long", timezone: "America/New_York"}, "Oct 24, 2026 22:30:00 America/New_York"},
       {%{datetime_format: "iso8601", timezone: "Europe/Rome"}, "2026-10-25T03:30:00+01:00"},
       {%{datetime_format: "invalid", timezone: "Europe/NotAZone"}, "2026-10-25 02:30:00 UTC"},
       {%{datetime_format: nil, timezone: nil}, "2026-10-25 02:30:00 UTC"},

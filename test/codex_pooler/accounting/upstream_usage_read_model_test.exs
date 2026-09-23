@@ -15,8 +15,7 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
       upstream_assignment_fixture(pool, %{
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -49,8 +48,7 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
                [
                  {"x-codex-secondary-used-percent", "100"},
                  {"x-codex-secondary-window-minutes", "10080"},
-                 {"x-codex-secondary-reset-at",
-                  Integer.to_string(DateTime.to_unix(DateTime.add(as_of, 86_400, :second)))}
+                 {"x-codex-secondary-reset-at", Integer.to_string(DateTime.to_unix(DateTime.add(as_of, 86_400, :second)))}
                ],
                DateTime.add(as_of, 1, :second)
              )
@@ -67,8 +65,7 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
       |> Ecto.Changeset.change(
         metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(state, observed_at, epoch)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(state, observed_at, epoch)
         }
       )
       |> CodexPooler.Repo.update!()
@@ -146,8 +143,7 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
         chatgpt_account_id: "acct_usage_windowless_#{System.unique_integer([:positive])}",
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -184,8 +180,7 @@ defmodule CodexPooler.Accounting.UpstreamUsageReadModelTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(state, observed_at, availability_epoch)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(state, observed_at, availability_epoch)
           }
         })
 

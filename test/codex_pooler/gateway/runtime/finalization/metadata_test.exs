@@ -54,7 +54,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     assert Metadata.request_metadata(true_options) == %{}
   end
 
-  test "classifies only resolved Full ordinary Responses HTTP rejections" do
+  test "classifies an upstream status without reference to the serving mode" do
     ordinary_endpoints = [
       "/backend-api/codex/responses",
       "/backend-api/codex/v1/responses",
@@ -73,8 +73,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
           source: "override"
         )
 
-      assert Metadata.upstream_status_error_code(400, options) ==
-               "full_upstream_rejection"
+      # An explicit Full override no longer earns its own code: the same
+      # provider rejection is classified the same way whatever mode resolved
+      # (codex-pooler-findings#173), and the mode itself stays in the routing
+      # metadata this attempt already carries.
+      assert Metadata.upstream_status_error_code(400, options) == "upstream_status"
 
       assert Metadata.upstream_status_error_code(429, options) ==
                "upstream_rate_limited"
@@ -215,9 +218,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
 
     frame_headers = %{"openai-request-id" => "frame-request-legacy"}
 
-    assert :erlang.term_to_binary(
-             Metadata.websocket_response_metadata([], nil, opts, frame_headers)
-           ) ==
+    assert :erlang.term_to_binary(Metadata.websocket_response_metadata([], nil, opts, frame_headers)) ==
              :erlang.term_to_binary(Map.put(expected, "websocket_frame_headers", frame_headers))
   end
 
@@ -678,6 +679,60 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
 
     metadata = Metadata.response_metadata(response, "upstream_status", %{})
     refute Enum.any?(Map.keys(metadata), &String.starts_with?(&1, "rejection_"))
+  end
+
+  test "response metadata records a bounded class for provider detail rejection bodies" do
+    stream_detail = "Stream must be set to true"
+    free_text_detail = "Invalid value near: synthetic prompt sentinel"
+
+    detail_metadata = fn status, detail ->
+      %Req.Response{status: status, body: CodexPooler.JSON.encode!(%{"detail" => detail})}
+      |> Metadata.response_metadata("upstream_status", %{})
+    end
+
+    stream_metadata = detail_metadata.(400, stream_detail)
+    assert stream_metadata["rejection_detail_class"] == "stream_must_be_true"
+    assert stream_metadata["rejection_message_present"] == true
+    assert stream_metadata["rejection_message_bytes"] == byte_size(stream_detail)
+    refute Map.has_key?(stream_metadata, "rejection_error_code")
+    refute inspect(stream_metadata) =~ stream_detail
+
+    assert detail_metadata.(404, "Not_Found.v2")["rejection_detail_class"] == "Not_Found.v2"
+
+    free_text_metadata = detail_metadata.(400, free_text_detail)
+    assert "sha256_" <> fingerprint = free_text_metadata["rejection_detail_class"]
+    assert fingerprint =~ ~r/\A[0-9a-f]{12}\z/
+    assert free_text_metadata["rejection_message_bytes"] == byte_size(free_text_detail)
+    refute inspect(free_text_metadata) =~ "synthetic prompt sentinel"
+
+    for detail <- [[%{"loc" => ["body", "stream"], "msg" => "synthetic"}], %{"msg" => "x"}, nil] do
+      structured = detail_metadata.(422, detail)
+      assert structured["rejection_detail_class"] == "non_string_detail"
+      assert structured["rejection_message_present"] == false
+      assert structured["rejection_message_bytes"] == 0
+      refute inspect(structured) =~ "synthetic"
+    end
+
+    assert detail_metadata.(400, "")["rejection_detail_class"] == "empty_detail"
+
+    refute Enum.any?(
+             Map.keys(detail_metadata.(429, stream_detail)),
+             &String.starts_with?(&1, "rejection_")
+           )
+
+    error_precedence =
+      %Req.Response{
+        status: 400,
+        body:
+          CodexPooler.JSON.encode!(%{
+            "error" => %{"code" => "invalid_request", "type" => "invalid_request_error"},
+            "detail" => stream_detail
+          })
+      }
+      |> Metadata.response_metadata("upstream_status", %{})
+
+    assert error_precedence["rejection_error_code"] == "invalid_request"
+    refute Map.has_key?(error_precedence, "rejection_detail_class")
   end
 
   test "response metadata records response body limit evidence without retaining body bytes" do

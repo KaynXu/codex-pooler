@@ -1,11 +1,13 @@
 ---
-title: OpenCode on Codex Pooler
+title: OpenCode v1 on Codex Pooler
 sidebar:
-  label: OpenCode
+  label: OpenCode v1
 description: Configure OpenCode and optional OMO model routing with Codex Pooler's narrow OpenAI-compatible /v1 surface.
 ---
 
-OpenCode should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the provider id as `openai` for this setup so OpenCode continues to use its OpenAI provider-family behavior. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
+This page covers OpenCode v1 and its optional OMO integration. For the native v2 provider format, use the [OpenCode v2 guide](/clients/opencode-v2/).
+
+OpenCode v1 should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the provider id as `openai` for this setup so OpenCode continues to use its OpenAI provider-family behavior. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
 
 OpenCode websocket support is the narrow Responses websocket route at `GET /v1/responses`, not OpenAI Realtime SDK compatibility.
 

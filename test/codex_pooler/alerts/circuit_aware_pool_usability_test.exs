@@ -52,9 +52,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
     })
 
     for assignment <- [first, second, third] do
-      circuit_fixture(pool, assignment, "GPT-SERVING", observed_at,
-        next_probe_at: DateTime.add(observed_at, 60, :second)
-      )
+      circuit_fixture(pool, assignment, "GPT-SERVING", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
     end
 
     scoped_rule =
@@ -80,9 +78,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
     pool = pool_fixture()
     assignment = usable_assignment(pool, observed_at)
 
-    circuit_fixture(pool, assignment, "missing-model", observed_at,
-      next_probe_at: DateTime.add(observed_at, 60, :second)
-    )
+    circuit_fixture(pool, assignment, "missing-model", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
 
     rule =
       alert_rule_fixture(pool,
@@ -111,9 +107,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
       })
     end
 
-    circuit_fixture(pool, assignment, "gpt-alpha", observed_at,
-      next_probe_at: DateTime.add(observed_at, 60, :second)
-    )
+    circuit_fixture(pool, assignment, "gpt-alpha", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
 
     rule = alert_rule_fixture(pool, rule_kind: "pool_no_usable_assignments")
     assert [%{action: :clear}] = Alerts.evaluate_rule(rule, at: observed_at)
@@ -153,9 +147,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
     })
 
     for model_id <- ["gpt-fully-blocked", "gpt-partially-blocked"] do
-      circuit_fixture(pool, first, model_id, observed_at,
-        next_probe_at: DateTime.add(observed_at, 60, :second)
-      )
+      circuit_fixture(pool, first, model_id, observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
     end
 
     scoped_rule =
@@ -181,9 +173,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
       metadata: %{"source_assignment_ids" => [assignment.assignment.id]}
     })
 
-    circuit_fixture(pool, assignment, "retired-model", observed_at,
-      next_probe_at: DateTime.add(observed_at, 60, :second)
-    )
+    circuit_fixture(pool, assignment, "retired-model", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
 
     rule =
       alert_rule_fixture(pool,
@@ -315,9 +305,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
     })
 
     for assignment <- Enum.take(assignments, 2) do
-      circuit_fixture(pool, assignment, "gpt-low-boundary", observed_at,
-        next_probe_at: DateTime.add(observed_at, 60, :second)
-      )
+      circuit_fixture(pool, assignment, "gpt-low-boundary", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
     end
 
     low_rule =
@@ -497,9 +485,7 @@ defmodule CodexPooler.Alerts.CircuitAwarePoolUsabilityTest do
       metadata: %{"source_assignment_ids" => [assignment.assignment.id]}
     })
 
-    circuit_fixture(pool, assignment, "gpt-unaffected-rules", observed_at,
-      next_probe_at: DateTime.add(observed_at, 60, :second)
-    )
+    circuit_fixture(pool, assignment, "gpt-unaffected-rules", observed_at, next_probe_at: DateTime.add(observed_at, 60, :second))
 
     rules = [
       alert_rule_fixture(pool,

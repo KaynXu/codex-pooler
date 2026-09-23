@@ -22,10 +22,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.NativeImageResult do
 
   defp valid_image?(_image), do: false
 
-  defp plausible_image?(
-         <<137, 80, 78, 71, 13, 10, 26, 10, 13::32, "IHDR", width::32, height::32,
-           header::binary-size(5), crc::32, chunks::binary>>
-       )
+  defp plausible_image?(<<137, 80, 78, 71, 13, 10, 26, 10, 13::32, "IHDR", width::32, height::32, header::binary-size(5), crc::32, chunks::binary>>)
        when width > 0 and height > 0,
        do:
          :erlang.crc32(<<"IHDR", width::32, height::32, header::binary>>) == crc and
@@ -34,10 +31,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.NativeImageResult do
   defp plausible_image?(<<255, 216, 255, rest::binary>>) when byte_size(rest) > 8,
     do: binary_part(rest, byte_size(rest) - 2, 2) == <<255, 217>>
 
-  defp plausible_image?(
-         <<"RIFF", size::32-little, "WEBP", kind::binary-size(4), chunk_size::32-little,
-           rest::binary>>
-       )
+  defp plausible_image?(<<"RIFF", size::32-little, "WEBP", kind::binary-size(4), chunk_size::32-little, rest::binary>>)
        when kind in ["VP8 ", "VP8L", "VP8X"] and chunk_size > 0,
        do: size == byte_size(rest) + 12 and byte_size(rest) >= chunk_size
 

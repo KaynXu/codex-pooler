@@ -58,8 +58,7 @@ defmodule CodexPoolerWeb.Endpoint do
     parsers: [
       :urlencoded,
       {:multipart, length: @multipart_parser_length},
-      {CodexPoolerWeb.Plugs.RuntimeJsonParser,
-       body_reader: {__MODULE__, :read_plain_json_body, []}}
+      {CodexPoolerWeb.Plugs.RuntimeJsonParser, body_reader: {__MODULE__, :read_plain_json_body, []}}
     ],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()

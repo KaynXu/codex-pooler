@@ -8,6 +8,114 @@ defmodule CodexPooler.DBInvariantsTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
 
+  test "model foreign key reference indexes cover every referencing table" do
+    for table <- ~w(requests attempts ledger_entries daily_rollups request_replay_entitlements) do
+      assert %{rows: [[true, true, true]]} =
+               Repo.query!(
+                 """
+                 SELECT i.indisvalid, i.indpred IS NULL,
+                   pg_get_indexdef(i.indexrelid, 1, true) = 'model_id'
+                 FROM pg_index i WHERE i.indexrelid = to_regclass($1)
+                 """,
+                 ["public.#{table}_model_id_index"]
+               )
+    end
+  end
+
+  test "execution recovery and token window indexes remain valid" do
+    for index <- ~w(attempts_open_owner_incarnation_idx attempts_open_execution_index
+                    ledger_entries_reservation_key_occurred_idx ledger_entries_terminal_request_idx
+                    ledger_entries_key_occurred_idx) do
+      assert %{rows: [[true]]} =
+               Repo.query!("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass($1)", [
+                 "public.#{index}"
+               ])
+    end
+
+    assert %{rows: [[true, true, true]]} =
+             Repo.query!("""
+             SELECT indisvalid,
+               pg_get_indexdef(indexrelid, 1, true) = 'published_at',
+               pg_get_indexdef(indexrelid, 2, true) = 'execution_id'
+             FROM pg_index
+             WHERE indexrelid = 'public.execution_terminal_proofs_published_at_execution_id_index'::regclass
+             """)
+  end
+
+  test "terminal proofs enforce their publication timestamp and owner shape" do
+    id = Ecto.UUID.bingenerate()
+
+    assert %{num_rows: 1} =
+             Repo.query!(
+               """
+               INSERT INTO execution_terminal_proofs
+                 (execution_id, owner_instance_id, owner_instance_boot_id, owner_process_id, end_kind, ended_at)
+               VALUES ($1, 'owner@example.invalid', 'synthetic-boot', '<0.1.0>', 'completed', now())
+               """,
+               [id]
+             )
+
+    assert %{rows: [[true]]} =
+             Repo.query!(
+               """
+               SELECT published_at BETWEEN (statement_timestamp() AT TIME ZONE 'UTC') - interval '1 minute'
+                 AND (statement_timestamp() AT TIME ZONE 'UTC')
+               FROM execution_terminal_proofs WHERE execution_id = $1
+               """,
+               [id]
+             )
+
+    assert {:error, %Postgrex.Error{postgres: %{code: :not_null_violation}}} =
+             Repo.query(
+               "UPDATE execution_terminal_proofs SET published_at=NULL WHERE execution_id=$1",
+               [id],
+               mode: :savepoint
+             )
+
+    for {column, value, constraint} <- [
+          {"end_kind", "live", "execution_terminal_proofs_end_kind_check"},
+          {"owner_process_id", "malformed", "execution_terminal_proofs_process_check"},
+          {"owner_instance_boot_id", "", "execution_terminal_proofs_owner_check"}
+        ] do
+      assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: ^constraint}}} =
+               Repo.query(
+                 "UPDATE execution_terminal_proofs SET #{column}=$1 WHERE execution_id=$2",
+                 [value, id],
+                 mode: :savepoint
+               )
+    end
+  end
+
+  test "saved-reset first-seen history defaults to the non-null empty version one ledger" do
+    user = create_user!("saved-reset-default@example.com")
+    identity = create_upstream_identity!(user, "saved-reset-default")
+
+    assert %{rows: [[%{"version" => 1, "entries" => []}]]} =
+             Repo.query!(
+               "SELECT saved_reset_first_seen_ledger FROM upstream_identities WHERE id=$1",
+               [identity]
+             )
+
+    assert {:error, %Postgrex.Error{postgres: %{code: :not_null_violation}}} =
+             Repo.query(
+               "UPDATE upstream_identities SET saved_reset_first_seen_ledger=NULL WHERE id=$1",
+               [identity],
+               mode: :savepoint
+             )
+  end
+
+  test "telemetry loss storage rejects unknown reasons" do
+    assert %{num_rows: 1} =
+             Repo.query!("INSERT INTO telemetry_relay_losses(reason,rows,samples) VALUES('expired_unclaimed',2,9)")
+
+    assert {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: "relay_loss_reason"}}} =
+             Repo.query(
+               "INSERT INTO telemetry_relay_losses(reason,rows,samples) VALUES('invalid',0,0)",
+               [],
+               mode: :savepoint
+             )
+  end
+
   test "database rejects invalid upstream lifecycle status values" do
     user_id = create_user!("owner-upstream-lifecycle-status@example.com")
     pool_id = create_pool!(user_id, "upstream-lifecycle-status", "Upstream Lifecycle Status")
@@ -339,11 +447,8 @@ defmodule CodexPooler.DBInvariantsTest do
     base = replay_entitlement_params(fixture, turn_id, eligible_attempt_id)
 
     for {field, constraint, extras} <- [
-          {:replay_claim_digest, "request_replay_entitlements_replay_claim_digest_shape_check",
-           %{}},
-          {:provisional_binding_digest,
-           "request_replay_entitlements_provisional_digest_shape_check",
-           consumed_tuple(%{replay_attempt_id: eligible_attempt_id})},
+          {:replay_claim_digest, "request_replay_entitlements_replay_claim_digest_shape_check", %{}},
+          {:provisional_binding_digest, "request_replay_entitlements_provisional_digest_shape_check", consumed_tuple(%{replay_attempt_id: eligible_attempt_id})},
           {:owner_lease_digest, "request_replay_entitlements_owner_lease_digest_shape_check", %{}}
         ] do
       assert_db_constraint(:check_violation, constraint, fn ->
@@ -362,8 +467,7 @@ defmodule CodexPooler.DBInvariantsTest do
 
     for {field, constraint} <- [
           {:model_identifier, "request_replay_entitlements_model_identifier_present_check"},
-          {:owner_lease_key_version,
-           "request_replay_entitlements_lease_key_version_present_check"}
+          {:owner_lease_key_version, "request_replay_entitlements_lease_key_version_present_check"}
         ] do
       assert_db_constraint(:check_violation, constraint, fn ->
         insert_replay_entitlement!(Map.put(base, field, "  \t"))
@@ -403,9 +507,7 @@ defmodule CodexPooler.DBInvariantsTest do
   test "database rejects malformed replay lifecycle tuples and timestamp orderings" do
     for {suffix, attrs} <- replay_illegal_tuple_matrix() do
       fixture =
-        replay_execution_fixture!(
-          "replay-illegal-#{suffix}-#{System.unique_integer([:positive])}"
-        )
+        replay_execution_fixture!("replay-illegal-#{suffix}-#{System.unique_integer([:positive])}")
 
       eligible_attempt_id = create_attempt!(fixture)
       replay_attempt_id = create_attempt!(%{fixture | request_id: fixture.request_id}, 2)
@@ -819,45 +921,6 @@ defmodule CodexPooler.DBInvariantsTest do
              ).rows
   end
 
-  test "legacy active instance admin membership backfill rewrites all rows to active owners" do
-    existing_owner_id = create_user!("owner-legacy-admin-existing-owner@example.com")
-    first_admin_id = create_user!("owner-legacy-admin-backfill-1@example.com")
-    second_admin_id = create_user!("owner-legacy-admin-backfill-2@example.com")
-
-    owner_membership_id =
-      create_membership!(existing_owner_id, "instance_owner", "active", existing_owner_id)
-
-    first_membership_id =
-      create_membership!(first_admin_id, "instance_admin", "active", existing_owner_id)
-
-    second_membership_id =
-      create_membership!(second_admin_id, "instance_admin", "active", existing_owner_id)
-
-    rewrite_legacy_instance_admin_memberships!()
-
-    rows =
-      Repo.query!(
-        """
-        SELECT id, role, status, revoked_at
-        FROM memberships
-        WHERE id = ANY($1::uuid[])
-        """,
-        [[first_membership_id, owner_membership_id, second_membership_id]]
-      ).rows
-
-    assert Enum.sort(rows) ==
-             Enum.sort([
-               [first_membership_id, "instance_owner", "active", nil],
-               [owner_membership_id, "instance_owner", "active", nil],
-               [second_membership_id, "instance_owner", "active", nil]
-             ])
-
-    assert [[0]] =
-             Repo.query!(
-               "SELECT COUNT(*) FROM memberships WHERE role = 'instance_admin' AND status = 'active'"
-             ).rows
-  end
-
   test "membership role demotion blocks the final active owner" do
     revoke_all_active_memberships!()
     owner_id = create_user!("owner-final-role-demotion@example.com")
@@ -939,57 +1002,6 @@ defmodule CodexPooler.DBInvariantsTest do
              actor_user_id: actor.id,
              target_id: revoked_membership.id
            )
-  end
-
-  test "legacy admin backfill keeps an existing same-user active owner grant" do
-    user_id = create_user!("owner-legacy-admin-duplicate-owner@example.com")
-
-    owner_membership_id =
-      create_membership!(user_id, "instance_owner", "active", user_id)
-
-    duplicate_admin_membership_id =
-      create_membership!(user_id, "instance_admin", "active", user_id)
-
-    rewrite_legacy_instance_admin_memberships!()
-
-    rows =
-      Repo.query!(
-        """
-        SELECT id, role, status, revoked_at
-        FROM memberships
-        WHERE id = ANY($1::uuid[])
-        """,
-        [[owner_membership_id, duplicate_admin_membership_id]]
-      ).rows
-      |> Map.new(fn [id, role, status, revoked_at] -> {id, {role, status, revoked_at}} end)
-
-    assert {"instance_owner", "active", nil} = rows[owner_membership_id]
-    assert {"instance_owner", "revoked", revoked_at} = rows[duplicate_admin_membership_id]
-    refute is_nil(revoked_at)
-
-    assert [[1]] =
-             Repo.query!(
-               """
-               SELECT COUNT(*)
-               FROM memberships
-               WHERE user_id = $1
-                 AND role = 'instance_owner'
-                 AND status = 'active'
-               """,
-               [user_id]
-             ).rows
-
-    assert [[0]] =
-             Repo.query!(
-               """
-               SELECT COUNT(*)
-               FROM memberships
-               WHERE user_id = $1
-                 AND role = 'instance_admin'
-                 AND status = 'active'
-               """,
-               [user_id]
-             ).rows
   end
 
   defp load_uuid!(uuid), do: Ecto.UUID.load!(uuid)
@@ -1180,31 +1192,6 @@ defmodule CodexPooler.DBInvariantsTest do
     id
   end
 
-  defp rewrite_legacy_instance_admin_memberships! do
-    Repo.query!("DROP INDEX IF EXISTS public.memberships_single_instance_owner_active_uq")
-
-    Repo.query!("""
-    UPDATE public.memberships legacy_admin
-    SET status = 'revoked',
-        revoked_at = COALESCE(legacy_admin.revoked_at, now())
-    WHERE legacy_admin.role = 'instance_admin'
-      AND legacy_admin.status = 'active'
-      AND EXISTS (
-        SELECT 1
-        FROM public.memberships active_owner
-        WHERE active_owner.user_id = legacy_admin.user_id
-          AND active_owner.role = 'instance_owner'
-          AND active_owner.status = 'active'
-      )
-    """)
-
-    Repo.query!("""
-    UPDATE public.memberships membership
-    SET role = 'instance_owner'
-    WHERE membership.role = 'instance_admin'
-    """)
-  end
-
   defp create_pricing_snapshot!(suffix) do
     [[id]] =
       Repo.query!(
@@ -1393,8 +1380,7 @@ defmodule CodexPooler.DBInvariantsTest do
     [
       {"armed", %{replay_attempt_id: nil}},
       {"consumed-open", consumed_tuple()},
-      {"consumed-open-started",
-       consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 3})},
+      {"consumed-open-started", consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 3})},
       {"consumed-closed", consumed_tuple(%{closed_offset_seconds: 11})},
       {"consumed-closed-started",
        consumed_tuple(%{
@@ -1429,12 +1415,9 @@ defmodule CodexPooler.DBInvariantsTest do
       {"consumed-abandon-not-after", consumed_tuple(%{abandon_offset_seconds: 1})},
       {"consumed-start-only", consumed_tuple(%{started_offset_seconds: 2})},
       {"consumed-liveness-only", consumed_tuple(%{last_liveness_offset_seconds: 2})},
-      {"consumed-start-before",
-       consumed_tuple(%{started_offset_seconds: 0, last_liveness_offset_seconds: 2})},
-      {"consumed-liveness-before-start",
-       consumed_tuple(%{started_offset_seconds: 3, last_liveness_offset_seconds: 2})},
-      {"consumed-liveness-at-abandon",
-       consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 10})},
+      {"consumed-start-before", consumed_tuple(%{started_offset_seconds: 0, last_liveness_offset_seconds: 2})},
+      {"consumed-liveness-before-start", consumed_tuple(%{started_offset_seconds: 3, last_liveness_offset_seconds: 2})},
+      {"consumed-liveness-at-abandon", consumed_tuple(%{started_offset_seconds: 2, last_liveness_offset_seconds: 10})},
       {"consumed-closed-too-early", consumed_tuple(%{closed_offset_seconds: 1})},
       {"consumed-terminal", consumed_tuple(%{terminal_offset_seconds: 4})},
       {"expired-too-early",
@@ -1453,8 +1436,7 @@ defmodule CodexPooler.DBInvariantsTest do
          terminal_offset_seconds: 30,
          closed_offset_seconds: 31
        }},
-      {"revoked-missing-close",
-       %{status: "revoked", replay_attempt_id: nil, terminal_offset_seconds: 1}},
+      {"revoked-missing-close", %{status: "revoked", replay_attempt_id: nil, terminal_offset_seconds: 1}},
       {"revoked-close-at-terminal",
        %{
          status: "revoked",

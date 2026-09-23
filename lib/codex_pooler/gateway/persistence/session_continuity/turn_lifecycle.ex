@@ -44,20 +44,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
       turn = insert_next_codex_turn!(locked_session, request, turn_opts, now)
 
-      case Map.get(turn_opts, :pool_upstream_assignment_id) do
-        assignment_id when is_binary(assignment_id) ->
-          locked_session
-          |> Ecto.Changeset.change(%{
-            pool_upstream_assignment_id: assignment_id,
-            status: @session_active,
-            last_heartbeat_at: now,
-            updated_at: now
-          })
-          |> Repo.update!()
-
-        _value ->
-          locked_session
-      end
+      # Turn start marks the session active and alive, and deliberately does not
+      # touch `pool_upstream_assignment_id`. That column is a routing preference
+      # for *later* turns, and writing it from the candidate this turn is about
+      # to dispatch to recorded dispatch rather than outcome: it overwrote on
+      # every turn start with no guard, so a turn refused by every candidate in
+      # the ring left the session pinned to the last one it tried. The durable
+      # binding belongs to `update_session_assignment/3`, which runs at terminal
+      # completion from the attempt that actually served, under owner-witness
+      # authorization.
+      locked_session
+      |> Ecto.Changeset.change(%{
+        status: @session_active,
+        last_heartbeat_at: now,
+        updated_at: now
+      })
+      |> Repo.update!()
 
       turn
     end)
@@ -208,9 +210,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
     {count, _rows} =
       CodexTurn
-      |> join(:inner, [turn], attempt in CodexPooler.Accounting.Attempt,
-        on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id
-      )
+      |> join(:inner, [turn], attempt in CodexPooler.Accounting.Attempt, on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id)
       |> where(
         [turn, attempt],
         turn.request_id == ^request_id and
@@ -298,7 +298,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
         |> generation_completion_query(attempt_id, generation, status)
         |> update_completion(status, error_code, attempt_id, now)
 
-      if count == 1 do
+      if count == 1 and status == @turn_succeeded do
         update_session_assignment(assignment, attempt, owner_witness)
       end
     end)
@@ -322,9 +322,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
   defp generation_completion_query(request_id, attempt_id, generation, status) do
     CodexTurn
-    |> join(:inner, [turn], attempt in Attempt,
-      on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id
-    )
+    |> join(:inner, [turn], attempt in Attempt, on: attempt.id == ^attempt_id and attempt.request_id == turn.request_id)
     |> where(
       [turn, attempt],
       turn.request_id == ^request_id and attempt.replay_generation == ^generation and
@@ -507,11 +505,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     Repo.load(CodexTurn, {columns, row})
   end
 
-  defp turn_opts(%RequestOptions{continuity: continuity, file_bridge: file_bridge}) do
+  # No assignment here any more: nothing in the turn path consumes one, and
+  # carrying it would suggest the turn still records which account served it.
+  # It does not — `attempts` holds that per dispatch, and the session's durable
+  # pin is written at terminal completion.
+  defp turn_opts(%RequestOptions{continuity: continuity}) do
     %{
       turn_claim_key: continuity.turn_claim_key,
-      semantic_turn_digest: continuity.semantic_turn_key,
-      pool_upstream_assignment_id: file_bridge.pool_upstream_assignment_id
+      semantic_turn_digest: continuity.semantic_turn_key
     }
     |> drop_nil_values()
   end
@@ -586,11 +587,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     do: replay_db_now(request_id)
 
   defp lifecycle_now(request_id, nil) do
-    if Repo.exists?(
-         from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id
-       ),
-       do: replay_db_now(request_id),
-       else: now()
+    if Repo.exists?(from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id),
+      do: replay_db_now(request_id),
+      else: now()
   end
 
   defp lifecycle_now(_request_id, _attempt), do: now()

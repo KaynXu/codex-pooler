@@ -2,10 +2,22 @@ defmodule CodexPooler.Status.FeedParser do
   @moduledoc "Bounded, metadata-only parser for the OpenAI status RSS feed."
 
   @max_bytes 1_000_000
-  @max_items 100
+  # Crossing this cap is not a soft degradation: a truncated read cannot tell an
+  # omitted incident from an unseen one, so `complete?` goes false and
+  # retirement stops until the feed shrinks again. The live feed carries ~91
+  # items over the provider's ~90-day window, so 100 left almost no headroom.
+  # This stays well inside the 500-incident store cap in `OpenAIStatus`, and
+  # `@max_bytes` still bounds the read regardless.
+  @max_items 300
   @max_text 4_000
   @max_guid 512
+  @max_component 512
   @max_link 2_048
+  @future_skew_seconds 300
+
+  @doc "The newest-item cap a poll can still account for."
+  @spec max_items() :: pos_integer()
+  def max_items, do: @max_items
 
   @type item :: %{
           guid: String.t(),
@@ -19,7 +31,15 @@ defmodule CodexPooler.Status.FeedParser do
         }
 
   @spec parse(binary(), keyword()) ::
-          {:ok, %{items: [item()], content_hash: String.t()}} | {:error, map()}
+          {:ok,
+           %{
+             items: [item()],
+             content_hash: String.t(),
+             skipped_count: non_neg_integer(),
+             skipped_guids: [String.t()],
+             complete?: boolean()
+           }}
+          | {:error, map()}
   def parse(xml, opts \\ [])
 
   def parse(xml, opts) when is_binary(xml) do
@@ -32,6 +52,12 @@ defmodule CodexPooler.Status.FeedParser do
       byte_size(xml) == 0 ->
         error(:malformed_xml, "feed body is empty")
 
+      not String.valid?(xml) or String.contains?(xml, <<0>>) ->
+        error(:unsafe_xml, "feed must use UTF-8")
+
+      Regex.match?(~r/<\?xml[^?]*encoding\s*=\s*["'](?!utf-8["'])[^"']+["']/i, xml) ->
+        error(:unsafe_xml, "feed must use UTF-8")
+
       Regex.match?(~r/<!(?:DOCTYPE|ENTITY)\b/i, xml) ->
         error(:unsafe_xml, "doctype and entities are not accepted")
 
@@ -43,57 +69,128 @@ defmodule CodexPooler.Status.FeedParser do
   def parse(_, _), do: error(:invalid_body, "feed body must be binary")
 
   defp parse_xml(xml, now) do
-    # xmerl expects the original UTF-8 byte sequence as a charlist. `String.to_charlist/1`
-    # turns multibyte characters into codepoints and makes otherwise valid feeds fail.
-    {doc, _} = :xmerl_scan.string(:binary.bin_to_list(xml), [{:quiet, true}])
-    nodes = :xmerl_xpath.string(~c"//item", doc) |> Enum.map(&elem(&1, 8))
+    # SAX preserves names as strings, unlike DOM scanning which interns provider names.
+    initial = %{path: [], fields: %{}, items: [], channel?: false}
 
-    if length(nodes) > @max_items do
-      error(:too_many_items, "feed item count exceeds limit")
-    else
-      with {:ok, parsed} <- parse_items(nodes, now),
-           {:ok, items} <- deduplicate(parsed) do
-        hash_fields =
-          Enum.map(
-            items,
-            &Map.take(&1, [
-              :guid,
-              :title,
-              :status,
-              :summary,
-              :component,
-              :link,
-              :hash_published_at
-            ])
-          )
+    case :xmerl_sax_parser.stream(xml, [
+           :disallow_entities,
+           {:external_entities, :none},
+           {:fail_undeclared_ref, true},
+           {:event_state, initial},
+           {:event_fun, &sax_event/3}
+         ]) do
+      {:ok, %{channel?: true, items: nodes}, rest} ->
+        if String.trim(to_string(rest)) == "",
+          do: parse_nodes(nodes, now),
+          else: error(:malformed_xml, "unexpected trailing XML")
 
-        {:ok,
-         %{
-           items: Enum.map(items, &Map.delete(&1, :hash_published_at)),
-           content_hash: hash(hash_fields)
-         }}
-      end
+      {:ok, _, _} ->
+        error(:invalid_feed, "feed must contain an RSS channel")
+
+      _ ->
+        error(:malformed_xml, "feed XML could not be parsed")
     end
   catch
     :exit, _ -> error(:malformed_xml, "feed XML could not be parsed")
     _, _ -> error(:malformed_xml, "feed XML could not be parsed")
   end
 
-  defp parse_items(nodes, now) do
-    Enum.reduce_while(nodes, {:ok, []}, fn children, {:ok, acc} ->
-      case parse_fields(children, now) do
-        {:ok, item} -> {:cont, {:ok, [item | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+  defp sax_event({:startElement, _, name, _, _}, _, state) do
+    path = [List.to_string(name) | state.path]
+    state = %{state | path: path, channel?: state.channel? or path == ["channel", "rss"]}
+    if path == ["item", "channel", "rss"], do: %{state | fields: %{}}, else: state
   end
 
-  defp parse_fields(children, now) do
-    fields =
-      children
-      |> Enum.filter(&match?({:xmlElement, _, _, _, _, _, _, _, _, _, _, _}, &1))
-      |> Map.new(fn child -> {local_name(elem(child, 2)), text(child)} end)
+  defp sax_event({:endElement, _, _, _}, _, %{path: ["item", "channel", "rss"]} = state),
+    do: %{state | path: ["channel", "rss"], items: [state.fields | state.items], fields: %{}}
 
+  defp sax_event({:endElement, _, _, _}, _, %{path: [_ | rest]} = state),
+    do: %{state | path: rest}
+
+  defp sax_event({kind, text}, _, %{path: [field, "item", "channel", "rss"]} = state)
+       when kind in [:characters, :ignorableWhitespace] do
+    value = List.to_string(text)
+    %{state | fields: Map.update(state.fields, field, value, &(&1 <> value))}
+  end
+
+  defp sax_event(_, _, state), do: state
+
+  defp parse_nodes(nodes, now) do
+    with {:ok, parsed, skipped, skipped_guids, unnamed} <- parse_items(nodes, now),
+         {:ok, items} <- deduplicate(parsed) do
+      # Two separate questions: did every item we saw get accounted for, and did
+      # we see the whole feed at all. Retirement needs both.
+      complete? = unnamed == 0 and length(items) <= @max_items
+      items = Enum.take(items, @max_items)
+
+      hash_fields =
+        Enum.map(
+          items,
+          &Map.take(&1, [
+            :guid,
+            :title,
+            :status,
+            :summary,
+            :component,
+            :link,
+            :hash_published_at
+          ])
+        )
+
+      {:ok,
+       %{
+         items: Enum.map(items, &Map.delete(&1, :hash_published_at)),
+         content_hash: hash(hash_fields),
+         skipped_count: skipped,
+         skipped_guids: skipped_guids,
+         complete?: complete?
+       }}
+    end
+  end
+
+  # An item we cannot parse is still an item the provider is publishing. When
+  # its guid survives, it is recorded as seen-but-not-updatable so retirement
+  # can run for everything else without retiring an incident that is plainly
+  # still in the feed. Only an item we cannot even name leaves the poll unable
+  # to account for the feed.
+  defp parse_items(nodes, now) do
+    {valid, errors, skipped_guids, unnamed} =
+      Enum.reduce(nodes, {[], [], [], 0}, fn children, {acc, errors, guids, unnamed} ->
+        case parse_fields(children, now) do
+          {:ok, item} ->
+            {[item | acc], errors, guids, unnamed}
+
+          {:error, reason, nil} ->
+            {acc, [reason | errors], guids, unnamed + 1}
+
+          {:error, reason, guid} ->
+            {acc, [reason | errors], [guid | guids], unnamed}
+        end
+      end)
+
+    case {valid, errors} do
+      {[], [error | _]} -> {:error, error}
+      _ -> {:ok, valid, length(errors), Enum.uniq(skipped_guids), unnamed}
+    end
+  end
+
+  # The guid is read on its own so a failure further down the chain still names
+  # the item it happened to. Error precedence is unchanged: this only observes.
+  defp parse_fields(fields, now) do
+    case parse_item_fields(fields, now) do
+      {:ok, item} -> {:ok, item}
+      {:error, reason} -> {:error, reason, identified_guid(fields)}
+    end
+  end
+
+  defp identified_guid(fields) do
+    case required(fields, "guid", @max_guid) do
+      {:ok, guid} -> guid
+      {:error, _unnamed} -> nil
+    end
+  end
+
+  defp parse_item_fields(fields, now) do
     with :ok <- validate_explicit_status(fields),
          {:ok, guid} <- required(fields, "guid", @max_guid),
          {:ok, title} <- required(fields, "title", @max_text),
@@ -202,12 +299,26 @@ defmodule CodexPooler.Status.FeedParser do
     end
   end
 
+  # The bound is deliberate, but a hard cut lands mid-component name and shows
+  # an operator something like "... Codex in ChatGPT Desktop (O". Mark the cut
+  # so a truncated list reads as truncated rather than as a mangled name.
+  defp bounded_component(value) do
+    if String.length(value) <= @max_component do
+      value
+    else
+      value
+      |> String.slice(0, @max_component - 1)
+      |> String.trim_trailing()
+      |> Kernel.<>("\u2026")
+    end
+  end
+
   defp extract_component(description) do
     plain = strip_html(description)
 
-    case Regex.run(~r/affected\s+components?\s+(.{1,256}?)(?:\s+operational\b|\z)/i, plain) do
+    case Regex.run(~r/affected\s+components?\s*:?\s+(.+)\z/iu, plain) do
       [_, value] ->
-        value |> String.trim() |> String.split(~r/\s{2,}|\n/) |> List.first() |> blank_to_nil()
+        value |> String.trim() |> bounded_component() |> blank_to_nil()
 
       _ ->
         nil
@@ -258,8 +369,13 @@ defmodule CodexPooler.Status.FeedParser do
     parsed = if match?({:error, _}, parsed), do: rfc822(value), else: parsed
 
     case parsed do
-      {:ok, dt, _} -> {:ok, if(DateTime.compare(dt, now) == :gt, do: now, else: dt)}
-      _ -> error(:invalid_date, "feed date is invalid")
+      {:ok, dt, _} ->
+        if DateTime.diff(dt, now, :second) <= @future_skew_seconds,
+          do: {:ok, dt},
+          else: error(:invalid_date, "feed date exceeds allowed clock skew")
+
+      _ ->
+        error(:invalid_date, "feed date is invalid")
     end
   end
 
@@ -286,8 +402,9 @@ defmodule CodexPooler.Status.FeedParser do
 
         with {:ok, date} <- Date.new(to_int(year), months[String.downcase(month)], to_int(day)),
              {:ok, time} <- Time.new(to_int(hh), to_int(mm), to_int(ss), 0),
-             {:ok, dt} <- DateTime.new(date, time, offset(zone)) do
-          {:ok, dt, 0}
+             {:ok, seconds} <- offset(String.upcase(zone)),
+             {:ok, dt} <- DateTime.new(date, time, "Etc/UTC") do
+          {:ok, DateTime.add(dt, -seconds, :second), seconds}
         else
           _ -> {:error, :invalid_date}
         end
@@ -299,26 +416,21 @@ defmodule CodexPooler.Status.FeedParser do
     _ -> {:error, :invalid_date}
   end
 
-  defp offset("GMT"), do: "Etc/UTC"
-  defp offset("UTC"), do: "Etc/UTC"
+  defp offset(zone) when zone in ["GMT", "UTC"], do: {:ok, 0}
 
   defp offset(<<sign, hh::binary-size(2), mm::binary-size(2)>>) do
-    seconds = (to_int(hh) * 60 + to_int(mm)) * 60
-    if sign == ?-, do: -seconds, else: seconds
+    hours = to_int(hh)
+    minutes = to_int(mm)
+
+    if hours < 24 and minutes < 60 do
+      seconds = (hours * 60 + minutes) * 60
+      {:ok, if(sign == ?-, do: -seconds, else: seconds)}
+    else
+      {:error, :invalid_date}
+    end
   end
 
   defp to_int(v), do: String.to_integer(v)
-
-  defp text(node) do
-    node
-    |> elem(8)
-    |> Enum.map_join("", fn
-      {:xmlText, _, _, _, value, _} -> List.to_string(value)
-      {:xmlElement, _, _, _, _, _, _, _, _, _, _, _} = child -> text(child)
-      _ -> ""
-    end)
-    |> String.trim()
-  end
 
   defp strip_html(value) do
     value
@@ -341,7 +453,7 @@ defmodule CodexPooler.Status.FeedParser do
 
   defp codepoint(value, base) do
     case Integer.parse(value, base) do
-      {n, ""} when n > 0 and n <= 0x10FFFF -> <<n::utf8>>
+      {n, ""} when n > 0 and n <= 0x10FFFF and n not in 0xD800..0xDFFF -> <<n::utf8>>
       _ -> " "
     end
   end
@@ -357,19 +469,15 @@ defmodule CodexPooler.Status.FeedParser do
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
 
-  defp local_name(name) when is_atom(name),
-    do: name |> Atom.to_string() |> String.split(":") |> List.last()
-
-  defp local_name(name) when is_list(name),
-    do: name |> List.to_string() |> String.split(":") |> List.last()
-
   defp deduplicate(items),
     do:
       {:ok,
        items
        |> Enum.group_by(& &1.guid)
-       |> Enum.map(fn {_guid, xs} -> Enum.max_by(xs, & &1.published_at, DateTime) end)
-       |> Enum.sort_by(& &1.published_at, {:desc, DateTime})}
+       |> Enum.map(fn {_guid, xs} ->
+         Enum.max_by(xs, &{DateTime.to_unix(&1.published_at, :microsecond), hash(&1)})
+       end)
+       |> Enum.sort_by(&{-DateTime.to_unix(&1.published_at, :microsecond), &1.guid})}
 
   defp hash(fields),
     do:

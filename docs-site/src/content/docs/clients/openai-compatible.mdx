@@ -41,7 +41,9 @@ configuration. On `/v1`, Codex Pooler translates supported OpenAI request and
 response shapes while preserving any projected provider `service_tier` value in
 its literal provider vocabulary. Codex backend relay routes under
 `/backend-api/codex` preserve provider bytes, frames, and service-tier
-vocabulary unchanged.
+vocabulary unchanged. The ChatGPT Codex backend reports
+`service_tier: "default"` on completed responses even when the request asked
+for `priority`, and Codex Pooler relays that value as reported.
 
 `ultrafast` is a separate tier, not an alias for `fast` or `priority`. Use
 `service_tier: "ultrafast"` only with direct `/v1/responses` requests when the
@@ -230,7 +232,19 @@ accepts only ordered `url_citation` annotations with exactly `type`,
 explicit empty annotation lists, and omission exactly. Malformed or unsupported
 annotation shapes are rejected before dispatch rather than filtered.
 
-`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` rejects `context_management`, and direct `POST /v1/responses/compact` remains unsupported. Explicit compaction is available on the normal `/v1/responses` route.
+`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. That probe is an ordinary authenticated request: a client that issues it without the Pool API key is refused like any other route, and a client that caches the refusal will keep using whatever context window it bundles for the model instead. Configure the context window explicitly wherever the client allows it. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Their output-budget fields are `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer; availability at the SDK layer does not establish upstream support or a hard generation limit. Codex Pooler's public `/v1/responses` rejects `context_management`, and direct `POST /v1/responses/compact` remains unsupported. Explicit compaction is available on the normal `/v1/responses` route.
+
+### Output budgets and local usage
+
+Codex Pooler checks token policy against admission estimates. The output reservation floor is 512 tokens, or 2,048 when context is opaque; higher accepted request or policy values can increase the estimate. Continuation references and other opaque input prevent a complete input count from the visible payload. These are local accounting estimates in both Full and Lite serving modes, not provider hard bounds. The selected upstream may refuse `max_output_tokens`; forwarding a field or switching serving modes does not guarantee output enforcement. Actual measured usage is recorded without clipping, so a single response can exceed its reservation or remaining token budget. There is no absolute per-response spend cap.
+
+`GET /v1/usage` separates measured reporting from local enforcement. Existing `total_tokens` and priced cost totals remain measured-usage reporting; a price snapshot produces an estimate, not an invoice or a provider-confirmed charge. `budget_usage.daily` and `budget_usage.weekly` each expose `known_total_tokens`, `provisional_total_tokens`, `pending_total_tokens`, `effective_total_tokens`, and `admission_count`. Daily means midnight UTC onward; weekly means the trailing seven days. These components cover only the authenticated key across models and routes, never other keys.
+
+Effective pressure is known plus provisional plus pending. Attempted work with unknown terminal usage keeps its original estimate provisionally until a known correction or expiry of the original terminal window. A correction replaces that estimate once at the original terminal time. Pre-attempt failures create no provisional consumption; pending reservations remain pressure across a window boundary. RPM counts each admitted reservation once, without refunds or movement on correction.
+
+The local `limits` list describes active default-policy thresholds; it is not a model-override simulator. A matching active model override replaces the default binding for admission, including its blank fields, while comparing its thresholds with whole-key pressure. Provider quota windows remain separate in `upstream_limits`; Codex-compatible usage endpoints retain their upstream quota authority when available. See [API key limits](/operators/api-keys/#limits) for policy and concurrency configuration.
+
+An optional key-wide `max_active_requests` limit spans the fleet and all models and routes. A trusted local saturation denial is `429 api_key_concurrency_limit_exceeded`, typed `rate_limit_error`, with HTTP `Retry-After: 1`. Back off before retrying; the interval does not promise availability. Native and narrow public Responses websockets receive the equivalent turn error and can retry on the same connection when a slot becomes available. A provider error that happens to use the same code is not trusted as a local concurrency denial and does not acquire its retry header or type. Authentication `401` and policy-budget `403` remain distinct.
 
 ### Request an explicit compaction turn
 
@@ -420,6 +434,45 @@ not promise cross-ID concurrency or fairness. `previous_response_id` controls
 conversation lineage independently. REST `POST /v1/responses`, native backend
 WebSockets, Chat, compact, and batches do not accept this field.
 
+### Error types on errors Codex Pooler authors
+
+Errors that Codex Pooler itself authors carry an `error.type` that agrees with
+the HTTP status about whether the failure is worth retrying. The same
+classification applies to HTTP error bodies on `/v1/*` and
+`/backend-api/codex/*` and to error frames on `GET /v1/responses`, so one code
+has one type on every surface.
+
+- `server_error`: the failure is on the server side, including failures raised
+  while the server hands a turn between connections. The same request can
+  succeed on a retry.
+- `rate_limit_error`: the request was throttled with HTTP `429`. Retry after
+  backing off.
+- `invalid_request_error`: the client must change the request before retrying,
+  or the connection was superseded by its own newer replacement.
+
+No released client branches on `error.type` for retries. openai-node,
+openai-python and the Vercel AI SDK retry on the HTTP status (`408`, `409`,
+`429`, `5xx`) and on connection errors, and the first two honour an
+`x-should-retry` response header that overrides the status in both directions.
+Codex's HTTP client retries `5xx` and transport errors, not `429`, with a
+default budget of four retries on a 200 ms doubling backoff; its sampling loop
+then retries any retryable turn error, including an unexpected status such as
+`409` and a `429` rate limit, up to five more times from its own error variant,
+surfacing each as a stream disconnect and falling back from websocket to HTTPS
+once that budget is spent. None of that reads the type. Keep that behaviour and use the type and `error.code` for diagnosis,
+treating `error.code` as an open string as described below; on the
+`GET /v1/responses` frame surface there is no HTTP status, and the type is what
+a reader sees. The status and the type never disagree: a `5xx` response or frame
+is never typed `invalid_request_error`. Errors relayed from the Codex backend
+follow the rules in the next section.
+
+Policy denials that Codex Pooler authors (`api_key_missing`,
+`api_key_disabled`, `api_key_policy_malformed`, `model_not_allowed`,
+`image_generation_disabled`) keep their
+own code and message on `/v1/*`, exactly as on `/backend-api/codex/*`; they are
+never rewritten to `server_error` or `upstream request failed`, because no
+upstream was involved.
+
 ### Relayed terminal errors
 
 When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when
@@ -448,6 +501,25 @@ fixed safe fallback when it is blank. The error never includes a provider
 `param`, body, or sibling fields. Durable accounting and logs retain only the
 exact code, fixed accounting text, and bounded facts. Every other provider error
 continues to use the generic redaction above.
+
+A second narrow exception covers upstream parameter validation. When upstream
+rejects a `POST /v1/responses` or `POST /v1/chat/completions` request before
+any stream starts with HTTP `400`, type `invalid_request_error`, and one of the
+codes `unsupported_value`, `invalid_value`, `unsupported_parameter`,
+`missing_required_parameter`, `invalid_type`, or `string_above_max_length`,
+streaming and non-streaming clients receive a `400` JSON error with type
+`invalid_request_error`, that code, a bounded `param` field path or `null`, and
+a message written by Codex Pooler from the code and param, for example
+`upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high`.
+SDKs expose these as `BadRequestError` with `code` and `param`. The provider
+message is never forwarded; for `unsupported_value` and `invalid_value` the
+message may list up to 12 supported values when upstream reports them as simple
+identifiers, never the rejected value. Chat Completions requests receive the
+Chat field they sent where Codex Pooler renamed it, for example
+`reasoning_effort`, `max_tokens`, `verbosity`, or `response_format`, and the
+message names that same Chat field; other paths name the upstream Responses
+field. Other statuses, types, and codes keep
+the generic redaction.
 
 Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In
 `openai-python`, leave `_strict_response_validation` at its default `false` when using this compatibility surface.

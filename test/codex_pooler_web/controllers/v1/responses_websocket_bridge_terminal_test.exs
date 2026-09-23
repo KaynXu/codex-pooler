@@ -154,14 +154,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
         })
       end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                    1_000
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
                    1_000
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -182,8 +180,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     assert %{
              "code" => "server_error",
              "error" => nested_error,
-             "message" =>
-               "upstream request failed: stream interrupted before terminal response event",
+             "message" => "upstream request failed: stream interrupted before terminal response event",
              "param" => nil,
              "sequence_number" => sequence_number,
              "type" => "error"
@@ -195,8 +192,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
     assert nested_error == %{
              "code" => "server_error",
-             "message" =>
-               "upstream request failed: stream interrupted before terminal response event",
+             "message" => "upstream request failed: stream interrupted before terminal response event",
              "param" => nil,
              "type" => "server_error"
            }
@@ -274,8 +270,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
           })
         end)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                      1_000
 
       owner = sole_owner_pid!()
@@ -293,8 +288,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
       send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
                      1_000
 
       # If the task exits before this external monitor is fully registered,

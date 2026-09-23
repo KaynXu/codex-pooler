@@ -226,6 +226,16 @@ defmodule CodexPooler.Accounting do
   defdelegate recover_stale_reservations(now \\ DateTime.utc_now(), opts \\ []),
     to: RequestLifecycle
 
+  @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
+          {:ok, map()} | {:error, term(), map()}
+  defdelegate recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []),
+    to: RequestLifecycle
+
+  @spec recover_dead_execution_attempts(DateTime.t(), keyword()) ::
+          {:ok, map()} | {:error, term(), map()}
+  defdelegate recover_dead_execution_attempts(now \\ DateTime.utc_now(), opts \\ []),
+    to: RequestLifecycle
+
   @spec finalize_request(Request.t(), Attempt.t(), map()) :: request_result()
   defdelegate finalize_request(request, attempt, attrs \\ %{}), to: RequestLifecycle
 
@@ -261,6 +271,11 @@ defmodule CodexPooler.Accounting do
 
     finalize_request_with_disposition(request, attempt, opts)
   end
+
+  @spec revoke_armed_replay_entitlement!(Ecto.UUID.t(), Attempt.t() | nil, DateTime.t()) ::
+          :revoked | :noop
+  defdelegate revoke_armed_replay_entitlement!(request_id, attempt, timestamp),
+    to: RequestLifecycle
 
   @spec finalize_reservation_failure(Request.t(), map()) :: request_result()
   def finalize_reservation_failure(%Request{} = request, opts \\ %{}) do
@@ -317,8 +332,7 @@ defmodule CodexPooler.Accounting do
       Map.merge(opts, %{
         request_status: "failed",
         attempt_status: "failed",
-        usage:
-          Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
+        usage: Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
         last_error_code: Map.get(opts, :last_error_code, "stream_interrupted")
       })
 
@@ -344,8 +358,7 @@ defmodule CodexPooler.Accounting do
       Map.merge(opts, %{
         request_status: "failed",
         attempt_status: "failed",
-        usage:
-          Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
+        usage: Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
         last_error_code: Map.get(opts, :last_error_code, "stream_interrupted")
       })
 
@@ -354,6 +367,9 @@ defmodule CodexPooler.Accounting do
 
   @spec list_ledger_entries_for_request(Request.t() | Ecto.UUID.t()) :: [term()]
   defdelegate list_ledger_entries_for_request(request), to: LedgerReads
+
+  @spec reservation_outstanding?(Request.t() | Ecto.UUID.t()) :: boolean()
+  defdelegate reservation_outstanding?(request), to: LedgerReads
 
   @spec token_totals_by_upstream_identity_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
           optional(Ecto.UUID.t()) => non_neg_integer()

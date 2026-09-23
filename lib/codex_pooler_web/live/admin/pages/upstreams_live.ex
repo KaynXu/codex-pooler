@@ -357,8 +357,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   def handle_event("confirm_delete_account", %{"upstream_delete" => delete_params}, socket) do
-    {:noreply,
-     AccountLifecycleWorkflow.confirm_delete(socket, delete_params, &reload_upstreams/1)}
+    {:noreply, AccountLifecycleWorkflow.confirm_delete(socket, delete_params, &reload_upstreams/1)}
   end
 
   def handle_event("open_saved_reset_policy", %{"id" => identity_id}, socket) do
@@ -384,8 +383,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   def handle_event("close_quota_observations", _params, socket) do
-    {:noreply,
-     socket |> assign(:quota_observations_open?, false) |> flush_deferred_upstreams_reload()}
+    {:noreply, socket |> assign(:quota_observations_open?, false) |> flush_deferred_upstreams_reload()}
   end
 
   def handle_event("cancel_saved_reset_policy", _params, socket) do
@@ -413,13 +411,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   def handle_event("toggle_account_pools_panel", %{"id" => identity_id}, socket) do
-    {:noreply,
-     update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :pools))}
+    {:noreply, update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :pools))}
   end
 
   def handle_event("toggle_account_tokens_panel", %{"id" => identity_id}, socket) do
-    {:noreply,
-     update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :tokens))}
+    {:noreply, update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :tokens))}
   end
 
   def handle_event("cancel_saved_reset_redemption", _params, socket) do
@@ -659,8 +655,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       upstreams_reload_dirty?: false,
       upstreams_reload_rerun?: false,
       upstreams_loaded?: true,
-      account_panel_views:
-        prune_account_panel_views(socket.assigns.account_panel_views, upstream_accounts)
+      account_panel_views: prune_account_panel_views(socket.assigns.account_panel_views, upstream_accounts)
     )
   end
 

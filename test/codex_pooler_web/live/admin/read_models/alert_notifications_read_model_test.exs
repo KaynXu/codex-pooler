@@ -41,9 +41,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModelTest do
         "password_change_required" => "false"
       })
 
-    operator_pool_assignment_fixture(admin, assigned_pool,
-      created_by_user_id: owner_scope.user.id
-    )
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner_scope.user.id)
 
     admin_scope = Scope.for_user(admin)
     %{identity: identity} = upstream_assignment_fixture(assigned_pool)
@@ -64,9 +62,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModelTest do
              )
 
     assert {:ok, %{incident: same_incident, inserted?: false, target_inserted?: true}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(hidden_rule, hidden_pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(hidden_rule, hidden_pool, identity, dedupe_key, matched_at))
 
     assert same_incident.id == incident.id
 
@@ -123,9 +119,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModelTest do
              )
 
     assert {:ok, %{inserted?: false, target_inserted?: false}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(hidden_rule, hidden_pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(hidden_rule, hidden_pool, identity, dedupe_key, matched_at))
 
     assert %{rows: [], unread_count: 0, empty?: true} =
              AlertNotificationsReadModel.load(owner_scope)
@@ -147,14 +141,10 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModelTest do
     matched_at = now()
 
     assert {:ok, %{incident: incident, inserted?: true, target_inserted?: true}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(first_rule, pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(first_rule, pool, identity, dedupe_key, matched_at))
 
     assert {:ok, %{incident: same_incident, inserted?: false, target_inserted?: true}} =
-             Alerts.record_incident_once(
-               saved_reset_match_attrs(second_rule, pool, identity, dedupe_key, matched_at)
-             )
+             Alerts.record_incident_once(saved_reset_match_attrs(second_rule, pool, identity, dedupe_key, matched_at))
 
     assert same_incident.id == incident.id
     assert alert_incident_target_count(incident.id) == 2
@@ -240,9 +230,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModelTest do
         "password_change_required" => "false"
       })
 
-    operator_pool_assignment_fixture(admin, assigned_pool,
-      created_by_user_id: owner_scope.user.id
-    )
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner_scope.user.id)
 
     admin_scope = Scope.for_user(admin)
 

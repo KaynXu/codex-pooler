@@ -1,11 +1,13 @@
 defmodule CodexPooler.Accounting.UsageSettlementPostgresTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPooler.AccountingTestSupport
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{DailyRollup, HourlyModelUsageRollup, LedgerEntry, RequestLogFact}
+  alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
   alias Ecto.Adapters.SQL.Sandbox
@@ -107,6 +109,22 @@ defmodule CodexPooler.Accounting.UsageSettlementPostgresTest do
       assert recorded.output_tokens == 5
       assert recorded.reasoning_tokens == 2
       assert recorded.total_tokens == 21
+      assert recorded.occurred_at == fixture.failed.settlement.occurred_at
+
+      window =
+        LedgerEntries.window_usages(
+          fixture.api_key.id,
+          all: DateTime.add(fixture.failed.settlement.occurred_at, -60, :second)
+        ).all
+
+      assert %{
+               effective_request_count: 1,
+               known_total_tokens: 21,
+               provisional_total_tokens: 0,
+               pending_total_tokens: 0,
+               effective_total_tokens: 21
+             } = window
+
       assert Decimal.equal?(recorded.settled_cost_micros, Decimal.new(623))
       assert Enum.count(entries, &(&1.entry_kind == "reservation")) == 1
       assert Enum.count(entries, &(&1.entry_kind == "release")) == 1

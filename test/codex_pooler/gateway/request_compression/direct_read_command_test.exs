@@ -31,9 +31,7 @@ defmodule CodexPooler.Gateway.RequestCompression.DirectReadCommandTest do
     for arguments <- accepted do
       assert DirectReadCommand.read?(arguments), inspect(arguments)
 
-      assert DirectReadCommand.read?(
-               CodexPooler.JSON.encode!(Map.put(arguments, "trace", "synthetic"))
-             )
+      assert DirectReadCommand.read?(CodexPooler.JSON.encode!(Map.put(arguments, "trace", "synthetic")))
     end
   end
 

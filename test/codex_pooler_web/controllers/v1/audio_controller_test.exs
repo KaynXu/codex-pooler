@@ -309,8 +309,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
 
     refute Repo.exists?(
              from model in CodexPooler.Catalog.Model,
-               where:
-                 model.pool_id == ^setup.pool.id and model.exposed_model_id == "gpt-4o-transcribe"
+               where: model.pool_id == ^setup.pool.id and model.exposed_model_id == "gpt-4o-transcribe"
            )
 
     response =
@@ -471,9 +470,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     sentinel = "synthetic unexpected upstream body"
 
     upstream =
-      start_upstream(
-        FakeUpstream.raw_response(sentinel, headers: [{"content-type", "text/plain"}])
-      )
+      start_upstream(FakeUpstream.raw_response(sentinel, headers: [{"content-type", "text/plain"}]))
 
     setup = gateway_setup(upstream)
 

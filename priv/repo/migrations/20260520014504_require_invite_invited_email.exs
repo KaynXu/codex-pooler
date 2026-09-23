@@ -14,9 +14,7 @@ defmodule CodexPooler.Repo.Migrations.RequireInviteInvitedEmail do
       modify :invited_email, :text, null: false
     end
 
-    create constraint(:invites, :invites_invited_email_not_blank_check,
-             check: "btrim(invited_email) <> ''"
-           )
+    create constraint(:invites, :invites_invited_email_not_blank_check, check: "btrim(invited_email) <> ''")
   end
 
   def down do

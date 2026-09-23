@@ -46,8 +46,19 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   def compaction_input_mode(%{}), do: :full_history
 
   @spec compaction_result_transport(payload()) :: compaction_result_transport()
-  def compaction_result_transport(%{"client_metadata" => %{} = metadata}) do
+  def compaction_result_transport(%{"input" => input} = payload) when is_list(input) do
+    if Enum.any?(input, &match?(%{"type" => "compaction_trigger"}, &1)),
+      do: :sse,
+      else: declared_result_transport(payload)
+  end
+
+  def compaction_result_transport(payload), do: declared_result_transport(payload)
+
+  defp declared_result_transport(%{"client_metadata" => %{} = metadata}) do
     case metadata["x-codex-turn-metadata"] do
+      %{"compaction" => %{"implementation" => "responses_compaction_v2"}} ->
+        :sse
+
       turn_metadata when is_binary(turn_metadata) ->
         case CodexPooler.JSON.decode(turn_metadata) do
           {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}} -> :sse
@@ -59,10 +70,10 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     end
   end
 
-  def compaction_result_transport(%{}), do: :buffered
+  defp declared_result_transport(%{}), do: :buffered
 
   @spec v2_streaming?(payload()) :: boolean()
-  def v2_streaming?(payload), do: compaction_result_transport(payload) == :sse
+  def v2_streaming?(payload), do: declared_result_transport(payload) == :sse
 
   @type result_mode :: :sse | :public_sse | :response | :websocket | :native_websocket
 
@@ -102,8 +113,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
       Map.has_key?(payload, "parallel_tool_calls") and
           not is_boolean(payload["parallel_tool_calls"]) ->
-        {:error,
-         Error.invalid_request("parallel_tool_calls must be a boolean", "parallel_tool_calls")}
+        {:error, Error.invalid_request("parallel_tool_calls must be a boolean", "parallel_tool_calls")}
 
       Map.has_key?(payload, "text") and not is_map(payload["text"]) ->
         {:error, Error.invalid_request("text must be an object", "text")}
@@ -171,7 +181,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
          %{
            status: 502,
            code: "invalid_compaction_response",
-           message: "upstream compact response was not valid JSON"
+           message: "upstream compact response was not valid JSON",
+           compaction_invalid_reason: "invalid_json"
          }}
 
       {:error, :missing_encrypted_content} ->
@@ -179,7 +190,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
          %{
            status: 502,
            code: "invalid_compaction_response",
-           message: "upstream compact response did not include encrypted compaction content"
+           message: "upstream compact response did not include encrypted compaction content",
+           compaction_invalid_reason: "missing_encrypted_content"
          }}
     end
   end
@@ -491,12 +503,18 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   end
 
   defp adapted_result(result, decoded, item, :websocket) do
+    response = public_response(decoded, item)
+
     %{
       status: 200,
       headers: json_headers(result),
       websocket_messages: [
-        %{"type" => "response.output_item.done", "item" => item},
-        %{"type" => "response.completed", "response" => public_response(decoded, item)}
+        %{
+          "type" => "response.created",
+          "response" => %{response | "status" => "in_progress", "output" => []}
+        },
+        %{"type" => "response.output_item.done", "output_index" => 0, "item" => item},
+        %{"type" => "response.completed", "response" => response}
       ]
     }
   end

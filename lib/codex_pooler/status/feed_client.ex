@@ -1,5 +1,6 @@
 defmodule CodexPooler.Status.FeedClient do
   @moduledoc "Req boundary for the fixed OpenAI status RSS feed."
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Status.FeedParser
   @url "https://status.openai.com/feed.rss"
   @max_bytes 1_000_000
@@ -7,6 +8,7 @@ defmodule CodexPooler.Status.FeedClient do
   @spec fetch(map(), keyword()) :: {:ok, map()} | {:not_modified, map()} | {:error, map()}
   def fetch(state \\ %{}, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 10_000)
+    url = Keyword.get(opts, :url, @url)
 
     headers =
       []
@@ -14,17 +16,34 @@ defmodule CodexPooler.Status.FeedClient do
       |> maybe_header("if-modified-since", Map.get(state, :last_modified))
 
     request = [
-      url: Keyword.get(opts, :url, @url),
+      url: url,
       headers: headers,
       decode_body: false,
+      compressed: false,
+      into: &collect_chunk/2,
       retry: false,
       receive_timeout: timeout,
-      connect_options: [timeout: timeout],
+      # Req refuses `connect_options` together with `finch`, so the connect
+      # timeout travels as Finch `conn_opts` next to the idle bound.
+      finch: OutboundHTTP.pool_options_for_url(url, transport_opts: [timeout: timeout]),
       redirect: false
     ]
 
-    Req.get(request) |> handle_response(state, opts)
+    OutboundHTTP.get(request) |> handle_response(state, opts)
   end
+
+  defp collect_chunk({:data, data}, {request, response}) do
+    body = response.body || ""
+
+    if byte_size(body) + byte_size(data) > @max_bytes do
+      {:halt, {request, Req.Response.put_private(response, :status_feed_too_large, true)}}
+    else
+      {:cont, {request, %{response | body: body <> data}}}
+    end
+  end
+
+  defp handle_response({:ok, %{private: %{status_feed_too_large: true}}}, _state, _opts),
+    do: error(:body_too_large, "feed body exceeds limit")
 
   defp handle_response({:ok, %{status: 200, headers: headers, body: body}}, _state, opts)
        when is_binary(body),

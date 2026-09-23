@@ -40,8 +40,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
         }
   @type link_result ::
           {:ok, link_success()}
-          | {:error,
-             Ecto.Changeset.t() | lifecycle_error() | IdentityLifecycle.identity_conflict()}
+          | {:error, Ecto.Changeset.t() | lifecycle_error() | IdentityLifecycle.identity_conflict()}
 
   @spec link_tokens(Scope.t(), Pool.t(), map(), keyword()) :: link_result()
   def link_tokens(scope, pool, attrs, opts \\ [])
@@ -113,8 +112,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
         {:ok, persist_prepared!(scope, pool, prepared, Keyword.get(opts, :slots_locked?, false))}
       end
     else
-      {:error,
-       lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
+      {:error, lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
     end
   end
 
@@ -182,8 +180,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
         persist_validated_prepared(scope, pool, prepared, :select)
       end
     else
-      {:error,
-       lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
+      {:error, lifecycle_error(:transaction_required, "token linking requires a caller-owned transaction")}
     end
   end
 
@@ -680,9 +677,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
     case Keyword.get(opts, :quota_trigger_kind) do
       trigger_kind when is_binary(trigger_kind) ->
         _job =
-          Jobs.enqueue_assignment_priming(assignment.pool_id, assignment,
-            trigger_kind: trigger_kind
-          )
+          Jobs.enqueue_assignment_priming(assignment.pool_id, assignment, trigger_kind: trigger_kind)
 
         {:ok, %{result | assignment: Repo.reload!(assignment)}}
 

@@ -178,8 +178,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
         FakeUpstream.expect_request(
           method: "WEBSOCKET",
           websocket_connection_ordinal: 1,
-          respond:
-            FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close")
+          respond: FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close")
         ),
         FakeUpstream.expect_request(
           method: "WEBSOCKET",
@@ -226,8 +225,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
         FakeUpstream.expect_request(
           method: "WEBSOCKET",
           websocket_connection_ordinal: 1,
-          respond:
-            FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close")
+          respond: FakeUpstream.websocket_sse_then_close([], code: 1001, reason: "synthetic close")
         ),
         FakeUpstream.expect_request(
           method: "GET",
@@ -311,9 +309,7 @@ defmodule CodexPooler.FakeUpstreamWebsocketContractTest do
 
   test "keeps malformed upgrade failure output bounded" do
     {upstream, _session} =
-      start_resources(
-        FakeUpstream.websocket_upgrade_error(%{"error" => "malformed"}, status: 502)
-      )
+      start_resources(FakeUpstream.websocket_upgrade_error(%{"error" => "malformed"}, status: 502))
 
     assert {:error, %{body: "", reason: {:websocket_upgrade_failed, 502, _}}} =
              UpstreamWebsocketSession.request_once(websocket_request(upstream))

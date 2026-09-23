@@ -30,9 +30,7 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
       {:trusted_unknown, unknown_metadata(), true, :present},
       {:trusted_unknown_without_secret, unknown_metadata(), false, :missing},
       {:legacy_past, %{"access_token_expires_at" => DateTime.to_iso8601(past)}, true, :expired},
-      {:legacy_future_epoch_one,
-       %{"credential_epoch" => 1, "secret_expires_at" => DateTime.to_iso8601(future)}, true,
-       :present},
+      {:legacy_future_epoch_one, %{"credential_epoch" => 1, "secret_expires_at" => DateTime.to_iso8601(future)}, true, :present},
       {:canonical_raw_key_wins_even_when_invalid,
        %{
          "access_token_expires_at" => "invalid",
@@ -60,8 +58,7 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
        }, true, :present},
       {:mismatched_marker_disables_raw_fallback,
        trusted_metadata(past)
-       |> put_in(["token_refresh", "access_token_expiry", "credential_epoch"], 2), true,
-       :present},
+       |> put_in(["token_refresh", "access_token_expiry", "credential_epoch"], 2), true, :present},
       {:future_marker_with_extra_key_is_untrusted,
        trusted_metadata(future)
        |> put_in(["token_refresh", "access_token_expiry", "extra"], true), false, :missing},
@@ -354,15 +351,13 @@ defmodule CodexPooler.Upstreams.CredentialExpiryConsumersTest do
             where: a.upstream_identity_id == ^identity.id,
             order_by: a.id
         ),
-      secrets:
-        Repo.all(
-          from s in EncryptedSecret, where: s.upstream_identity_id == ^identity.id, order_by: s.id
-        )
+      secrets: Repo.all(from s in EncryptedSecret, where: s.upstream_identity_id == ^identity.id, order_by: s.id)
     }
   end
 
   defp lifecycle_fixture(metadata) do
-    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    # Tests build several lifecycles, and the singleton admits one owner: every call gets that one.
+    %{user: owner} = bootstrap_owner_fixture()
     scope = Scope.for_user(owner, ["instance_owner"])
     pool = pool_fixture()
     identity = active_upstream_identity_fixture(metadata: metadata)

@@ -27,9 +27,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     Repo.transaction(fn ->
       with {:ok, pool} <- Pools.create_pool(scope, pool_create_attrs(attrs), broadcast?: false),
            {:ok, _settings} <-
-             PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs),
-               broadcast?: false
-             ),
+             PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
            :ok <-
              UpstreamAssignments.sync_pool_assignments_for_pool_edit(
                pool,
@@ -92,9 +90,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     with {:ok, pool} <-
            Pools.update_pool(scope, pool_or_id, pool_edit_attrs(attrs), broadcast?: false),
          {:ok, _settings} <-
-           PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs),
-             broadcast?: false
-           ),
+           PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
          :ok <-
            UpstreamAssignments.sync_pool_assignments_for_pool_edit(pool, assignment_ids,
              select_by: select_by,
@@ -113,9 +109,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     with %Pool{} = pool <- admin_pool_for_assignment(pool_or_id),
          :ok <- Access.assign_api_keys_to_pool(scope, pool, api_key_ids),
          {:ok, _settings} <-
-           PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs),
-             broadcast?: false
-           ),
+           PoolRouting.update_routing_settings(scope, pool, routing_attrs(attrs), broadcast?: false),
          :ok <-
            UpstreamAssignments.sync_pool_assignments_for_pool_edit(pool, assignment_ids,
              select_by: select_by,

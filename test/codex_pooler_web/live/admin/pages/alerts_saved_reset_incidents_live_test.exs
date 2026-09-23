@@ -50,8 +50,7 @@ defmodule CodexPoolerWeb.Admin.AlertsSavedResetIncidentsLiveTest do
 
     assert {:ok, incident} =
              Alerts.record_incident_match(%{
-               dedupe_key:
-                 "alerts:v2:upstream_saved_reset_banked_first_seen:upstream_identity:#{identity.id}",
+               dedupe_key: "alerts:v2:upstream_saved_reset_banked_first_seen:upstream_identity:#{identity.id}",
                scope_type: "upstream_identity",
                rule_kind: rule.rule_kind,
                severity: "info",
@@ -209,8 +208,7 @@ defmodule CodexPoolerWeb.Admin.AlertsSavedResetIncidentsLiveTest do
           ] do
         assert {:ok, incident} =
                  Alerts.record_incident_match(%{
-                   dedupe_key:
-                     "alerts:v2:upstream_saved_reset_banked_first_seen:upstream_identity:#{identity.id}",
+                   dedupe_key: "alerts:v2:upstream_saved_reset_banked_first_seen:upstream_identity:#{identity.id}",
                    scope_type: "upstream_identity",
                    rule_kind: rule.rule_kind,
                    severity: "info",

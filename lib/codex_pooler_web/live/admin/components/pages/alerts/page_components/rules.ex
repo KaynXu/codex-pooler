@@ -285,9 +285,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               field={@rule_form[:target_state]}
               type="select"
               label="Target state"
-              options={
-                AlertRuleForm.target_state_options(AlertRuleForm.value(@rule_form[:rule_kind]))
-              }
+              options={AlertRuleForm.target_state_options(AlertRuleForm.value(@rule_form[:rule_kind]))}
             />
 
             <.input
@@ -398,8 +396,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
     do: "All assignments #{AlertRuleForm.target_state_label(rule.target_state)}"
 
   defp threshold_summary(%AlertRule{rule_kind: "upstream_quota_threshold"} = rule),
-    do:
-      "#{AlertRuleForm.window_selector_label(rule.window_selector)} at #{AlertRuleForm.threshold_label(rule.threshold_used_percent)}"
+    do: "#{AlertRuleForm.window_selector_label(rule.window_selector)} at #{AlertRuleForm.threshold_label(rule.threshold_used_percent)}"
 
   defp threshold_summary(%AlertRule{rule_kind: "upstream_auth_state"} = rule),
     do: "Assigned upstream #{AlertRuleForm.target_state_label(rule.target_state)}"

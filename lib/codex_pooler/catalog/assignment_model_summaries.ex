@@ -82,8 +82,7 @@ defmodule CodexPooler.Catalog.AssignmentModelSummaries do
                 source_metadata
                 |> then(&ModelInfo.from_sources([&1]))
                 |> maybe_attach_catalog_updated_at(model.last_seen_at, preserved, assignment_id),
-              provenance:
-                if(Map.has_key?(preserved, assignment_id), do: :preserved, else: :observed)
+              provenance: if(Map.has_key?(preserved, assignment_id), do: :preserved, else: :observed)
             }
           ]
         else

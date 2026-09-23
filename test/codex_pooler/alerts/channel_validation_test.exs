@@ -59,8 +59,7 @@ defmodule CodexPooler.Alerts.ChannelValidationTest do
              Alerts.create_channel(scope, %{
                channel_type: "webhook",
                display_name: "Webhook alerts",
-               endpoint_url:
-                 " https://Hooks.Example.COM/services/abcd1234/team-5678?token=query-token ",
+               endpoint_url: " https://Hooks.Example.COM/services/abcd1234/team-5678?token=query-token ",
                metadata: %{}
              })
 

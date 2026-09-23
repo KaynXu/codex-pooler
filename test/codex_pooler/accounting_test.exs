@@ -1407,9 +1407,7 @@ defmodule CodexPooler.AccountingTest do
                0
 
       identity_row =
-        rollup_row(actual_rows, "upstream_identity",
-          upstream_identity_id: fixture.primary.identity.id
-        )
+        rollup_row(actual_rows, "upstream_identity", upstream_identity_id: fixture.primary.identity.id)
 
       assert identity_row.pool_id == fixture.secondary.pool.id
       assert identity_row.request_count == 2
@@ -1509,6 +1507,9 @@ defmodule CodexPooler.AccountingTest do
   defp count_repo_commands(fun) do
     parent = self()
     handler_id = "accounting-test-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

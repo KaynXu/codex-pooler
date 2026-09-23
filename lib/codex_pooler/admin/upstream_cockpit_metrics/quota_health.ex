@@ -95,8 +95,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
       kpis: kpis,
       empty?: items == [],
       degraded?: quota_health_degraded?(kpis),
-      missing?:
-        kpis.assignment_count > 0 and kpis.missing_evidence_count == kpis.assignment_count,
+      missing?: kpis.assignment_count > 0 and kpis.missing_evidence_count == kpis.assignment_count,
       state: quota_health_state(kpis)
     }
   end
@@ -111,9 +110,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
     measurements = quota_measurements(display_window)
 
     %{}
-    |> Map.merge(
-      Map.take(assignment, [:upstream_identity_id, :pool_id, :pool_label, :assignment_label])
-    )
+    |> Map.merge(Map.take(assignment, [:upstream_identity_id, :pool_id, :pool_label, :assignment_label]))
     |> Map.put(:assignment_id, assignment.id)
     |> Map.put(:state, state)
     |> Map.put(:state_label, quota_state_label(state))

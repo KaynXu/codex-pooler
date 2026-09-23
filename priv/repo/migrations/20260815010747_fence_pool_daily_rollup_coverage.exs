@@ -258,21 +258,15 @@ defmodule CodexPooler.Repo.Migrations.FencePoolDailyRollupCoverage do
   def down do
     execute("DELETE FROM public.daily_rollup_coverages")
 
-    execute(
-      "DROP TRIGGER IF EXISTS daily_rollup_coverages_guard_contract ON public.daily_rollup_coverages"
-    )
+    execute("DROP TRIGGER IF EXISTS daily_rollup_coverages_guard_contract ON public.daily_rollup_coverages")
 
     execute("DROP FUNCTION IF EXISTS public.guard_pool_daily_rollup_coverage_contract()")
 
-    execute(
-      "DROP TRIGGER IF EXISTS daily_rollups_track_pool_daily_rollup_mutation ON public.daily_rollups"
-    )
+    execute("DROP TRIGGER IF EXISTS daily_rollups_track_pool_daily_rollup_mutation ON public.daily_rollups")
 
     execute("DROP FUNCTION IF EXISTS public.track_daily_rollup_pool_mutation()")
 
-    execute(
-      "DROP TRIGGER IF EXISTS ledger_entries_track_pool_daily_rollup_mutation ON public.ledger_entries"
-    )
+    execute("DROP TRIGGER IF EXISTS ledger_entries_track_pool_daily_rollup_mutation ON public.ledger_entries")
 
     execute("DROP FUNCTION IF EXISTS public.track_ledger_pool_daily_rollup_mutation()")
 

@@ -1,0 +1,145 @@
+---
+title: OpenCode v2 on Codex Pooler
+sidebar:
+  label: OpenCode v2
+description: Connect OpenCode v2 through the native Responses provider, with explicit models, context budgets, tools and session settings.
+---
+
+OpenCode v2 connects to Codex Pooler's narrow OpenAI-compatible `/v1` surface with a Pool API key. It supports text generation, local tools, image input, session resume, summary compaction and native provider checkpoints. Use the native Responses package below; [OpenCode v1 and OMO configuration](/clients/opencode/) remains a separate setup.
+
+## Before you start
+
+- Install [OpenCode v2](https://opencode.ai/v2/docs/) and check `opencode --version`.
+- Create a [Pool API key](/getting-started/quick-start/) and choose models available to that Pool.
+- Make the Pooler URL and key available to the OpenCode server process. V2 normally runs a shared background service; restarting a terminal alone may not refresh its environment.
+
+V1 and v2 use the same executable name and configuration locations. Back up your existing configuration before replacing it. V1 plugins and server-API integrations require a separate migration.
+
+## Configure the connection
+
+Set the key in the environment used to start OpenCode:
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
+```
+
+Merge this native v2 configuration into `~/.config/opencode/opencode.jsonc`. The custom provider name keeps this connection separate from personal OpenAI credentials.
+
+```jsonc title="~/.config/opencode/opencode.jsonc" frame="code"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "codex-pooler/gpt-5.6-terra",
+  "agents": {
+    "title": { "model": "codex-pooler/gpt-5.6-luna" }
+  },
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "buffer": 41420
+  },
+  "providers": {
+    "codex-pooler": {
+      "package": "@opencode/ai/providers/openai/responses",
+      "settings": {
+        "baseURL": "https://codex-pooler.example.com/v1",
+        "apiKey": "{env:CODEX_POOLER_API_KEY}",
+        "transport": "http",
+        "compaction": { "type": "summary" }
+      },
+      "models": {
+        "gpt-5.6-luna": {
+          "modelID": "gpt-5.6-luna",
+          "name": "GPT-5.6 Luna",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+        },
+        "gpt-5.6-terra": {
+          "modelID": "gpt-5.6-terra",
+          "name": "GPT-5.6 Terra",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        },
+        "gpt-5.6-sol": {
+          "modelID": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        },
+        "gpt-6-astra": {
+          "modelID": "gpt-6-astra",
+          "name": "GPT-6 Astra",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        }
+      }
+    }
+  }
+}
+```
+
+For a local instance, use `http://localhost:4000/v1`. Define only models your Pool serves, and replace the example limits with the values described below. Keep the title agent on an available model so helper calls do not select an unavailable default.
+
+## Choose a model
+
+Read the authenticated catalog before copying a context budget:
+
+```bash
+curl -fsS https://codex-pooler.example.com/v1/models \
+  -H "Authorization: Bearer $CODEX_POOLER_API_KEY"
+```
+
+Luna, Terra, Sol and Astra are example model IDs, not an availability guarantee. Use the exact `data[].id` served by your Pool and its `context_length` for both `limit.context` and `limit.input`. A long account profile can expose **828,400** tokens; a smaller profile can expose **258,400** for the same model. V2 does not automatically replace a manually configured model limit with Pooler's catalog value.
+
+`limit.output` is the configured output allowance, not extra input capacity. The example uses a conservative 32,000-token budget; `/v1/models.context_length` does not advertise an output-token maximum. Raise the allowance only when the selected upstream supports it. Reasoning effort goes under model `settings`, not the ignored v1 model boolean `reasoning`. Optional priority processing uses `settings.serviceTier: "priority"` when your Pool supports it and you accept the additional cost.
+
+## Start a conversation
+
+Start a standalone conversation with your configured model:
+
+```bash
+opencode run --standalone --model codex-pooler/gpt-5.6-terra "Reply with a short greeting"
+```
+
+Resume a conversation with `opencode run --standalone --session <session-id>`. Pooler's request logs show the model, time and final status of each request.
+
+## Advanced configuration
+
+### Compaction and context budgets
+
+V2 defaults to **local summary checkpoints**: it sends a normal model request to summarize older history, retains recent context under `compaction.keep.tokens`, and keeps the earlier transcript in its own storage. It uses the selected session model and variant; there is no separate compaction model.
+
+Automatic compaction starts when estimated context reaches:
+
+```text
+min(input limit - buffer, context limit - max(output reserve, buffer))
+```
+
+The output reserve used by this calculation is capped at 32,000 tokens. With the example's 828,400 input/context budget and 41,420 buffer, the threshold is **786,980**. `keep.tokens` controls retained recent history; it does not increase the context ceiling. For a smaller catalog profile, recalculate the buffer and threshold instead of keeping the long-profile values.
+
+For **native provider checkpoints**, change the provider's `settings.compaction` to `{ "type": "native" }`. OpenCode sends a terminal `compaction_trigger` through `/v1/responses`; Pooler collects the upstream streamed checkpoint and returns the encrypted compaction item for the next turn. Both HTTP and Responses websocket transport support this mode. Keep the Responses provider package shown above: the standalone `/v1/responses/compact` endpoint is not part of this integration. See [OpenCode's compaction guide](https://opencode.ai/v2/docs/compaction/) for the client-side mechanisms.
+
+Manual compaction uses OpenCode's own session controls or its server's `POST /api/session/{sessionID}/compact` API. That is an OpenCode server endpoint, not a Codex Pooler route. Manual compaction remains available when `compaction.auto` is false; completion is asynchronous, so wait for the session's completed checkpoint before treating it as successful.
+
+### Protocol and continuity
+
+The configuration explicitly selects the Responses protocol and HTTP streaming: `POST /v1/responses` with SSE replies. It is not Chat Completions or Realtime. Set provider `settings.transport: "websocket"` to use the narrow Responses websocket route at `GET /v1/responses`; connection failures may fall back to HTTP. Keep the explicit transport when using a custom provider ID, rather than assuming the built-in `openai` provider's defaults apply.
+
+OpenCode supplies per-session continuity headers and a prompt cache key. Reusing the same OpenCode session preserves that identity; starting another session must not share it. Pooler may bridge an eligible HTTP SSE conversation onto an upstream websocket, so the client-to-Pooler and Pooler-to-provider transports are separate facts. A cache key is a locality hint, not proof of a cache hit.
+
+### Images and tools
+
+Local tools such as shell commands and file edits execute in OpenCode, with results sent back through Responses. They do not require operator MCP access. Keep OpenCode's permission rules appropriate for your workspace; `--auto` is not required by the connection configuration.
+
+Image input uses `capabilities.input: ["text", "image"]`, not the ignored v1 `attachment` field. Attach local PNG, JPEG, GIF or WebP files; OpenCode's attachment interface does not accept remote HTTP image URLs.
+
+Image input does not enable an image-generation tool in OpenCode's stock coding-agent toolset. For image generation through Pooler's separate Images API, see the [OpenAI-compatible guide](/clients/openai-compatible/).
+
+### Migrating v1 settings
+
+Use `providers`, `package`, `settings`, `capabilities` and `modelID` for native v2 configuration. `agents.title.model` replaces `small_model`; `compaction.buffer` replaces `reserved`, and `compaction.keep.tokens` replaces tail-turn/pruning settings.
+
+V2 warns and ignores legacy fields including `logLevel`, `compaction.prune`, `compaction.tail_turns`, and model `reasoning`, `attachment` and `temperature`. Use `OPENCODE_LOG_LEVEL` for logging and `--print-logs` to display migration warnings. V1 plugins, including OMO integrations, require migration to the v2 plugin API. See the [migration guide](https://opencode.ai/v2/docs/migrate-v1/).

@@ -98,12 +98,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
        do: {blocks, block_start, false}
 
   defp scan_complete_blocks(data, block_start, scan_index, blocks) do
-    first_ending_length = line_ending_length(data, scan_index)
+    case :binary.match(data, ["\r", "\n"], scope: {scan_index, byte_size(data) - scan_index}) do
+      :nomatch ->
+        {blocks, block_start, false}
 
-    if first_ending_length == 0 do
-      scan_complete_blocks(data, block_start, scan_index + 1, blocks)
-    else
-      scan_after_first_ending(data, block_start, scan_index, first_ending_length, blocks)
+      {ending_index, _length} ->
+        first_ending_length = line_ending_length(data, ending_index)
+        scan_after_first_ending(data, block_start, ending_index, first_ending_length, blocks)
     end
   end
 

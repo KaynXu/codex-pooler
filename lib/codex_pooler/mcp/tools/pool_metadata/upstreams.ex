@@ -232,12 +232,9 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Upstreams do
       description:
         ToolRegistry.metadata_description(
           use_when: "an MCP client needs bounded upstream account metadata discovery",
-          returns:
-            "sanitized upstream identity records with masked account emails and assignment summaries",
-          never_returns:
-            "raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP token prefixes, setup snippets, or upstream secret material",
-          filters_limits:
-            "accepts optional query, status, pool_selector, and limit; limit is capped at #{Common.max_limit()} records"
+          returns: "sanitized upstream identity records with masked account emails and assignment summaries",
+          never_returns: "raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP token prefixes, setup snippets, or upstream secret material",
+          filters_limits: "accepts optional query, status, pool_selector, and limit; limit is capped at #{Common.max_limit()} records"
         ),
       input_schema: Common.list_schema(),
       output_schema: Common.list_output_schema(),
@@ -252,14 +249,10 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata.Upstreams do
       title: "Get upstream",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs one upstream account metadata record by id, stored account id, or label",
-          returns:
-            "one sanitized upstream identity record or structured ambiguity candidates when the selector matches multiple records",
-          never_returns:
-            "raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP token prefixes, setup snippets, or upstream secret material",
-          filters_limits:
-            "requires selector; exact id and stored account id are preferred, while duplicate labels return ambiguity candidates"
+          use_when: "an MCP client needs one upstream account metadata record by id, stored account id, or label",
+          returns: "one sanitized upstream identity record or structured ambiguity candidates when the selector matches multiple records",
+          never_returns: "raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP token prefixes, setup snippets, or upstream secret material",
+          filters_limits: "requires selector; exact id and stored account id are preferred, while duplicate labels return ambiguity candidates"
         ),
       input_schema: Common.selector_schema(),
       output_schema: Common.get_output_schema(),

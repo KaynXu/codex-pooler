@@ -322,8 +322,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   end
 
   defp normalize_input_item(%{"content" => content} = item) when is_list(content) do
-    {:ok,
-     item |> Map.put("type", "message") |> Map.put_new("role", "user") |> normalize_message_role()}
+    {:ok, item |> Map.put("type", "message") |> Map.put_new("role", "user") |> normalize_message_role()}
   end
 
   defp normalize_input_item(%{"role" => _role} = item),
@@ -375,9 +374,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
            }
            |> put_optional_id(Map.get(item, "response_item_id"))
            |> put_optional_metadata(Map.get(item, "metadata") || parent_metadata)
-           |> put_optional_metadata_passthrough(
-             metadata_passthrough || parent_metadata_passthrough
-           )}
+           |> put_optional_metadata_passthrough(metadata_passthrough || parent_metadata_passthrough)}
       end
     end
   end

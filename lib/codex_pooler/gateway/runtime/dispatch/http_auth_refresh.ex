@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @exhausted_status 503
   @exhausted_message "upstream authentication failed; retry the request"
@@ -32,7 +33,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
 
   @spec eligible?(PreparedContext.t(), Req.Response.t()) :: boolean()
   def eligible?(%PreparedContext{context: context}, %Req.Response{} = response) do
-    auth_failure?(response) and not AuthRefresh.retry_suppressed?(context)
+    not UpstreamIdentity.responses_api?(context.identity) and
+      auth_failure?(response) and not AuthRefresh.retry_suppressed?(context)
   end
 
   @spec auth_failure?(Req.Response.t()) :: boolean()
@@ -91,6 +93,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
           redispatch_with_refreshed_token(prepared_context, retry_context, redispatch)
         end
 
+      {:refresh_not_retryable, %{"status" => "refresh_in_progress"} = refresh_metadata} ->
+        with {:ok, refreshed_context} <- record_metadata(context, refresh_metadata) do
+          finish_refresh_follower(refreshed_context, response)
+        end
+
       {:refresh_not_retryable, refresh_metadata} ->
         with {:ok, refreshed_context} <- record_metadata(context, refresh_metadata) do
           finalize_exhausted(refreshed_context, response, recorded?: true)
@@ -100,6 +107,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
 
   defp record_metadata(context, metadata),
     do: AuthRefresh.record_metadata(context, metadata, :merge_http_auth_refresh_metadata)
+
+  defp finish_refresh_follower(context, response) do
+    if failover?(context) do
+      with :ok <- DispatchLifecycle.neutral_completion(context),
+           do: {:retry, unauthorized_code()}
+    else
+      finalize_failure(context, response, true, fn ->
+        DispatchLifecycle.neutral_completion(context)
+      end)
+    end
+  end
 
   defp redispatch_with_refreshed_token(prepared_context, retry_context, redispatch) do
     case AuthRefresh.decrypt_access_token(retry_context.identity) do
@@ -170,7 +188,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
     end
   end
 
-  defp finalize_failure(context, response, recorded?) do
+  defp finalize_failure(context, response, recorded?, side_effects \\ nil) do
     attrs =
       SettlementAttrs.failure(
         context,
@@ -180,7 +198,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.HttpAuthRefresh do
         attempt_metadata(context, response),
         latency_ms: elapsed_ms(context.started),
         usage: %{status: "usage_unknown", source: "upstream_status"},
-        before_finalize: exhausted_side_effects(context, response, recorded?)
+        before_finalize: side_effects || exhausted_side_effects(context, response, recorded?)
       )
 
     case AttemptSettlement.finalize_failure(

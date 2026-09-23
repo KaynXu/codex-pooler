@@ -309,18 +309,116 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
     assert String.ends_with?(full_body, retained_body)
   end
 
+  test "a drain signal for this stream interrupts the relay and finalizes it once" do
+    parent = self()
+    ref = make_ref()
+    drain_token = make_ref()
+    response = async_response(ref)
+
+    pid =
+      spawn(fn ->
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {:gateway_stream_drain, drain_token, :owner_drained})
+
+        result =
+          StreamRelay.run(
+            :stream_state,
+            response,
+            Map.merge(handlers(), %{
+              drain_token: drain_token,
+              before_finalize_failure: fn _state, :owner_drained ->
+                send(parent, :before_finalize_failure)
+                {:ok, :terminal_written, ["synthetic-terminal"]}
+              end,
+              finalize_failure: fn body, reason ->
+                send(parent, {:finalize_failure, body, reason})
+                {:error, reason}
+              end
+            })
+          )
+
+        send(parent, {:stream_relay_result, result})
+      end)
+
+    monitor = Process.monitor(pid)
+
+    assert_receive :before_finalize_failure, @relay_timeout
+
+    assert_receive {:finalize_failure, "visiblesynthetic-terminal", :owner_drained},
+                   @relay_timeout
+
+    assert_receive {:stream_relay_result, {:error, :owner_drained}}, @relay_timeout
+    assert_process_down(monitor, pid)
+  end
+
+  test "cancels the retrying source before entering the next-candidate callback" do
+    parent = self()
+    ref = make_ref()
+    response = async_response(ref, fn _ref -> send(parent, :retry_source_cancelled) end)
+
+    task =
+      Task.async(fn ->
+        send(self(), {ref, {:data, "retryable-terminal"}})
+
+        StreamRelay.run(:stream_state, response, %{
+          handlers()
+          | write_chunk: fn _state, _data -> {:retry_first_event, %{code: "server_error"}} end,
+            first_event_retry: fn state, _body, _failure ->
+              send(parent, :retry_candidate_started)
+              {:ok, state}
+            end
+        })
+      end)
+
+    assert_receive :retry_source_cancelled, @relay_timeout
+    assert_receive :retry_candidate_started, @relay_timeout
+    assert Task.await(task, @relay_timeout) == {:ok, :stream_state}
+  end
+
+  test "a drain signal carrying another stream's token is left alone" do
+    parent = self()
+    ref = make_ref()
+    drain_token = make_ref()
+    stale = {:gateway_stream_drain, make_ref(), :owner_drained}
+    response = async_response(ref)
+
+    pid =
+      spawn(fn ->
+        send(self(), stale)
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {ref, :done})
+
+        result =
+          StreamRelay.run(:stream_state, response, Map.put(handlers(), :drain_token, drain_token))
+
+        preserved =
+          receive do
+            ^stale -> stale
+          after
+            0 -> :missing
+          end
+
+        send(parent, {:stream_relay_result, result, preserved})
+      end)
+
+    monitor = Process.monitor(pid)
+
+    assert_receive {:stream_relay_result, {:ok, :stream_state}, ^stale}, @relay_timeout
+    assert_process_down(monitor, pid)
+  end
+
   defp assert_process_down(monitor, pid) do
     assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, @relay_timeout
     assert reason in [:normal, :noproc]
   end
 
-  defp async_response(ref) do
+  defp async_response(ref, cancel_fun \\ fn _ref -> :ok end) do
     %Req.Response{
       body: %Req.Response.Async{
         pid: self(),
         ref: ref,
         stream_fun: &parse_async_message/2,
-        cancel_fun: fn _ref -> :ok end
+        cancel_fun: cancel_fun
       }
     }
   end

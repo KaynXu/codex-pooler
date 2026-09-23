@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.{Cache, Settings}
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
 
   @websocket_frame_timeout 1_000
@@ -564,6 +565,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       false ->
         ensure_epmd_started!()
         previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
+        # Also on_exit: the ExUnit timeout kills the test before its peer cleanup is registered.
+        on_exit(fn -> restore_partition_guard(previous_partition_guard) end)
 
         distribution = %{
           node_started?: true,
@@ -593,6 +596,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"])
+        PeerRegistry.assert_epmd_ready!()
         true
     end
   end
@@ -607,48 +611,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
   defp restore_partition_guard(:unchanged), do: :ok
 
+  # epmd drops a name only once it processes the closed registration socket, which trails the
+  # peer's `:DOWN`; `PeerRegistry` bounds that wait and names its detection budget on timeout.
   defp assert_epmd_names_released!(nodes) do
-    expected_names =
-      nodes
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(fn node ->
-        node
-        |> Atom.to_string()
-        |> String.split("@", parts: 2)
-        |> hd()
-      end)
-      |> MapSet.new()
-
-    await_epmd_names_released!(expected_names, System.monotonic_time(:millisecond) + 1_000)
-  end
-
-  defp await_epmd_names_released!(expected_names, deadline) do
-    registered_names =
-      case :erl_epmd.names() do
-        {:ok, names} ->
-          names
-          |> Enum.map(fn {name, _port} -> List.to_string(name) end)
-          |> MapSet.new()
-
-        {:error, _reason} ->
-          MapSet.new()
-      end
-
-    remaining_names = MapSet.intersection(expected_names, registered_names)
-
-    cond do
-      MapSet.size(remaining_names) == 0 ->
-        :ok
-
-      System.monotonic_time(:millisecond) < deadline ->
-        receive do
-        after
-          10 -> await_epmd_names_released!(expected_names, deadline)
-        end
-
-      true ->
-        flunk("EPMD still registers acquired nodes: #{inspect(remaining_names)}")
-    end
+    nodes
+    |> Enum.reject(&is_nil/1)
+    |> Enum.each(fn node ->
+      [name | _host] = node |> Atom.to_string() |> String.split("@", parts: 2)
+      PeerRegistry.assert_peer_absent!(String.to_atom(name))
+    end)
   end
 
   defp broadcast_peer_source do
@@ -679,8 +650,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
                   {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
                   decoded = Enum.reject(decoded, &metadata_control_frame?/1)
 
-                  {websocket, frames ++ decoded,
-                   closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
+                  {websocket, frames ++ decoded, closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
 
                 _response, acc ->
                   acc

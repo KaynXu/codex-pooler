@@ -183,8 +183,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
         ),
       select: %{
         request_id: request.id,
-        bucket_index:
-          bucket_index(request.admitted_at, ^window.started_at, ^window.bucket_seconds),
+        bucket_index: bucket_index(request.admitted_at, ^window.started_at, ^window.bucket_seconds),
         model_label: model_label(model.exposed_model_id),
         succeeded: fragment("CASE WHEN ? = 'succeeded' THEN 1 ELSE 0 END", request.status),
         failed:
@@ -197,8 +196,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
             "CASE WHEN ? IN ('accepted', 'in_progress') THEN 1 ELSE 0 END",
             request.status
           ),
-        has_settlement:
-          fragment("CASE WHEN ? IS NULL THEN 0 ELSE 1 END", fact.latest_settlement_entry_id),
+        has_settlement: fragment("CASE WHEN ? IS NULL THEN 0 ELSE 1 END", fact.latest_settlement_entry_id),
         unknown_usage:
           fragment(
             "CASE WHEN ? IS NOT NULL AND ? <> ? THEN 1 ELSE 0 END",
@@ -207,12 +205,9 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
             ^@usage_known
           ),
         input_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_input_tokens),
-        cached_input_tokens:
-          known_usage(fact.latest_settlement_usage_status, fact.latest_cached_input_tokens),
-        output_tokens:
-          known_usage(fact.latest_settlement_usage_status, fact.latest_output_tokens),
-        reasoning_tokens:
-          known_usage(fact.latest_settlement_usage_status, fact.latest_reasoning_tokens),
+        cached_input_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_cached_input_tokens),
+        output_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_output_tokens),
+        reasoning_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_reasoning_tokens),
         total_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_total_tokens),
         settled_cost_micros:
           settled_cost(

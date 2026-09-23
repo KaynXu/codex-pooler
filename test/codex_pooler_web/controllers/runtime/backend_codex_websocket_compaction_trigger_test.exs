@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   for topology <- [:direct, :forwarded], flip? <- [false, true] do
     @tag :queued_lite_compaction
     @tag capture_log: true
+    @tag slow: "drives real queued compaction through current serving-mode admission and owner delivery barriers"
     test "#{topology} queued Lite compact #{if flip?, do: "rejects a current mode flip", else: "uses unresolved owner mode"}" do
       queued_lite_compaction_case(unquote(topology), unquote(flip?))
     end
@@ -111,9 +112,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     upstream =
       start_upstream(
         # provenance: synthetic_adversarial
-        FakeUpstream.strict_sequence(
-          [seed_expectation] ++ if(flip?, do: [], else: [compact_expectation])
-        )
+        FakeUpstream.strict_sequence([seed_expectation] ++ if(flip?, do: [], else: [compact_expectation]))
       )
 
     setup = gateway_setup(upstream, compact?: true)
@@ -220,9 +219,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert Repo.aggregate(Attempt, :count) == before_attempts + 1
 
         compact_row =
-          Repo.one!(
-            from r in Request, where: r.endpoint == "/backend-api/codex/responses/compact"
-          )
+          Repo.one!(from r in Request, where: r.endpoint == "/backend-api/codex/responses/compact")
 
         assert compact_row.request_metadata["routing"]["model_serving_mode"] == "lite"
       end
@@ -264,8 +261,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
-  test "forwarded final validates the submitted compaction item instead of the stored digest" do
+  for topology <- [:direct, :forwarded] do
+    test "#{topology} final validates the submitted compaction item instead of the stored digest" do
+      assert_final_compaction_item_binding(unquote(topology))
+    end
+  end
+
+  defp assert_final_compaction_item_binding(topology) do
     enable_owner_forwarding_for_trace!()
+
+    Application.put_env(
+      :codex_pooler,
+      :websocket_owner_forwarding_enabled,
+      topology == :forwarded
+    )
+
     turn = "final-digest-check"
     context = "00000000-0000-4000-8000-000000000991"
     item = incremental_compaction_item("final-digest-check")
@@ -374,7 +384,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, final)
       {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
-      assert %{"type" => "error"} = CodexPooler.JSON.decode!(frame)
+
+      assert %{
+               "type" => "error",
+               "status" => 409,
+               "error" => %{"code" => "invalid_runtime_admission"}
+             } = CodexPooler.JSON.decode!(frame)
+
       assert FakeUpstream.count(upstream) == 2
       assert :ok = FakeUpstream.verify!(upstream)
     after
@@ -528,6 +544,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
+  @tag slow: "captures and flushes full BEAM trace events through a real owner compaction socket lifecycle"
   test "full trace records a real socket owner compact lifecycle without injected events" do
     assert_real_trace_fixture_has_no_manual_emits!()
     enable_owner_forwarding_for_trace!()
@@ -759,13 +776,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {"/backend-api/codex/responses", :sse, :valid},
         {"/backend-api/codex/v1/responses", :sse, :malformed}
       ],
-      mode <- ["full", "lite"] do
+      mode <- ["full", "lite"],
+      metadata_encoding <- if(transport == :sse, do: [:json, :object], else: [:json]) do
     if transport == :sse do
       @tag :codex_remote_compaction_v2
     end
 
     @tag :strict_fake_upstream
-    test "#{path} completes #{mode} #{transport} native compaction and reuses the downstream socket" do
+    test "#{path} completes #{mode} #{transport} native compaction with #{metadata_encoding} metadata and reuses the downstream socket" do
       path = unquote(path)
       transport = unquote(transport)
       optional_metadata = unquote(optional_metadata)
@@ -810,7 +828,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         public_websocket_connect!(port, setup, upgrade_turn_state, path)
 
       try do
-        payload = compact_payload(setup, frame_turn_state, transport)
+        payload =
+          setup
+          |> compact_payload(frame_turn_state, transport)
+          |> encode_compaction_metadata(unquote(metadata_encoding))
+
         previous_logger_level = Logger.level()
         Logger.configure(level: :info)
         on_exit(fn -> Logger.configure(level: previous_logger_level) end)
@@ -903,7 +925,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
         assert request.request_metadata["compaction_bridge"] == %{
                  "applied" => true,
-                 "result_transport" => Atom.to_string(transport)
+                 "result_transport" => "sse"
                }
 
         assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
@@ -981,6 +1003,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
+  @tag slow: "runs all measured incremental compaction scenarios through real socket lineage and accounting"
   test "source-derived incremental compaction stays on the response lineage assignment and reuses the socket" do
     :ok = NativeCompactionAuthorizationObserver.arm()
     on_exit(fn -> NativeCompactionAuthorizationObserver.disarm() end)
@@ -1061,8 +1084,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                   "input.0.type" => compact_first_input_type
                 }
               ],
-              respond:
-                incremental_compaction_frames(compact_item, "resp_compact_#{scenario_name}")
+              respond: incremental_compaction_frames(compact_item, "resp_compact_#{scenario_name}")
             ),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
@@ -2027,8 +2049,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
             CodexResponsesSocket.init(%{
               auth: auth,
               opts: %{
-                request_id:
-                  "owner-invalid-bridge-turn-state-target-#{System.unique_integer([:positive])}",
+                request_id: "owner-invalid-bridge-turn-state-target-#{System.unique_integer([:positive])}",
                 accepted_turn_state: turn_state,
                 client_ip: "127.0.0.1"
               }
@@ -2073,10 +2094,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
-  test "buffered native bridge forwards one validated frame turn state and adapts once after settlement" do
+  test "unmarked native bridge collects HTTP SSE and forwards one validated frame turn state" do
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
+        FakeUpstream.compaction_stream(%{
           "id" => "resp_native_buffered_compaction",
           "output" => [
             %{
@@ -2140,22 +2161,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     end
   end
 
-  test "invalid buffered native compact bodies fail before success settlement" do
+  test "non-streamed native compact bodies fail before success settlement" do
     cases = [
-      {FakeUpstream.malformed_json("{malformed-native-compact", 200),
-       "upstream compact response was not valid JSON"},
-      {FakeUpstream.json_response(%{"id" => "resp_missing_native_compact_content"}),
-       "upstream compact response did not include encrypted compaction content"},
-      {buffered_native_compaction_response("resp_empty_native_compact_content", "", :output),
-       "upstream compact response did not include encrypted compaction content"},
+      {FakeUpstream.malformed_json("{malformed-native-compact", 200), "upstream compact response was not valid JSON", "invalid_json"},
+      {FakeUpstream.json_response(%{"id" => "resp_missing_native_compact_content"}), "upstream compact response did not include encrypted compaction content", "missing_encrypted_content"},
+      {buffered_native_compaction_response("resp_empty_native_compact_content", "", :output), "upstream compact response did not include encrypted compaction content", "missing_encrypted_content"},
       {buffered_native_compaction_response(
          "resp_blank_native_compact_content",
          " \t\r\n",
          :top_level
-       ), "upstream compact response did not include encrypted compaction content"}
+       ), "upstream compact response did not include encrypted compaction content", "missing_encrypted_content"}
     ]
 
-    for {mode, expected_message} <- cases do
+    for {mode, _legacy_message, _legacy_reason} <- cases do
       upstream = start_upstream(mode)
       setup = gateway_setup(upstream, compact?: true)
       {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -2171,7 +2189,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       assert error.status == 502
       assert error.code == "invalid_compaction_response"
-      assert error.message == expected_message
+      assert error.message == "upstream compact stream was invalid"
       refute_received {:unexpected_frame, _frame}
 
       assert [request] =
@@ -2186,6 +2204,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       assert attempt.status == "failed"
       assert attempt.network_error_code == "invalid_compaction_response"
+      assert attempt.response_metadata["compaction_invalid_reason"] == "missing_terminal"
       refute attempt.retryable
 
       assert [turn] =
@@ -2304,8 +2323,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     try do
       {conn, websocket} =
-        Enum.reduce(malformed_compact_payloads(setup), {conn, websocket}, fn payload,
-                                                                             {conn, websocket} ->
+        Enum.reduce(malformed_compact_payloads(setup), {conn, websocket}, fn payload, {conn, websocket} ->
           {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
           {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
@@ -2413,6 +2431,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   defp assert_compact_turn_state_header(headers, :sse, _frame_turn_state),
     do: assert(header_values(headers, "x-codex-turn-state") == [])
+
+  defp encode_compaction_metadata(payload, :json), do: payload
+
+  defp encode_compaction_metadata(payload, :object) do
+    payload
+    |> CodexPooler.JSON.decode!()
+    |> update_in(["client_metadata", "x-codex-turn-metadata"], &CodexPooler.JSON.decode!/1)
+    |> CodexPooler.JSON.encode!()
+  end
 
   defp compact_payload(setup, turn_state, transport \\ :buffered) do
     client_metadata =
@@ -2741,7 +2768,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     upstream_mode =
       case transport do
         :buffered ->
-          FakeUpstream.json_response(response)
+          FakeUpstream.compaction_stream(response)
 
         :sse ->
           FakeUpstream.websocket_text_frames([
@@ -2967,7 +2994,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   end
 
   defp assert_compact_transport_payload(payload, :buffered) do
-    refute Map.has_key?(payload, "stream")
+    assert payload["stream"] == true
   end
 
   defp assert_compact_transport_payload(payload, :sse) do
@@ -2977,9 +3004,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   defp configure_compact_saturation do
     old_config = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: compact_saturation_settings()
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: compact_saturation_settings())
 
     on_exit(fn ->
       if old_config do

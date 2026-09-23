@@ -2,6 +2,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.CompatibilityMatrix
+  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Pools.RoutingSettings
 
   describe "catalog and Responses runtime contract" do
@@ -62,19 +63,23 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                valid_trigger: "exactly_one_final_after_visible_input",
                malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                retained: ["final_compaction_trigger"],
-               strips: ["stream", "include", "prompt_cache_options"],
+               strips: ["include", "prompt_cache_options"],
                upstream_payload: %{
-                 mode: "buffered_responses_json",
+                 mode: "responses_sse",
                  terminal_trigger: "retained",
                  store: false,
-                 stream: "omitted"
+                 stream: true
                },
                response_adaptation: %{
-                 upstream: "buffered_responses_json",
+                 upstream: "responses_sse",
                  downstream: %{
                    http_json: ["response"],
                    http_sse: ["response.output_item.done", "response.completed", "[DONE]"],
-                   responses_websocket: ["response.output_item.done", "response.completed"]
+                   responses_websocket: [
+                     "response.created",
+                     "response.output_item.done",
+                     "response.completed"
+                   ]
                  }
                },
                public_compact_route_supported: false,
@@ -87,10 +92,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       boundary = fixture.compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.upstream_payload == %{
-               mode: "semantic_v2_sse_or_buffered_responses_json",
+               mode: "responses_sse",
                terminal_trigger: "retained",
                store: false,
-               stream: "semantic_v2_true_otherwise_omitted"
+               stream: true
              }
 
       assert boundary.backend_compaction_trigger.direct_compact_preservation.upstream_payload ==
@@ -126,8 +131,8 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.result_classification == %{
-               source: "request_client_metadata.x-codex-turn-metadata",
-               marker: "compaction.implementation=responses_compaction_v2",
+               source: "request_input_compaction_trigger",
+               marker: "terminal_compaction_trigger",
                additive_metadata: "ignored",
                returned_compaction_items: "not_inspected"
              }
@@ -371,6 +376,24 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
     end
 
+    test "states that public /v1 surfaces relay no provider event header objects" do
+      feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+      fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)
+
+      assert feature.contract =~ "relay no provider event header objects"
+      assert feature.contract =~ "dropped from every relayed event, terminal or not"
+
+      assert fixture.provider_event_headers == %{
+               surfaces: [
+                 %{method: :post, path: "/v1/responses", transport: "http_sse"},
+                 %{method: :get, path: "/v1/responses", transport: "responses_websocket"}
+               ],
+               dropped_keys: ["headers", "response.headers"],
+               scope: "every_relayed_event",
+               native_websocket_with_snapshot: "projected_native_controls_only"
+             }
+    end
+
     @tag :hosted_shell_history
     test "makes hosted shell history replay boundaries machine-readable" do
       feature = CompatibilityMatrix.by_slug!(:responses_chat)
@@ -550,6 +573,15 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.canonical_partition.selection_fallback ==
                "largest_partition_when_none_routable"
 
+      assert feature.canonical_partition.reasoning_variants == %{
+               stable_catalog_projection: "routable_capability_family_reasoning_union",
+               canonical_allowance: "all_reasoning_variants_in_quota_selected_capability_family",
+               native_turn_selection: "post_eligibility_assignment_advertising_effective_known_effort",
+               non_reasoning_capability_boundary: "never_crossed",
+               no_advertiser_fallback: "quota_selected_partition",
+               circuit_state_input: false
+             }
+
       assert feature.canonical_partition.pinned_continuation == %{
                valid_canonical_hard_pin: "may_cross_partition",
                malformed_or_retired_source: "unavailable"
@@ -559,7 +591,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                "same policy-visible native catalog body and deterministic weak ETag"
 
       assert feature.contract =~
-               "backend Codex catalog-driven new turns use the selected partition"
+               "backend Codex catalog-driven new turns use the selected capability family"
 
       assert feature.contract =~
                "translated OpenAI Responses capacity includes all valid canonical assignments"
@@ -594,11 +626,18 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                http: :request,
                websocket: :response_create_turn,
                retry: :preserve,
+               native_replay: :preserve,
                owner_forwarding: :preserve,
                next_websocket_turn: :reresolve
              }
 
       assert fixture.upstream_etag_relay == false
+
+      assert fixture.provider_metadata_event == %{
+               order: :after_pooler_event,
+               x_models_etag: :removed,
+               consumer_etag_source: :metadata_event_carrying_x_models_etag
+             }
 
       assert fixture.included_routes == [
                "/backend-api/codex/responses",
@@ -677,7 +716,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
       assert feature.current == :bounded_terminal_failure_attempt_detail
       assert feature.routes == CompatibilityMatrix.by_slug!(:upstream_error_param).routes
-      assert fixture.fields == ~w(upstream_error_code stream_terminal_type upstream_error_param)
+
+      assert fixture.fields ==
+               ~w(upstream_error_code stream_terminal_type compaction_invalid_reason upstream_error_param)
+
       assert fixture.projection == "failed_and_retryable_failed_attempt_detail_only"
       assert fixture.readable_identifier == "strict_ascii_80_bytes_or_less_cleartext"
       assert fixture.malformed_identifier == "sha256_12"
@@ -701,9 +743,82 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                rejection_error_param
                rejection_message_present
                rejection_message_bytes
+               rejection_supported_values_state
+               rejection_supported_values
              )
       assert fixture.invalid_shapes == "omitted"
       assert fixture.raw_error_message_or_body == "never_projected"
+    end
+
+    test "pins the bounded upstream validation rejection relay" do
+      feature = CompatibilityMatrix.by_slug!(:upstream_validation_rejection_relay)
+      fixture = CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay)
+
+      assert feature.current == :bounded_allowlisted_validation_rejection_relay
+      assert feature.fixture == :upstream_validation_rejection_relay
+
+      assert fixture.codes ==
+               ValidationRejection.relayable_codes()
+
+      assert fixture.upstream_status == 400
+      assert fixture.error_type == "invalid_request_error"
+      assert fixture.source == CompatibilityMatrix.fixture!(:rejection_metadata).source
+      assert fixture.relayed_fields == ~w(type code param message)
+      assert fixture.message == "pooler_authored_from_code_and_param"
+      assert fixture.supported_values.codes == ValidationRejection.supported_values_codes()
+      assert fixture.supported_values.max_values == 12
+      assert fixture.supported_values.message_max_bytes == 2_048
+      assert fixture.supported_values.rejected_or_earlier_quoted_values == "excluded"
+      assert fixture.supported_values.persisted_as == "rejection_supported_values"
+      assert fixture.supported_values.states == ~w(present none unparseable)
+      assert fixture.supported_values.relayed_under_explicit_full_override == true
+      assert fixture.chat_param == "client_field_for_adapter_renames_else_upstream_path"
+      assert fixture.provider_message_forwarded == false
+      assert fixture.native_streaming_body == "native_json_error_envelope"
+      assert fixture.native_materialized_body == "unchanged_passthrough"
+      assert fixture.public_v1_body == "openai_error_object"
+      refute :explicit_full_override in fixture.unchanged_scopes
+      assert :websocket_frames in fixture.unchanged_scopes
+      assert fixture.accounting_error_code == "upstream_status"
+      assert fixture.retry == false
+      assert fixture.routing_health == :unchanged
+    end
+
+    test "Full supported-values response example agrees with both published references" do
+      fixture = CompatibilityMatrix.fixture!(:upstream_validation_rejection_relay)
+      full = CompatibilityMatrix.fixture!(:pool_model_serving_modes).full_rejection_diagnostic
+
+      assert fixture.supported_values.relayed_under_explicit_full_override
+      assert full.supported_values_suffix_relayed
+      assert fixture.supported_values.serving_modes == ~w(auto lite full)
+
+      mode_contract =
+        Enum.map_join(fixture.supported_values.serving_modes, ", ", &String.capitalize/1) <>
+          " relay the same bounded supported-values list from persisted attempt metadata."
+
+      for slug <- [:pool_model_serving_modes, :upstream_validation_rejection_relay] do
+        assert CompatibilityMatrix.by_slug!(slug).contract =~ mode_contract
+      end
+
+      assert fixture.full_supported_values_example == %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "unsupported_value",
+                 "param" => "reasoning.effort",
+                 "message" => "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+               }
+             }
+
+      for page <- ~w(responses-lite-vs-full runtime-routes) do
+        path = Path.join("docs-site/src/content/docs/reference", page <> ".mdx")
+        assert File.read!(path) =~ mode_contract
+        examples = Regex.scan(~r/```json\n(.*?)\n```/s, File.read!(path), capture: :all_but_first)
+
+        assert Enum.any?(examples, fn [json] ->
+                 CodexPooler.JSON.decode(json) == {:ok, fixture.full_supported_values_example}
+               end),
+               "#{path} must publish the executable Full supported-values response example"
+      end
     end
   end
 
@@ -1436,8 +1551,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         }
       },
       result_transports: %{
-        buffered: "responses_json",
-        v2: "responses_sse_semantic_nested_implementation_with_additive_metadata"
+        trigger: "responses_sse_independent_of_client_metadata"
       },
       turn_state: %{
         source: "client_metadata.x-codex-turn-state_or_upgrade_header",
@@ -1445,10 +1559,17 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         persistence: "hashed_alias_only"
       },
       native_frames: ["response.output_item.done", "response.completed"],
+      collected_result: %{
+        source: "collect_delivery_accumulator_not_diagnostic_retention",
+        max_bytes: 8_388_608,
+        diagnostic_retention_bytes: 65_536,
+        overflow_reason: "compaction_result_too_large"
+      },
       errors: %{
         malformed_trigger: "pre_dispatch_invalid_request",
         compact_saturation: "server_is_overloaded",
         invalid_result: "invalid_compaction_response",
+        oversized_result: "invalid_compaction_response",
         provider_terminal: "canonical_provider_terminal"
       },
       socket_reuse: "ordinary_follow_up_same_downstream_socket",

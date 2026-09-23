@@ -168,8 +168,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
       "target_id" => filters.target_id || raw_values["target_id"],
       "page" => Integer.to_string(filters.page),
       "show_completed" => if(filters.show_completed, do: "true", else: "false"),
-      "job_id" =>
-        if(filters.job_id, do: Integer.to_string(filters.job_id), else: raw_values["job_id"])
+      "job_id" => if(filters.job_id, do: Integer.to_string(filters.job_id), else: raw_values["job_id"])
     }
   end
 
@@ -221,8 +220,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   defp parse_target(%{"target_kind" => "", "target_id" => ""}), do: {nil, nil, []}
 
   defp parse_target(%{"target_kind" => "", "target_id" => target_id}) when target_id != "" do
-    {nil, nil,
-     [%{field: :target_kind, message: "Target kind is required when target id is present"}]}
+    {nil, nil, [%{field: :target_kind, message: "Target kind is required when target id is present"}]}
   end
 
   defp parse_target(%{"target_kind" => target_kind, "target_id" => target_id}) do
@@ -242,8 +240,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   end
 
   defp parse_uuid_target(_target_kind, "") do
-    {nil, nil,
-     [%{field: :target_id, message: "Target id is required for the selected target kind"}]}
+    {nil, nil, [%{field: :target_id, message: "Target id is required for the selected target kind"}]}
   end
 
   defp parse_uuid_target(target_kind, target_id) do
@@ -263,8 +260,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   end
 
   defp parse_rollup_date_target("") do
-    {nil, nil,
-     [%{field: :target_id, message: "Target id is required for the selected target kind"}]}
+    {nil, nil, [%{field: :target_id, message: "Target id is required for the selected target kind"}]}
   end
 
   defp parse_rollup_date_target(target_id) do
@@ -273,8 +269,7 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
         {"rollup_date", Date.to_iso8601(date), []}
 
       {:error, _reason} ->
-        {nil, nil,
-         [%{field: :target_id, message: "Target id must be a valid ISO date for rollup_date"}]}
+        {nil, nil, [%{field: :target_id, message: "Target id must be a valid ISO date for rollup_date"}]}
     end
   end
 

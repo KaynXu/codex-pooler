@@ -51,6 +51,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     end)
   end
 
+  @tag :committed_cleanup_jobs
+  test "owner-death fixture teardown removes owned jobs and preserves a shared identity job" do
+    upstream = start_upstream(FakeUpstream.json_response(%{}))
+    setup = Sandbox.unboxed_run(Repo, fn -> gateway_setup(upstream) end)
+
+    cleanup = fn ->
+      purge_committed_pool_rows!(setup.pool.id, setup.identity.id, setup.pricing.id)
+    end
+
+    on_exit(cleanup)
+
+    CodexPooler.CommittedJobCleanupSupport.assert_cleanup_jobs!(
+      setup.pool,
+      setup.identity,
+      setup.assignment,
+      cleanup
+    )
+  end
+
   test "remote owner loss before visible output recovers without re-resolving the turn mode" do
     upstream =
       start_upstream(
@@ -83,8 +102,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
             [remote_node],
             [
               calls: %{
-                remote_node =>
-                  {:barrier_return, parent, release_ref, {:error, :owner_unavailable}}
+                remote_node => {:barrier_return, parent, release_ref, {:error, :owner_unavailable}}
               },
               notify: parent,
               capture_request_to: parent
@@ -102,8 +120,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
-      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
-                      :remote_submit_request_v1},
+      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref, :remote_submit_request_v1},
                      1_000
 
       try do
@@ -117,8 +134,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       original_downstream = remote_state.websocket_owner_downstream
 
-      assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch,
-                      {:data, recovered_metadata_frame}},
+      assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch, {:data, recovered_metadata_frame}},
                      1_000
 
       assert correlation_id == original_downstream.correlation_id
@@ -129,8 +145,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
                "headers" => %{"x-models-etag" => _models_etag}
              } = CodexPooler.JSON.decode!(recovered_metadata_frame)
 
-      assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch,
-                      {:data, recovered_frame}},
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch, {:data, recovered_frame}},
                      1_000
 
       assert owner_response_id(recovered_frame) == "resp_owner_mode_loss_recovered"
@@ -232,8 +247,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
     assert {:ok, ^remote_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch,
-                {:data, stale_frame}},
+               {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch, {:data, stale_frame}},
                remote_state
              )
 
@@ -260,8 +274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, upstream_pid, ^release_ref},
                      1_000
 
       try do
@@ -435,9 +448,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-visible-kill", "owner-visible-kill",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-visible-kill", "owner-visible-kill", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     remote_node = :"codex_pooler@visible-killed-owner.example"
 
@@ -560,9 +571,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
             end
           end)
 
+        # A malformed owner reply is settled as `owner_crashed`, and a crashed
+        # owner is an interruption like a drained or lost one (findings#228).
         assert_receive {:stream_outcome,
                         %{
-                          outcome: "failed",
+                          outcome: "interrupted",
                           downstream_transport: "websocket",
                           upstream_transport: "websocket"
                         }}
@@ -599,9 +612,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     assert attempt.status == "failed"
 
     assert [turn] =
-             Repo.all(
-               from(t in CodexTurn, where: t.codex_session_id == ^remote_state.codex_session.id)
-             )
+             Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^remote_state.codex_session.id))
 
     assert turn.status == "failed"
 
@@ -633,7 +644,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
     # assertions elsewhere in the file keep an empty baseline.
     pool_id = setup.pool.id
     identity_id = setup.identity.id
-    on_exit(fn -> purge_committed_pool_rows!(pool_id, identity_id) end)
+    pricing_id = setup.pricing.id
+    on_exit(fn -> purge_committed_pool_rows!(pool_id, identity_id, pricing_id) end)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
@@ -846,7 +858,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
   end
 
   # Removes every row an auto-mode test committed for its Pool, children first.
-  defp purge_committed_pool_rows!(pool_id, identity_id) do
+  defp purge_committed_pool_rows!(pool_id, identity_id, pricing_id) do
     Sandbox.unboxed_run(Repo, fn ->
       request_ids = Repo.all(from(r in Request, where: r.pool_id == ^pool_id, select: r.id))
       session_ids = Repo.all(from(s in CodexSession, where: s.pool_id == ^pool_id, select: s.id))
@@ -857,8 +869,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
 
       Repo.delete_all(
         from(l in RequestClientRetryLink,
-          where:
-            l.predecessor_request_id in ^request_ids or l.successor_request_id in ^request_ids
+          where: l.predecessor_request_id in ^request_ids or l.successor_request_id in ^request_ids
         )
       )
 
@@ -867,15 +878,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
       Repo.delete_all(from(f in RequestLogFact, where: f.request_id in ^request_ids))
       Repo.delete_all(from(r in Request, where: r.pool_id == ^pool_id))
       Repo.delete_all(from(s in CodexSession, where: s.pool_id == ^pool_id))
+      # Read before the keys go: the fixture owner is only recorded as their creator.
+      owner_ids = CodexPooler.PoolerFixtures.api_key_creator_ids([pool_id])
       Repo.delete_all(from(k in APIKey, where: k.pool_id == ^pool_id))
 
-      Repo.delete_all(
-        from(a in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
-          where: a.pool_id == ^pool_id
-        )
-      )
-
-      Repo.delete_all(from(p in CodexPooler.Pools.Pool, where: p.id == ^pool_id))
+      CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id], owner_ids)
 
       Repo.delete_all(
         from(s in CodexPooler.Upstreams.Schemas.EncryptedSecret,
@@ -884,6 +891,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.OwnerDeath
       )
 
       Repo.delete_all(from(i in UpstreamIdentity, where: i.id == ^identity_id))
+      Repo.delete_all(from(p in CodexPooler.Catalog.PricingSnapshot, where: p.id == ^pricing_id))
     end)
 
     :ok

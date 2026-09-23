@@ -6,6 +6,25 @@ defmodule CodexPooler.Accounting.LedgerReads do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Repo
 
+  @spec outstanding_reservation_count(Ecto.UUID.t()) :: non_neg_integer()
+  def outstanding_reservation_count(api_key_id) do
+    terminal =
+      from entry in LedgerEntry,
+        where:
+          entry.request_id == parent_as(:reservation).request_id and
+            entry.entry_kind in ["release", "settlement"],
+        select: 1
+
+    Repo.one!(
+      from entry in LedgerEntry,
+        as: :reservation,
+        where:
+          entry.api_key_id == ^api_key_id and entry.entry_kind == "reservation" and
+            entry.amount_status == "recorded" and not exists(subquery(terminal)),
+        select: count(entry.request_id, :distinct)
+    )
+  end
+
   @spec latest_success_by_assignment_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => DateTime.t() | nil
         }
@@ -17,12 +36,33 @@ defmodule CodexPooler.Accounting.LedgerReads do
 
     Repo.all(
       from attempt in Attempt,
-        where:
-          attempt.pool_upstream_assignment_id in ^assignment_ids and attempt.status == "succeeded",
+        where: attempt.pool_upstream_assignment_id in ^assignment_ids and attempt.status == "succeeded",
         group_by: attempt.pool_upstream_assignment_id,
         select: {attempt.pool_upstream_assignment_id, max(attempt.completed_at)}
     )
     |> Map.new()
+  end
+
+  # A reservation whose reserved budget is still held: recorded, and neither
+  # returned by a release nor consumed by a settlement. Callers finalizing a
+  # request that never produced an attempt ask this before calling
+  # `finalize_reservation_failure/2`, which requires the reservation row to
+  # exist and would raise for a request that was rejected before the ledger.
+  @spec reservation_outstanding?(Request.t() | Ecto.UUID.t()) :: boolean()
+  def reservation_outstanding?(%Request{id: request_id}),
+    do: reservation_outstanding?(request_id)
+
+  def reservation_outstanding?(request_id) when is_binary(request_id) do
+    Repo.exists?(
+      from entry in LedgerEntry,
+        where:
+          entry.request_id == ^request_id and entry.entry_kind == "reservation" and
+            entry.amount_status == "recorded"
+    ) and
+      not Repo.exists?(
+        from entry in LedgerEntry,
+          where: entry.request_id == ^request_id and entry.entry_kind in ["release", "settlement"]
+      )
   end
 
   @spec list_ledger_entries_for_request(Request.t() | Ecto.UUID.t()) :: [LedgerEntry.t()]

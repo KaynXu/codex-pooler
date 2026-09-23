@@ -339,8 +339,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
       </label>
       <div class="flex flex-wrap items-center justify-between gap-3">
         <p id={"#{@id}-status"} class="text-xs leading-5 text-base-content/60">
-          {@status_label}:
-          <span class={secret_status_class(@status)}>{secret_status_label(@status)}</span>
+          {@status_label}: <span class={secret_status_class(@status)}>{secret_status_label(@status)}</span>
         </p>
         <input type="hidden" name={@action_name} value="preserve" />
         <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-base-content/70">

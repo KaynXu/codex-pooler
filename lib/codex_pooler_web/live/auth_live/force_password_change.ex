@@ -108,8 +108,7 @@ defmodule CodexPoolerWeb.AuthLive.ForcePasswordChange do
              socket.assigns.current_user_token
            ) do
       CodexPoolerWeb.UserAuth.disconnect_user_sessions(socket.assigns.current_scope.user.id,
-        except_live_socket_id:
-          CodexPoolerWeb.UserAuth.live_socket_id_for_token(socket.assigns.current_user_token)
+        except_live_socket_id: CodexPoolerWeb.UserAuth.live_socket_id_for_token(socket.assigns.current_user_token)
       )
 
       {:noreply,

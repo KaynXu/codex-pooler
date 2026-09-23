@@ -85,20 +85,7 @@ defmodule CodexPoolerWeb.Telemetry.MemorySamplerTest do
     attach_id = {__MODULE__, name}
 
     {:ok, pid} =
-      start_supervised(
-        {MemorySampler,
-         enabled?: true,
-         name: name,
-         attach_id: attach_id,
-         limit_bytes: 100,
-         threshold_ratio: 0.5,
-         min_interval_ms: 0,
-         top_processes: 1,
-         top_ets_tables: 1,
-         cgroup_usage_reader: fn -> nil end,
-         cgroup_stat_reader: fn -> %{} end,
-         env_reader: fn _name -> nil end}
-      )
+      start_supervised({MemorySampler, enabled?: true, name: name, attach_id: attach_id, limit_bytes: 100, threshold_ratio: 0.5, min_interval_ms: 0, top_processes: 1, top_ets_tables: 1, cgroup_usage_reader: fn -> nil end, cgroup_stat_reader: fn -> %{} end, env_reader: fn _name -> nil end})
 
     log =
       capture_log(fn ->
@@ -118,12 +105,7 @@ defmodule CodexPoolerWeb.Telemetry.MemorySamplerTest do
 
     child_spec =
       Supervisor.child_spec(
-        {MemorySampler,
-         enabled?: true,
-         name: name,
-         attach_id: attach_id,
-         limit_bytes: 100,
-         cgroup_usage_reader: fn -> 0 end},
+        {MemorySampler, enabled?: true, name: name, attach_id: attach_id, limit_bytes: 100, cgroup_usage_reader: fn -> 0 end},
         id: name
       )
 

@@ -324,11 +324,9 @@ defmodule CodexPooler.InstanceSettings.Cache do
       retry_generation: retry_generation,
       reconciliation_timer: nil,
       reconciliation_generation: reconciliation_generation,
-      retry_initial_interval_ms:
-        Keyword.get(config, :retry_initial_interval_ms, @retry_initial_interval_ms),
+      retry_initial_interval_ms: Keyword.get(config, :retry_initial_interval_ms, @retry_initial_interval_ms),
       retry_max_interval_ms: Keyword.get(config, :retry_max_interval_ms, @retry_max_interval_ms),
-      reconciliation_interval_ms:
-        Keyword.get(config, :reconciliation_interval_ms, @reconciliation_interval_ms),
+      reconciliation_interval_ms: Keyword.get(config, :reconciliation_interval_ms, @reconciliation_interval_ms),
       timer_module: Keyword.get(config, :timer_module, Process)
     }
   end

@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   use CodexPoolerWeb, :html
 
   alias CodexPooler.Pools
+  alias CodexPooler.Status.Freshness
   alias CodexPoolerWeb.Admin.OperatorComponents.Identity
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: RelativeTime
 
@@ -109,8 +110,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   attr :active_nav, :atom, required: true
   attr :alert_notification_center, :map, required: true
 
-  attr :openai_status_aggregate, :map,
-    default: %{incidents: [], last_success_at: nil, stale?: false}
+  attr :openai_status_aggregate, :map, default: %{incidents: [], last_success_at: nil, stale?: false}
 
   slot :inner_block, required: true
 
@@ -333,9 +333,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
         >
           <div class="flex min-w-0 flex-col gap-6 p-4 sm:p-6 xl:p-8">
             <.openai_status_banner
-              :if={
-                @active_nav != :incidents and openai_status_banner_visible?(@openai_status_aggregate)
-              }
+              :if={@active_nav != :incidents and openai_status_banner_visible?(@openai_status_aggregate)}
               aggregate={@openai_status_aggregate}
             />
             {render_slot(@inner_block)}
@@ -366,8 +364,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             {if index > 0, do: ", "}{title}
           </span><span :if={length(@aggregate.incidents) > 3}> +{length(@aggregate.incidents) - 3} more</span>
         </p>
-        <p :if={@aggregate.stale?} id="admin-openai-status-stale" class="text-xs text-base-content/70">
-          The feed may be out of date; automatic refresh continues every five minutes.
+        <p
+          :if={@aggregate.stale? || !Map.get(@aggregate, :polling_enabled?, true)}
+          id="admin-openai-status-stale"
+          class="text-xs text-base-content/70"
+        >
+          {if Map.get(@aggregate, :polling_enabled?, true),
+            do: "The feed may be out of date. Automatic refresh continues every five minutes.",
+            else: "Status polling is disabled in System settings. Showing the last known incidents."}
         </p>
       </div>
       <div class="flex shrink-0 flex-wrap items-center gap-2">
@@ -397,7 +401,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
          last_success_at: %DateTime{} = timestamp
        })
        when is_list(incidents) do
-    DateTime.diff(DateTime.utc_now(), timestamp, :second) <= 86_400 and incidents != []
+    Freshness.banner_fresh?(timestamp) and incidents != []
   end
 
   defp openai_status_banner_visible?(_), do: false

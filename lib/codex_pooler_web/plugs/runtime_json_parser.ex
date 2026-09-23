@@ -17,12 +17,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeJsonParser do
     error in Plug.Parsers.ParseError ->
       case conn.private[@parse_error_scope_private_key] do
         :protected_backend ->
-          {:ok, %{"_invalid_json" => true},
-           Plug.Conn.put_private(conn, :runtime_json_parse_error, true)}
+          {:ok, %{"_invalid_json" => true}, Plug.Conn.put_private(conn, :runtime_json_parse_error, true)}
 
         :mcp ->
-          {:ok, %{"_invalid_json" => true},
-           Plug.Conn.put_private(conn, :mcp_json_parse_error, true)}
+          {:ok, %{"_invalid_json" => true}, Plug.Conn.put_private(conn, :mcp_json_parse_error, true)}
 
         _other ->
           reraise error, __STACKTRACE__

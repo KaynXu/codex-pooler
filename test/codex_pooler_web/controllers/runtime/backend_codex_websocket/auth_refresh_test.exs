@@ -337,9 +337,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
           # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_native_request(1, websocket_terminal_auth_failure(auth_code)),
-            strict_oauth_refresh(
-              FakeUpstream.json_response(%{"access_token" => "upstream-token-refreshed"}, 200)
-            ),
+            strict_oauth_refresh(FakeUpstream.json_response(%{"access_token" => "upstream-token-refreshed"}, 200)),
             FakeUpstream.expect_request(
               method: "WEBSOCKET",
               path: "/backend-api/codex/responses",
@@ -470,8 +468,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
         )
       end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
                    1_000
 
     metadata = active_token_refresh_metadata()
@@ -548,9 +545,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
           # provenance: synthetic_adversarial
           FakeUpstream.strict_sequence([
             strict_native_request(1, websocket_terminal_auth_failure("invalid_authentication")),
-            strict_oauth_refresh(
-              FakeUpstream.json_response(@refresh_response_body, @refresh_response_status)
-            )
+            strict_oauth_refresh(FakeUpstream.json_response(@refresh_response_body, @refresh_response_status))
           ])
         )
 
@@ -628,9 +623,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
             json: [valid: true, equals: %{"type" => "response.create"}],
             respond:
               FakeUpstream.websocket_text_frames([
-                CodexPooler.JSON.encode!(
-                  websocket_auth_retry_success_payload("disconnect_refresh")
-                )
+                CodexPooler.JSON.encode!(websocket_auth_retry_success_payload("disconnect_refresh"))
               ])
           )
         ])
@@ -778,8 +771,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -842,6 +834,108 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
     refute metadata_text =~ "refresh-token-ws-partial-do-not-leak"
   end
 
+  # findings#238: the handshake `x-openai-authorization-error` header is
+  # promoted to the first attempt's stream_error_code, so it takes the
+  # websocket diagnostic code bound: cleartext for an identifier, a
+  # fingerprint otherwise, and the `unauthorized` fallback when blank.
+  test "websocket handshake 401 keeps an identifier x-openai-authorization-error in cleartext" do
+    first_attempt = bounded_handshake_first_attempt!("invalid_api_key", "bounded_clear")
+
+    assert first_attempt.response_metadata["stream_error_code"] == "invalid_api_key"
+  end
+
+  test "websocket handshake 401 fingerprints a non-identifier x-openai-authorization-error" do
+    hostile_code = "Token expired; sign in again (session " <> String.duplicate("s", 60) <> ")"
+    first_attempt = bounded_handshake_first_attempt!(hostile_code, "bounded_hostile")
+
+    assert first_attempt.response_metadata["stream_error_code"] == fingerprint(hostile_code)
+    refute inspect(first_attempt.response_metadata) =~ "sign in again"
+  end
+
+  test "websocket handshake 401 with a blank x-openai-authorization-error falls back to unauthorized" do
+    first_attempt = bounded_handshake_first_attempt!("", "bounded_blank")
+
+    assert first_attempt.response_metadata["stream_error_code"] == "unauthorized"
+  end
+
+  defp bounded_handshake_first_attempt!(header_value, marker) do
+    initial_access_token = synthetic_access_token("ws-#{marker}-initial-region")
+    refreshed_access_token = synthetic_access_token("ws-#{marker}-refreshed-region")
+
+    # Strict: a 401 handshake carrying the header under test, one provider
+    # token refresh, then the retried handshake succeeds.
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            respond:
+              FakeUpstream.websocket_upgrade_error(
+                %{"error" => %{"code" => "invalid_api_key"}},
+                status: 401,
+                headers: [{"x-openai-authorization-error", header_value}]
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/oauth/token",
+            respond: FakeUpstream.json_response(%{"access_token" => refreshed_access_token}, 200)
+          ),
+          strict_native_response_payload(websocket_auth_retry_success_payload(marker), 1)
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "access_token",
+               plaintext: initial_access_token
+             })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "refresh_token",
+               plaintext: "refresh-token-ws-#{marker}-do-not-leak"
+             })
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    capture_log(fn ->
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 websocket_auth_refresh_payload(setup, marker),
+                 %{request_id: "ws-auth-#{marker}"},
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+    end)
+
+    assert_received {:websocket_frame, frame}
+    assert %{"id" => "resp_ws_auth_retry_" <> received_marker} = CodexPooler.JSON.decode!(frame)
+    assert received_marker == marker
+    assert :ok = FakeUpstream.verify!(upstream)
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.network_error_code == "upstream_unauthorized"
+    assert second_attempt.status == "succeeded"
+
+    refute inspect(first_attempt.response_metadata) =~ "refresh-token-ws-#{marker}-do-not-leak"
+
+    first_attempt
+  end
+
+  defp fingerprint(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, 12))
+  end
+
   defp strict_native_response_payload(payload, connection_ordinal) when is_map(payload) do
     strict_native_request(
       connection_ordinal,
@@ -879,8 +973,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AuthRefreshTest do
       "status" => "refreshing",
       "attempt_id" => Ecto.UUID.generate(),
       "generation" => Keyword.get(opts, :generation, 1),
-      "started_at" =>
-        DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+      "started_at" => DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
       "trigger_kind" => "test",
       "receive_timeout_ms" => Keyword.get(opts, :receive_timeout_ms, 30_000),
       "stale_after_ms" => Keyword.get(opts, :stale_after_ms, 60_000)

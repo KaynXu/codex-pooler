@@ -165,8 +165,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
          }, conn}
 
       {:error, _reason} ->
-        {:error,
-         %{status: 400, code: "invalid_request", message: "request body could not be read"}, conn}
+        {:error, %{status: 400, code: "invalid_request", message: "request body could not be read"}, conn}
     end
   end
 
@@ -308,8 +307,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
          } = state
        )
        when byte_size(pending) > 0 do
-    {pending,
-     %DecompressionState{state | offset: offset, compressed_size: compressed_size, pending: <<>>}}
+    {pending, %DecompressionState{state | offset: offset, compressed_size: compressed_size, pending: <<>>}}
   end
 
   defp zstd_next_chunk(
@@ -496,8 +494,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
              }}
 
           {:error, _reason} ->
-            {:error,
-             %{status: 400, code: "invalid_request", message: "request body must be JSON"}}
+            {:error, %{status: 400, code: "invalid_request", message: "request body must be JSON"}}
         end
 
       {:other, content_type} ->

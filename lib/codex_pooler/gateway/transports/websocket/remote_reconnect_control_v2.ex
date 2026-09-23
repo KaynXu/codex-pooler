@@ -216,8 +216,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2 do
         is_nil(value.provisional_binding_digest) and digest?(value.owner_lease_digest)
 
   defp exact_shape?(value, fields),
-    do:
-      is_map(value) and not is_struct(value) and MapSet.new(Map.keys(value)) == MapSet.new(fields)
+    do: is_map(value) and not is_struct(value) and MapSet.new(Map.keys(value)) == MapSet.new(fields)
 
   defp exact_keys(attrs, fields) do
     unknown = Map.keys(attrs) -- fields
@@ -238,6 +237,5 @@ end
 
 defimpl Inspect, for: CodexPooler.Gateway.Transports.Websocket.RemoteReconnectControlV2 do
   def inspect(control, _opts),
-    do:
-      "#RemoteReconnectControlV2<version: 2, action: #{control.action}, intent: #{control.intent}, token: redacted>"
+    do: "#RemoteReconnectControlV2<version: 2, action: #{control.action}, intent: #{control.intent}, token: redacted>"
 end

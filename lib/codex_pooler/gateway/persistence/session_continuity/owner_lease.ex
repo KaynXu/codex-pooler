@@ -11,11 +11,24 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     CodexSession
   }
 
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.LockWaitDiagnostics
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
 
+  @typedoc """
+  The VM that owns a session: its node name and the incarnation that minted it.
+
+  `boot_id` is `nil` only when the incarnation is genuinely unknown — an owner
+  named as a bare node string by a caller that is not that node. Two legacy
+  owners with the same node name and nil incarnation still match; a known
+  incarnation never matches nil. Unknown ownership cannot be proved absent.
+  """
+  @type owner :: %{node_name: String.t(), boot_id: String.t() | nil}
+
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
+  @type renewal_option :: {:lock_timeout_ms, pos_integer()} | {:timeout_ms, pos_integer()}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()
 
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
@@ -23,7 +36,34 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   @lease_expired OwnerLeaseStatus.expired_status()
   @lease_released OwnerLeaseStatus.released_status()
 
-  @spec acquire!(CodexSession.t(), map(), RequestOptions.t(), String.t(), DateTime.t()) ::
+  @doc """
+  The VM this request options value names as the session owner.
+
+  With no explicit override the owner is this VM, node name and incarnation
+  together. An override naming this node carries this VM's incarnation, which
+  is the owner-forwarding takeover path taking the lease for itself. An
+  override naming another node names an incarnation nobody here can know, so it
+  stays `nil` rather than borrowing the local one — a fabricated incarnation
+  would let this VM claim a lease it does not own.
+  """
+  @spec owner_instance(RequestOptions.t()) :: owner()
+  def owner_instance(%RequestOptions{} = request_options) do
+    local = InstancePresence.local_identity()
+    boot_id = blank_to_nil(request_options.continuity.owner_instance_boot_id)
+
+    case blank_to_nil(request_options.continuity.owner_instance_id) do
+      nil ->
+        %{node_name: local.node_name, boot_id: local.boot_id}
+
+      node_name when node_name == local.node_name ->
+        %{node_name: node_name, boot_id: boot_id || local.boot_id}
+
+      node_name ->
+        %{node_name: node_name, boot_id: boot_id}
+    end
+  end
+
+  @spec acquire!(CodexSession.t(), map(), RequestOptions.t(), owner(), DateTime.t()) ::
           BridgeOwnerLease.t()
   def acquire!(%CodexSession{} = session, auth, %RequestOptions{} = opts, owner, now) do
     expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
@@ -37,18 +77,27 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     |> Repo.update_all(set: [status: @lease_expired, released_at: now, updated_at: now])
 
     case active_for_update(session.id) do
-      %BridgeOwnerLease{owner_instance_id: ^owner} = lease ->
-        lease
-        |> Ecto.Changeset.change(%{
-          pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-          renewed_at: now,
-          expires_at: expires_at,
-          updated_at: now
-        })
-        |> Repo.update!()
-
       %BridgeOwnerLease{} = lease ->
-        lease
+        locked_now = db_now()
+
+        cond do
+          validate_renewal_presence(lease, locked_now) == {:error, :owner_unavailable} ->
+            release!(lease, "owner_unavailable_takeover", nil, locked_now)
+            insert_takeover!(session, owner, opts, locked_now)
+
+          own_lease?(lease, owner) ->
+            lease
+            |> Ecto.Changeset.change(%{
+              pool_upstream_assignment_id: session.pool_upstream_assignment_id,
+              renewed_at: locked_now,
+              expires_at: DateTime.add(locked_now, bridge_owner_lease_ttl_seconds(opts), :second),
+              updated_at: locked_now
+            })
+            |> Repo.update!()
+
+          true ->
+            lease
+        end
 
       nil ->
         %BridgeOwnerLease{}
@@ -57,7 +106,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
           pool_id: auth.pool.id,
           api_key_id: auth.api_key.id,
           pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-          owner_instance_id: owner,
+          owner_instance_id: owner.node_name,
+          owner_instance_boot_id: owner.boot_id,
           lease_token: Ecto.UUID.generate(),
           status: @lease_active,
           acquired_at: now,
@@ -71,11 +121,33 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
+  # Renewing an active lease is claiming to be the VM that holds it, so the
+  # claim has to name a VM. The node name alone is an address: it derives from
+  # the pod IP, so a container that restarts in place comes back under it, and
+  # matching on the name alone is exactly what let a successor renew the lease
+  # of the VM it replaced and keep a destroyed owner's session alive.
+  #
+  # The match is on the whole identity, so a live incarnation never matches a
+  # different one and never matches a lease that carries none. A restarted VM
+  # therefore falls through to the branch that hands back a lease it does not
+  # own, and its caller takes the ordinary owner-unavailable takeover, which
+  # releases that lease and mints a fresh one under the new incarnation.
+  #
+  # Two owners that both name no incarnation still match. That is the
+  # pre-incarnation world exactly as it was — an owner named only by node name,
+  # and a lease written before this change — preserved rather than broken,
+  # because nothing there can tell the two apart in either direction.
+  defp own_lease?(%BridgeOwnerLease{} = lease, owner) do
+    lease.owner_instance_id == owner.node_name and
+      lease.owner_instance_boot_id == owner.boot_id
+  end
+
   @spec persist_session!(CodexSession.t(), BridgeOwnerLease.t(), DateTime.t()) :: CodexSession.t()
   def persist_session!(%CodexSession{} = session, %BridgeOwnerLease{} = lease, now) do
     session
     |> Ecto.Changeset.change(%{
       owner_instance_id: lease.owner_instance_id,
+      owner_instance_boot_id: lease.owner_instance_boot_id,
       owner_lease_token: lease.lease_token,
       owner_lease_expires_at: lease.expires_at,
       last_heartbeat_at: now,
@@ -91,6 +163,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
         now = db_now()
 
         case validate_owner_token_snapshot(session, lease, session.owner_lease_token, now) do
+          :ok -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+        case validate_renewal_presence(lease, now) do
           :ok -> :ok
           {:error, reason} -> Repo.rollback(reason)
         end
@@ -124,33 +201,68 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
   @spec renew_owner_token(session_ref(), Ecto.UUID.t() | String.t(), RequestOptions.t()) ::
           {:ok, CodexSession.t()} | {:error, :stale_owner | :owner_unavailable}
-  def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts) do
-    Repo.transaction(fn ->
-      with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
-             active_snapshot_for_update(session_ref),
-           now <- db_now(),
-           :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now) do
-        expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
+  def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts),
+    do: renew_owner_token(session_ref, owner_lease_token, opts, [])
 
-        renewed_lease =
-          lease
-          |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
+  # `timeout_ms` supplies DBConnection's absolute deadline for the complete
+  # operation through COMMIT. Checkout time consumes that budget once acquired;
+  # the heartbeat's outer call also bounds waiting for a connection.
+  # `lock_timeout_ms` separately
+  # bounds acquisition of both rows, starting after BEGIN rather than charging
+  # checkout against the row budget. PostgreSQL applies lock_timeout per statement, so the
+  # remaining budget is set again before each lock wait; exhausting it rolls the
+  # renewal back cleanly as `:lock_timeout` instead of leaving the caller to kill
+  # a process that is still inside the transaction. The timed-out lock statement
+  # runs in a savepoint, so the still-open transaction can name the holder in
+  # the returned lock-wait diagnostics before it rolls back.
+  @spec renew_owner_token(
+          session_ref(),
+          Ecto.UUID.t() | String.t(),
+          RequestOptions.t(),
+          [renewal_option()]
+        ) ::
+          {:ok, CodexSession.t()}
+          | {:error, :stale_owner | :owner_unavailable | {:lock_timeout, LockWaitDiagnostics.t()}}
+  def renew_owner_token(session_ref, owner_lease_token, %RequestOptions{} = opts, renewal_opts)
+      when is_list(renewal_opts) do
+    Repo.transaction(
+      fn ->
+        lock_deadline = lock_deadline(renewal_opts)
+
+        with {:ok, %CodexSession{} = session, %BridgeOwnerLease{} = lease} <-
+               active_snapshot_for_update(session_ref, lock_deadline),
+             now <- db_now(),
+             :ok <- validate_owner_token_snapshot(session, lease, owner_lease_token, now),
+             :ok <- validate_renewal_presence(lease, now) do
+          expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
+
+          renewed_lease =
+            lease
+            |> Ecto.Changeset.change(%{renewed_at: now, expires_at: expires_at, updated_at: now})
+            |> Repo.update!()
+
+          session
+          |> Ecto.Changeset.change(%{
+            owner_instance_id: renewed_lease.owner_instance_id,
+            owner_instance_boot_id: renewed_lease.owner_instance_boot_id,
+            owner_lease_token: renewed_lease.lease_token,
+            owner_lease_expires_at: expires_at,
+            last_heartbeat_at: now,
+            updated_at: now
+          })
           |> Repo.update!()
-
-        session
-        |> Ecto.Changeset.change(%{
-          owner_instance_id: renewed_lease.owner_instance_id,
-          owner_lease_token: renewed_lease.lease_token,
-          owner_lease_expires_at: expires_at,
-          last_heartbeat_at: now,
-          updated_at: now
-        })
-        |> Repo.update!()
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end,
+      transaction_options(renewal_opts)
+    )
     |> unwrap_owner_token_renewal()
+  rescue
+    error in Postgrex.Error ->
+      if lock_timeout_error?(error, renewal_opts),
+        do: {:error, {:lock_timeout, LockWaitDiagnostics.unresolved(:unknown)}},
+        else: reraise(error, __STACKTRACE__)
   end
 
   @spec release(session_ref(), Ecto.UUID.t() | String.t(), String.t()) ::
@@ -190,7 +302,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
           {:ok, CodexSession.t()} | {:error, term()}
   def replace_unavailable(session_ref, %RequestOptions{} = opts) do
     now = now()
-    owner = owner_instance_id(opts)
+    owner = owner_instance(opts)
     expected_owner = expected_owner_snapshot(session_ref)
 
     Repo.transaction(fn ->
@@ -206,13 +318,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     |> unwrap_transaction()
   end
 
-  defp active_for_update(session_id) do
+  defp active_for_update(session_id, opts \\ []) do
     Repo.one(
-      from lease in BridgeOwnerLease,
+      from(lease in BridgeOwnerLease,
         where: lease.codex_session_id == ^session_id and lease.status == ^@lease_active,
         order_by: [desc: lease.renewed_at, desc: lease.created_at],
         limit: 1,
         lock: "FOR UPDATE"
+      ),
+      opts
     )
   end
 
@@ -287,7 +401,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       pool_id: session.pool_id,
       api_key_id: session.api_key_id,
       pool_upstream_assignment_id: session.pool_upstream_assignment_id,
-      owner_instance_id: owner,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       lease_token: Ecto.UUID.generate(),
       status: @lease_active,
       acquired_at: now,
@@ -335,23 +450,40 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
-  defp active_snapshot_for_update(session_ref) do
+  defp active_snapshot_for_update(session_ref, lock_deadline) do
     with {:ok, session_id} <- session_id(session_ref),
-         %CodexSession{} = session <- codex_session_for_update(session_id),
-         %BridgeOwnerLease{} = lease <- active_for_update(session.id) do
+         :ok <- put_lock_timeout(lock_deadline, :codex_sessions),
+         {:ok, %CodexSession{} = session} <-
+           row_lock(lock_deadline, :codex_sessions, session_id, &codex_session_for_update/2),
+         :ok <- put_lock_timeout(lock_deadline, :bridge_owner_leases),
+         {:ok, %BridgeOwnerLease{} = lease} <-
+           row_lock(lock_deadline, :bridge_owner_leases, session.id, &active_for_update/2) do
       {:ok, session, lease}
     else
       {:error, reason} -> {:error, reason}
-      nil -> {:error, :owner_unavailable}
+      {:ok, nil} -> {:error, :owner_unavailable}
     end
   end
 
-  @spec codex_session_for_update(Ecto.UUID.t()) :: CodexSession.t() | nil
-  defp codex_session_for_update(session_id) do
+  defp row_lock(nil, _relation, session_id, lock), do: {:ok, lock.(session_id, [])}
+
+  defp row_lock(_lock_deadline, relation, session_id, lock) do
+    {:ok, lock.(session_id, mode: :savepoint)}
+  rescue
+    error in Postgrex.Error ->
+      if lock_not_available?(error),
+        do: {:error, {:lock_timeout, LockWaitDiagnostics.capture(relation, session_id)}},
+        else: reraise(error, __STACKTRACE__)
+  end
+
+  @spec codex_session_for_update(Ecto.UUID.t(), keyword()) :: CodexSession.t() | nil
+  defp codex_session_for_update(session_id, opts \\ []) do
     Repo.one(
-      from session in CodexSession,
+      from(session in CodexSession,
         where: session.id == ^session_id,
         lock: "FOR UPDATE"
+      ),
+      opts
     )
   end
 
@@ -385,6 +517,21 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
+  # A request holding a valid token may execute on a different replica. Only
+  # a stale heartbeat plus exact evidence of a distributed successor revokes
+  # its liveness. Missing connectivity and non-distributed name collisions are
+  # unknown; the exact local incarnation always remains live.
+  @spec validate_renewal_presence(BridgeOwnerLease.t(), DateTime.t()) ::
+          :ok | {:error, :owner_unavailable}
+  def validate_renewal_presence(%BridgeOwnerLease{} = lease, now) do
+    identity =
+      InstancePresence.Identity.owner(lease.owner_instance_id, lease.owner_instance_boot_id)
+
+    if InstancePresence.absent?(identity, now) and InstancePresence.status(identity) == :dead,
+      do: {:error, :owner_unavailable},
+      else: :ok
+  end
+
   defp session_id(%CodexSession{id: id}) when is_binary(id), do: {:ok, id}
 
   defp session_id(id) when is_binary(id) do
@@ -406,12 +553,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     end
   end
 
-  defp owner_instance_id(%RequestOptions{} = request_options) do
-    request_options.continuity.owner_instance_id
-    |> blank_to_nil()
-    |> Kernel.||(Atom.to_string(node()))
-  end
-
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata
   defp normalize_metadata(_metadata), do: %{}
 
@@ -428,6 +569,47 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()", [])
     now
   end
+
+  defp lock_deadline(renewal_opts) do
+    case Keyword.get(renewal_opts, :lock_timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        System.monotonic_time(:millisecond) + timeout
+
+      _no_bound ->
+        nil
+    end
+  end
+
+  defp transaction_options(renewal_opts) do
+    case Keyword.get(renewal_opts, :timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 ->
+        [timeout: timeout, deadline: System.monotonic_time(:millisecond) + timeout]
+
+      _no_bound ->
+        []
+    end
+  end
+
+  defp put_lock_timeout(nil, _relation), do: :ok
+
+  defp put_lock_timeout(deadline, relation) do
+    case deadline - System.monotonic_time(:millisecond) do
+      remaining when remaining > 0 ->
+        _result =
+          Repo.query!("SELECT set_config('lock_timeout', $1, true)", ["#{remaining}ms"])
+
+        :ok
+
+      _exhausted ->
+        {:error, {:lock_timeout, LockWaitDiagnostics.unresolved(relation)}}
+    end
+  end
+
+  defp lock_timeout_error?(%Postgrex.Error{} = error, renewal_opts),
+    do: lock_not_available?(error) and not is_nil(lock_deadline(renewal_opts))
+
+  defp lock_not_available?(%Postgrex.Error{postgres: %{code: :lock_not_available}}), do: true
+  defp lock_not_available?(%Postgrex.Error{}), do: false
 
   defp unwrap_ok_transaction({:ok, :ok}), do: :ok
   defp unwrap_ok_transaction({:error, reason}), do: {:error, reason}

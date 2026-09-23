@@ -16,6 +16,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Coherence do
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
 
   @version 1
+  # Two readings count toward the same cycle when their resets agree to within
+  # this much. It answers a different question from each surface's
+  # `override_tolerance_seconds` (how much older than the row it contradicts a
+  # confirmation may be observed) and from `WindowSelector`'s hour-wide
+  # prior-cycle margin (whether a reset belongs to an ended cycle at all).
+  # Readings whose resets drift further apart than this never accumulate, so
+  # the exhausted row keeps winning: the failure direction is fail-closed.
   @same_cycle_tolerance_seconds 5 * 60
   @required_observations 2
 
@@ -139,8 +146,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Coherence do
     %{
       "version" => @version,
       "count" => count,
-      "used_percent" =>
-        evidence.used_percent |> Decimal.normalize() |> Decimal.to_string(:normal),
+      "used_percent" => evidence.used_percent |> Decimal.normalize() |> Decimal.to_string(:normal),
       "reset_at" => DateTime.to_iso8601(evidence.reset_at),
       "first_observed_at" => DateTime.to_iso8601(first_observed_at),
       "last_observed_at" => DateTime.to_iso8601(evidence.observed_at),

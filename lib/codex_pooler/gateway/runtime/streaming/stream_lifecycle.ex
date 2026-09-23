@@ -30,6 +30,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
           context: SelectedCandidateContext.t(),
           dispatch_candidate: dispatch_candidate(),
           next_index: non_neg_integer(),
+          retry_allowed?: boolean(),
           reset_state: reset_state(),
           stream_candidate: stream_candidate(),
           write_final_event: write_final_event()
@@ -85,11 +86,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
       )
       when is_function(dispatch_candidate, 1) do
     reset_state = Keyword.fetch!(opts, :reset_state)
+    retry_allowed? = Keyword.get(opts, :retry_allowed?, true)
     write_final_event = Keyword.get(opts, :write_final_event, fn state, _body -> {:ok, state} end)
     stream_candidate = Keyword.fetch!(opts, :stream_candidate)
 
     fn state, body, failure ->
-      next_index = context.retry_count + 1
+      # A same-identity auth refresh adds an attempt without advancing the
+      # route candidate; failover follows the candidate index, not retry count.
+      next_index = context.index + 1
 
       if compact_assignment_model_miss?(failure, context) do
         finalize_last_first_event_failure(
@@ -109,6 +113,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
             context: context,
             dispatch_candidate: dispatch_candidate,
             next_index: next_index,
+            retry_allowed?: retry_allowed?,
             reset_state: reset_state,
             stream_candidate: stream_candidate,
             write_final_event: write_final_event
@@ -127,12 +132,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
            context: context,
            dispatch_candidate: dispatch_candidate,
            next_index: next_index,
+           retry_allowed?: retry_allowed?,
            reset_state: reset_state,
            stream_candidate: stream_candidate,
            write_final_event: write_final_event
          }
        ) do
-    if Dispatch.candidate_available?(context, next_index) and not bound_reset_probe?(context) do
+    if retry_allowed? and Dispatch.candidate_available?(context, next_index) and
+         not bound_reset_probe?(context) do
       body
       |> Finalization.record_retryable_first_event_stream_failure(failure, response_context)
       |> continue_after_retryable_first_event_record(

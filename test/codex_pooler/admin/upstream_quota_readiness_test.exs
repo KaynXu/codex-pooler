@@ -8,6 +8,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.{AccountAvailabilityStore, AccountQuotaWindow}
   alias CodexPooler.Upstreams.Quota.RoutingQuotaSnapshot
+  alias CodexPooler.Upstreams.Quota.Windows
 
   @as_of ~U[2026-05-30 12:00:00Z]
   @future_reset ~U[2026-05-30 12:15:00Z]
@@ -351,6 +352,32 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
   end
 
   describe "from_snapshot/1" do
+    for minutes <- [300, 43_200] do
+      test "permitted zero-use #{minutes}-minute primary agrees with runtime eligibility" do
+        %{identity: identity} = upstream_assignment_fixture(pool_fixture())
+
+        primary =
+          account_primary_window(
+            window_minutes: unquote(minutes),
+            active_limit: nil,
+            credits: nil,
+            used_percent: Decimal.new(0),
+            metadata: %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
+          )
+
+        snapshot = RoutingQuotaSnapshot.from_identity(identity, [primary], @as_of)
+
+        assert %{eligible?: true} =
+                 Windows.routing_quota_eligibility_from_snapshot(snapshot)
+
+        assert %{state: "ready", routing_ready_now?: true, primary_window: ^primary} =
+                 UpstreamQuotaReadiness.from_snapshot(snapshot)
+
+        assert %{state: "ready", primary_window: ^primary} =
+                 UpstreamQuotaReadiness.from_windows([primary], @as_of)
+      end
+    end
+
     test "affirmative permission with exhausted percentage remains ready" do
       pool = pool_fixture()
 
@@ -358,8 +385,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, @as_of, 1)
           }
         })
 
@@ -395,8 +421,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, @as_of, 1)
           }
         })
 
@@ -432,8 +457,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
       for {state, observed_at, epoch, expected_state} <- [
             {:blocked, @as_of, 1, "blocked"},
             {:unknown, @as_of, 1, "missing_evidence"},
-            {:available, DateTime.add(@as_of, -(Evidence.freshness_ttl_seconds() + 1), :second),
-             1, "missing_evidence"},
+            {:available, DateTime.add(@as_of, -(Evidence.freshness_ttl_seconds() + 1), :second), 1, "missing_evidence"},
             {:available, @as_of, 2, "missing_evidence"}
           ] do
         pool = pool_fixture()
@@ -442,8 +466,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
           upstream_assignment_fixture(pool, %{
             identity_metadata: %{
               "credential_epoch" => 1,
-              AccountAvailabilityStore.metadata_key() =>
-                AccountAvailabilityStore.encode!(state, observed_at, epoch)
+              AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(state, observed_at, epoch)
             }
           })
 
@@ -465,8 +488,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
         upstream_assignment_fixture(pool, %{
           identity_metadata: %{
             "credential_epoch" => 1,
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:available, @as_of, 1)
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, @as_of, 1)
           }
         })
 

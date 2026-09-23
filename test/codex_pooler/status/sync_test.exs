@@ -1,13 +1,116 @@
 defmodule CodexPooler.Status.SyncTest do
   use CodexPooler.DataCase, async: false
 
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
+
   alias CodexPooler.OpenAIStatus
   alias CodexPooler.Status.Events
+  alias CodexPooler.Status.FeedParser
   alias CodexPooler.Status.Schemas.{FeedState, Incident}
   alias CodexPooler.Status.Sync
   alias Ecto.Adapters.SQL.Sandbox
 
   @notification_timeout 15_000
+
+  test "identical 200 refreshes feed freshness without rewriting incidents or aggregate revision" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    fetcher = fn _, _ -> {:ok, %{items: [item("identical")], content_hash: "same"}} end
+    assert {:ok, first} = Sync.sync(fetcher: fetcher, now: now)
+    incidents = OpenAIStatus.list_incidents()
+    later = DateTime.add(now, 300, :second)
+    assert {:ok, second} = Sync.sync(fetcher: fetcher, now: later)
+    assert second.aggregate_revision == first.aggregate_revision
+    assert OpenAIStatus.list_incidents() == incidents
+    assert OpenAIStatus.feed_state().last_success_at == later
+  end
+
+  test "identical committed 200 emits only freshness after a material change" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    guid = "stable-#{System.unique_integer([:positive])}"
+    fetcher = fn _, _ -> {:ok, %{items: [item(guid)], content_hash: "stable"}} end
+
+    with_committed_status(guid, fn listener ->
+      assert {:ok, %{aggregate_revision: 1}} = Sync.sync(fetcher: fetcher, now: now)
+      assert_status_event(listener, 1, 1, now)
+      before = OpenAIStatus.list_incidents()
+
+      assert {:ok, %{aggregate_revision: 1, changed_count: 0}} =
+               Sync.sync(fetcher: fetcher, now: DateTime.add(now, 300, :second))
+
+      assert OpenAIStatus.list_incidents() == before
+      assert_freshness_event(listener, 1, DateTime.add(now, 300, :second))
+      changed = fn _, _ -> {:ok, %{items: [%{item(guid) | status: "Monitoring"}]}} end
+      later = DateTime.add(now, 600, :second)
+
+      assert {:ok, %{aggregate_revision: 2, changed_count: 1}} =
+               Sync.sync(fetcher: changed, now: later)
+
+      assert_status_event(listener, 1, 2, later)
+    end)
+  end
+
+  test "partial snapshots cannot retire incidents omitted by parsing or truncation" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+
+    assert {:ok, _} =
+             Sync.sync(fetcher: fn _, _ -> {:ok, %{items: [item("preserve")]}} end, now: now)
+
+    for seconds <- 1..4 do
+      assert {:ok, _} =
+               Sync.sync(
+                 fetcher: fn _, _ -> {:ok, %{items: [], complete?: false}} end,
+                 now: DateTime.add(now, seconds, :second)
+               )
+    end
+
+    assert [%{guid: "preserve", omission_count: 0, retired_at: nil}] =
+             OpenAIStatus.active_incidents()
+  end
+
+  # findings#246. One unreadable item used to stall retirement for the whole
+  # poll. Now a skipped item the parser could still name is counted as seen, so
+  # it is not retired and everything genuinely gone still is.
+  test "an unreadable but named incident is preserved while a truly omitted one retires" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+
+    seed = fn _, _ -> {:ok, %{items: [item("unreadable"), item("departed")]}} end
+    assert {:ok, _} = Sync.sync(fetcher: seed, now: now)
+
+    # Every later poll reads neither: one is present but unparseable, the other
+    # has genuinely left the feed.
+    partial = fn _, _ ->
+      {:ok, %{items: [], skipped_count: 1, skipped_guids: ["unreadable"], complete?: true}}
+    end
+
+    for seconds <- 1..4 do
+      assert {:ok, _} = Sync.sync(fetcher: partial, now: DateTime.add(now, seconds, :second))
+    end
+
+    guids = OpenAIStatus.active_incidents() |> Enum.map(& &1.guid)
+    assert "unreadable" in guids
+    refute "departed" in guids
+
+    assert [%{guid: "unreadable", omission_count: 0, retired_at: nil}] =
+             OpenAIStatus.active_incidents()
+  end
+
+  test "non-feed XML polls preserve active incidents and record the failure" do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+    seed = fn _state, _opts -> {:ok, %{items: [item("preserved")], content_hash: "feed"}} end
+    assert {:ok, _} = Sync.sync(fetcher: seed, now: now)
+
+    invalid = fn _state, opts -> FeedParser.parse("<error>unavailable</error>", opts) end
+
+    for seconds <- 1..3 do
+      assert {:error, %{code: "invalid_feed"}} =
+               Sync.sync(fetcher: invalid, now: DateTime.add(now, seconds, :second))
+    end
+
+    assert [%{guid: "preserved", omission_count: 0, retired_at: nil}] =
+             OpenAIStatus.active_incidents()
+
+    assert OpenAIStatus.feed_state().last_success_at == now
+  end
 
   defp item(guid, status \\ "Investigating") do
     now = ~U[2026-09-10 10:00:00.000000Z]
@@ -81,10 +184,10 @@ defmodule CodexPooler.Status.SyncTest do
       incidents = OpenAIStatus.list_incidents()
       refreshed_at = DateTime.add(now, 1, :second)
 
-      assert {:not_modified, %{changed_count: 0, aggregate_revision: 2}} =
+      assert {:not_modified, %{changed_count: 0, aggregate_revision: 1}} =
                Sync.sync(fetcher: not_modified, now: refreshed_at)
 
-      assert_status_event(listener, 0, 2, refreshed_at)
+      assert_freshness_event(listener, 1, refreshed_at)
       assert OpenAIStatus.list_incidents() == incidents
       state = OpenAIStatus.feed_state()
       assert state.etag == "e2"
@@ -227,7 +330,7 @@ defmodule CodexPooler.Status.SyncTest do
 
     assert {:ok, resolved} =
              OpenAIStatus.upsert_incident(
-               Map.put(item("resolved", "Resolved"), :content_hash, "h"),
+               Map.merge(item("resolved", "Resolved"), %{content_hash: "h", published_at: old}),
                old
              )
 
@@ -240,33 +343,41 @@ defmodule CodexPooler.Status.SyncTest do
     refute Repo.get(CodexPooler.Status.Schemas.Incident, resolved.id)
   end
 
+  # Registered, never scoped. `openai_status_feed_states` is a committed singleton and the
+  # incident rows are committed too, so losing this teardown makes the very first assertion of
+  # every later `with_committed_status/2` -- and of any other file that expects no feed state
+  # -- fail on rows nobody in that file wrote. A `try/after` only runs while the test process
+  # is alive: an ExUnit timeout kill or an exit signal from the notification listener skips it,
+  # and the old block also ended in assertions, so a failing check there aborted the rest of
+  # the teardown instead of just reporting it.
   defp with_committed_status(guid, fun) do
     :ok = OpenAIStatus.subscribe()
     assert %{status_listen_ref: bridge_ref} = :sys.get_state(CodexPooler.Events.PostgresBridge)
     assert is_reference(bridge_ref)
 
     notifications =
-      start_supervised!(
-        {Postgrex.Notifications,
-         Keyword.take(Repo.config(), [:hostname, :port, :database, :username, :password, :ssl])}
-      )
+      start_supervised!({Postgrex.Notifications, Keyword.take(Repo.config(), [:hostname, :port, :database, :username, :password, :ssl])})
 
     channel = Events.postgres_channel()
     assert {:ok, ref} = Postgrex.Notifications.listen(notifications, channel)
+    register_unboxed_cleanup!(fn -> delete_committed_status!(guid) end)
 
     Sandbox.unboxed_run(Repo, fn ->
       assert OpenAIStatus.feed_state() == nil
       assert OpenAIStatus.list_incidents() == []
 
-      try do
-        fun.({notifications, ref, channel})
-      after
-        Repo.delete_all(from(i in Incident, where: i.guid == ^guid))
-        Repo.delete_all(from(s in FeedState, where: s.singleton == true))
-        assert Repo.get_by(Incident, guid: guid) == nil
-        assert OpenAIStatus.feed_state() == nil
-      end
+      fun.({notifications, ref, channel})
     end)
+  end
+
+  # Both deletes run before either check, so a check that fails still leaves the table clean.
+  defp delete_committed_status!(guid) do
+    Repo.delete_all(from(i in Incident, where: i.guid == ^guid))
+    Repo.delete_all(from(s in FeedState, where: s.singleton == true))
+
+    assert Repo.get_by(Incident, guid: guid) == nil
+    assert OpenAIStatus.feed_state() == nil
+    :ok
   end
 
   defp assert_status_event({notifications, ref, channel}, changed_count, revision, emitted_at) do
@@ -289,6 +400,17 @@ defmodule CodexPooler.Status.SyncTest do
 
   defp refute_status_event({notifications, ref, channel}) do
     refute_receive {:notification, ^notifications, ^ref, ^channel, _}, 100
+    refute_received {:openai_status_updated, _}
+    refute_received {:openai_status_freshness, _}
+  end
+
+  defp assert_freshness_event({notifications, ref, channel}, revision, timestamp) do
+    assert_receive {:notification, ^notifications, ^ref, ^channel, payload}, @notification_timeout
+    assert {:ok, decoded} = CodexPooler.JSON.decode(payload)
+    assert {:ok, event} = Events.decode_freshness(decoded)
+    assert event.aggregate_revision == revision
+    assert event.last_success_at == timestamp
+    assert_receive {:openai_status_freshness, ^event}, @notification_timeout
     refute_received {:openai_status_updated, _}
   end
 end

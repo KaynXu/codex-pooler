@@ -4,10 +4,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
   defstruct mode: :relay, effective_serving_mode: nil
 
   @type t :: %__MODULE__{
-          mode:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.delivery_mode(),
-          effective_serving_mode:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.effective_serving_mode()
+          mode: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.delivery_mode(),
+          effective_serving_mode: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.effective_serving_mode()
         }
 end
 
@@ -17,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
   alias __MODULE__.Delivery
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
 
   # The receive state mirrors the finite websocket protocol phases; adding the
@@ -30,6 +29,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :native_codex_response_control,
     :response_id,
     :response_usage,
+    :served_model,
     :terminal_upstream_error_code,
     :terminal_upstream_error_param,
     :termination_source,
@@ -54,22 +54,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     terminal_candidate_rejection: nil,
     text_frame_count: 0,
     body: {[], 0},
+    collected_body: :disabled,
     websocket_frame_headers: %{},
     peer_close_metadata: %{}
   ]
 
   @type t :: %__MODULE__{
-          writer:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.writer(),
+          writer: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.writer(),
           timeouts: map(),
-          message_mapper:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
-          frame_observer:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
+          message_mapper: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
+          frame_observer: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
           native_codex_response_control: TurnSnapshot.t() | nil,
           delivery: Delivery.t(),
           response_id: String.t() | nil,
           response_usage: ResponseUsage.usage() | nil,
+          served_model: String.t() | nil,
           terminal_upstream_error_code: String.t() | nil,
           terminal_upstream_error_param: String.t() | nil,
           termination_source: atom() | nil,
@@ -80,8 +79,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           connection_idle_bucket: atom() | nil,
           request_caller_pid: pid() | nil,
           request_caller_monitor: reference() | nil,
-          native_client_retry_observation:
-            CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
+          native_client_retry_observation: CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
           assignment_advertised?: boolean(),
           native_metadata_emitted?: boolean(),
           downstream_output_started?: boolean(),
@@ -94,8 +92,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           terminal_candidate_rejection: String.t() | nil,
           text_frame_count: non_neg_integer(),
           websocket_frame_headers: %{optional(String.t()) => String.t()},
-          peer_close_metadata:
-            CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
-          body: RetainedBody.t()
+          peer_close_metadata: CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
+          body: RetainedBody.t(),
+          collected_body: CollectedBody.t()
         }
 end

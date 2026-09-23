@@ -109,8 +109,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       RequestOptions.put_continuity(request_options,
-        resolved_previous_response_assignment_id:
-          ContinuityStore.previous_response_assignment_id(auth, previous_response_id, now)
+        resolved_previous_response_assignment_id: ContinuityStore.previous_response_assignment_id(auth, previous_response_id, now)
       )
     else
       _already_resolved_or_unresolvable -> request_options
@@ -148,8 +147,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         with {:ok, affinities} <- Files.response_assignment_affinities(auth, file_ids),
              {:ok, assignment_id} <- single_file_assignment_id(affinities),
              :ok <- ensure_file_affinity_matches_session(auth, request_options, assignment_id) do
-          {:ok,
-           RequestOptions.put_routing(request_options, file_affinity_assignment_id: assignment_id)}
+          {:ok, RequestOptions.put_routing(request_options, file_affinity_assignment_id: assignment_id)}
         end
     end
   end
@@ -241,8 +239,19 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     end
   end
 
-  def apply_codex_session_assignment(candidates, %RequestOptions{} = request_options, %Model{}),
-    do: filter_codex_session_assignment(candidates, request_options)
+  def apply_codex_session_assignment(
+        candidates,
+        %RequestOptions{} = request_options,
+        %Model{} = model
+      ) do
+    case {recreated_session_assignment_preference(request_options), classify_codex_session_pin(request_options, model)} do
+      {assignment_id, {:soft, :recreated_session_assignment}} when is_binary(assignment_id) ->
+        {:ok, prefer_codex_session_assignment(candidates, assignment_id)}
+
+      _no_recreation_preference ->
+        filter_codex_session_assignment(candidates, request_options)
+    end
+  end
 
   @spec filter_codex_session_assignment([BridgeRing.candidate()], RequestOptions.t(), Model.t()) ::
           {:ok, [BridgeRing.candidate()]} | {:error, gateway_error()}
@@ -293,6 +302,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
           :previous_response_id
           | :file_affinity
           | :live_upstream_websocket
+          | :recreated_session_assignment
           | :local_session_header
           | :accepted_turn_state
           | :same_model_successful_turn
@@ -357,6 +367,16 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
 
   @spec classify_codex_session_pin(RequestOptions.t(), Model.t()) :: {pin_mode(), pin_reason()}
   defp classify_codex_session_pin(%RequestOptions{} = request_options, %Model{} = model) do
+    hard_codex_session_pin(request_options) || soft_codex_session_pin(request_options, model)
+  end
+
+  # The two modes are classified separately because they are different
+  # authorities, not two halves of one list: a hard pin filters candidates and
+  # can authorize the irreversible quota bypass, while a soft pin only orders an
+  # already-admitted shortlist. Every hard reason therefore has to be decided
+  # before any soft one is considered.
+  @spec hard_codex_session_pin(RequestOptions.t()) :: {pin_mode(), pin_reason()} | nil
+  defp hard_codex_session_pin(%RequestOptions{} = request_options) do
     cond do
       previous_response_id?(request_options) ->
         {:hard, :previous_response_id}
@@ -365,8 +385,26 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         {:hard, :file_affinity}
 
       assigned_codex_session?(request_options) and
-          live_upstream_websocket_continuity?(request_options) ->
+        live_upstream_websocket_continuity?(request_options) and
+          (not request_options.payload_context.portable_full_history? or
+             RequestOptions.connection_bound_compaction?(request_options)) ->
         {:hard, :live_upstream_websocket}
+
+      true ->
+        nil
+    end
+  end
+
+  @spec soft_codex_session_pin(RequestOptions.t(), Model.t()) :: {pin_mode(), pin_reason()}
+  defp soft_codex_session_pin(%RequestOptions{} = request_options, %Model{} = model) do
+    cond do
+      # Ranked above the other soft reasons deliberately. A lease-expiry
+      # recreation nearly always also carries the session header that produced
+      # the session key, and that reason has nothing to order by here because
+      # the replacement session is still unassigned. Naming the recreation is
+      # both the accurate diagnostic and the only soft reason with a target.
+      recreated_session_assignment_preference(request_options) != nil ->
+        {:soft, :recreated_session_assignment}
 
       local_session_header?(request_options) ->
         {:soft, :local_session_header}
@@ -411,6 +449,28 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
        do: is_binary(clean_string(assignment_id))
 
   defp assigned_codex_session?(%RequestOptions{}), do: false
+
+  # The assignment of the session that was just closed for this key because its
+  # owner lease had expired, carried in memory on the replacement session
+  # struct by the transaction that recreated it. It is read only while the new
+  # session has no assignment of its own, and it only ever orders candidates:
+  # every hard pin above outranks it, `hard_pin_metadata/2` stays nil for it,
+  # and eligibility, quota, health, circuit, compact and file-affinity
+  # filtering all run before this ordering, so a preferred assignment that is
+  # gone or ineligible is simply absent from the list and the request falls
+  # through to ordinary ordering.
+  @spec recreated_session_assignment_preference(RequestOptions.t()) :: String.t() | nil
+  defp recreated_session_assignment_preference(%RequestOptions{
+         continuity: %{
+           codex_session: %CodexSession{
+             pool_upstream_assignment_id: nil,
+             recreated_from_assignment_id: assignment_id
+           }
+         }
+       }),
+       do: clean_string(assignment_id)
+
+  defp recreated_session_assignment_preference(%RequestOptions{}), do: nil
 
   @spec live_upstream_websocket_continuity?(RequestOptions.t()) :: boolean()
   defp live_upstream_websocket_continuity?(%RequestOptions{transport: transport}) do
@@ -493,8 +553,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
           pinned_reauth_continuity_metadata(assignment, identity, reason_code)
         )
 
-      {:unavailable, %PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity,
-       internal_reason} ->
+      {:unavailable, %PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity, internal_reason} ->
         Contracts.pinned_continuation_unavailable_error(
           pinned_unavailable_continuity_metadata(
             assignment,
@@ -525,8 +584,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         if revoked_refresh_token_pinned_reauth?(assignment, identity) do
           {:ok, assignment, identity, "refresh_token_revoked"}
         else
-          {:unavailable, assignment, identity,
-           pinned_unavailable_internal_reason(assignment, identity)}
+          {:unavailable, assignment, identity, pinned_unavailable_internal_reason(assignment, identity)}
         end
 
       nil ->

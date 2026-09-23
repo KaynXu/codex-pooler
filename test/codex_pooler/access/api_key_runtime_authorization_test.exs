@@ -36,6 +36,14 @@ defmodule CodexPooler.Access.APIKeyRuntimeAuthorizationTest do
   end
 
   describe "runtime authorization" do
+    test "missing capture carries HTTP 401 while generic access errors keep their default" do
+      assert {:ok, {:error, %{status: 401, code: :api_key_missing}}} =
+               Repo.transaction(fn -> Access.capture_api_key_runtime_epoch(nil) end)
+
+      assert {:error, error} = Access.list_api_keys(nil)
+      assert error == %{code: :invalid_request, message: "user scope is required"}
+    end
+
     test "captures and authorizes a matching active epoch inside the caller transaction" do
       {scope, pool} = owner_scope_and_pool()
       %{api_key: api_key} = active_api_key_fixture(pool, %{scope: scope})
@@ -89,8 +97,7 @@ defmodule CodexPooler.Access.APIKeyRuntimeAuthorizationTest do
                  Access.authorize_api_key_runtime_turn(Ecto.UUID.generate(), 0)
                end)
 
-      assert {:ok,
-              {:error, %{code: :api_key_runtime_epoch_stale, disabling_epoch: 0} = stale_error}} =
+      assert {:ok, {:error, %{code: :api_key_runtime_epoch_stale, disabling_epoch: 0} = stale_error}} =
                Repo.transaction(fn ->
                  Access.authorize_api_key_runtime_turn(active_key.id, 1)
                end)

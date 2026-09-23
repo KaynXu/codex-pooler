@@ -3,9 +3,35 @@ defmodule CodexPooler.Accounting.UsageResponses do
   Codex-compatible usage-limit response shaping for accounting reads.
   """
 
+  alias CodexPooler.Accounting.RequestLifecycle.WindowUsage
   alias CodexPooler.Quotas.AdditionalMeterIdentity
   alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
+
+  @type budget_window :: %{
+          known_total_tokens: non_neg_integer(),
+          provisional_total_tokens: non_neg_integer(),
+          pending_total_tokens: non_neg_integer(),
+          effective_total_tokens: non_neg_integer(),
+          admission_count: non_neg_integer()
+        }
+
+  @spec budget_usage(%{atom() => WindowUsage.window_usage()}) ::
+          %{daily: budget_window(), weekly: budget_window()}
+  def budget_usage(windows) do
+    Map.new([:daily, :weekly], fn name ->
+      window = Map.fetch!(windows, name)
+
+      {name,
+       %{
+         known_total_tokens: window.known_total_tokens,
+         provisional_total_tokens: window.provisional_total_tokens,
+         pending_total_tokens: window.pending_total_tokens,
+         effective_total_tokens: window.effective_total_tokens,
+         admission_count: window.effective_request_count
+       }}
+    end)
+  end
 
   @spec self_usage_limits([map()], integer(), integer(), integer(), DateTime.t()) :: [map()]
   def self_usage_limits(bindings, minute_requests, daily_tokens, weekly_tokens, as_of) do
@@ -164,8 +190,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
           {"fresh", %{"rate_limit_reached" => true}, _window} ->
             false
 
-          {"fresh", %{"rate_limit_allowed" => true, "rate_limit_reached" => false},
-           %{source: "codex_usage_api", active_limit: nil, credits: nil}} ->
+          {"fresh", %{"rate_limit_allowed" => true, "rate_limit_reached" => false}, %{source: "codex_usage_api", active_limit: nil, credits: nil}} ->
             true
 
           _other ->
@@ -273,8 +298,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
     %{
       used_percent: snapshot_used_percent(limit),
       limit_window_seconds: window_seconds(limit.limit_window),
-      reset_after_seconds:
-        if(reset_at, do: max(DateTime.diff(reset_at, now(), :second), 0), else: nil),
+      reset_after_seconds: if(reset_at, do: max(DateTime.diff(reset_at, now(), :second), 0), else: nil),
       reset_at: if(reset_at, do: DateTime.to_unix(reset_at), else: nil)
     }
   end

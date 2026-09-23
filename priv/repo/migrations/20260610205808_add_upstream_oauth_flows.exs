@@ -35,42 +35,26 @@ defmodule CodexPooler.Repo.Migrations.AddUpstreamOauthFlows do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_flow_kind_check,
-             check: "flow_kind IN ('browser', 'device')"
-           )
+    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_flow_kind_check, check: "flow_kind IN ('browser', 'device')")
 
-    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_purpose_check,
-             check: "purpose IN ('link', 'relink')"
-           )
+    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_purpose_check, check: "purpose IN ('link', 'relink')")
 
-    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_status_check,
-             check: "status IN ('pending', 'completed', 'failed', 'cancelled', 'expired')"
-           )
+    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_status_check, check: "status IN ('pending', 'completed', 'failed', 'cancelled', 'expired')")
 
-    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_metadata_shape_check,
-             check: "jsonb_typeof(metadata) = 'object'"
-           )
+    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_metadata_shape_check, check: "jsonb_typeof(metadata) = 'object'")
 
-    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_interval_seconds_check,
-             check: "interval_seconds IS NULL OR interval_seconds > 0"
-           )
+    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_interval_seconds_check, check: "interval_seconds IS NULL OR interval_seconds > 0")
 
-    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_state_hash_shape_check,
-             check: "state_token_hash IS NULL OR octet_length(state_token_hash) = 32"
-           )
+    create constraint(:upstream_oauth_flows, :upstream_oauth_flows_state_hash_shape_check, check: "state_token_hash IS NULL OR octet_length(state_token_hash) = 32")
 
     create unique_index(:upstream_oauth_flows, [:state_token_hash],
              name: :upstream_oauth_flows_state_token_hash_uq,
              where: "state_token_hash IS NOT NULL"
            )
 
-    create index(:upstream_oauth_flows, [:pool_id, :status, :expires_at],
-             name: :upstream_oauth_flows_pool_status_expires_idx
-           )
+    create index(:upstream_oauth_flows, [:pool_id, :status, :expires_at], name: :upstream_oauth_flows_pool_status_expires_idx)
 
-    create index(:upstream_oauth_flows, [:upstream_identity_id, :status, :expires_at],
-             name: :upstream_oauth_flows_identity_status_expires_idx
-           )
+    create index(:upstream_oauth_flows, [:upstream_identity_id, :status, :expires_at], name: :upstream_oauth_flows_identity_status_expires_idx)
 
     create index(:upstream_oauth_flows, [:upstream_identity_id, :inserted_at, :id],
              name: :upstream_oauth_flows_identity_inserted_idx,
@@ -92,27 +76,17 @@ defmodule CodexPooler.Repo.Migrations.AddUpstreamOauthFlows do
              where: "status IN ('completed', 'failed', 'cancelled', 'expired')"
            )
 
-    create index(:upstream_oauth_flows, [:requested_by_user_id, :status, :inserted_at],
-             name: :upstream_oauth_flows_requested_status_inserted_idx
-           )
+    create index(:upstream_oauth_flows, [:requested_by_user_id, :status, :inserted_at], name: :upstream_oauth_flows_requested_status_inserted_idx)
   end
 
   def down do
-    drop_if_exists index(:upstream_oauth_flows, [:requested_by_user_id, :status, :inserted_at],
-                     name: :upstream_oauth_flows_requested_status_inserted_idx
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:requested_by_user_id, :status, :inserted_at], name: :upstream_oauth_flows_requested_status_inserted_idx)
 
-    drop_if_exists index(:upstream_oauth_flows, [:updated_at],
-                     name: :upstream_oauth_flows_terminal_updated_idx
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:updated_at], name: :upstream_oauth_flows_terminal_updated_idx)
 
-    drop_if_exists index(:upstream_oauth_flows, [:expires_at],
-                     name: :upstream_oauth_flows_pending_expires_idx
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:expires_at], name: :upstream_oauth_flows_pending_expires_idx)
 
-    drop_if_exists index(:upstream_oauth_flows, [:pool_id, :purpose, :upstream_identity_id],
-                     name: :upstream_oauth_flows_pending_scope_idx
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:pool_id, :purpose, :upstream_identity_id], name: :upstream_oauth_flows_pending_scope_idx)
 
     drop_if_exists index(
                      :upstream_oauth_flows,
@@ -120,17 +94,11 @@ defmodule CodexPooler.Repo.Migrations.AddUpstreamOauthFlows do
                      name: :upstream_oauth_flows_identity_inserted_idx
                    )
 
-    drop_if_exists index(:upstream_oauth_flows, [:upstream_identity_id, :status, :expires_at],
-                     name: :upstream_oauth_flows_identity_status_expires_idx
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:upstream_identity_id, :status, :expires_at], name: :upstream_oauth_flows_identity_status_expires_idx)
 
-    drop_if_exists index(:upstream_oauth_flows, [:pool_id, :status, :expires_at],
-                     name: :upstream_oauth_flows_pool_status_expires_idx
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:pool_id, :status, :expires_at], name: :upstream_oauth_flows_pool_status_expires_idx)
 
-    drop_if_exists index(:upstream_oauth_flows, [:state_token_hash],
-                     name: :upstream_oauth_flows_state_token_hash_uq
-                   )
+    drop_if_exists index(:upstream_oauth_flows, [:state_token_hash], name: :upstream_oauth_flows_state_token_hash_uq)
 
     drop table(:upstream_oauth_flows)
   end

@@ -663,9 +663,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     refute html =~ raw_header
 
     view
-    |> element(
-      "#alerts-incident-severity-filter [data-role='severity-filter-option'][data-filter-value='warning']"
-    )
+    |> element("#alerts-incident-severity-filter [data-role='severity-filter-option'][data-filter-value='warning']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/alerts?#{%{"tab" => "incidents", "severity" => "warning"}}")
@@ -1007,13 +1005,9 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
                ]
              })
 
-    delivery_attempt_fixture(incident, visible_channel,
-      status: AlertDeliveryAttempt.sent_status()
-    )
+    delivery_attempt_fixture(incident, visible_channel, status: AlertDeliveryAttempt.sent_status())
 
-    delivery_attempt_fixture(incident, hidden_channel,
-      status: AlertDeliveryAttempt.failed_status()
-    )
+    delivery_attempt_fixture(incident, hidden_channel, status: AlertDeliveryAttempt.failed_status())
 
     assert {:ok, %{token: token}} =
              Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})

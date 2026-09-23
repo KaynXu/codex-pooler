@@ -10,10 +10,20 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   use Plug.Router
 
   alias __MODULE__.Websocket
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
   @default_host "127.0.0.1"
   @default_port 4058
   @default_manifest_path "tmp/gateway-perf/bootstrap/profile-manifest.json"
+
+  # The response header that carries the synthetic upstream request id. The
+  # default is the name other OpenAI surfaces use; the Codex backend itself
+  # names its server-assigned id `x-oai-request-id`, and a lane that only ever
+  # sees `x-request-id` cannot go red when the product stops reading the
+  # backend's real name (findings#218 row 218-44). The accepted names are the
+  # product's own ordered allowlist, so the fake cannot emit a name the Pooler
+  # would never read.
+  @default_upstream_request_id_header "x-request-id"
   @manifest_fields [
     "name",
     "first_event_delay_ms",
@@ -171,7 +181,8 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
              port: non_neg_integer(),
              run_id: String.t(),
              profile_manifest: String.t(),
-             profiles: [profile()]
+             profiles: [profile()],
+             upstream_request_id_header: String.t()
            }}
           | {:error, String.t()}
   @type server :: %{server: pid(), url: String.t(), profiles: [profile()], run_id: String.t()}
@@ -250,7 +261,8 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
           host: :string,
           port: :integer,
           profile_manifest: :string,
-          profiles: :string
+          profiles: :string,
+          upstream_request_id_header: :string
         ]
       )
 
@@ -266,14 +278,17 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
         with {:ok, run_id} <- fetch_required_string(opts, :run_id, "--run-id"),
              {:ok, profiles} <- profiles_from_selector(Map.get(opts, :profiles, "all")),
-             {:ok, port} <- normalize_port(Map.get(opts, :port, @default_port)) do
+             {:ok, port} <- normalize_port(Map.get(opts, :port, @default_port)),
+             {:ok, upstream_request_id_header} <-
+               normalize_upstream_request_id_header(Map.get(opts, :upstream_request_id_header, @default_upstream_request_id_header)) do
           {:ok,
            %{
              host: Map.get(opts, :host, @default_host),
              port: port,
              run_id: run_id,
              profile_manifest: Map.get(opts, :profile_manifest, @default_manifest_path),
-             profiles: profiles
+             profiles: profiles,
+             upstream_request_id_header: upstream_request_id_header
            }}
         end
     end
@@ -286,12 +301,21 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     host = Keyword.get(opts, :host, @default_host)
     port = Keyword.get(opts, :port, @default_port)
 
+    {:ok, upstream_request_id_header} =
+      normalize_upstream_request_id_header(Keyword.get(opts, :upstream_request_id_header, @default_upstream_request_id_header))
+
     reset_request_observations()
 
     with {:ok, ip} <- parse_host(host),
          {:ok, server} <-
            Bandit.start_link(
-             plug: {__MODULE__, %{profiles: profiles, run_id: run_id}},
+             plug:
+               {__MODULE__,
+                %{
+                  profiles: profiles,
+                  run_id: run_id,
+                  upstream_request_id_header: upstream_request_id_header
+                }},
              port: port,
              ip: ip,
              startup_log: false
@@ -326,12 +350,11 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
             host: config.host,
             port: config.port,
             profiles: config.profiles,
-            run_id: config.run_id
+            run_id: config.run_id,
+            upstream_request_id_header: config.upstream_request_id_header
           )
 
-        IO.puts(
-          "gateway-perf-fake-upstream listening on #{server.url} run_id=#{config.run_id} profiles=#{profile_selector(config.profiles)} manifest=#{config.profile_manifest}"
-        )
+        IO.puts("gateway-perf-fake-upstream listening on #{server.url} run_id=#{config.run_id} profiles=#{profile_selector(config.profiles)} manifest=#{config.profile_manifest}")
 
         Process.sleep(:infinity)
 
@@ -419,14 +442,39 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   @upstream_request_id_prefix "perfreq_"
 
   @doc """
+  The response header names this fake may carry the synthetic upstream request
+  id on: exactly the product's ordered allowlist.
+  """
+  @spec upstream_request_id_header_names() :: [String.t()]
+  def upstream_request_id_header_names,
+    do: StreamProtocol.upstream_request_id_header_names()
+
+  @spec default_upstream_request_id_header() :: String.t()
+  def default_upstream_request_id_header, do: @default_upstream_request_id_header
+
+  @spec normalize_upstream_request_id_header(term()) :: {:ok, String.t()} | {:error, String.t()}
+  def normalize_upstream_request_id_header(name) when is_binary(name) do
+    normalized = name |> String.trim() |> String.downcase()
+
+    if normalized in upstream_request_id_header_names() do
+      {:ok, normalized}
+    else
+      {:error, "--upstream-request-id-header must be one of #{Enum.join(upstream_request_id_header_names(), ", ")}"}
+    end
+  end
+
+  def normalize_upstream_request_id_header(_name),
+    do: {:error, "--upstream-request-id-header must be a header name"}
+
+  @doc """
   Generates one bounded synthetic upstream request id.
 
-  The id is returned to the caller in the established `x-request-id` response
-  header (HTTP responses and websocket 101 upgrades alike), which the product
-  already persists as attempt metadata `upstream_request_id`. Only its
-  12-character SHA-256 fingerprint is stored beside the wire capture, so the
-  capture entry and the durable Pooler attempt row can be correlated without
-  forwarding any new downstream header.
+  The id is returned to the caller in the configured upstream request id
+  response header (`x-request-id` by default; HTTP responses and websocket 101
+  upgrades alike), which the product already persists as attempt metadata
+  `upstream_request_id`. Only its 12-character SHA-256 fingerprint is stored
+  beside the wire capture, so the capture entry and the durable Pooler attempt
+  row can be correlated without forwarding any new downstream header.
   """
   @spec generate_upstream_request_id() :: String.t()
   def generate_upstream_request_id do
@@ -586,8 +634,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       "store" => Map.get(payload, "store") == true,
       "stream" => Map.get(payload, "stream") == true,
       "compactPhase" => compact_phase(input_types),
-      "requestKind" =>
-        metadata_enum(metadata, "request_kind", ~w(turn prewarm compaction memory)),
+      "requestKind" => metadata_enum(metadata, "request_kind", ~w(turn prewarm compaction memory)),
       "windowId" => metadata_field_state(metadata, "window_id"),
       "contextWindowId" => metadata_field_state(metadata, "context_window_id"),
       "compactionMetadata" => metadata_field_state(metadata, "compaction"),
@@ -723,21 +770,27 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   end
 
   # Mints the per-request synthetic upstream request id, returns it in the
-  # `x-request-id` response header, and records the bounded capture entry keyed
-  # by the downstream correlator header when one exists, or by the id's own
-  # fingerprint otherwise (Pooler deliberately forwards no downstream
-  # correlator upstream). The raw id is never stored; only its fingerprint.
+  # configured upstream request id response header, and records the bounded
+  # capture entry keyed by the downstream correlator header when one exists, or
+  # by the id's own fingerprint otherwise (Pooler deliberately forwards no
+  # downstream correlator upstream). The raw id is never stored; only its
+  # fingerprint.
   defp with_upstream_request_id(conn, transport) do
     upstream_request_id = generate_upstream_request_id()
     fingerprint = upstream_request_id_fingerprint(upstream_request_id)
 
     conn =
       conn
-      |> put_resp_header("x-request-id", upstream_request_id)
+      |> put_resp_header(upstream_request_id_header(conn), upstream_request_id)
       |> record_wire_capture(transport, fingerprint)
 
     {conn, fingerprint}
   end
+
+  defp upstream_request_id_header(%Plug.Conn{private: %{gateway_perf_fake_upstream_opts: opts}}),
+    do: Map.get(opts, :upstream_request_id_header, @default_upstream_request_id_header)
+
+  defp upstream_request_id_header(%Plug.Conn{}), do: @default_upstream_request_id_header
 
   defp record_wire_capture(conn, transport, fingerprint) do
     ensure_wire_capture_store()
@@ -1400,8 +1453,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
           {:push, Enum.map(messages, &{:text, &1}), state}
 
         "upstream_error" ->
-          {:push, Enum.map(messages ++ [CodexPooler.JSON.encode!(websocket_error_payload())], &{:text, &1}),
-           state}
+          {:push, Enum.map(messages ++ [CodexPooler.JSON.encode!(websocket_error_payload())], &{:text, &1}), state}
 
         _mode ->
           {:push, Enum.map(messages, &{:text, &1}), state}

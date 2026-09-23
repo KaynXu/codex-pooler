@@ -45,17 +45,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
       transport: Map.get(opts, :transport) || default(endpoint, payload),
       upstream_endpoint: Map.get(opts, :upstream_endpoint) || endpoint,
       websocket_writer: Map.get(opts, :websocket_writer),
-      forwarded_metadata_headers:
-        Normalization.forwarded_headers(Map.get(opts, :forwarded_headers, [])),
+      forwarded_metadata_headers: Normalization.forwarded_headers(Map.get(opts, :forwarded_headers, [])),
       upstream_websocket_session: Map.get(opts, :upstream_websocket_session),
       websocket_owner: WebsocketOwnerContext.build(opts),
       websocket_owner_submission_observer: Map.get(opts, :websocket_owner_submission_observer),
-      websocket_response_task_drain_ms:
-        Normalization.optional_positive_integer(Map.get(opts, :websocket_response_task_drain_ms)),
-      websocket_owner_response_task_drain_ms:
-        Normalization.optional_positive_integer(
-          Map.get(opts, :websocket_owner_response_task_drain_ms)
-        ),
+      websocket_response_task_drain_ms: Normalization.optional_positive_integer(Map.get(opts, :websocket_response_task_drain_ms)),
+      websocket_owner_response_task_drain_ms: Normalization.optional_positive_integer(Map.get(opts, :websocket_owner_response_task_drain_ms)),
       route_class: route_class(opts, endpoint, payload)
     }
   end

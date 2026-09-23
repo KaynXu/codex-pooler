@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPoolerWeb.Admin.UpstreamAccountActions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
@@ -49,10 +50,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:auth_fresh_label) => String.t(),
           required(:auth_verified_label) => String.t(),
           required(:access_token_label) => String.t(),
-          required(:credential_expiry) =>
-            UpstreamAccountsReadModel.credential_expiry_projection(),
-          required(:secret_status) =>
-            :present | :missing | :expired | :refresh_due | :reauth_required,
+          required(:credential_expiry) => UpstreamAccountsReadModel.credential_expiry_projection(),
+          required(:secret_status) => :present | :missing | :expired | :refresh_due | :reauth_required,
           required(:token_refresh_label) => String.t(),
           required(:refresh_job_state) => String.t() | nil,
           required(:reauth_required?) => boolean(),
@@ -170,7 +169,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   @spec load_visible_without_request_metrics(term(), Ecto.UUID.t()) :: {:ok, t()} | :error
   def load_visible_without_request_metrics(scope, identity_id) when is_binary(identity_id) do
-    load_visible(scope, identity_id, request_metrics?: false)
+    load_visible(scope, identity_id, request_metrics?: false, request_events?: false)
+  end
+
+  @spec deferred_request_data(Scope.t(), t()) :: %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution(),
+          recent_events: recent_events()
+        }
+  def deferred_request_data(%Scope{} = scope, %{identity: %{id: identity_id}} = cockpit) do
+    scope
+    |> request_metrics(cockpit)
+    |> Map.put(:recent_events, recent_events(identity_id, scope, cockpit.oauth_flows))
   end
 
   @spec request_metrics(Scope.t(), Ecto.UUID.t(), assignments()) :: %{
@@ -205,6 +215,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   @spec merge_request_metrics(t(), %{
+          optional(:recent_events) => recent_events(),
           request_health: request_health(),
           pool_contribution: pool_contribution()
         }) ::
@@ -222,9 +233,45 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       cockpit
       | flags: flags,
         charts: charts,
-        sections:
-          sections(flags, cockpit.assignments, charts, cockpit.recent_events, cockpit.actions)
+        sections: sections(flags, cockpit.assignments, charts, cockpit.recent_events, cockpit.actions)
     }
+  end
+
+  @spec merge_deferred_request_data(t(), %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution(),
+          recent_events: recent_events()
+        }) :: t()
+  def merge_deferred_request_data(cockpit, %{recent_events: recent_events} = data) do
+    cockpit = merge_request_metrics(cockpit, data)
+
+    %{
+      cockpit
+      | recent_events: recent_events,
+        sections:
+          sections(
+            cockpit.flags,
+            cockpit.assignments,
+            cockpit.charts,
+            recent_events,
+            cockpit.actions
+          )
+    }
+  end
+
+  @spec preserve_request_data(t(), t()) :: t()
+  def preserve_request_data(cockpit, previous) do
+    recent_events =
+      previous.recent_events.items
+      |> Enum.filter(&(&1.source == "request_log"))
+      |> Enum.concat(cockpit.recent_events.items)
+      |> summarize_recent_events()
+
+    merge_deferred_request_data(cockpit, %{
+      request_health: previous.charts.request_health,
+      pool_contribution: previous.charts.pool_contribution,
+      recent_events: recent_events
+    })
   end
 
   defp load_visible(scope, identity_id, options) when is_binary(identity_id) do
@@ -269,7 +316,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     flags = flags(account, assignments, quota_health, request_health)
     charts = charts(flags, quota_health, request_health, pool_contribution)
     oauth_flows = oauth_flows(account, scope)
-    recent_events = recent_events(account.identity, scope, oauth_flows)
+    recent_events = recent_events(account.identity.id, scope, oauth_flows, options)
     actions = actions(account, header)
     saved_resets = saved_resets(account)
     saved_reset_policy = saved_reset_policy(account)
@@ -479,12 +526,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   defp datetime_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
   defp datetime_sort_value(_datetime), do: 0
 
-  defp recent_events(%UpstreamIdentity{} = identity, scope, oauth_flows) do
+  defp recent_events(identity_id, scope, oauth_flows, options \\ [])
+       when is_binary(identity_id) do
+    request_items =
+      if Keyword.get(options, :request_events?, true) do
+        request_recent_event_items(identity_id, scope)
+      else
+        []
+      end
+
+    request_items
+    |> Enum.concat(audit_recent_event_items(scope, identity_id))
+    |> Enum.concat(oauth_recent_event_items(oauth_flows))
+    |> summarize_recent_events()
+  end
+
+  defp summarize_recent_events(items) do
     items =
-      identity.id
-      |> request_recent_event_items(scope)
-      |> Enum.concat(audit_recent_event_items(scope, identity.id))
-      |> Enum.concat(oauth_recent_event_items(oauth_flows))
+      items
       |> Enum.sort_by(&datetime_sort_value(&1.timestamp), :desc)
       |> Enum.take(@recent_event_limit)
 
@@ -647,9 +706,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   # A pending flow past its deadline is expired in fact; present it as such
   # without waiting for the expiry sweeper to relabel the row.
-  defp normalize_oauth_flow_status(
-         %{status: "pending", expires_at: %DateTime{} = expires_at} = flow
-       ) do
+  defp normalize_oauth_flow_status(%{status: "pending", expires_at: %DateTime{} = expires_at} = flow) do
     if DateTime.after?(expires_at, DateTime.utc_now()) do
       flow
     else
@@ -735,12 +792,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     redeem_saved_reset = redeem_saved_reset_action(account, header)
 
     %{
-      rename: action(status != "deleted", "deleted accounts cannot be renamed"),
+      rename: assignment_action(account, status != "deleted", "deleted accounts cannot be renamed"),
       pause:
-        action(status in ["active", "refresh_due", "refresh_failed"], "account is not pausable"),
-      reactivate: action(status in @reactivatable_statuses, "account is not reactivatable"),
+        assignment_action(
+          account,
+          status in ["active", "refresh_due", "refresh_failed"],
+          "account is not pausable"
+        ),
+      reactivate:
+        assignment_action(
+          account,
+          status in @reactivatable_statuses,
+          "account is not reactivatable"
+        ),
       refresh_token:
-        action(
+        assignment_action(
+          account,
           status in ["active", "refresh_due", "refresh_failed"],
           "token refresh is unavailable"
         ),
@@ -756,7 +823,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           recovery_eligible? and account.assignments != [],
           "reinvite requires a Pool assignment"
         ),
-      delete: action(status != "deleted", "account is already deleted"),
+      delete: assignment_action(account, status != "deleted", "account is already deleted"),
       empty?: false,
       degraded?: recovery_eligible?
     }
@@ -792,6 +859,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp action(true, _reason), do: %{available?: true, reason: nil}
   defp action(false, reason), do: %{available?: false, reason: reason}
+
+  defp assignment_action(account, available?, reason) do
+    available?
+    |> action(reason)
+    |> UpstreamAccountActions.require_assignment(account.assignments)
+  end
 
   defp sections(flags, assignments, charts, recent_events, actions) do
     %{

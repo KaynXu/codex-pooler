@@ -173,6 +173,27 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert Repo.reload!(terminal_attempt.attempt).status == "failed"
   end
 
+  test "preflight settles an orphaned request reservation exactly once" do
+    fixture = replay_fixture(reservation?: true)
+
+    fixture.attempt
+    |> Ecto.Changeset.change(%{
+      status: "failed",
+      completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      usage_status: "usage_unknown"
+    })
+    |> Repo.update!()
+
+    terminal_attempt = Repo.reload!(fixture.attempt)
+    assert :none = RequestReplay.preflight_snapshot(fixture.preflight)
+    assert Repo.reload!(fixture.attempt) == terminal_attempt
+    assert terminal_ledger_count(fixture.request.id, "settlement") == 1
+    assert terminal_ledger_count(fixture.request.id, "release") == 1
+    assert :none = RequestReplay.preflight_snapshot(fixture.preflight)
+    assert terminal_ledger_count(fixture.request.id, "settlement") == 1
+    assert terminal_ledger_count(fixture.request.id, "release") == 1
+  end
+
   test "preflight keeps live, retryable, pre-attempt, and visible lifecycles as conflicts" do
     # An in-progress attempt with stale usage is still live work.
     stale_usage = replay_fixture()
@@ -254,10 +275,8 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
 
     _entitlement =
       insert_entitlement!(expired, %{
-        armed_at:
-          DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond),
-        expires_at:
-          DateTime.utc_now() |> DateTime.add(-30, :second) |> DateTime.truncate(:microsecond)
+        armed_at: DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond),
+        expires_at: DateTime.utc_now() |> DateTime.add(-30, :second) |> DateTime.truncate(:microsecond)
       })
 
     assert {:error, :lifecycle_conflict} =
@@ -625,8 +644,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
 
     cancelled_consumer_monitor = Process.monitor(cancelled_consumer)
 
-    assert_receive {:request_replay_owner_reserve_redeemed, ^cancelled_consumer,
-                    ^cancelled_barrier_ref}
+    assert_receive {:request_replay_owner_reserve_redeemed, ^cancelled_consumer, ^cancelled_barrier_ref}
 
     %{suspended_replay: cancelled_redeemed} = :sys.get_state(cancelled_owner)
     consume_monitor = cancelled_redeemed.consume_monitor
@@ -934,9 +952,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     {consumed_owner, consumed_arm} = start_suspended_replay_owner(consumed_fixture)
 
     assert {:ok, consumed} =
-             RequestReplay.consume(
-               suspended_consume_input(consumed_fixture, consumed_owner, consumed_arm)
-             )
+             RequestReplay.consume(suspended_consume_input(consumed_fixture, consumed_owner, consumed_arm))
 
     stop_replay_owner(consumed_fixture.session.id)
 
@@ -952,25 +968,28 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
   @tag :replay_api_key_delete
   @tag :replay_race
   @tag :replay_lock_order
-  test "API key deletion closes armed replay before cascading its graph" do
+  test "API key deletion closes armed replay and preserves its accounting history" do
     fixture = replay_fixture(owner?: true, reservation?: true)
     assert {:ok, _armed} = RequestReplay.arm(arm_input(fixture))
 
     assert {:ok, deleted} = Access.delete_api_key(fixture.scope, fixture.api_key)
     assert deleted.id == fixture.api_key.id
     assert Repo.get(CodexPooler.Access.APIKey, fixture.api_key.id) == nil
-    assert Repo.get(CodexPooler.Accounting.Request, fixture.request.id) == nil
+
+    assert %{api_key_id: nil, status: "failed"} =
+             Repo.get!(CodexPooler.Accounting.Request, fixture.request.id)
+
     assert Repo.get_by(RequestReplayEntitlement, request_id: fixture.request.id) == nil
 
     assert Repo.aggregate(
              from(row in Attempt, where: row.request_id == ^fixture.request.id),
              :count
-           ) == 0
+           ) == 1
 
     assert Repo.aggregate(
              from(row in LedgerEntry, where: row.request_id == ^fixture.request.id),
              :count
-           ) == 0
+           ) == 3
   end
 
   @tag :replay_api_key_delete
@@ -1022,12 +1041,12 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert consume_error in [:ineligible, :owner_unavailable]
     assert {:error, :ineligible} = RequestReplay.arm(arm_input(delete_first))
     assert Repo.get(CodexPooler.Access.APIKey, delete_first.api_key.id) == nil
-    assert Repo.get(CodexPooler.Accounting.Request, delete_first.request.id) == nil
+    assert %{api_key_id: nil} = Repo.get!(CodexPooler.Accounting.Request, delete_first.request.id)
 
     assert Repo.aggregate(
              from(row in Attempt, where: row.request_id == ^delete_first.request.id),
              :count
-           ) == 0
+           ) == 1
 
     Application.delete_env(:codex_pooler, :request_replay_consume_test_barrier)
 
@@ -1063,7 +1082,10 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert {:ok, _deleted} = Task.await(consume_first_delete, 15_000)
     assert {:error, :ineligible} = RequestReplay.dispatch_lifecycle(consumed.consume_binding)
     assert Repo.get(CodexPooler.Access.APIKey, consume_first.api_key.id) == nil
-    assert Repo.get(CodexPooler.Accounting.Request, consume_first.request.id) == nil
+
+    assert %{api_key_id: nil} =
+             Repo.get!(CodexPooler.Accounting.Request, consume_first.request.id)
+
     assert Repo.get_by(RequestReplayEntitlement, request_id: consume_first.request.id) == nil
   end
 
@@ -1216,9 +1238,7 @@ defmodule CodexPooler.Accounting.RequestReplayTest do
     assert {:ok, abandoned_arm} = RequestReplay.arm(arm_input(abandoned))
 
     assert {:ok, abandoned_consume} =
-             RequestReplay.consume(
-               consume_input(abandoned, abandoned_arm, :crypto.strong_rand_bytes(32))
-             )
+             RequestReplay.consume(consume_input(abandoned, abandoned_arm, :crypto.strong_rand_bytes(32)))
 
     assert {:ok, _closed} = RequestReplay.compensate_no_send(abandoned_consume.consume_binding)
     assert {:ok, :noop} = RequestReplay.close(abandoned.request.id, :owner_unavailable)

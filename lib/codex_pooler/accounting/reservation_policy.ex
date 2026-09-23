@@ -4,6 +4,7 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   import Ecto.Query
 
   alias CodexPooler.Access.APIKeyPolicyBinding
+  alias CodexPooler.Accounting.LedgerReads
   alias CodexPooler.Accounting.Metadata
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Catalog.Model
@@ -20,11 +21,34 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
     attr(opts, :effective_model) || model.exposed_model_id || requested_model
   end
 
-  @spec enforce_reservation_limits(term(), struct() | nil, map(), DateTime.t()) ::
+  @spec enforce_reservation_limits(term(), struct() | nil, map(), DateTime.t() | nil) ::
           :ok | {:error, Metadata.accounting_error()}
-  def enforce_reservation_limits(_api_key, nil, _estimate, _timestamp), do: :ok
+  def enforce_reservation_limits(api_key, policy, estimate, timestamp \\ nil) do
+    with :ok <- enforce_active_request_limit(api_key) do
+      enforce_policy_limits(api_key, policy, estimate, timestamp)
+    end
+  end
 
-  def enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+  # Caller holds the per-key reservation advisory mutex through insertion.
+  # The cap is independent of the effective model binding and token windows.
+  defp enforce_active_request_limit(%{max_active_requests: limit} = api_key)
+       when is_integer(limit) and limit > 0 do
+    if LedgerReads.outstanding_reservation_count(api_key.id) >= limit do
+      {:error,
+       Metadata.accounting_error(
+         :api_key_concurrency_limit_exceeded,
+         "api key active request limit reached; retry shortly"
+       )}
+    else
+      :ok
+    end
+  end
+
+  defp enforce_active_request_limit(_api_key), do: :ok
+
+  defp enforce_policy_limits(_api_key, nil, _estimate, _timestamp), do: :ok
+
+  defp enforce_policy_limits(api_key, policy, estimate, timestamp) do
     case enforce_request_token_limits(policy, estimate) do
       :ok -> enforce_window_reservation_limits(api_key, policy, estimate, timestamp)
       {:error, _reason} = error -> error
@@ -73,19 +97,15 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   defp effective_binding?(_binding, _requested_model), do: false
 
   defp enforce_window_reservation_limits(api_key, policy, estimate, timestamp) do
+    timestamp = timestamp || enforcement_timestamp(policy)
+
     limits =
       [
-        {:max_requests_per_minute, policy.max_requests_per_minute, :minute,
-         DateTime.add(timestamp, -60, :second), :effective_request_count, 1, "request_count",
-         "minute"},
-        {:max_tokens_per_day, policy.max_tokens_per_day, :daily, beginning_of_day(timestamp),
-         :effective_total_tokens, estimate.total_tokens, "total_tokens", "daily"},
-        {:max_tokens_per_week, policy.max_tokens_per_week, :weekly,
-         DateTime.add(timestamp, -7, :day), :effective_total_tokens, estimate.total_tokens,
-         "total_tokens", "weekly"}
+        {:max_requests_per_minute, policy.max_requests_per_minute, :minute, DateTime.add(timestamp, -60, :second), :effective_request_count, 1, "request_count", "minute"},
+        {:max_tokens_per_day, policy.max_tokens_per_day, :daily, beginning_of_day(timestamp), :effective_total_tokens, estimate.total_tokens, "total_tokens", "daily"},
+        {:max_tokens_per_week, policy.max_tokens_per_week, :weekly, DateTime.add(timestamp, -7, :day), :effective_total_tokens, estimate.total_tokens, "total_tokens", "weekly"}
       ]
-      |> Enum.reject(fn {_field, max_value, _window, _since, _usage_field, _delta, _metric,
-                         _label} ->
+      |> Enum.reject(fn {_field, max_value, _window, _since, _usage_field, _delta, _metric, _label} ->
         is_nil(max_value)
       end)
 
@@ -94,7 +114,7 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
       |> Map.new(fn {_field, _max_value, window, since, _usage_field, _delta, _metric, _label} ->
         {window, since}
       end)
-      |> then(&LedgerEntries.window_usages(api_key.id, &1))
+      |> then(&LedgerEntries.window_usages(api_key.id, &1, timestamp))
 
     Enum.reduce_while(limits, :ok, fn
       {field, max_value, window, _since, usage_field, delta, metric, label}, :ok ->
@@ -107,6 +127,23 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
           {:error, error} -> {:halt, {:error, error}}
         end
     end)
+  end
+
+  # Called only after reservation authorization holds the per-key mutex and
+  # reader lock. Admission time stays on the ledger; every enforcement window
+  # instead shares this database clock, including committed mutex predecessors.
+  defp enforcement_timestamp(%{
+         max_requests_per_minute: nil,
+         max_tokens_per_day: nil,
+         max_tokens_per_week: nil
+       }),
+       do: DateTime.utc_now()
+
+  defp enforcement_timestamp(_policy) do
+    Repo.one!(
+      from fragment("SELECT clock_timestamp() AS as_of"),
+        select: type(fragment("as_of"), :utc_datetime_usec)
+    )
   end
 
   defp enforce_request_token_limits(policy, estimate) do

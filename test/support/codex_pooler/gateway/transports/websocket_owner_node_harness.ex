@@ -200,9 +200,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
           )
 
         {:ok, _task_supervisor} =
-          Task.Supervisor.start_link(
-            name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor
-          )
+          Task.Supervisor.start_link(name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor)
 
         send(caller, {ready_ref, :ready})
 
@@ -229,9 +227,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   def put_owner_idle_timeout(timeout) when is_integer(timeout) do
     settings = OperationalSettings.current()
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %{settings | websocket_owner_idle_timeout_ms: timeout}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %{settings | websocket_owner_idle_timeout_ms: timeout})
   end
 
   def start_owner_with_local_idle_timeout(opts) when is_list(opts) do
@@ -381,12 +377,23 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     end
   end
 
+  # Supervised cleanup tasks retain their test caller through Task's caller chain.
+  # Read only this harness entry; never copy the caller's process dictionary.
+  defp current_node_client_state do
+    Process.get(__MODULE__) ||
+      Enum.find_value(Process.get(:"$callers", []), %{}, fn caller ->
+        case Process.info(caller, :dictionary) do
+          {:dictionary, dictionary} -> Keyword.get(dictionary, __MODULE__)
+          nil -> nil
+        end
+      end)
+  end
+
   @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
 
   @impl true
   def connected_app_nodes do
-    __MODULE__
-    |> Process.get(%{})
+    current_node_client_state()
     |> Map.get(:nodes, [])
   end
 
@@ -512,8 +519,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
 
   defp node_role(node) do
     roles =
-      __MODULE__
-      |> Process.get(%{})
+      current_node_client_state()
       |> Map.get(:roles, %{})
 
     Map.get(roles, node)
@@ -521,15 +527,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
 
   defp call_mode(node) do
     calls =
-      __MODULE__
-      |> Process.get(%{})
+      current_node_client_state()
       |> Map.get(:calls, %{})
 
     Map.get(calls, node, :success)
   end
 
   defp send_call_observation(node, module, function, args, timeout, mode) do
-    notify = __MODULE__ |> Process.get(%{}) |> Map.get(:notify, self())
+    notify = current_node_client_state() |> Map.get(:notify, self())
 
     send(notify, {
       :websocket_owner_harness_node_call,
@@ -557,14 +562,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   defp request_call_metadata(_function, _args), do: %{}
 
   defp send_request_observation(:remote_submit_request, [_session_id, _downstream, request, _opts]) do
-    case __MODULE__ |> Process.get(%{}) |> Map.get(:capture_request_to) do
+    case current_node_client_state() |> Map.get(:capture_request_to) do
       pid when is_pid(pid) -> send(pid, {:websocket_owner_harness_request, request})
       _not_configured -> :ok
     end
   end
 
   defp send_request_observation(:remote_submit_request_v1, [_session_id, _downstream, request]) do
-    case __MODULE__ |> Process.get(%{}) |> Map.get(:capture_request_to) do
+    case current_node_client_state() |> Map.get(:capture_request_to) do
       pid when is_pid(pid) -> send(pid, {:websocket_owner_harness_request, request})
       _not_configured -> :ok
     end

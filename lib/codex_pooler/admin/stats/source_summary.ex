@@ -32,8 +32,7 @@ defmodule CodexPooler.Admin.Stats.SourceSummary do
       jobs: activity_counts.jobs,
       model_usage_source: model_usage_source,
       model_usage_rows: model_usage_rows,
-      usage_source:
-        if(daily_rollups == [], do: :raw_ledger_fallback, else: :raw_ledger_with_rollup_context)
+      usage_source: if(daily_rollups == [], do: :raw_ledger_fallback, else: :raw_ledger_with_rollup_context)
     }
   end
 end

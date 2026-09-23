@@ -26,9 +26,7 @@ defmodule CodexPooler.Upstreams.Auth.OAuthCallbackTest do
   describe "parse/1" do
     test "accepts localhost browser callback URLs with one state and one code" do
       assert {:ok, %{state: "state_123", code: "authorization-code-456"}} =
-               OAuthCallback.parse(
-                 "#{@callback_origin}?state=state_123&code=authorization-code-456"
-               )
+               OAuthCallback.parse("#{@callback_origin}?state=state_123&code=authorization-code-456")
     end
 
     test "accepts provider success callbacks that include returned scopes" do
@@ -56,9 +54,7 @@ defmodule CodexPooler.Upstreams.Auth.OAuthCallbackTest do
 
     test "accepts 127.0.0.1 as the manual browser callback host" do
       assert {:ok, %{state: "state_123", code: "authorization-code-456"}} =
-               OAuthCallback.parse(
-                 "http://127.0.0.1:1455/auth/callback?state=state_123&code=authorization-code-456"
-               )
+               OAuthCallback.parse("http://127.0.0.1:1455/auth/callback?state=state_123&code=authorization-code-456")
     end
 
     test "provider-denied callbacks keep only safe code, state, and message" do
@@ -70,9 +66,7 @@ defmodule CodexPooler.Upstreams.Auth.OAuthCallbackTest do
                 message: "OpenAI denied the OAuth request",
                 state: "state_123"
               } = error} =
-               OAuthCallback.parse(
-                 "#{@callback_origin}?state=state_123&error=access_denied&error_description=#{raw_provider_value}"
-               )
+               OAuthCallback.parse("#{@callback_origin}?state=state_123&error=access_denied&error_description=#{raw_provider_value}")
 
       refute inspect(error) =~ "access_denied"
       refute inspect(error) =~ raw_provider_value
@@ -105,9 +99,7 @@ defmodule CodexPooler.Upstreams.Auth.OAuthCallbackTest do
                OAuthCallback.parse("#{@callback_origin}#state=state_123&code=code_123")
 
       assert {:error, %{code: :invalid_callback_url}} =
-               OAuthCallback.parse(
-                 "#{@callback_origin}?state=state_123&code=code_123#access_token=raw"
-               )
+               OAuthCallback.parse("#{@callback_origin}?state=state_123&code=code_123#access_token=raw")
     end
 
     test "rejects missing state" do
@@ -154,9 +146,7 @@ defmodule CodexPooler.Upstreams.Auth.OAuthCallbackTest do
       log =
         capture_log(fn ->
           assert {:error, error} =
-                   OAuthCallback.parse(
-                     "#{@callback_origin}?state=state_123&code=code_123&access_token=#{raw_value}##{raw_value}"
-                   )
+                   OAuthCallback.parse("#{@callback_origin}?state=state_123&code=code_123&access_token=#{raw_value}##{raw_value}")
 
           refute inspect(error) =~ raw_value
           refute inspect(error) =~ "access_token"

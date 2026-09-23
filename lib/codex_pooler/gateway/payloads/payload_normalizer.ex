@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
+  alias CodexPooler.Gateway.Routing.ModelMetadata
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
   @backend_turn_state_param "client_metadata.x-codex-turn-state"
@@ -26,6 +27,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   @schema_definition_keys ~w(properties $defs definitions)
   @schema_list_keys ~w(anyOf oneOf allOf)
 
+  @ultra_rewrite_targets ~w(max xhigh high medium low)
+
   @unsupported_upstream_fields ~w(
     max_output_tokens
     prompt_cache_retention
@@ -37,26 +40,38 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   @spec upstream_payload(map(), Model.t(), String.t(), RequestOptions.t()) ::
           {:ok, binary() | {:multipart, list()}}
           | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
-  def upstream_payload(payload, %Model{} = model, endpoint, %RequestOptions{} = request_options) do
-    case prepare_upstream_payload(payload, model, endpoint, request_options) do
+  def upstream_payload(
+        payload,
+        %Model{} = model,
+        endpoint,
+        %RequestOptions{} = request_options,
+        opts \\ []
+      ) do
+    case prepare_upstream_payload(payload, model, endpoint, request_options, opts) do
       {:ok, upstream_payload, _request_options} -> {:ok, upstream_payload}
       {:error, _reason} = error -> error
     end
   end
 
-  @spec prepare_upstream_payload(map(), Model.t(), String.t(), RequestOptions.t()) ::
+  @typedoc "`assignment_id:` the selected assignment, so catalog-gated rewrites read its levels."
+  @type prepare_option :: {:assignment_id, Ecto.UUID.t() | nil}
+
+  @spec prepare_upstream_payload(map(), Model.t(), String.t(), RequestOptions.t(), [
+          prepare_option()
+        ]) ::
           {:ok, binary() | {:multipart, list()}, RequestOptions.t()}
           | {:error, CodexPooler.JSON.encode_error() | Error.reason()}
   def prepare_upstream_payload(
         payload,
         %Model{} = model,
         endpoint,
-        %RequestOptions{} = request_options
+        %RequestOptions{} = request_options,
+        opts \\ []
       ) do
     if multipart_endpoint?(endpoint) do
       multipart_payload(payload, model, request_options)
     else
-      json_payload(payload, model, endpoint, request_options)
+      json_payload(payload, model, endpoint, request_options, opts)
     end
   end
 
@@ -221,7 +236,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp validate_tool_choice(_payload, _request_options), do: :ok
 
-  defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options) do
+  defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options, opts) do
     payload =
       payload
       |> Map.new(fn {key, value} -> {to_string(key), value} end)
@@ -240,11 +255,17 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     payload = normalize_client_reasoning_effort(payload)
 
+    # The selected assignment's levels, not the Pool-wide union: an `ultra`
+    # rewrite must land on a level this assignment's model advertises
+    # (findings#221).
+    catalog_reasoning_levels =
+      ModelMetadata.selected_reasoning_levels(model, Keyword.get(opts, :assignment_id))
+
     upstream_payload =
       payload
       |> maybe_strip_unsupported_upstream_fields(endpoint)
       |> remove_client_supplied_responses_lite_metadata()
-      |> strip_backend_codex_fields(endpoint, request_options)
+      |> strip_backend_codex_fields(endpoint, request_options, catalog_reasoning_levels)
 
     {upstream_payload, prompt_cache_controls_downgraded} =
       adapt_prompt_cache_controls(upstream_payload, request_options)
@@ -271,9 +292,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> put_upstream_previous_response_id(upstream_payload)
       |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
-      |> RequestOptions.put_runtime_context(
-        prompt_cache_controls_downgraded: prompt_cache_controls_downgraded
-      )
+      |> RequestOptions.put_runtime_context(prompt_cache_controls_downgraded: prompt_cache_controls_downgraded)
 
     with :ok <- validate(payload, request_options),
          {:ok, encoded} <- CodexPooler.JSON.encode(upstream_payload) do
@@ -295,9 +314,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
         |> Enum.map(fn {key, value} -> {key, to_string(value)} end)
 
       file_part =
-        {:file,
-         {stream,
-          filename: upload.redacted_filename, content_type: upload.content_type, size: upload.size}}
+        {:file, {stream, filename: upload.redacted_filename, content_type: upload.content_type, size: upload.size}}
 
       {:ok, {:multipart, [file_part | prompt_fields ++ array_fields]}, request_options}
     end
@@ -415,14 +432,15 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp strip_backend_codex_fields(
          payload,
          _endpoint,
-         %RequestOptions{transport: %{transport: "websocket"}} = request_options
+         %RequestOptions{transport: %{transport: "websocket"}} = request_options,
+         catalog_reasoning_levels
        ) do
     payload
     |> Map.drop(["request_id"])
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input(request_options)
-    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_reasoning_effort(catalog_reasoning_levels)
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(request_options)
@@ -439,17 +457,19 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
            transport: %{
              upstream_endpoint: "/backend-api/codex/responses/compact"
            }
-         } = request_options
+         } = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_compact_payload(payload, request_options)
+    normalize_backend_codex_compact_payload(payload, request_options, catalog_reasoning_levels)
   end
 
   defp strip_backend_codex_fields(
          payload,
          "/backend-api/codex/responses/compact",
-         %RequestOptions{} = request_options
+         %RequestOptions{} = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_compact_payload(payload, request_options)
+    normalize_backend_codex_compact_payload(payload, request_options, catalog_reasoning_levels)
   end
 
   defp strip_backend_codex_fields(
@@ -459,28 +479,31 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
            transport: %{
              upstream_endpoint: "/backend-api/codex/responses"
            }
-         } = request_options
+         } = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_http_payload(payload, request_options)
+    normalize_backend_codex_http_payload(payload, request_options, catalog_reasoning_levels)
   end
 
   defp strip_backend_codex_fields(
          payload,
          "/backend-api/codex/responses",
-         %RequestOptions{} = request_options
+         %RequestOptions{} = request_options,
+         catalog_reasoning_levels
        ) do
-    normalize_backend_codex_http_payload(payload, request_options)
+    normalize_backend_codex_http_payload(payload, request_options, catalog_reasoning_levels)
   end
 
-  defp strip_backend_codex_fields(payload, _endpoint, _opts), do: payload
+  defp strip_backend_codex_fields(payload, _endpoint, _opts, _catalog_reasoning_levels),
+    do: payload
 
-  defp normalize_backend_codex_http_payload(payload, opts) do
+  defp normalize_backend_codex_http_payload(payload, opts, catalog_reasoning_levels) do
     payload
     |> Map.drop(["type", "generate"])
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input(opts)
-    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_reasoning_effort(catalog_reasoning_levels)
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
@@ -489,9 +512,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> sanitize_backend_codex_response_item_ids(opts)
   end
 
-  defp normalize_backend_codex_compact_payload(payload, opts) do
+  defp normalize_backend_codex_compact_payload(payload, opts, catalog_reasoning_levels) do
     payload
-    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_reasoning_effort(catalog_reasoning_levels)
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
@@ -548,7 +571,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
 
       input =
-        [prefix | maybe_responses_lite_instructions(instructions) ++ input]
+        (prefix ++ maybe_responses_lite_instructions(instructions) ++ input)
         |> Enum.map(&strip_responses_lite_image_details/1)
 
       Map.put(payload, "input", input)
@@ -656,14 +679,24 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp responses_lite_tools_prefix([first | rest] = input, false, _tools) do
-    if canonical_responses_lite_tools_prefix?(first),
-      do: {first, rest},
-      else: {additional_tools([]), input}
+  # Lite carries the developer tool manifest as a leading `additional_tools` input
+  # item instead of top-level `tools`. When the client sent `tools`, the prefix is
+  # exactly the projection of those tools and stays a pure function of them, so
+  # consecutive full-history turns keep a stable upstream prefix; the
+  # request-shaped `additional_tools` items a client may also send are
+  # non-executable input and are never merged into that projection. When the
+  # client sent no `tools` we must not manufacture a second manifest: a manifest
+  # the client already supplied anywhere in `input` is the manifest, and is
+  # forwarded exactly as sent.
+  defp responses_lite_tools_prefix(input, false, _tools) do
+    case Enum.split_while(input, &(not canonical_responses_lite_tools_prefix?(&1))) do
+      {[], [manifest | rest]} -> {[manifest], rest}
+      {_leading, []} -> {[additional_tools([])], input}
+      {_leading, _supplied} -> {[], input}
+    end
   end
 
-  defp responses_lite_tools_prefix([], false, _tools), do: {additional_tools([]), []}
-  defp responses_lite_tools_prefix(input, true, tools), do: {additional_tools(tools), input}
+  defp responses_lite_tools_prefix(input, true, tools), do: {[additional_tools(tools)], input}
 
   defp canonical_responses_lite_tools_prefix?(
          %{
@@ -673,9 +706,18 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
          } = item
        )
        when is_list(tools),
-       do: not Map.has_key?(item, "id")
+       do: canonical_responses_lite_tools_prefix_id?(Map.get(item, "id", :absent))
 
   defp canonical_responses_lite_tools_prefix?(_item), do: false
+
+  # `id` is optional on the item and must be a nonblank binary when present,
+  # matching what the request validator accepts.
+  defp canonical_responses_lite_tools_prefix_id?(:absent), do: true
+
+  defp canonical_responses_lite_tools_prefix_id?(id) when is_binary(id),
+    do: String.trim(id) != ""
+
+  defp canonical_responses_lite_tools_prefix_id?(_id), do: false
 
   defp additional_tools(tools),
     do: %{"type" => "additional_tools", "role" => "developer", "tools" => tools}
@@ -704,9 +746,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
        when type in ["function_call_output", "custom_tool_call_output"] and is_list(output),
        do: Map.put(item, "output", Enum.map(output, &strip_input_image_detail/1))
 
-  defp strip_responses_lite_image_details(
-         %{"type" => type, "output" => %{"content" => content} = output} = item
-       )
+  defp strip_responses_lite_image_details(%{"type" => type, "output" => %{"content" => content} = output} = item)
        when type in ["function_call_output", "custom_tool_call_output"] and is_list(content) do
     Map.put(
       item,
@@ -1041,14 +1081,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp normalize_backend_codex_reasoning_effort(payload) do
+  defp normalize_backend_codex_reasoning_effort(payload, catalog_reasoning_levels) do
     case payload do
       %{"reasoning" => %{"effort" => effort} = reasoning} when is_binary(effort) ->
-        Map.put(
-          payload,
-          "reasoning",
-          Map.put(reasoning, "effort", ReasoningEffort.rewrite_backend_upstream(effort))
-        )
+        effort = ReasoningEffort.rewrite_backend_upstream(effort, catalog_reasoning_levels)
+        Map.put(payload, "reasoning", Map.put(reasoning, "effort", effort))
 
       _payload ->
         payload
@@ -1118,10 +1155,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp decision_configured_effort(nil), do: nil
 
   defp reasoning_effort_rewrite(applied_effort, effective_effort) do
-    case {normalize_effort_for_compare(applied_effort),
-          normalize_effort_for_compare(effective_effort)} do
+    case {normalize_effort_for_compare(applied_effort), normalize_effort_for_compare(effective_effort)} do
       {"minimal", "low"} -> "minimal_to_low"
-      {"ultra", "max"} -> "ultra_to_max"
+      {"ultra", target} when target in @ultra_rewrite_targets -> "ultra_to_" <> target
       _efforts -> nil
     end
   end
@@ -1156,9 +1192,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp remove_client_supplied_responses_lite_metadata(
-         %{"client_metadata" => %{} = metadata} = payload
-       ) do
+  defp remove_client_supplied_responses_lite_metadata(%{"client_metadata" => %{} = metadata} = payload) do
     Map.put(
       payload,
       "client_metadata",

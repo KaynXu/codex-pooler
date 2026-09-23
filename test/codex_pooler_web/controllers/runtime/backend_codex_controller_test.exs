@@ -74,6 +74,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
+  alias CodexPoolerWeb.Runtime.BackendCodexWebsocketSupport
 
   @supported_compression_model "gpt-4o"
   @reasoning_denial_message "reasoning effort is not available for this API key"
@@ -90,6 +91,240 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "type" => "server_error"
     }
   }
+
+  @tag :native_sse_epoch_stale
+  test "native SSE epoch-stale refusal after authentication returns 401 without upstream work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+    ref = make_ref()
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        reservation = CodexPooler.Accounting.Lifecycle.RequestLifecycle.Reservation
+        service = CodexPooler.Gateway.Runtime.Service
+
+        Process.put(
+          {reservation, :runtime_authorization_barrier},
+          {parent, ref, {:reserve, :before}}
+        )
+
+        Process.put({service, :runtime_authorization_barrier}, {parent, ref, {:reserve, :before}})
+
+        Phoenix.ConnTest.build_conn()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("epoch stale controller race"),
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, _pid}
+
+    setup.api_key
+    |> Ecto.Changeset.change(runtime_revocation_epoch: setup.api_key.runtime_revocation_epoch + 1)
+    |> Repo.update!()
+
+    send(task.pid, {:runtime_authorization_release, ref})
+    conn = Task.await(task, 15_000)
+
+    assert %{"error" => %{"code" => "api_key_runtime_epoch_stale"}} = json_response(conn, 401)
+    assert FakeUpstream.count(upstream) == 0
+
+    assert [
+             %Request{status: "rejected", last_error_code: "api_key_runtime_epoch_stale"} =
+               request
+           ] =
+             Repo.all(Request)
+
+    assert request.response_status_code == 401
+    assert request.api_key_id == setup.api_key.id
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+  end
+
+  defp assert_sse_race(setup, upstream, code, mutation) do
+    ref = make_ref()
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        reservation = CodexPooler.Accounting.Lifecycle.RequestLifecycle.Reservation
+        service = CodexPooler.Gateway.Runtime.Service
+
+        Process.put(
+          {reservation, :runtime_authorization_barrier},
+          {parent, ref, {:reserve, :before}}
+        )
+
+        Process.put(
+          {service, :runtime_authorization_barrier},
+          {parent, ref, {:reserve, :before}}
+        )
+
+        Phoenix.ConnTest.build_conn()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("lifecycle race"),
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, _pid}
+    mutation.(setup)
+    send(task.pid, {:runtime_authorization_release, ref})
+    conn = Task.await(task, 15_000)
+
+    assert %{"error" => %{"code" => ^code}} = json_response(conn, 401)
+    assert [%Request{status: "rejected", last_error_code: ^code} = request] = Repo.all(Request)
+    assert request.response_status_code == 401
+    assert request.api_key_id == setup.api_key.id
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  for {status, code} <- [{"paused", "api_key_paused"}, {"revoked", "api_key_revoked"}] do
+    @tag :native_sse_disabled
+    test "native SSE #{status} refusal after authentication" do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+      setup = gateway_setup(upstream)
+
+      assert_sse_race(setup, upstream, unquote(code), fn setup ->
+        setup.api_key
+        |> Ecto.Changeset.change(status: unquote(status))
+        |> Repo.update!()
+      end)
+    end
+  end
+
+  @tag :native_sse_expired
+  test "native SSE expired refusal after authentication" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+
+    assert_sse_race(setup, upstream, "api_key_expired", fn setup ->
+      setup.api_key
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -60, :second))
+      |> Repo.update!()
+    end)
+  end
+
+  @tag :native_sse_pool_inactive
+  test "native SSE pool inactive refusal after authentication" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    setup = gateway_setup(upstream)
+
+    assert_sse_race(setup, upstream, "pool_inactive", fn setup ->
+      Repo.update!(Ecto.Changeset.change(setup.pool, status: "disabled"))
+    end)
+  end
+
+  @tag :native_sse_deleted
+  test "native SSE physical key deletion after authentication retains a rejected request without reservation" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_run"}))
+    supervisor = start_supervised!(Task.Supervisor)
+    parent = self()
+    ref = make_ref()
+
+    # Keep fixture creation transactional until its exact cleanup is registered.
+    fixture_task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        unboxed_run(fn ->
+          Repo.transaction(fn ->
+            setup = gateway_setup(upstream)
+            send(parent, {:fixture_prepared, ref, setup, self()})
+
+            receive do
+              {:commit_fixture, ^ref} -> setup
+            after
+              15_000 -> Repo.rollback(:fixture_commit_timeout)
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:fixture_prepared, ^ref, setup, fixture_pid}, 15_000
+    creator_id = setup.api_key.created_by_user_id
+
+    on_exit(fn ->
+      CodexPooler.UnboxedFixture.run_unboxed(fn ->
+        cleanup_unboxed_pool!(setup)
+        CodexPooler.AccountsFixtures.delete_unreferenced_fixture_owners!([creator_id])
+      end)
+    end)
+
+    send(fixture_pid, {:commit_fixture, ref})
+    assert {:ok, ^setup} = Task.await(fixture_task, 15_000)
+
+    request_task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        unboxed_run(fn ->
+          Repo.checkout(fn ->
+            [[backend_pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:request_backend, ref, backend_pid})
+
+            Process.put(
+              {CodexPooler.Gateway.Runtime.Service, :runtime_authorization_barrier},
+              {parent, ref, {:reserve, :before}}
+            )
+
+            Phoenix.ConnTest.build_conn()
+            |> auth(setup)
+            |> post("/backend-api/codex/responses", %{
+              "model" => setup.model.exposed_model_id,
+              "input" => native_text_input("physical deletion controller race"),
+              "stream" => true
+            })
+          end)
+        end)
+      end)
+
+    request_monitor = Process.monitor(request_task.pid)
+    assert_receive {:request_backend, ^ref, request_backend}, 15_000
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, request_pid},
+                   15_000
+
+    deletion_backend =
+      CodexPooler.UnboxedFixture.run_unboxed(fn ->
+        Repo.checkout(fn ->
+          [[backend_pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+          Repo.delete!(setup.api_key)
+          assert Repo.get(Access.APIKey, setup.api_key.id) == nil
+          backend_pid
+        end)
+      end)
+
+    assert deletion_backend != request_backend
+    send(request_pid, {:runtime_authorization_release, ref})
+    conn = Task.await(request_task, 15_000)
+    assert_receive {:DOWN, ^request_monitor, :process, _, :normal}, 15_000
+
+    assert %{
+             "error" => %{
+               "code" => "api_key_missing",
+               "type" => "invalid_request_error",
+               "message" => "api key is required"
+             }
+           } = json_response(conn, 401)
+
+    assert [%Request{} = request] =
+             Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
+
+    assert request.status == "rejected"
+    assert request.last_error_code == "api_key_missing"
+    assert request.response_status_code == 401
+    assert request.api_key_id == nil
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.pool_id == ^setup.pool.id), :count) == 0
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   @code_mode_turn_metadata_projection_routes [
     %{
       local_path: "/backend-api/codex/responses",
@@ -366,8 +601,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [denied_assignment.id],
           "source_assignment_models" => %{
-            denied_assignment.id =>
-              pristine_catalog_source("gpt-backend-policy-denied-etag", "policy-denied")
+            denied_assignment.id => pristine_catalog_source("gpt-backend-policy-denied-etag", "policy-denied")
           }
         }
       })
@@ -440,8 +674,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         source_assignment_count: 3,
         metadata: %{
           "upstream_model" => %{"description" => "lossy aggregate must not emit"},
-          "source_assignment_ids" =>
-            Enum.sort([setup.assignment.id, matching_assignment.id, divergent_assignment.id]),
+          "source_assignment_ids" => Enum.sort([setup.assignment.id, matching_assignment.id, divergent_assignment.id]),
           "source_assignment_models" => %{
             setup.assignment.id => source,
             matching_assignment.id => source,
@@ -547,8 +780,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [hidden_assignment.id],
           "source_assignment_models" => %{
-            hidden_assignment.id =>
-              pristine_catalog_source("gpt-hidden-serving-mode", "hidden-serving-mode")
+            hidden_assignment.id => pristine_catalog_source("gpt-hidden-serving-mode", "hidden-serving-mode")
           }
         }
       })
@@ -605,17 +837,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  @tag :model_serving_modes
-  test "backend response aliases keep the selected Pool model mode across JSON and SSE", %{
-    conn: conn
-  } do
-    routes = [
-      {"/backend-api/codex/responses", :responses},
-      {"/backend-api/codex/v1/responses", :responses},
-      {"/backend-api/codex/v1/chat/completions", :chat}
-    ]
-
-    for {path, kind} <- routes, stream? <- [false, true] do
+  for {path, kind} <- [
+        {"/backend-api/codex/responses", :responses},
+        {"/backend-api/codex/v1/responses", :responses},
+        {"/backend-api/codex/v1/chat/completions", :chat}
+      ],
+      stream? <- [false, true] do
+    @tag :model_serving_modes
+    @tag mode_path: path, mode_kind: kind, mode_stream: stream?
+    test "backend response alias #{path} keeps the selected Pool model mode with stream=#{stream?}", %{conn: conn, mode_path: path, mode_kind: kind, mode_stream: stream?} do
       upstream = start_upstream(backend_mode_matrix_upstream(kind, stream?))
       setup = gateway_setup(upstream)
       payload = backend_mode_matrix_payload(setup, kind, stream?)
@@ -776,9 +1006,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(first_upstream, exposed_model_id: "gpt-mode-failover")
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback", compact?: false)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -974,9 +1202,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(rejecting_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-full-rejection-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-full-rejection-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -1015,12 +1241,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "failed"
     assert request.response_status_code == 400
     assert request.retry_count == 0
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.upstream_status_code == 400
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
 
     expected_mode_metadata = %{
       "model_serving_mode_configured" => "full",
@@ -1034,7 +1260,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
              expected_mode_metadata
 
-    assert [%{denial_reason: "full_upstream_rejection", response_status_code: 400} = request_log] =
+    assert [%{denial_reason: "upstream_status", response_status_code: 400} = request_log] =
              RequestLogs.list(setup.pool.id, limit: 10).items
 
     audit_events = Repo.all(from(e in AuditEvent))
@@ -1045,10 +1271,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         Map.take(sentinels, [:message, :body])
       )
 
-    canonical_response? = canonical_full_failure_response?(response, 400)
+    relayed_response? =
+      response.status == 400 and
+        CodexPooler.JSON.decode(response.resp_body) ==
+          {:ok, relayed_full_failure_body(sentinels)}
 
     assert sentinels_absent?
-    assert canonical_response?
+    assert relayed_response?
   end
 
   @tag :sensitive_metadata_sanitization
@@ -1166,9 +1395,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> Plug.Conn.send_chunked(200)
 
     assert {:ok, stream_conn} = stream.(stream_conn)
-    assert CodexPooler.JSON.decode!(stream_conn.resp_body) == @canonical_full_failure_body
 
-    assert full_failure_sentinels_absent?([stream_conn.resp_body], sentinels)
+    # The Full projection relays only the sanitized rejection tokens the attempt
+    # already records; the provider message and body sentinels stay out.
+    assert CodexPooler.JSON.decode!(stream_conn.resp_body) ==
+             relayed_full_failure_body(sentinels)
+
+    assert full_failure_sentinels_absent?(
+             [stream_conn.resp_body],
+             Map.take(sentinels, [:message, :body])
+           )
+
     assert FakeUpstream.count(failing_upstream) == 1
     assert FakeUpstream.count(rejecting_upstream) == 1
   end
@@ -1279,10 +1516,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
     assert request.retry_count == 0
-    assert request.last_error_code == "full_upstream_rejection"
+    assert request.last_error_code == "upstream_status"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.network_error_code == "full_upstream_rejection"
+    assert attempt.network_error_code == "upstream_status"
   end
 
   @tag :sensitive_metadata_sanitization
@@ -1682,8 +1919,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [allowed_assignment.id],
           "source_assignment_models" => %{
-            allowed_assignment.id =>
-              pristine_catalog_source("gpt-backend-visible-allowed", "policy-allowed")
+            allowed_assignment.id => pristine_catalog_source("gpt-backend-visible-allowed", "policy-allowed")
           }
         }
       })
@@ -1701,8 +1937,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [hidden_assignment.id],
           "source_assignment_models" => %{
-            hidden_assignment.id =>
-              pristine_catalog_source("gpt-backend-policy-hidden", "policy-hidden")
+            hidden_assignment.id => pristine_catalog_source("gpt-backend-policy-hidden", "policy-hidden")
           }
         }
       })
@@ -2592,9 +2827,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "GET /backend-api/codex/models derives short context window from pricing", %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{model_context_window_overrides: %{}}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{model_context_window_overrides: %{}})
 
     on_exit(fn ->
       if previous_env,
@@ -2629,9 +2862,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "GET /backend-api/codex/models promotes long context window from pricing", %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{model_context_window_overrides: %{}}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{model_context_window_overrides: %{}})
 
     on_exit(fn ->
       if previous_env,
@@ -3445,7 +3676,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(attempt.response_metadata["payload_compression"]) =~ call_id
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/responses forwards only approved lineage metadata headers",
        %{conn: conn} do
     upstream =
@@ -3481,6 +3712,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_approved_lineage_headers_forwarded!(captured, metadata)
     assert_disallowed_client_headers_not_forwarded!(captured, setup)
     assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  @tag :lineage_metadata_forwarding
+  test "POST /backend-api/codex/responses drops out-of-vocabulary guardian, overlong inference call id and non-true memgen values",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_bounded_flag_headers",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    overlong_call_id = String.duplicate("c", 129)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/responses",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic bounded flag header request")
+        },
+        [
+          {"x-openai-subagent", "bounded-flags-control-subagent"},
+          {"x-openai-memgen-request", "false"},
+          {"x-codex-guardian", "auditor"},
+          {"x-codex-inference-call-id", overlong_call_id},
+          {"x-codex-installation-id", "bounded-flags-installation"}
+        ]
+      )
+
+    assert %{"id" => "resp_backend_bounded_flag_headers"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    captured_headers = Map.new(captured.headers)
+
+    assert captured_headers["x-openai-subagent"] == "bounded-flags-control-subagent"
+    refute Map.has_key?(captured_headers, "x-openai-memgen-request")
+    refute Map.has_key?(captured_headers, "x-codex-guardian")
+    refute Map.has_key?(captured_headers, "x-codex-inference-call-id")
+    refute Map.has_key?(captured_headers, "x-codex-installation-id")
+    refute inspect(captured.headers) =~ "auditor"
+    refute inspect(captured.headers) =~ overlong_call_id
+    refute inspect(captured.headers) =~ "bounded-flags-installation"
   end
 
   @tag :client_metadata
@@ -3936,7 +4218,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-internal-unapproved")
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/v1/responses forwards approved lineage metadata with trusted Codex identity",
        %{conn: conn} do
     upstream =
@@ -4293,8 +4575,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert terminal == %{
              "error" => %{
-               "message" =>
-                 "upstream request failed: stream interrupted before terminal response event",
+               "message" => "upstream request failed: stream interrupted before terminal response event",
                "type" => "server_error",
                "code" => "server_error",
                "param" => nil
@@ -5325,6 +5606,94 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-session-affinity")
   end
 
+  for mode <- ["full", "lite"], window_header? <- [true, false] do
+    @tag :ephemeral_fork_cache
+    test "ephemeral fork HTTP cache identity in #{mode}, window header #{window_header?}" do
+      # Synthetic wire contract from openai/codex#44862, not a released-client probe.
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "object" => "response",
+            "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+      scope = BackendCodexWebsocketSupport.model_serving_scope()
+
+      BackendCodexWebsocketSupport.set_model_serving_mode!(
+        scope,
+        setup,
+        unquote(mode)
+      )
+
+      for thread <- ["synthetic-parent", "synthetic-fork", "synthetic-parent"] do
+        conn =
+          build_conn()
+          |> auth(setup)
+          |> put_req_header("session-id", "synthetic-parent")
+          |> put_req_header("thread-id", thread)
+
+        conn =
+          if unquote(window_header?),
+            do: put_req_header(conn, "x-codex-window-id", thread <> ":0"),
+            else: conn
+
+        conn =
+          post(conn, "/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "prompt_cache_key" => "synthetic-parent",
+            "input" => native_text_input("synthetic fork contract"),
+            "client_metadata" => %{
+              "x-codex-turn-metadata" =>
+                CodexPooler.JSON.encode!(%{
+                  "session_id" => thread,
+                  "turn_id" => Ecto.UUID.generate(),
+                  "request_kind" => "turn"
+                })
+            }
+          })
+
+        assert json_response(conn, 200)["object"] == "response"
+      end
+
+      assert [parent, fork, resumed] =
+               Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: r.admitted_at))
+
+      parent_session = parent.request_metadata["codex_session_id"]
+      fork_session = fork.request_metadata["codex_session_id"]
+      assert is_binary(parent_session)
+      assert is_binary(fork_session)
+      assert resumed.request_metadata["codex_session_id"] == parent_session
+
+      if unquote(window_header?) do
+        refute fork_session == parent_session
+
+        assert Repo.aggregate(from(s in CodexSession, where: s.pool_id == ^setup.pool.id), :count) ==
+                 2
+      else
+        # Existing fallback uses session-id, not thread-id or body session metadata.
+        assert fork_session == parent_session
+
+        assert Repo.aggregate(from(s in CodexSession, where: s.pool_id == ^setup.pool.id), :count) ==
+                 1
+      end
+
+      captured = FakeUpstream.requests(upstream)
+      assert length(captured) == 3
+
+      for {request, thread} <-
+            Enum.zip(captured, ["synthetic-parent", "synthetic-fork", "synthetic-parent"]) do
+        assert Map.new(request.headers)["session-id"] == "synthetic-parent"
+        assert Map.new(request.headers)["thread-id"] == thread
+        assert request.json["prompt_cache_key"] == "synthetic-parent"
+
+        assert Map.new(request.headers)["x-openai-internal-codex-responses-lite"] ==
+                 if(unquote(mode) == "lite", do: "true", else: nil)
+      end
+    end
+  end
+
   test "backend control-plane proxy routes are absent before auth, parsing, or upstream dispatch",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
@@ -5373,9 +5742,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     release_ref = make_ref()
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     setup = gateway_setup(upstream)
 
@@ -5522,6 +5889,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     ])
 
     refute inspect(attempt.response_metadata) =~ "sensitive transport body"
+
+    assert [%BridgeDemotion{reason_code: "upstream_network_error", status: "active"}] =
+             Repo.all(
+               from(d in BridgeDemotion,
+                 where:
+                   d.pool_id == ^setup.pool.id and
+                     d.pool_upstream_assignment_id == ^setup.assignment.id
+               )
+             )
+
+    assert [
+             %RoutingCircuitState{
+               reason_code: "upstream_network_error",
+               status: "closed",
+               failure_count: 1
+             }
+           ] =
+             Repo.all(
+               from(c in RoutingCircuitState,
+                 where:
+                   c.pool_id == ^setup.pool.id and
+                     c.pool_upstream_assignment_id == ^setup.assignment.id and
+                     c.route_class == "proxy_http"
+               )
+             )
   end
 
   @tag :prompt_cache_adaptation
@@ -5666,9 +6058,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              })
 
     success =
-      gateway_upstream(setup.pool, success_upstream, "upstream-token-transport-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, success_upstream, "upstream-token-transport-fallback", compact?: false)
 
     prime_routing_quota!(success.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -5753,9 +6143,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     release_ref = make_ref()
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -5792,15 +6180,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.network_error_code == "upstream_network_error"
     assert attempt.response_metadata["error_code"] == "upstream_network_error"
     assert_safe_transport_failure_metadata!(attempt, ["pre-header timeout fixture"])
+
+    assert [%BridgeDemotion{reason_code: "upstream_network_error", status: "active"}] =
+             Repo.all(
+               from(d in BridgeDemotion,
+                 where:
+                   d.pool_id == ^setup.pool.id and
+                     d.pool_upstream_assignment_id == ^setup.assignment.id
+               )
+             )
+
+    assert [
+             %RoutingCircuitState{
+               reason_code: "upstream_network_error",
+               status: "closed",
+               failure_count: 1
+             }
+           ] =
+             Repo.all(
+               from(c in RoutingCircuitState,
+                 where:
+                   c.pool_id == ^setup.pool.id and
+                     c.pool_upstream_assignment_id == ^setup.assignment.id and
+                     c.route_class == "proxy_http"
+               )
+             )
   end
 
   test "POST /backend-api/codex/responses keeps silent pre-first-event SSE stalls metadata-only" do
     release_ref = make_ref()
 
     upstream =
-      start_upstream(
-        FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref))
 
     fallback_upstream =
       start_upstream(
@@ -5819,9 +6230,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-silent-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-silent-fallback", compact?: false)
 
     setup =
       setup
@@ -5865,8 +6274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute stream_conn.resp_body =~ "[DONE]"
     refute stream_conn.resp_body =~ "resp_silent_fallback_should_not_run"
 
-    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :after_sse_headers, upstream_pid, ^release_ref},
                    1_000
 
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
@@ -5905,9 +6313,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-partial-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-partial-fallback", compact?: false)
 
     setup =
       setup
@@ -7118,8 +7524,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         byte_size: 9,
         status: "expired",
         finalize_status: "succeeded",
-        expires_at:
-          DateTime.add(DateTime.utc_now() |> DateTime.truncate(:microsecond), -60, :second)
+        expires_at: DateTime.add(DateTime.utc_now() |> DateTime.truncate(:microsecond), -60, :second)
       ).file_id
 
     expired_conn =
@@ -7251,8 +7656,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
          "previous_response_id" => previous_response_id,
          "input" => visible_input
        }},
-      {"header previous response", [{"x-codex-previous-response-id", previous_response_id}],
-       %{"input" => visible_input}},
+      {"header previous response", [{"x-codex-previous-response-id", previous_response_id}], %{"input" => visible_input}},
       {"tool result continuation", [],
        %{
          "previous_response_id" => previous_response_id,
@@ -7350,10 +7754,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured.json, "previous_response_id")
 
     metadata_text =
-      inspect(
-        {fresh_request.request_metadata, fresh_attempt.response_metadata,
-         RequestLogs.list(setup.pool)}
-      )
+      inspect({fresh_request.request_metadata, fresh_attempt.response_metadata, RequestLogs.list(setup.pool)})
 
     refute metadata_text =~ previous_response_id
     refute metadata_text =~ "visible pinned reauth context must not persist"
@@ -7469,8 +7870,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = %{
       setup
-      | model:
-          put_model_source_assignments!(setup.model, [setup.assignment, alternate.assignment])
+      | model: put_model_source_assignments!(setup.model, [setup.assignment, alternate.assignment])
     }
 
     use_routing_strategy!(setup.pool, "bridge_ring", 1)
@@ -7568,9 +7968,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(retryable_upstream)
 
     shortlisted_success =
-      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted", compact?: false)
 
     excluded =
       gateway_upstream(setup.pool, excluded_upstream, "upstream-token-excluded", compact?: false)
@@ -7676,9 +8074,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
 
       second =
-        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-fallback", compact?: false)
 
       prime_routing_quota!(second.identity)
       use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -7794,9 +8190,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
 
       second =
-        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-status-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-status-fallback", compact?: false)
 
       prime_routing_quota!(second.identity)
       use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -7964,9 +8358,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-hard-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-hard-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8036,9 +8428,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-provenance-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-provenance-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8108,9 +8498,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-model-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-model-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8238,9 +8626,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(first_upstream, compact?: true, exposed_model_id: "gpt-example-luna")
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-compact-model-fallback",
-        compact?: true
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-compact-model-fallback", compact?: true)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8313,9 +8699,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     alternate =
-      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-prompt-cache-alternate",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-prompt-cache-alternate", compact?: false)
 
     prime_routing_quota!(alternate.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8442,9 +8826,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     sibling =
-      gateway_upstream(setup.pool, sibling_upstream, "synthetic-current-reasoning-sibling-token",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, sibling_upstream, "synthetic-current-reasoning-sibling-token", compact?: false)
 
     prime_routing_quota!(sibling.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -8512,9 +8894,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(retryable_upstream)
 
     shortlisted_success =
-      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-shortlisted", compact?: false)
 
     excluded =
       gateway_upstream(setup.pool, excluded_upstream, "upstream-token-excluded", compact?: false)
@@ -8604,9 +8984,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(older_success_upstream)
 
     newer_success =
-      gateway_upstream(setup.pool, newer_success_upstream, "upstream-token-newer",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, newer_success_upstream, "upstream-token-newer", compact?: false)
 
     prime_routing_quota!(newer_success.identity)
 
@@ -8768,19 +9146,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(high_usage_upstream, quota?: false)
 
     lower_usage =
-      gateway_upstream(setup.pool, lower_usage_upstream, "upstream-token-lower-usage",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, lower_usage_upstream, "upstream-token-lower-usage", compact?: false)
 
     exhausted =
-      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted-quota",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted-quota", compact?: false)
 
     resetless =
-      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless-quota",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless-quota", compact?: false)
 
     prime_routing_quota!(setup.identity, %{used_percent: Decimal.new("90")})
     prime_routing_quota!(lower_usage.identity, %{used_percent: Decimal.new("10")})
@@ -8875,14 +9247,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(retryable_upstream)
 
     shortlisted_success =
-      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-sse-shortlisted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, shortlisted_success_upstream, "upstream-token-sse-shortlisted", compact?: false)
 
     excluded =
-      gateway_upstream(setup.pool, excluded_upstream, "upstream-token-sse-excluded",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, excluded_upstream, "upstream-token-sse-excluded", compact?: false)
 
     prime_routing_quota!(shortlisted_success.identity)
     prime_routing_quota!(excluded.identity)
@@ -9102,9 +9470,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   } do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -9213,10 +9579,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert [failed_attempt, successful_attempt] =
                Repo.all(
                  from(a in Attempt,
-                   where:
-                     a.request_id in subquery(
-                       from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id)
-                     ),
+                   where: a.request_id in subquery(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id)),
                    order_by: [asc: a.attempt_number]
                  )
                )
@@ -9248,6 +9611,339 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(failing_upstream) == 1
     assert FakeUpstream.count(success_upstream) == 1
     assert_stream_retry_success!(setup, "server_error")
+  end
+
+  @tag :first_event_stream_retry
+  test "SSE retry publishes only the successful candidate preamble identity and metadata", %{
+    conn: conn
+  } do
+    first_id = "resp_retry_first_candidate"
+    second_id = "resp_retry_second_candidate"
+    first_model = "fixture-first-model"
+    second_model = "fixture-second-model"
+
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", first_id, first_model),
+          retry_preamble_event("response.in_progress", first_id),
+          first_event_terminal_payload("response.failed", "server_error")
+        ],
+        done: false
+      )
+
+    second_mode =
+      FakeUpstream.sse_stream([
+        retry_preamble_event("response.created", second_id, second_model),
+        retry_preamble_event("response.in_progress", second_id),
+        retry_completed_event(second_id)
+      ])
+
+    {setup, failing_upstream, success_upstream} = stream_retry_setup(first_mode, second_mode)
+
+    stream_conn =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("retry identity coherence fixture"),
+        "stream" => true
+      })
+
+    assert stream_conn.status == 200
+
+    assert [
+             %{"type" => "response.created", "response" => created_response},
+             %{"type" => "response.in_progress", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    assert created_response["id"] == second_id
+    assert get_in(created_response, ["headers", "OpenAI-Model"]) == second_model
+    refute stream_conn.resp_body =~ first_id
+    refute stream_conn.resp_body =~ first_model
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+  end
+
+  @tag :first_event_stream_retry
+  test "SSE retry publishes only the successful candidate response metadata", %{conn: conn} do
+    first = retry_metadata_fixture("first")
+    second = retry_metadata_fixture("second")
+
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", first.response_id, first.model),
+          retry_preamble_event("response.in_progress", first.response_id),
+          retry_response_metadata_event(first),
+          first_event_terminal_payload("response.failed", "server_error")
+        ],
+        done: false
+      )
+
+    second_mode =
+      FakeUpstream.sse_stream([
+        retry_preamble_event("response.created", second.response_id, second.model),
+        retry_preamble_event("response.in_progress", second.response_id),
+        retry_response_metadata_event(second),
+        retry_completed_event(second.response_id)
+      ])
+
+    {setup, failing_upstream, success_upstream} = stream_retry_setup(first_mode, second_mode)
+
+    stream_conn =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("retry response metadata coherence fixture"),
+        "stream" => true
+      })
+
+    assert stream_conn.status == 200
+    second_id = second.response_id
+
+    assert [
+             %{"type" => "response.created", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.in_progress", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.metadata"} = metadata,
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    assert metadata == retry_response_metadata_payload(second)
+
+    for candidate_one_value <- Map.values(first) do
+      refute stream_conn.resp_body =~ candidate_one_value
+    end
+
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+  end
+
+  for header_name <- ["openai-model", "x-codex-turn-state"] do
+    @tag :first_event_stream_retry
+    test "SSE #{header_name} closes the retry window", %{conn: conn} do
+      header_name = unquote(header_name)
+      first = retry_metadata_fixture("header-first")
+      second = retry_metadata_fixture("header-second")
+
+      first_mode =
+        FakeUpstream.sse_stream(
+          [
+            retry_preamble_event("response.created", first.response_id, first.model),
+            retry_preamble_event("response.in_progress", first.response_id),
+            retry_response_metadata_event(first),
+            first_event_terminal_payload("response.failed", "server_error")
+          ],
+          done: false,
+          headers: [retry_candidate_http_header(header_name, first)]
+        )
+
+      second_mode =
+        FakeUpstream.sse_stream(
+          [
+            retry_preamble_event("response.created", second.response_id, second.model),
+            retry_response_metadata_event(second),
+            retry_completed_event(second.response_id)
+          ],
+          headers: [retry_candidate_http_header(header_name, second)]
+        )
+
+      {setup, first_upstream, second_upstream} = stream_retry_setup(first_mode, second_mode)
+
+      stream_conn =
+        conn
+        |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("retry HTTP header coherence fixture"),
+          "stream" => true
+        })
+
+      assert get_resp_header(stream_conn, header_name) == [retry_header_value(header_name, first)]
+
+      first_id = first.response_id
+
+      assert [
+               %{"type" => "response.created", "response" => %{"id" => ^first_id}},
+               %{"type" => "response.in_progress", "response" => %{"id" => ^first_id}},
+               %{"type" => "response.metadata"} = metadata,
+               %{"type" => "response.failed"}
+             ] = streamed_response_events(stream_conn.resp_body)
+
+      assert metadata == retry_response_metadata_payload(first)
+
+      for candidate_two_value <- Map.values(second) do
+        refute stream_conn.resp_body =~ candidate_two_value
+      end
+
+      assert FakeUpstream.count(first_upstream) == 1
+      assert FakeUpstream.count(second_upstream) == 0
+      assert_stream_terminal_failure!(setup, "server_error")
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.retry_count == 0
+    end
+  end
+
+  @tag :first_event_stream_retry
+  test "SSE EOF flush filters replayed preamble before relaying an unterminated completed terminal",
+       %{conn: conn} do
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", "resp_retry_eof_first"),
+          retry_preamble_event("response.in_progress", "resp_retry_eof_first"),
+          first_event_terminal_payload("response.failed", "server_error")
+        ],
+        done: false
+      )
+
+    second_id = "resp_retry_eof_second"
+
+    second_mode =
+      FakeUpstream.sse_stream(
+        [
+          retry_preamble_event("response.created", second_id),
+          "event: response.completed\ndata: #{CodexPooler.JSON.encode!(retry_completed_payload(second_id))}\n"
+        ],
+        done: false
+      )
+
+    {setup, failing_upstream, success_upstream} = stream_retry_setup(first_mode, second_mode)
+
+    stream_conn =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("retry EOF replay fixture"),
+        "stream" => true
+      })
+
+    assert stream_conn.status == 200
+
+    assert [
+             %{"type" => "response.created", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    refute stream_conn.resp_body =~ "resp_retry_eof_first"
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+  end
+
+  @tag :first_event_stream_retry
+  test "SSE retry cancels the failed candidate before the successful candidate completes", %{
+    conn: _conn
+  } do
+    first_release_ref = make_ref()
+    second_release_ref = make_ref()
+    first_id = "resp_retry_cancel_first"
+    second_id = "resp_retry_cancel_second"
+
+    first_mode =
+      FakeUpstream.barrier_sse_stream(
+        [
+          retry_preamble_event("response.created", first_id),
+          retry_preamble_event("response.in_progress", first_id),
+          first_event_terminal_payload("response.failed", "server_error"),
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "late-first"}}
+        ],
+        barrier_after: 3,
+        done: false,
+        notify: self(),
+        release_ref: first_release_ref,
+        on_client_close: :expected,
+        owner: "stream-retry-cancel-first"
+      )
+
+    second_mode =
+      FakeUpstream.barrier_sse_stream(
+        [
+          retry_preamble_event("response.created", second_id),
+          retry_completed_event(second_id)
+        ],
+        barrier_after: 1,
+        notify: self(),
+        release_ref: second_release_ref,
+        owner: "stream-retry-cancel-second"
+      )
+
+    {setup, first_upstream, second_upstream} = stream_retry_setup(first_mode, second_mode)
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        receive do
+          :sandbox_allowed -> :ok
+        after
+          1_000 -> raise "timed out waiting for cancellation stream sandbox allowance"
+        end
+
+        stream_conn =
+          Phoenix.ConnTest.build_conn()
+          |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+          |> auth(setup)
+          |> post("/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("retry cancellation fixture"),
+            "stream" => true
+          })
+
+        send(parent, {:retry_cancellation_stream_done, stream_conn})
+        :ok
+      end)
+
+    Sandbox.allow(Repo, self(), task.pid)
+    send(task.pid, :sandbox_allowed)
+
+    assert_receive {:fake_upstream_chunk_barrier, 3, first_handler, ^first_release_ref}, 15_000
+    assert_receive {:fake_upstream_client_gone, 3, ^first_handler, ^first_release_ref}, 15_000
+    assert_receive {:fake_upstream_chunk_barrier, 1, second_handler, ^second_release_ref}, 15_000
+
+    send(first_handler, {:fake_upstream_release_chunk, first_release_ref})
+
+    assert_receive {:fake_upstream_client_closed, 4, ^first_handler, ^first_release_ref}, 15_000
+
+    send(second_handler, {:fake_upstream_release_chunk, second_release_ref})
+
+    assert_receive {:retry_cancellation_stream_done, stream_conn}, 15_000
+    assert stream_conn.status == 200
+
+    assert [
+             %{"type" => "response.created", "response" => %{"id" => ^second_id}},
+             %{"type" => "response.completed", "response" => %{"id" => ^second_id}}
+           ] = streamed_response_events(stream_conn.resp_body)
+
+    refute stream_conn.resp_body =~ first_id
+    refute stream_conn.resp_body =~ "late-first"
+
+    assert [%{outcome: :client_closed_expected, chunk_index: 4, chunk_count: 4}] =
+             FakeUpstream.sse_outcomes(first_upstream)
+
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(second_upstream) == 1
+    assert_stream_retry_success!(setup, "server_error")
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where:
+                 entry.entry_kind == "settlement" and
+                   entry.request_id in subquery(from(r in Request, where: r.pool_id == ^setup.pool.id, select: r.id))
+             ),
+             :count
+           ) == 1
+
+    assert Task.await(task, 15_000) == :ok
   end
 
   @tag :first_event_stream_retry
@@ -9288,10 +9984,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.retry_count == 1
     assert request.usage_status == "usage_unknown"
 
-    refute inspect(
-             {request.request_metadata, first_attempt.response_metadata,
-              second_attempt.response_metadata}
-           ) =~
+    refute inspect({request.request_metadata, first_attempt.response_metadata, second_attempt.response_metadata}) =~
              "usage_observer"
 
     settlement =
@@ -9418,9 +10111,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE keepalive before assignment model miss preserves the failover window" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -9486,8 +10177,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     first_mode =
       FakeUpstream.sse_stream(
         [
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible-once"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible-once"}},
           {"response.failed",
            %{
              "type" => "response.failed",
@@ -9545,9 +10235,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-sse-hard-pin",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-sse-hard-pin", compact?: false)
 
     prime_routing_quota!(pinned.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -9596,8 +10284,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     first_upstream =
       FakeUpstream.sse_stream(
         [
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible"}},
           first_event_terminal_payload("response.failed", "upstream_request_timeout")
         ],
         done: false
@@ -9714,8 +10401,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "visible"}}
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible"}}
         ])
       )
 
@@ -9898,9 +10584,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(rejecting_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-cyber-policy-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-cyber-policy-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -10136,8 +10820,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -10204,8 +10887,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -10413,9 +11095,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE streams inject keepalive comments during upstream idle gaps" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -10429,8 +11109,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.barrier_sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "first"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "first"}},
             {"response.completed",
              %{
                "type" => "response.completed",
@@ -10477,9 +11156,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE streams can disable keepalive comments" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 0}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 0})
 
     on_exit(fn ->
       if previous_env,
@@ -10534,9 +11211,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "SSE keepalive before retryable first event preserves current stream state" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{sse_keepalive_interval_ms: 50})
 
     on_exit(fn ->
       if previous_env,
@@ -10757,9 +11432,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "failed"
     assert request.last_error_code == "no_eligible_backend"
 
-    refute Repo.exists?(
-             from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress")
-           )
+    refute Repo.exists?(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"))
 
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
@@ -10826,7 +11499,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                  "code" => "no_eligible_backend",
                  "message" => "no healthy eligible backend is currently available",
                  "param" => "model",
-                 "type" => "invalid_request_error"
+                 # findings#191: a 503 is retryable once a backend recovers, and
+                 # the terminal client class said the opposite.
+                 "type" => "server_error"
                }
              })
 
@@ -11022,14 +11697,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     request = Repo.get!(Request, request_id)
     assert request.status == "succeeded"
 
-    refute Repo.exists?(
-             from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress")
-           )
+    refute Repo.exists?(from(r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"))
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.pool_upstream_assignment_id == second.assignment.id
     assert attempt.status == "succeeded"
     assert ["release", "reservation", "settlement"] == ledger_entry_kinds(request)
+  end
+
+  test "POST /backend-api/codex/responses/compact rewrites ultra to the highest catalog level when the model lacks max",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        compact?: true,
+        model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+      )
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("compact"),
+        "reasoning" => %{"effort" => "ultra"}
+      })
+
+    assert %{"object" => "response.compaction"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.json["reasoning"] == %{"effort" => "xhigh"}
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == "ultra_to_xhigh"
   end
 
   @tag :prompt_cache_adaptation
@@ -11070,7 +11777,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured.json, "max_output_tokens")
     refute Map.has_key?(captured.json, "temperature")
     refute Map.has_key?(captured.json, "top_p")
-    assert captured.json["reasoning"] == %{"effort" => "max"}
+    # The selected assignment's source model advertises levels up to xhigh, so
+    # ultra lands there rather than on a Pool-wide `max` (findings#221).
+    assert captured.json["reasoning"] == %{"effort" => "xhigh"}
     assert captured.json["prompt_cache_key"] == raw_prompt_cache_key
     refute Map.has_key?(captured.json, "prompt_cache_options")
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -11693,8 +12402,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "backend-visible-before-close"}}
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "backend-visible-before-close"}}
           ],
           done: false
         )
@@ -12027,8 +12735,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           %{
             "error" => %{
               "code" => "rate_limit_exceeded",
-              "message" =>
-                "We're currently experiencing high demand, which may cause temporary errors."
+              "message" => "We're currently experiencing high demand, which may cause temporary errors."
             }
           },
           [{"x-codex-turn-state", response_turn_state}],
@@ -12104,7 +12811,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/responses/compact forwards approved lineage metadata headers and redacts metadata",
        %{conn: conn} do
     upstream =
@@ -12142,8 +12849,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-turn-metadata" => metadata.turn_metadata,
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
-             "x-codex-installation-id" => metadata.installation_id,
              "x-openai-subagent" => metadata.subagent,
+             "x-openai-memgen-request" => metadata.memgen_request,
+             "x-codex-guardian" => metadata.guardian,
+             "x-codex-inference-call-id" => metadata.inference_call_id,
              "session-id" => "lineage-session-id",
              "thread-id" => "lineage-thread-id",
              "x-client-request-id" => "lineage-thread-id"
@@ -12190,7 +12899,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-internal-unapproved")
   end
 
-  @tag :installation_id_metadata
+  @tag :lineage_metadata_forwarding
   test "POST /backend-api/codex/v1/responses/compact forwards approved lineage metadata with trusted Codex identity",
        %{conn: conn} do
     upstream =
@@ -12228,8 +12937,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-turn-metadata" => metadata.turn_metadata,
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
-             "x-codex-installation-id" => metadata.installation_id,
              "x-openai-subagent" => metadata.subagent,
+             "x-openai-memgen-request" => metadata.memgen_request,
+             "x-codex-guardian" => metadata.guardian,
+             "x-codex-inference-call-id" => metadata.inference_call_id,
              "session-id" => "lineage-session-id",
              "thread-id" => "lineage-thread-id",
              "x-client-request-id" => "lineage-thread-id"
@@ -12409,8 +13120,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {%{
          "plan_type" => "sample_unknown_plan",
          "rate_limit" => %{"allowed" => true, "limit_reached" => true}
-       }, "quota_evidence_unavailable",
-       "no upstream account has fresh reset-bearing quota evidence for this model"},
+       }, "quota_evidence_unavailable", "no upstream account has fresh reset-bearing quota evidence for this model"},
       {%{
          "plan_type" => "sample_malformed_additional_plan",
          "rate_limit" => %{"allowed" => true, "limit_reached" => false},
@@ -12425,8 +13135,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              }
            }
          ]
-       }, "quota_evidence_unavailable",
-       "no upstream account has fresh reset-bearing quota evidence for this model"},
+       }, "quota_evidence_unavailable", "no upstream account has fresh reset-bearing quota evidence for this model"},
       {%{
          "plan_type" => "sample_blocked_additional_plan",
          "rate_limit" => %{"allowed" => true, "limit_reached" => false},
@@ -12437,8 +13146,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "rate_limit" => %{"allowed" => false, "limit_reached" => true}
            }
          ]
-       }, "quota_evidence_unavailable",
-       "no upstream account has fresh reset-bearing quota evidence for this model"}
+       }, "quota_evidence_unavailable", "no upstream account has fresh reset-bearing quota evidence for this model"}
     ]
 
     Enum.each(cases, fn {usage_payload, code, message} ->
@@ -12516,54 +13224,52 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end)
   end
 
-  test "POST /backend-api/codex/responses rejects incomplete selected account and additional windows before dispatch",
-       %{conn: conn} do
-    valid_window = %{
-      "used_percent" => 25,
-      "limit_window_seconds" => 18_000,
-      "reset_after_seconds" => 3_600,
-      "reset_at" => DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
-    }
+  for field <- ~w(limit_window_seconds reset_after_seconds reset_at), mutation <- [:missing, :wrong_type], scope <- [:account, :additional] do
+    @tag window_field: field, window_mutation: mutation, window_scope: scope
+    test "POST /backend-api/codex/responses rejects #{scope} window #{field} #{mutation} before dispatch", %{conn: conn, window_field: field, window_mutation: mutation, window_scope: scope} do
+      valid_window = %{
+        "used_percent" => 25,
+        "limit_window_seconds" => 18_000,
+        "reset_after_seconds" => 3_600,
+        "reset_at" => DateTime.utc_now() |> DateTime.add(3_600, :second) |> DateTime.to_unix()
+      }
 
-    invalid_windows =
-      for field <- ~w(limit_window_seconds reset_after_seconds reset_at),
-          mutation <- [:missing, :wrong_type] do
+      window =
         case mutation do
           :missing -> Map.delete(valid_window, field)
           :wrong_type -> Map.put(valid_window, field, "invalid")
         end
-      end
 
-    cases =
-      Enum.flat_map(invalid_windows, fn window ->
-        [
-          %{
-            "plan_type" => "sample_malformed_account_window",
-            "rate_limit" => %{
-              "allowed" => true,
-              "limit_reached" => false,
-              "primary_window" => window
-            }
-          },
-          %{
-            "plan_type" => "sample_malformed_additional_window",
-            "rate_limit" => %{"allowed" => true, "limit_reached" => false},
-            "additional_rate_limits" => [
-              %{
-                "limit_name" => "Sample model",
-                "metered_feature" => "sample_model",
-                "rate_limit" => %{
-                  "allowed" => true,
-                  "limit_reached" => false,
-                  "primary_window" => window
-                }
+      usage_payload =
+        case scope do
+          :account ->
+            %{
+              "plan_type" => "sample_malformed_account_window",
+              "rate_limit" => %{
+                "allowed" => true,
+                "limit_reached" => false,
+                "primary_window" => window
               }
-            ]
-          }
-        ]
-      end)
+            }
 
-    Enum.each(cases, fn usage_payload ->
+          :additional ->
+            %{
+              "plan_type" => "sample_malformed_additional_window",
+              "rate_limit" => %{"allowed" => true, "limit_reached" => false},
+              "additional_rate_limits" => [
+                %{
+                  "limit_name" => "Sample model",
+                  "metered_feature" => "sample_model",
+                  "rate_limit" => %{
+                    "allowed" => true,
+                    "limit_reached" => false,
+                    "primary_window" => window
+                  }
+                }
+              ]
+            }
+        end
+
       upstream = start_windowless_lifecycle_upstream(usage_payload, "resp_must_not_dispatch")
       setup = gateway_setup(upstream, quota?: false)
 
@@ -12585,7 +13291,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert model_dispatch_count(upstream) == 0
       assert Repo.aggregate(Attempt, :count) == 0
       assert QuotaWindows.list_quota_windows(setup.identity) == []
-    end)
+    end
   end
 
   test "POST /backend-api/codex/responses invalidates a positive snapshot after credential rotation",
@@ -12603,9 +13309,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     rotated_identity =
       refreshed_identity
-      |> Ecto.Changeset.change(
-        metadata: CredentialFencing.advance_credential_epoch(refreshed_identity)
-      )
+      |> Ecto.Changeset.change(metadata: CredentialFencing.advance_credential_epoch(refreshed_identity))
       |> Repo.update!()
 
     assert get_in(rotated_identity.metadata, ["credential_epoch"]) == 2
@@ -12621,8 +13325,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{
              "error" => %{
                "code" => "quota_evidence_unavailable",
-               "message" =>
-                 "no upstream account has fresh reset-bearing quota evidence for this model"
+               "message" => "no upstream account has fresh reset-bearing quota evidence for this model"
              }
            } = json_response(conn, 503)
 
@@ -12815,9 +13518,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              ])
 
     assert {:ok, _identity} =
-             PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment,
-               observed_at: usage_at
-             )
+             PoolReconciliation.refresh_quota_from_usage(setup.identity, setup.assignment, observed_at: usage_at)
 
     assert QuotaWindows.list_quota_windows(setup.identity) == []
 
@@ -13246,9 +13947,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-soft-pinned-json",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-soft-pinned-json", compact?: false)
 
     prime_exhausted_routing_quota!(pinned.identity)
 
@@ -13317,9 +14016,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-session-header-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-session-header-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -13386,9 +14083,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-turn-state-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-turn-state-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -13544,9 +14239,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(pinned_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-hard-pin-recovery-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-hard-pin-recovery-fallback", compact?: false)
 
     setup =
       Map.put(
@@ -13638,9 +14331,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(fallback_upstream) == 0
 
     requests =
-      Repo.all(
-        from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at])
-      )
+      Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
 
     assert Enum.map(requests, &{&1.status, &1.last_error_code}) ==
              [
@@ -13804,9 +14495,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(fallback_upstream) == 0
 
     requests =
-      Repo.all(
-        from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at])
-      )
+      Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id, order_by: [asc: r.admitted_at]))
 
     assert Enum.map(requests, &{&1.status, &1.last_error_code}) ==
              [
@@ -13851,9 +14540,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-exhausted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-exhausted", compact?: false)
 
     prime_exhausted_routing_quota!(pinned.identity)
 
@@ -13921,9 +14608,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
 
     pinned_upstream =
-      start_upstream(
-        {:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}}
-      )
+      start_upstream({:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}})
 
     fallback_upstream =
       start_upstream(
@@ -13937,9 +14622,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-previous-anchor-stale",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-previous-anchor-stale", compact?: false)
 
     prime_stale_routing_quota!(pinned.identity)
 
@@ -14023,9 +14706,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(fallback_upstream)
 
     pinned =
-      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-stale",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-affinity-stale", compact?: false)
 
     prime_stale_routing_quota!(pinned.identity)
 
@@ -14110,16 +14791,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(precise_upstream)
 
     exhausted =
-      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, exhausted_upstream, "upstream-token-exhausted", compact?: false)
 
     stale = gateway_upstream(setup.pool, stale_upstream, "upstream-token-stale", compact?: false)
 
     resetless =
-      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless", compact?: false)
 
     prime_exhausted_routing_quota!(exhausted.identity)
     prime_stale_routing_quota!(stale.identity)
@@ -14184,9 +14861,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(first_upstream, quota?: false)
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-exhausted",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-exhausted", compact?: false)
 
     prime_exhausted_routing_quota!(setup.identity)
     prime_exhausted_routing_quota!(second.identity)
@@ -14268,9 +14943,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     stale = gateway_upstream(setup.pool, stale_upstream, "upstream-token-stale", compact?: false)
 
     resetless =
-      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, resetless_upstream, "upstream-token-resetless", compact?: false)
 
     prime_exhausted_routing_quota!(setup.identity)
     prime_stale_routing_quota!(stale.identity)
@@ -14710,6 +15383,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       installation_id: installation_id,
       parent_thread_id: "parent-#{forked_thread_id}",
       subagent: "subagent-#{forked_thread_id}",
+      memgen_request: "true",
+      guardian: "reviewer",
+      inference_call_id: "inference-call-#{forked_thread_id}",
       compaction_source_window_id: compaction_source_window_id,
       compaction_target_window_id: compaction_target_window_id,
       compaction_strategy: compaction_strategy,
@@ -14812,6 +15488,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     parent = self()
     handler_id = {__MODULE__, System.unique_integer([:positive])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -14910,6 +15589,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {"x-codex-parent-thread-id", metadata.parent_thread_id},
       {"x-codex-installation-id", metadata.installation_id},
       {"x-openai-subagent", metadata.subagent},
+      {"x-openai-memgen-request", metadata.memgen_request},
+      {"x-codex-guardian", metadata.guardian},
+      {"x-codex-inference-call-id", metadata.inference_call_id},
       {"session-id", "lineage-session-id"},
       {"thread-id", "lineage-thread-id"},
       {"x-client-request-id", "lineage-thread-id"},
@@ -14925,8 +15607,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "x-codex-turn-metadata",
       "x-codex-window-id",
       "x-codex-parent-thread-id",
-      "x-codex-installation-id",
       "x-openai-subagent",
+      "x-openai-memgen-request",
+      "x-codex-guardian",
+      "x-codex-inference-call-id",
       "session-id",
       "thread-id",
       "x-client-request-id"
@@ -14952,8 +15636,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["x-codex-turn-metadata"] =~ metadata.compaction_target_window_id
     assert captured_headers["x-codex-window-id"] == metadata.window_id
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
-    assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
+    assert captured_headers["x-openai-memgen-request"] == metadata.memgen_request
+    assert captured_headers["x-codex-guardian"] == metadata.guardian
+    assert captured_headers["x-codex-inference-call-id"] == metadata.inference_call_id
+    # The client sends the installation id only as a websocket frame
+    # `client_metadata` key; its header form is not in the allowlist.
+    refute Map.has_key?(captured_headers, "x-codex-installation-id")
     assert_provider_session_headers_forwarded!(captured_headers)
   end
 
@@ -14962,8 +15651,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert captured_headers["x-codex-window-id"] == metadata.window_id
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
-    assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
+    assert captured_headers["x-openai-memgen-request"] == metadata.memgen_request
+    assert captured_headers["x-codex-guardian"] == metadata.guardian
+    assert captured_headers["x-codex-inference-call-id"] == metadata.inference_call_id
+    # The client sends the installation id only as a websocket frame
+    # `client_metadata` key; its header form is not in the allowlist.
+    refute Map.has_key?(captured_headers, "x-codex-installation-id")
     assert_provider_session_headers_forwarded!(captured_headers)
   end
 
@@ -15168,6 +15862,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute text =~ metadata.installation_id
     refute text =~ metadata.parent_thread_id
     refute text =~ metadata.subagent
+    refute text =~ metadata.inference_call_id
     refute text =~ metadata.compaction_source_window_id
     refute text =~ metadata.compaction_target_window_id
     refute text =~ metadata.compaction_strategy
@@ -15544,6 +16239,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
   end
 
+  defp relayed_full_failure_body(sentinels) do
+    %{
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => sentinels.code,
+        "param" => sentinels.param,
+        # Built from the relayed code and param, not from the provider message
+        # (codex-pooler-findings#173): Full and the non-Full relay use one
+        # constructor, so serving mode no longer decides what a client is told.
+        "message" => "upstream rejected parameter #{sentinels.param} (#{sentinels.code})"
+      }
+    }
+  end
+
   defp full_failure_sentinels_absent?(observables, sentinels) do
     serialized = inspect(observables, limit: :infinity, printable_limit: :infinity)
     Enum.all?(Map.values(sentinels), &(not String.contains?(serialized, &1)))
@@ -15629,8 +16338,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
          "type" => "response.created",
          "response" => %{"id" => "resp_backend_mode_matrix", "status" => "in_progress"}
        }},
-      {"response.output_text.delta",
-       %{"type" => "response.output_text.delta", "delta" => "synthetic backend mode answer"}},
+      {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic backend mode answer"}},
       {"response.completed",
        %{
          "type" => "response.completed",
@@ -15898,9 +16606,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp raw_http_request_complete?(data) do
     case :binary.split(data, "\r\n\r\n") do
       [headers, body] ->
-        case Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> headers,
-               capture: :all_but_first
-             ) do
+        case Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> headers, capture: :all_but_first) do
           [length] -> byte_size(body) >= String.to_integer(length)
           nil -> true
         end
@@ -15908,5 +16614,91 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       _incomplete ->
         false
     end
+  end
+
+  defp retry_preamble_event(event_type, response_id, model \\ nil)
+
+  defp retry_preamble_event("response.created", response_id, model) do
+    response =
+      %{"id" => response_id, "status" => "in_progress"}
+      |> then(fn response ->
+        if is_binary(model),
+          do: Map.put(response, "headers", %{"OpenAI-Model" => model}),
+          else: response
+      end)
+
+    {"response.created", %{"type" => "response.created", "response" => response}}
+  end
+
+  defp retry_preamble_event("response.in_progress", response_id, _model),
+    do:
+      {"response.in_progress",
+       %{
+         "type" => "response.in_progress",
+         "response" => %{"id" => response_id, "status" => "in_progress"}
+       }}
+
+  defp retry_completed_event(response_id),
+    do: {"response.completed", retry_completed_payload(response_id)}
+
+  defp retry_completed_payload(response_id) do
+    %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => response_id,
+        "status" => "completed",
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+      }
+    }
+  end
+
+  defp retry_metadata_fixture(candidate) do
+    %{
+      response_id: "resp_retry_metadata_#{candidate}",
+      model: "fixture-metadata-model-#{candidate}",
+      verification: "fixture-verification-#{candidate}",
+      moderation: "fixture-moderation-#{candidate}",
+      safety_reason: "fixture-safety-reason-#{candidate}",
+      turn_state: "fixture-turn-state-#{candidate}"
+    }
+  end
+
+  defp retry_response_metadata_event(fixture),
+    do: {"response.metadata", retry_response_metadata_payload(fixture)}
+
+  defp retry_response_metadata_payload(fixture) do
+    %{
+      "type" => "response.metadata",
+      "sequence_number" => 1,
+      "response_id" => fixture.response_id,
+      "headers" => %{
+        "OpenAI-Model" => fixture.model,
+        "x-codex-turn-state" => fixture.turn_state
+      },
+      "metadata" => %{
+        "type" => "safety_buffering",
+        "openai_verification_recommendation" => [fixture.verification],
+        "openai_chatgpt_moderation_metadata" => %{"presentation" => fixture.moderation},
+        "use_cases" => ["fixture-use-case"],
+        "reasons" => [fixture.safety_reason],
+        "retry_model" => fixture.model
+      }
+    }
+  end
+
+  defp retry_candidate_http_header(header_name, fixture),
+    do: {header_name, retry_header_value(header_name, fixture)}
+
+  defp retry_header_value("openai-model", fixture), do: fixture.model
+  defp retry_header_value("x-codex-turn-state", fixture), do: fixture.turn_state
+
+  defp streamed_response_events(body) do
+    {blocks, _residue} = SSEParser.complete_sse_blocks(body, bounded?: false)
+
+    Enum.flat_map(blocks, fn block ->
+      {_event, decoded} = SSEParser.stream_block_event(block)
+
+      if is_binary(decoded["type"]), do: [decoded], else: []
+    end)
   end
 end

@@ -345,8 +345,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
       %{
         name: name,
         title: title,
-        description:
-          "Use when testing family aggregation. Returns no entity data. Never returns secrets. Filters/limits: none.",
+        description: "Use when testing family aggregation. Returns no entity data. Never returns secrets. Filters/limits: none.",
         input_schema: %{
           "type" => "object",
           "properties" => %{},

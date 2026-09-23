@@ -16,6 +16,26 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
   @external_resource @incremental_fixture_path
 
   describe "prepare_bridge/2" do
+    test "streams an unmarked trigger without requiring client-specific metadata" do
+      payload = %{
+        "model" => "sample-model",
+        "stream" => true,
+        "input" => [
+          %{"role" => "user", "content" => "synthetic context"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      assert CompactionTrigger.compaction_result_transport(payload) == :sse
+      refute CompactionTrigger.v2_streaming?(payload)
+      assert {:ok, projected} = CompactionTrigger.prepare_bridge("/v1/responses", payload)
+      assert CompactionTrigger.project_responses_payload(projected, :sse)["stream"] == true
+      assert projected["input"] == payload["input"]
+
+      assert CompactionTrigger.prepare_bridge("/backend-api/codex/responses/compact", payload) ==
+               :passthrough
+    end
+
     test "accepts a final native trigger after a zero-byte function output" do
       payload = zero_byte_compaction_payload()
 
@@ -359,8 +379,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
             %{"client_metadata" => %{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{})}},
             %{
               "client_metadata" => %{
-                "x-codex-turn-metadata" =>
-                  CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
+                "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"compaction" => %{"implementation" => "other"}})
               }
             },
             %{"client_metadata" => ["not", "a", "map"]},

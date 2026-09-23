@@ -106,8 +106,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             required
           >
             <:label_content>
-              Type <span class="font-semibold text-base-content">{@deleting_pool.slug}</span>
-              to confirm
+              Type <span class="font-semibold text-base-content">{@deleting_pool.slug}</span> to confirm
             </:label_content>
           </.input>
         </.form>
@@ -130,9 +129,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
               type="submit"
               form="pool-delete-form"
               variant={:danger}
-              phx-click={
-                JS.dispatch("blur", to: "#pool_delete_confirmation_slug_#{@delete_form_version}")
-              }
+              phx-click={JS.dispatch("blur", to: "#pool_delete_confirmation_slug_#{@delete_form_version}")}
               disabled={@deleting_pool.status != "archived"}
             />
           </:actions>
@@ -929,8 +926,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       token_total_label: Format.token_count(token_total),
       request_total_label: format_integer(request_total),
       request_total_unit: request_total_unit(request_total),
-      total_label:
-        "#{Format.token_count(token_total)} tokens / #{format_request_count(request_total)}",
+      total_label: "#{Format.token_count(token_total)} tokens / #{format_request_count(request_total)}",
       categories: CodexPooler.JSON.encode!(Enum.map(points, & &1.label)),
       series:
         CodexPooler.JSON.encode!([
@@ -946,8 +942,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       colors: CodexPooler.JSON.encode!(["var(--color-primary)", "var(--color-info)"]),
       points: points,
       empty?: token_total == 0 and request_total == 0,
-      aria_label:
-        "Traffic in the last #{window_label}: #{Format.token_count(token_total)} tokens and #{format_request_count(request_total)}"
+      aria_label: "Traffic in the last #{window_label}: #{Format.token_count(token_total)} tokens and #{format_request_count(request_total)}"
     }
   end
 

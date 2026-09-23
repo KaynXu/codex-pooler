@@ -93,8 +93,7 @@ defmodule CodexPooler.Quotas.Evidence.DescriptorsTest do
     assert {"model", "codex_model", "gpt-5.3-codex-spark", nil, "codex_spark", "primary", 300} =
              Descriptors.canonical_logical_window_key(primary_key)
 
-    assert {"model", "codex_model", "gpt-5.3-codex-spark", nil, "codex_spark", "secondary",
-            10_080} = Descriptors.canonical_logical_window_key(weekly_key)
+    assert {"model", "codex_model", "gpt-5.3-codex-spark", nil, "codex_spark", "secondary", 10_080} = Descriptors.canonical_logical_window_key(weekly_key)
   end
 
   test "feature and account rows containing codex_other are not converted" do
@@ -108,8 +107,7 @@ defmodule CodexPooler.Quotas.Evidence.DescriptorsTest do
 
   test "unrelated weekly target identifiers remain distinct" do
     logical_key =
-      {"model", "codex_model", "gpt-5.3-codex-spark-preview", nil, "codex_otherwise", "secondary",
-       10_080}
+      {"model", "codex_model", "gpt-5.3-codex-spark-preview", nil, "codex_otherwise", "secondary", 10_080}
 
     assert Descriptors.canonical_logical_window_key(logical_key) == logical_key
   end
@@ -117,12 +115,10 @@ defmodule CodexPooler.Quotas.Evidence.DescriptorsTest do
   test "recognized Spark tokens in inactive target-scope dimensions do not canonicalize" do
     for token <- @spark_tokens do
       model_scope_key =
-        {"model", "unrelated-family", "unrelated-model", token, "unrelated-quota", "secondary",
-         10_080}
+        {"model", "unrelated-family", "unrelated-model", token, "unrelated-quota", "secondary", 10_080}
 
       upstream_model_scope_key =
-        {"upstream_model", "unrelated-family", token, "unrelated-upstream-model",
-         "unrelated-quota", "secondary", 10_080}
+        {"upstream_model", "unrelated-family", token, "unrelated-upstream-model", "unrelated-quota", "secondary", 10_080}
 
       assert Descriptors.canonical_logical_window_key(model_scope_key) == model_scope_key
 
@@ -142,8 +138,7 @@ defmodule CodexPooler.Quotas.Evidence.DescriptorsTest do
     upstream_model = if field == :active_dimension, do: token, else: "unrelated-upstream-model"
     quota_key = if field == :quota_key, do: token, else: "unrelated-quota"
 
-    {"upstream_model", "unrelated-family", "ignored-model", upstream_model, quota_key,
-     "secondary", 10_080}
+    {"upstream_model", "unrelated-family", "ignored-model", upstream_model, quota_key, "secondary", 10_080}
   end
 
   defp canonical_spark_key("model") do
@@ -151,7 +146,6 @@ defmodule CodexPooler.Quotas.Evidence.DescriptorsTest do
   end
 
   defp canonical_spark_key("upstream_model") do
-    {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark", "secondary",
-     10_080}
+    {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark", "secondary", 10_080}
   end
 end

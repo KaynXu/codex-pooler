@@ -210,13 +210,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTerminalCloseTest do
     registry = start_supervised!({ActivityRegistry, name: nil})
 
     server =
-      start_supervised!(
-        {Bandit,
-         plug: {Endpoint, parent: self(), registry: registry, order: order},
-         port: 0,
-         ip: {127, 0, 0, 1},
-         startup_log: false}
-      )
+      start_supervised!({Bandit, plug: {Endpoint, parent: self(), registry: registry, order: order}, port: 0, ip: {127, 0, 0, 1}, startup_log: false})
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
     {conn, websocket, ref} = connect(port)

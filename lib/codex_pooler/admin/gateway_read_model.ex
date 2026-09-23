@@ -86,8 +86,7 @@ defmodule CodexPooler.Admin.GatewayReadModel do
         group_by: fragment("date_trunc('hour', ?)", request.admitted_at),
         order_by: [asc: fragment("date_trunc('hour', ?)", request.admitted_at)],
         select: %{
-          bucket:
-            type(fragment("date_trunc('hour', ?)", request.admitted_at), :utc_datetime_usec),
+          bucket: type(fragment("date_trunc('hour', ?)", request.admitted_at), :utc_datetime_usec),
           requests: count(request.id),
           succeeded: filter(count(request.id), request.status == "succeeded"),
           failed: filter(count(request.id), request.status in ^@failed_request_statuses),
@@ -192,8 +191,7 @@ defmodule CodexPooler.Admin.GatewayReadModel do
         order_by: [asc: fragment("date_trunc('hour', ?)", request.admitted_at)],
         select: %{
           pool_id: request.pool_id,
-          bucket:
-            type(fragment("date_trunc('hour', ?)", request.admitted_at), :utc_datetime_usec),
+          bucket: type(fragment("date_trunc('hour', ?)", request.admitted_at), :utc_datetime_usec),
           requests: count(request.id)
         }
     )

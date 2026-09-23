@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
+    InterruptionOutcome,
     Metadata,
     ResponseUsage,
     SettlementAttrs,
@@ -173,7 +174,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       |> Map.put(:collected_provider_failure, failure)
 
     finalization =
-      if native_full_history_compaction?(context.request_options) do
+      if native_full_history_compaction?(context.request_options) or
+           (native_collected_compaction?(context.request_options) and finalization.status == 502) do
         Map.put(
           finalization,
           :collected_provider_failure_event,
@@ -221,7 +223,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
           Map.get(finalization, :websocket_frame_headers, %{}),
           Map.get(finalization, :upstream_websocket_connection)
         )
-        |> collected_compaction_diagnostics(finalization),
+        |> collected_compaction_diagnostics(finalization)
+        |> maybe_put_compaction_invalid_reason(error),
         started: finalization.started,
         before_finalize: fn ->
           SideEffects.observe_websocket_response(context, finalization)
@@ -262,6 +265,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp collected_compaction_diagnostics(metadata, _finalization), do: metadata
 
+  # The collector's own rejection diagnosis travels on the internal gateway
+  # error map; persisting it keeps the six collector failure modes separable
+  # after the logs age out. Public error renderers project a fixed field set,
+  # so the key never reaches a wire payload.
+  defp maybe_put_compaction_invalid_reason(metadata, %{compaction_invalid_reason: reason}) do
+    case DiagnosticTaxonomy.identifier(reason) do
+      code when is_binary(code) -> Map.put(metadata, "compaction_invalid_reason", code)
+      nil -> metadata
+    end
+  end
+
+  defp maybe_put_compaction_invalid_reason(metadata, _error), do: metadata
+
   defp native_full_history_compaction?(%RequestOptions{
          payload_context: %{
            compaction_trigger_bridge?: true,
@@ -273,6 +289,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
        do: true
 
   defp native_full_history_compaction?(%RequestOptions{}), do: false
+
+  defp native_collected_compaction?(%RequestOptions{
+         payload_context: %{
+           compaction_trigger_bridge?: true,
+           compaction_result_mode: :native_websocket
+         },
+         transport: %{transport: "websocket", websocket_delivery_mode: mode}
+       })
+       when mode in [:collect_compaction, :collect_full_history],
+       do: true
+
+  defp native_collected_compaction?(%RequestOptions{}), do: false
 
   defp completed_result(
          %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options,
@@ -337,9 +365,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              receipt.attempt_id == context.attempt.id,
          true <-
            receipt.model_digest ==
-             NativeCompactionAdmission.FirstCompactResult.model_digest(
-               context.model.upstream_model_id
-             ),
+             NativeCompactionAdmission.FirstCompactResult.model_digest(context.model.upstream_model_id),
          {:ok, topology, owner} <- admission_owner(request_options),
          binding <-
            ordinary_success_binding(request_options, metadata, response_id, lifecycle, topology) do
@@ -375,9 +401,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     if receipt.request_id == context.reserved.request.id and
          receipt.attempt_id == context.attempt.id and
          receipt.model_digest ==
-           NativeCompactionAdmission.FirstCompactResult.model_digest(
-             context.model.upstream_model_id
-           ) do
+           NativeCompactionAdmission.FirstCompactResult.model_digest(context.model.upstream_model_id) do
       :ok
     else
       {:error, compact_ack_error()}
@@ -561,8 +585,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         owner.downstream_epoch
       )
 
-    {:ok, topology,
-     {:forwarded, owner.session, owner.lease_token, downstream, owner.forwarder_opts}}
+    {:ok, topology, {:forwarded, owner.session, owner.lease_token, downstream, owner.forwarder_opts}}
   end
 
   defp admission_owner(%RequestOptions{}), do: {:error, :owner_unavailable}
@@ -641,8 +664,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   end
 
   defp collected_compaction?(%SelectedCandidateContext{
-         request_options:
-           %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options
+         request_options: %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options
        })
        when mode in [:native_websocket, :public_websocket],
        do: RequestOptions.connection_bound_compaction?(request_options)
@@ -855,7 +877,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     end
   end
 
-  @spec finalize_failed(SelectedCandidateContext.t(), map()) :: {:error, map()}
+  @spec finalize_failed(SelectedCandidateContext.t(), map()) ::
+          {:ok, map()} | {:error, map()} | {:retry, term()}
   def finalize_failed(context, %{reason: :client_disconnected} = finalization) do
     %{headers: headers, started: started} = finalization
 
@@ -944,12 +967,50 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         {:ok, finalized}
 
       {:ok, _finalized} = result ->
-        emit_settlement_outcome(result, "failed", transports)
+        # A drained, lost or crashed owner interrupted the turn; a forwarding
+        # refusal or a superseded downstream failed it (findings#228).
+        emit_settlement_outcome(result, InterruptionOutcome.outcome_for_code(owner_payload.code), transports)
 
         {:error,
          error(owner_payload.status, owner_payload.code, owner_payload.message, nil, %{
            owner_error: owner_payload.metadata.owner_error
          })}
+
+      {:error, gateway_error} = error ->
+        emit_settlement_failure(error, transports)
+        {:error, gateway_error}
+    end
+  end
+
+  # A websocket turn with no websocket upstream path never dispatched: settle it
+  # once with the fixed Pooler error, without retry or route-health evidence.
+  def finalize_failed(
+        context,
+        %{reason: :websocket_transport_required, error: %{status: status, code: code} = failure} =
+          finalization
+      ) do
+    %{headers: headers, started: started} = finalization
+    %{reserved: reserved, attempt: attempt, request_options: request_options} = context
+    transports = resolved_transports(context)
+
+    metadata =
+      headers
+      |> Metadata.websocket_response_metadata(code, request_options)
+      |> Map.drop(["content_type", "status_code", "upstream_transport"])
+
+    case AttemptSettlement.finalize_partial_stream_failure(
+           reserved.request,
+           attempt,
+           response_usage(finalization, ""),
+           SettlementAttrs.partial_stream_failure(context, status, code, code, metadata, started: started),
+           request_options.runtime.session_owner_witness
+         ) do
+      {:stale_generation, finalized} ->
+        {:ok, finalized}
+
+      {:ok, _finalized} = result ->
+        emit_settlement_outcome(result, "failed", transports)
+        {:error, error(status, code, failure.message)}
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)
@@ -991,11 +1052,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
        ) do
     case ClientRetry.final_observation_metadata(observation) do
       {:ok, summary} -> Map.put(metadata, "native_client_retry_observation", summary)
-      :ineligible -> metadata
+      :ineligible -> put_native_client_retry_authority_loss(metadata, observation)
     end
   end
 
   defp maybe_put_native_client_retry_observation(metadata, _finalization), do: metadata
+
+  # An ineligible observation is still evidence, just not admission evidence.
+  # It keeps its own key so no resend path can mistake it for the witness, and
+  # it carries only the bounded reason authority was lost.
+  defp put_native_client_retry_authority_loss(metadata, observation) do
+    case ClientRetry.authority_loss_metadata(observation) do
+      {:ok, summary} -> Map.put(metadata, "native_client_retry_authority_loss", summary)
+      :none -> metadata
+    end
+  end
 
   defp finalize_failed_after_health(
          %SelectedCandidateContext{allow_retry?: true, reserved: reserved, attempt: attempt} =
@@ -1083,11 +1154,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
     if AttemptSettlement.first_settlement?(finalized) do
-      Streaming.emit_stream_outcome(
-        outcome,
-        transports.downstream_transport,
-        transports.upstream_transport
-      )
+      if outcome == "interrupted" do
+        InterruptionOutcome.emit(
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+      else
+        Streaming.emit_stream_outcome(
+          outcome,
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+      end
     end
   end
 

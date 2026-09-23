@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Binding
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession, as: Owner
 
@@ -272,6 +273,43 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
       assert {:ok, %{intent: :fresh, lifecycle: nil}} =
                Service.prepare_replay_intent(setup.auth, authorized)
 
+      final_payload = %{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [%{"type" => "compaction", "encrypted_content" => "synthetic-summary"}],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" => CodexPooler.JSON.encode!(metadata)
+        }
+      }
+
+      final = prepare(final_payload, session, setup)
+
+      final_capability = %NativeCompactionAdmission.Capability{
+        phase: :final,
+        binding: %{
+          binding
+          | compaction_item_digest: NativeCodexTurnMetadata.compaction_item_digest(final_payload),
+            previous_response_digest: nil
+        },
+        control_ref: make_ref(),
+        token: :crypto.strong_rand_bytes(32),
+        expires_at_ms: System.system_time(:millisecond) + 30_000
+      }
+
+      {:ok, final_admission} =
+        RequestOptions.NativeCompactionAdmission.new(
+          final_capability,
+          {:direct, owner},
+          receipt.lifecycle
+        )
+
+      {:ok, authorized_final} =
+        WebsocketCodec.attach_native_compaction_admission(final, final_admission)
+
+      assert {:ok, %{intent: :fresh, lifecycle: nil}} =
+               Service.prepare_replay_intent(setup.auth, authorized_final)
+
       assert {:error, %{code: "duplicate_turn"}} =
                Service.prepare_replay_intent(setup.auth, prepare(continuation, session, setup))
 
@@ -331,9 +369,7 @@ defmodule CodexPooler.Gateway.Runtime.NativeCompactionPreflightTest do
         effective_mode: "full",
         source: "override"
       })
-      |> RequestOptions.put_runtime_context(
-        api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch
-      )
+      |> RequestOptions.put_runtime_context(api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch)
 
     {:ok, metadata} =
       NativeCodexTurnMetadata.parse(payload, session.id)

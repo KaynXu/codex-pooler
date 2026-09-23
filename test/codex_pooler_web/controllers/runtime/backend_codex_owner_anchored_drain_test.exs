@@ -1,5 +1,6 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPoolerWeb.Runtime.AnchoredOwnerDrainSupport
@@ -57,9 +58,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
     assert [%{"type" => "function_call_output", "call_id" => ^call_id}] = wire.json["input"]
 
     assert [request] =
-             Repo.all(
-               from r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress"
-             )
+             Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id and r.status == "in_progress")
 
     assert %{first_visible_output_at: visible, status: "in_progress"} =
              Repo.get_by!(CodexTurn, request_id: request.id)
@@ -94,11 +93,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
 
     assert [%{status: "failed"}] = Repo.all(from a in Attempt, where: a.request_id == ^request.id)
 
-    assert Enum.sort(
-             Repo.all(
-               from e in LedgerEntry, where: e.request_id == ^request.id, select: e.entry_kind
-             )
-           ) == ["release", "reservation", "settlement"]
+    assert Enum.sort(Repo.all(from e in LedgerEntry, where: e.request_id == ^request.id, select: e.entry_kind)) == ["release", "reservation", "settlement"]
 
     assert Repo.aggregate(
              from(l in BridgeOwnerLease,
@@ -271,9 +266,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexOwnerAnchoredDrainTest do
                    assert_terminal_request(request)
                  end
 
-    assert Repo.all(
-             from e in LedgerEntry, where: e.request_id == ^request.id, select: e.entry_kind
-           ) == ["reservation"]
+    assert Repo.all(from e in LedgerEntry, where: e.request_id == ^request.id, select: e.entry_kind) == ["reservation"]
   end
 
   defp drain_after_commit(owner, response_task, request) do

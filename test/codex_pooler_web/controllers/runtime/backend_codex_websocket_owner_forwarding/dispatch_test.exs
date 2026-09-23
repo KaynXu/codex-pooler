@@ -504,8 +504,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DispatchTe
       assert paused_key.status == "paused"
       send(task.pid, {:runtime_authorization_release, barrier_ref})
 
-      assert {:socket_response_result, :local_complete,
-              {:error, %{code: :api_key_paused, disabling_epoch: disabling_epoch}}} =
+      assert {:socket_response_result, :local_complete, {:error, %{code: :api_key_paused, disabling_epoch: disabling_epoch}}} =
                Task.await(task, 15_000)
 
       assert disabling_epoch == paused_key.runtime_revocation_epoch
@@ -660,9 +659,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.DispatchTe
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-close-during-request", "close-during-request",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-close-during-request", "close-during-request", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     payload = websocket_payload(setup, "close while owner request is active")
 

@@ -13,20 +13,12 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsGroupContract do
     "gateway" => ~w(gateway files transcription)
   }
   @runtime_groups %{
-    "streaming" =>
-      {"gateway",
-       ~w(sse_keepalive_interval_ms websocket_idle_timeout_ms websocket_owner_idle_timeout_ms)},
-    "upstream" =>
-      {"gateway",
-       ~w(upstream_connect_timeout_ms upstream_pool_timeout_ms upstream_receive_timeout_ms)},
-    "continuity" =>
-      {"gateway",
-       ~w(expired_alias_ttl_seconds bridge_owner_lease_ttl_seconds bridge_owner_lease_renewal_seconds)},
-    "circuit" =>
-      {"gateway",
-       ~w(circuit_failure_threshold circuit_open_seconds circuit_half_open_probe_limit circuit_success_threshold)},
-    "files" =>
-      {"files", ~w(max_size_bytes upload_ttl_seconds abandoned_upload_cleanup_interval_seconds)},
+    "streaming" => {"gateway", ~w(sse_keepalive_interval_ms websocket_idle_timeout_ms websocket_owner_idle_timeout_ms)},
+    "upstream" => {"gateway", ~w(upstream_connect_timeout_ms upstream_pool_timeout_ms upstream_receive_timeout_ms upstream_conn_max_idle_time_ms)},
+    "token_refresh" => {"gateway", ~w(upstream_token_refresh_margin_seconds upstream_token_refresh_proactive_enabled)},
+    "continuity" => {"gateway", ~w(expired_alias_ttl_seconds bridge_owner_lease_ttl_seconds bridge_owner_lease_renewal_seconds)},
+    "circuit" => {"gateway", ~w(circuit_failure_threshold circuit_open_seconds circuit_half_open_probe_limit circuit_success_threshold)},
+    "files" => {"files", ~w(max_size_bytes upload_ttl_seconds abandoned_upload_cleanup_interval_seconds)},
     "transcription" => {"transcription", ~w(max_upload_bytes)}
   }
 

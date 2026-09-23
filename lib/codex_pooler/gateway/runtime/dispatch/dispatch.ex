@@ -6,6 +6,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Accounting.FailureResponse
+  alias CodexPooler.Accounting.PreAttemptRelease
+  alias CodexPooler.Gateway.Admission
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -119,13 +121,32 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
         route_class: context.route_class
       })
 
-    with {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
+    with :ok <- drain_checkpoint(context),
+         {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
          {:ok, context} <- validate_reset_probe_scope(context),
          {:ok, context} <- validate_provider_permission(context),
          {:ok, context} <- persist_route_metadata(context),
          {:ok, context} <- begin_candidate_circuit(context, selection),
          {:ok, context} <- start_dispatch_attempt(context, selection) do
       transport_dispatch.(context)
+    end
+  end
+
+  defp drain_checkpoint(context) do
+    case Admission.checkpoint() do
+      :ok ->
+        :ok
+
+      {:error, error} ->
+        case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
+               response_status_code: 499,
+               last_error_code: "owner_drained",
+               usage_status: "not_applicable",
+               pre_attempt_phase: PreAttemptRelease.turn_interrupted()
+             }) do
+          {:ok, _} -> {:error, Map.delete(error, :accounting_disposition)}
+          {:error, _} = failure -> failure
+        end
     end
   end
 
@@ -301,7 +322,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
            response_status_code: 503,
            last_error_code: "no_eligible_backend",
-           usage_status: "not_applicable"
+           usage_status: "not_applicable",
+           pre_attempt_phase: PreAttemptRelease.routing_rejected()
          }) do
       {:ok, _finalized} ->
         {:error,
@@ -357,7 +379,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
 
     case result do
       {:ok, attempt} ->
-        {:ok, %{context | attempt: attempt, started: System.monotonic_time(:millisecond)}}
+        {:ok,
+         %{
+           context
+           | attempt: attempt,
+             retry_count: attempt.attempt_number - 1,
+             started: System.monotonic_time(:millisecond)
+         }}
 
       {:error, %{code: :request_already_finalized}} ->
         release_unstarted_attempt_circuit(
@@ -449,7 +477,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
       case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
              response_status_code: 503,
              last_error_code: "no_eligible_backend",
-             usage_status: "not_applicable"
+             usage_status: "not_applicable",
+             pre_attempt_phase: PreAttemptRelease.routing_rejected()
            }) do
         {:ok, _finalized} ->
           {:error,

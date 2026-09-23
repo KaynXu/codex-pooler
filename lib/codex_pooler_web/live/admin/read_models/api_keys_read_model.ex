@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting
   alias CodexPooler.Catalog
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
@@ -88,8 +89,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       filter_values: filter_values,
       selected_pool: selected_pool,
       api_key_model_policy_summaries: model_policy_summaries,
-      api_key_pool_groups:
-        pool_groups(filter_pools(pools, selected_pool), pool_lookup, visible_api_key_rows),
+      api_key_pool_groups: pool_groups(filter_pools(pools, selected_pool), pool_lookup, visible_api_key_rows),
       pool_options: pool_options(pools),
       model_policy_filter: model_policy_filter,
       unavailable_model_policy_count: unavailable_model_policy_count,
@@ -102,6 +102,18 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     do: Enum.find(pools, &(&1.id == pool_id))
 
   def selected_pool(_pools, _pool_id), do: nil
+
+  @spec budget_usage(APIKey.t()) :: map() | nil
+  def budget_usage(%APIKey{pool_id: pool_id, id: api_key_id}),
+    do: budget_usage(pool_id, api_key_id)
+
+  @spec budget_usage(Ecto.UUID.t(), Ecto.UUID.t()) :: map() | nil
+  def budget_usage(pool_id, api_key_id) do
+    case Accounting.build_api_key_self_usage(pool_id, api_key_id, as_of: DateTime.utc_now()) do
+      {:ok, usage} -> usage.budget_usage
+      {:error, _reason} -> nil
+    end
+  end
 
   @spec filter_values(Pool.t() | nil) :: filters()
   def filter_values(pool), do: filter_values(pool, nil)
@@ -196,9 +208,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   # query order.
   defp sort_api_keys(api_keys) do
     Enum.sort_by(api_keys, fn api_key ->
-      {Map.get(@api_key_status_rank, api_key.status, map_size(@api_key_status_rank)),
-       String.downcase(api_key.display_name || ""), created_at_desc_rank(api_key.created_at),
-       api_key.id}
+      {Map.get(@api_key_status_rank, api_key.status, map_size(@api_key_status_rank)), String.downcase(api_key.display_name || ""), created_at_desc_rank(api_key.created_at), api_key.id}
     end)
   end
 
@@ -381,8 +391,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       warning = %{
         code: :enforced_model_unavailable,
         severity: :warning,
-        message:
-          "Enforced model #{enforced_model_identifier} is not in the current routable catalog; runtime requests will fail until this is changed",
+        message: "Enforced model #{enforced_model_identifier} is not in the current routable catalog; runtime requests will fail until this is changed",
         requires_acknowledgement?: false
       }
 

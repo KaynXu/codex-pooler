@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
+  alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -1099,8 +1100,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         assert {:error, %{reason: :upstream_websocket_session_unavailable}} =
                  UpstreamWebsocketSession.request(session, request)
 
-        assert_receive {:DOWN, ^monitor, :process, ^session,
-                        {%RuntimeError{}, callback_stacktrace}},
+        assert_receive {:DOWN, ^monitor, :process, ^session, {%RuntimeError{}, callback_stacktrace}},
                        @detection_timeout_ms
 
         {expected_function, expected_arity} =
@@ -1166,8 +1166,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         assert {:ok, %{terminal: "response.completed", status: 200}} = result
         assert_receive {:observer_called, ^failure_kind}
 
-        assert_receive {:observer_failure_writer, ^failure_kind, ^terminal,
-                        %{terminal: "response.completed"}}
+        assert_receive {:observer_failure_writer, ^failure_kind, ^terminal, %{terminal: "response.completed"}}
 
         refute_received {:observer_called, ^failure_kind}
         refute_received {:observer_failure_writer, ^failure_kind, _frame, _discriminator}
@@ -1509,6 +1508,163 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "routing hint changes reuse the connection while an account header change opens another" do
+    first_hint = "model=provider-routing-model;tier=priority"
+    other_model_hint = "model=provider-other-model"
+
+    upstream =
+      start_upstream(
+        # Tier and model hint changes ride the first physical connection, whose
+        # handshake keeps the first hint; an account header change reconnects.
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs websocket_connection (reconnect only on endpoint change or close; replies invented)
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_hint_priority",
+            websocket_connection_ordinal: 1,
+            headers: [
+              required: %{
+                "x-codex-routing-hint" => first_hint,
+                "chatgpt-account-id" => "account-a"
+              }
+            ]
+          ),
+          strict_websocket_success("resp_ws_hint_default_tier",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-codex-routing-hint" => first_hint}]
+          ),
+          strict_websocket_success("resp_ws_hint_model_switch",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-codex-routing-hint" => first_hint}]
+          ),
+          strict_websocket_success("resp_ws_hint_account_switch",
+            websocket_connection_ordinal: 2,
+            headers: [
+              required: %{
+                "x-codex-routing-hint" => other_model_hint,
+                "chatgpt-account-id" => "account-b"
+              }
+            ]
+          )
+        ])
+      )
+
+    base_request = websocket_request(FakeUpstream.url(upstream))
+
+    request = fn account, hint ->
+      %{
+        base_request
+        | headers: [{"chatgpt-account-id", account}, {"x-codex-routing-hint", hint}]
+      }
+    end
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, first_result} =
+             UpstreamWebsocketSession.request(session, request.("account-a", first_hint))
+
+    first_lifecycle = lifecycle_state(session)
+    assert_connection_metadata(first_result, first_lifecycle, false, false)
+
+    assert {:ok, default_tier_result} =
+             UpstreamWebsocketSession.request(
+               session,
+               request.("account-a", "model=provider-routing-model")
+             )
+
+    assert_connection_metadata(default_tier_result, first_lifecycle, true, false)
+
+    assert {:ok, model_switch_result} =
+             UpstreamWebsocketSession.request(session, request.("account-a", other_model_hint))
+
+    assert_connection_metadata(model_switch_result, first_lifecycle, true, false)
+
+    assert {:ok, account_switch_result} =
+             UpstreamWebsocketSession.request(session, request.("account-b", other_model_hint))
+
+    refute account_switch_result.upstream_websocket_connection.reused
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+    assert [first_id, first_id, first_id, account_id] =
+             Enum.map(FakeUpstream.requests(upstream), & &1.websocket_connection_id)
+
+    refute account_id == first_id
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "provider session header values scope connection reuse" do
+    session_a = %{
+      "session-id" => "session-a",
+      "thread-id" => "thread-a",
+      "x-client-request-id" => "thread-a"
+    }
+
+    session_b = %{
+      "session-id" => "session-b",
+      "thread-id" => "thread-b",
+      "x-client-request-id" => "thread-b"
+    }
+
+    upstream =
+      start_upstream(
+        # The same client session values ride one connection; other values or
+        # none open another, so a handshake never carries a different session.
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers and websocket_connection (session headers fixed per client connection; replies invented)
+        FakeUpstream.strict_sequence([
+          strict_websocket_success("resp_ws_session_a_first",
+            websocket_connection_ordinal: 1,
+            headers: [required: session_a]
+          ),
+          strict_websocket_success("resp_ws_session_a_second",
+            websocket_connection_ordinal: 1,
+            headers: [required: session_a]
+          ),
+          strict_websocket_success("resp_ws_session_b",
+            websocket_connection_ordinal: 2,
+            headers: [required: session_b]
+          ),
+          strict_websocket_success("resp_ws_session_absent",
+            websocket_connection_ordinal: 3,
+            headers: [forbidden: Map.keys(session_a)]
+          )
+        ])
+      )
+
+    base_request = websocket_request(FakeUpstream.url(upstream))
+
+    request = fn session_headers ->
+      %{
+        base_request
+        | headers: [{"chatgpt-account-id", "account-a"} | Enum.sort(session_headers)]
+      }
+    end
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, first_result} = UpstreamWebsocketSession.request(session, request.(session_a))
+    first_lifecycle = lifecycle_state(session)
+    assert_connection_metadata(first_result, first_lifecycle, false, false)
+
+    assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request.(session_a))
+    assert_connection_metadata(second_result, first_lifecycle, true, false)
+
+    assert {:ok, other_session_result} =
+             UpstreamWebsocketSession.request(session, request.(session_b))
+
+    refute other_session_result.upstream_websocket_connection.reused
+
+    assert {:ok, absent_result} = UpstreamWebsocketSession.request(session, request.(%{}))
+    refute absent_result.upstream_websocket_connection.reused
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 3
+
+    assert [first_id, first_id, other_id, absent_id] =
+             Enum.map(FakeUpstream.requests(upstream), & &1.websocket_connection_id)
+
+    assert length(Enum.uniq([first_id, other_id, absent_id])) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "ordinary successful and request-terminal work keep one connection reusable" do
     upstream =
       start_upstream(
@@ -1572,8 +1728,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid,
-                    ^terminal_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid, ^terminal_ref},
                    @detection_timeout_ms
 
     assert FakeUpstream.websocket_connection_alive?(upstream, 1)
@@ -1589,8 +1744,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive :findings116_next_request_task_started, @detection_timeout_ms
     send(websocket_pid, {:fake_upstream_release_websocket, terminal_ref})
 
-    assert {:error,
-            %{reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}}} =
+    assert {:error, %{reason: {:retryable_first_event, %{code: "websocket_connection_limit_reached"}}}} =
              Task.await(terminal_task, @detection_timeout_ms)
 
     assert {:ok, %{terminal: "response.completed"}} = Task.await(next_task, @detection_timeout_ms)
@@ -1652,8 +1806,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       old_socket = session_socket(session)
       terminal_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid,
-                      ^terminal_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, websocket_pid, ^terminal_ref},
                      @detection_timeout_ms
 
       assert FakeUpstream.websocket_connection_alive?(upstream, 1)
@@ -1913,8 +2066,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         UpstreamWebsocketSession.request(session, request)
       end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                    1_000
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -1925,8 +2077,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
              Task.await(request_task, 1_000)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
                    1_000
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -2035,6 +2186,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert metadata["terminal_candidate_seen"] == false
     refute inspect(metadata) =~ "private reasoning fragment"
     refute_received :t7_frame_sql_query
+  end
+
+  test "close after an unknown response event returns the bounded reason authority was lost" do
+    raw_event_type = "response.private_event_sentinel_deadbeef"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close([
+          {raw_event_type, %{"type" => raw_event_type, "delta" => "private frame sentinel"}}
+        ])
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | native_client_retry_observation: ClientRetry.new_observation()
+    }
+
+    assert {:error,
+            %{
+              reason: :upstream_websocket_closed_before_terminal,
+              native_client_retry_observation: observation
+            }} = UpstreamWebsocketSession.request(session, request)
+
+    assert :ineligible = ClientRetry.final_observation_metadata(observation)
+
+    assert {:ok, diagnostics} = ClientRetry.authority_loss_metadata(observation)
+    assert diagnostics == %{"version" => 1, "authority_lost_reason" => "unknown_response_event"}
+    refute inspect(diagnostics) =~ raw_event_type
+    refute inspect(diagnostics) =~ "private frame sentinel"
   end
 
   test "peer close after an arbitrary nonterminal event records only bounded protocol buckets" do
@@ -2413,14 +2596,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     writer = fn frame -> send(parent, {:controlled_owner_frame, frame}) end
     send_task = Task.async(fn -> upstream.send.(upstream_pid, "request", writer) end)
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :task_result, task_barrier,
-                    task_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :task_result, task_barrier, task_ref},
                    1_000
 
     assert task_ref == controls.task_result
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :nonterminal_frames,
-                    nonterminal_barrier, nonterminal_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :nonterminal_frames, nonterminal_barrier, nonterminal_ref},
                    1_000
 
     assert nonterminal_ref == controls.nonterminal_frames
@@ -2434,8 +2615,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     assert_receive {:controlled_owner_frame, "nonterminal"}, 1_000
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :terminal_frames,
-                    terminal_barrier, terminal_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :terminal_frames, terminal_barrier, terminal_ref},
                    1_000
 
     assert terminal_ref == controls.terminal_frames
@@ -2457,8 +2637,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
           WebsocketOwnerNodeHarness.controlled_result(parent, controls, stage, expected)
         end)
 
-      assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
-                      release_ref},
+      assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid, release_ref},
                      1_000
 
       assert release_ref == Map.fetch!(controls, stage)
@@ -2478,8 +2657,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         )
       end)
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, :timer_message, timer_barrier,
-                    timer_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, :timer_message, timer_barrier, timer_ref},
                    1_000
 
     assert timer_ref == controls.timer_message
@@ -3788,6 +3966,92 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute String.contains?(body, response_id)
   end
 
+  @tag :collect_compaction
+  test "collects a compaction item that later frames push past the diagnostic retention bound" do
+    encrypted_content = "opaque-compaction-result"
+
+    item_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => encrypted_content}
+      })
+
+    # The compact result is authoritative for the collect delivery modes, so it
+    # must survive however many frames follow it. 40 * 2 KiB clears the 64 KiB
+    # diagnostic retention bound that used to evict the item above.
+    filler_frames =
+      for index <- 1..40 do
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.output_text.delta",
+          "sequence_number" => index,
+          "delta" => String.duplicate("x", 2_048)
+        })
+      end
+
+    terminal_frame =
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_collect_past_retention", "status" => "completed"}
+      })
+
+    assert {:ok, %{body: body, terminal: "response.completed"}} =
+             request_websocket_frames(
+               [item_frame] ++ filler_frames ++ [terminal_frame],
+               writer: nil,
+               websocket_delivery_mode: :collect_full_history,
+               effective_serving_mode: "full",
+               payload: full_history_compaction_payload()
+             )
+
+    assert {:ok, %{compaction_item: %{"encrypted_content" => ^encrypted_content}}} =
+             CompactionResultCollector.collect_websocket_body(body)
+
+    assert byte_size(body) > 65_536
+  end
+
+  test "attributes a truncated retained body to its transport and route class" do
+    attach_stream_buffer_telemetry()
+
+    frames = [
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "opaque-compaction-result"}
+      }),
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => String.duplicate("x", 70_000)
+      }),
+      CodexPooler.JSON.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ]
+
+    assert {:ok, _collected} =
+             request_websocket_frames(frames,
+               writer: nil,
+               websocket_delivery_mode: :collect_full_history,
+               effective_serving_mode: "full",
+               payload: full_history_compaction_payload()
+             )
+
+    assert_receive {[:codex_pooler, :gateway, :stream_buffer, :truncated], %{count: 1},
+                    %{
+                      buffer: "retained_body",
+                      transport: "websocket",
+                      route_class: "proxy_compact"
+                    }}
+
+    assert {:ok, _relayed} = request_websocket_frames(frames)
+
+    assert_receive {[:codex_pooler, :gateway, :stream_buffer, :truncated], %{count: 1},
+                    %{
+                      buffer: "retained_body",
+                      transport: "websocket",
+                      route_class: "proxy_websocket"
+                    }}
+  end
+
   test "captures nested identities from each allowlisted typed lifecycle or success frame" do
     Enum.each(
       [
@@ -4710,6 +4974,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     }
   end
 
+  defp attach_stream_buffer_telemetry do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    parent = self()
+
+    :telemetry.attach(
+      handler_id,
+      [:codex_pooler, :gateway, :stream_buffer, :truncated],
+      fn event, measurements, metadata, _config ->
+        send(parent, {event, measurements, metadata})
+      end,
+      :ok
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp full_history_compaction_payload do
+    CodexPooler.JSON.encode!(%{
+      "type" => "response.create",
+      "input" => [
+        %{"type" => "message", "role" => "user", "content" => "synthetic"},
+        %{"type" => "compaction_trigger"}
+      ]
+    })
+  end
+
   defp generation_request(base_url) do
     %{
       websocket_request(base_url)
@@ -4819,9 +5109,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     ForwardedOwnerRequestHandoff.new(owner, witness)
   end
 
-  defp status_state(
-         {:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}
-       ) do
+  defp status_state({:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}) do
     status
     |> Keyword.get_values(:data)
     |> Enum.flat_map(& &1)
@@ -4831,9 +5119,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end)
   end
 
-  defp status_logged_events(
-         {:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}
-       ) do
+  defp status_logged_events({:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}) do
     status
     |> Keyword.get_values(:data)
     |> Enum.flat_map(& &1)
@@ -4969,7 +5255,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   defp with_short_keepalive(opts \\ []) do
-    original_env = Application.get_env(:codex_pooler, UpstreamWebsocketSession, [])
+    original_env = CodexPooler.TestAppEnv.restore_on_exit(UpstreamWebsocketSession)
 
     settings =
       Keyword.merge(
@@ -4985,10 +5271,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       UpstreamWebsocketSession,
       Keyword.merge(original_env, settings)
     )
-
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, UpstreamWebsocketSession, original_env)
-    end)
   end
 
   defp start_raw_websocket_peer(opts \\ []) do
@@ -5021,8 +5303,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       )
 
     peer = %{
-      url:
-        "#{Keyword.get(opts, :scheme, "http")}://127.0.0.1:#{port}/backend-api/codex/responses",
+      url: "#{Keyword.get(opts, :scheme, "http")}://127.0.0.1:#{port}/backend-api/codex/responses",
       state: state,
       supervisor: supervisor
     }

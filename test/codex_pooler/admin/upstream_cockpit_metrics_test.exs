@@ -170,8 +170,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
       upstream_assignment_fixture(pool, %{
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, as_of, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, as_of, 1)
         }
       })
 
@@ -344,8 +343,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
       |> Ecto.Changeset.change(%{
         started_at: admitted_at,
         completed_at: completed_at,
-        network_error_code:
-          Map.get(attrs, :attempt_network_error_code, request_error_code(status))
+        network_error_code: Map.get(attrs, :attempt_network_error_code, request_error_code(status))
       })
       |> Repo.update!()
 
@@ -354,8 +352,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
       pool_upstream_assignment_id: assignment.id,
       upstream_identity_id: assignment.upstream_identity_id,
       occurred_at: completed_at,
-      usage_status:
-        Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known"))
+      usage_status: Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known"))
     })
 
     request

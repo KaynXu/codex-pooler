@@ -15,19 +15,13 @@ defmodule CodexPooler.Files.UploadUrlPolicyTest do
     assert :ok = UploadUrlPolicy.validate("https://fake-upload.invalid/upload/file?sig=fake")
 
     assert :ok =
-             UploadUrlPolicy.validate(
-               "https://bucket.s3.eu-west-1.amazonaws.com/upload/file?X-Amz-Signature=fake"
-             )
+             UploadUrlPolicy.validate("https://bucket.s3.eu-west-1.amazonaws.com/upload/file?X-Amz-Signature=fake")
 
     assert :ok =
-             UploadUrlPolicy.validate(
-               "HTTPS://storage-account.blob.core.windows.net/container/file?sig=fake"
-             )
+             UploadUrlPolicy.validate("HTTPS://storage-account.blob.core.windows.net/container/file?sig=fake")
 
     assert :ok =
-             UploadUrlPolicy.validate(
-               "https://upload.example.invalid/a%20b/file?filename=a%20b.txt&sig=fake%2Bvalue"
-             )
+             UploadUrlPolicy.validate("https://upload.example.invalid/a%20b/file?filename=a%20b.txt&sig=fake%2Bvalue")
   end
 
   @tag :upload_url_policy

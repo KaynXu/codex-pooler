@@ -2,6 +2,7 @@ defmodule CodexPooler.Files.RequestLogContractTest do
   use CodexPooler.DataCase, async: false
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
+  alias CodexPooler.AccountingBoundaryTrace
   alias CodexPooler.Files.{RequestLog, RequestMetadata}
 
   test "file operations never persist raw idempotency keys and retain bounded client metadata" do
@@ -44,6 +45,35 @@ defmodule CodexPooler.Files.RequestLogContractTest do
         do: refute(Map.has_key?(request.request_metadata, "client_request_id")),
         else: assert(request.request_metadata["client_request_id"] == expected)
     end
+  end
+
+  test "file operations omit the raw idempotency key at the accounting boundary" do
+    auth = active_api_key_fixture()
+    raw_key = "file-private-key-#{System.unique_integer([:positive])}"
+
+    metadata =
+      RequestMetadata.build(
+        %{
+          transport: "http_json",
+          idempotency_key: raw_key,
+          route_class: "file_upload"
+        },
+        "/backend-api/files"
+      )
+
+    {result, [_auth, attrs]} =
+      AccountingBoundaryTrace.capture_call(
+        {CodexPooler.Accounting, :record_metadata_request, 2},
+        fn ->
+          RequestLog.record_file_request(auth, "succeeded", 200, metadata, %{
+            "operation" => "create"
+          })
+        end
+      )
+
+    assert {:ok, _request} = result
+    refute Map.has_key?(attrs, :idempotency_key)
+    refute inspect(attrs, limit: :infinity, printable_limit: :infinity) =~ raw_key
   end
 
   test "bridge metadata merges into persisted request and absent metadata is a no-op" do

@@ -1,8 +1,9 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeHttpTurnIdentity, RequestOptions}
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
@@ -43,24 +44,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     refute WebsocketCodec.valid_prepared_frame?(forged)
   end
 
-  test "full-history native V2 compact selects connection-bound collection" do
-    payload =
-      native_compaction_trigger_payload(%{
-        "x-codex-turn-metadata" =>
-          CodexPooler.JSON.encode!(%{
-            "compaction" => %{"implementation" => "responses_compaction_v2"}
-          })
-      })
+  for encoding <- [:json, :object] do
+    test "full-history native V2 compact with #{encoding} metadata selects connection-bound collection" do
+      metadata = %{"compaction" => %{"implementation" => "responses_compaction_v2"}}
 
-    assert {:ok, prepared} =
-             WebsocketCodec.prepare_frame(
-               CodexPooler.JSON.encode!(payload),
-               direct_responses_options(payload),
-               fn _ -> :ok end
-             )
+      metadata =
+        if unquote(encoding) == :json, do: CodexPooler.JSON.encode!(metadata), else: metadata
 
-    assert prepared.request_options.transport.transport == "websocket"
-    assert RequestOptions.connection_bound_compaction?(prepared.request_options)
+      payload = native_compaction_trigger_payload(%{"x-codex-turn-metadata" => metadata})
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 CodexPooler.JSON.encode!(payload),
+                 direct_responses_options(payload),
+                 fn _ -> :ok end
+               )
+
+      assert prepared.request_options.transport.transport == "websocket"
+      assert RequestOptions.connection_bound_compaction?(prepared.request_options)
+    end
   end
 
   test "sealed prepared compact preserves its anchor before continuity hydration" do
@@ -147,9 +149,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         ] do
       continuity = struct!(prepared.request_options.continuity, updates)
 
-      refute WebsocketCodec.replay_eligible?(
-               put_in(prepared.request_options.continuity, continuity)
-             )
+      refute WebsocketCodec.replay_eligible?(put_in(prepared.request_options.continuity, continuity))
     end
 
     refute WebsocketCodec.replay_eligible?(%{
@@ -165,9 +165,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         ] do
       context = struct!(prepared.request_options.payload_context, updates)
 
-      refute WebsocketCodec.replay_eligible?(
-               put_in(prepared.request_options.payload_context, context)
-             )
+      refute WebsocketCodec.replay_eligible?(put_in(prepared.request_options.payload_context, context))
     end
   end
 
@@ -235,7 +233,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       end
     end
 
-    test "final compaction item bypasses retry preflight on an owner websocket" do
+    test "final compaction item stays replay-suspendable on an owner websocket" do
       turn_metadata =
         CodexPooler.JSON.encode!(%{
           "turn_id" => Ecto.UUID.generate(),
@@ -284,7 +282,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
           }
       }
 
-      refute WebsocketCodec.replay_eligible?(prepared)
+      assert WebsocketCodec.replay_eligible?(prepared)
     end
 
     test "rejects malformed native input and tools before sealing" do
@@ -626,8 +624,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         "model" => "gpt-example",
         "input" => [],
         "client_metadata" => %{
-          "x-codex-turn-metadata" =>
-            CodexPooler.JSON.encode!(%{"turn_id" => canonical_turn_id, "request_kind" => "turn"})
+          "x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"turn_id" => canonical_turn_id, "request_kind" => "turn"})
         }
       }
 
@@ -868,11 +865,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
         for {kind, input, distinct?} <- [
               {"turn", [summary, output], true},
-              {"turn", [output, summary], false},
-              {"turn", [summary, output, summary], false},
-              {"turn",
-               [summary, %{"type" => "message", "role" => "user", "content" => "synthetic"}],
-               false},
+              {"turn", [output, summary], true},
+              {"turn", [summary, output, summary], true},
+              {"turn", [summary, %{"type" => "message", "role" => "user", "content" => "synthetic"}], false},
               {"compaction", [summary, output], false},
               {nil, [summary, output], false}
             ] do
@@ -921,6 +916,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
             refute WebsocketCodec.valid_prepared_frame?(forged)
           end
         end
+      end
+    end
+
+    test "post-compaction resume uses the same payload-independent claim on HTTP and websocket" do
+      turn_id = "turn-post-compaction-resume"
+      session_id = "018f60df-713f-7ca8-b9a0-0d12c508a902"
+      metadata = CodexPooler.JSON.encode!(%{"turn_id" => turn_id, "request_kind" => "turn"})
+      compaction = %{"type" => "context_compaction", "encrypted_content" => "synthetic"}
+      earlier_tool = %{"type" => "function_call_output", "call_id" => "call_old", "output" => ""}
+
+      for tail <- [[], [%{"type" => "message", "role" => "assistant"}]] do
+        payload =
+          native_request_claim_payload(turn_id, nil, [earlier_tool, compaction] ++ tail)
+          |> put_in(["client_metadata", "x-codex-turn-metadata"], metadata)
+
+        assert {:ok, prepared} =
+                 WebsocketCodec.prepare_frame(
+                   CodexPooler.JSON.encode!(payload),
+                   native_responses_options(payload, session_id),
+                   fn _frame -> :ok end
+                 )
+
+        websocket_claim = prepared.request_options.continuity.request_claim_key
+        assert websocket_claim =~ ~r/\Acodex-resume:[A-Za-z0-9_-]{43}\z/
+        refute websocket_claim == prepared.turn_claim_key
+
+        http_options =
+          RequestOptions.build(
+            %{codex_session: %CodexSession{id: session_id}},
+            "/backend-api/codex/responses",
+            payload
+          )
+
+        assert {:ok, ^websocket_claim} =
+                 NativeHttpTurnIdentity.request_claim_key(http_options, payload)
       end
     end
 
@@ -1129,11 +1159,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       refute coerced.request_options.payload_context.compaction_trigger_bridge?
     end
 
-    test "bridges terminal native compaction through the selected streaming or buffered transport" do
-      for {client_metadata, result_transport} <- [
+    test "bridges terminal native compaction over streaming transport with or without a declaration" do
+      for {client_metadata, declared_transport} <- [
             {v2_client_metadata(), :sse},
-            {%{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"compaction" => %{}})},
-             :buffered},
+            {%{"x-codex-turn-metadata" => CodexPooler.JSON.encode!(%{"compaction" => %{}})}, :buffered},
             {remote_compaction_v2_client_metadata(), :sse},
             {nil, :buffered}
           ] do
@@ -1159,7 +1188,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         }
 
         expected_payload =
-          if result_transport == :sse,
+          if declared_transport == :sse,
             do: Map.put(expected_payload, "stream", true),
             else: expected_payload
 
@@ -1168,7 +1197,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         assert is_function(coerced.result_adapter, 1)
 
         assert coerced.request_options.transport.transport ==
-                 if(result_transport == :sse, do: "websocket", else: "http_compact_json")
+                 if(declared_transport == :sse, do: "websocket", else: "http_compact_json")
 
         assert coerced.request_options.transport.upstream_endpoint ==
                  "/backend-api/codex/responses"
@@ -1178,7 +1207,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         assert coerced.request_options.payload_context.compaction_trigger_bridge?
 
         assert coerced.request_options.payload_context.compaction_result_transport ==
-                 result_transport
+                 :sse
 
         assert coerced.request_options.payload_context.compaction_result_mode ==
                  :native_websocket
@@ -1368,7 +1397,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
       assert coerced.endpoint == "/backend-api/codex/responses/compact"
       assert coerced.payload["input"] == [%{"type" => "compaction_trigger"}]
-      assert coerced.request_options.payload_context.compaction_result_transport == :buffered
+      assert coerced.request_options.payload_context.compaction_result_transport == :sse
     end
 
     test "rejects malformed native compaction trigger placement without retaining metadata" do
@@ -1405,8 +1434,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         assert error == %{
                  status: 400,
                  code: "invalid_request",
-                 message:
-                   "compaction_trigger must be the final input item and must follow visible input",
+                 message: "compaction_trigger must be the final input item and must follow visible input",
                  param: "input"
                }
 
@@ -1442,9 +1470,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       }
 
       assert {:ok, adapted} =
-               result_adapter.(
-                 {:ok, %{status: 200, headers: [], raw_body: CodexPooler.JSON.encode!(source)}}
-               )
+               result_adapter.({:ok, %{status: 200, headers: [], raw_body: CodexPooler.JSON.encode!(source)}})
 
       item = %{
         "type" => "compaction",
@@ -1541,7 +1567,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         ]
       }
 
-      assert {:ok, %{websocket_messages: [_done, completed]}} =
+      assert {:ok, %{websocket_messages: [_created, _done, completed]}} =
                result_adapter.({:ok, %{status: 200, body: source}})
 
       assert completed["response"]["object"] == "response"
@@ -1682,53 +1708,35 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                )
 
       assert {:error, %{status: 400, code: "invalid_request", param: "stream_id"}} =
-               WebsocketCodec.stream_id(
-                 CodexPooler.JSON.encode!(%{"type" => "response.create", "stream_id" => "lane/a"})
-               )
+               WebsocketCodec.stream_id(CodexPooler.JSON.encode!(%{"type" => "response.create", "stream_id" => "lane/a"}))
     end
   end
 
   describe "request_row_producing_response_payload?/1" do
     test "accepts response lifecycle and model request frames" do
-      assert WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(%{"type" => "response.processed"})
-             )
+      assert WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"type" => "response.processed"}))
 
-      assert WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(%{"type" => "response.create"})
-             )
+      assert WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"type" => "response.create"}))
 
-      assert WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(%{"model" => "gpt-example"})
-             )
+      assert WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"model" => "gpt-example"}))
     end
 
     test "rejects warmups, malformed JSON, non-object JSON, and blank models" do
-      refute WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(%{"generate" => false})
-             )
+      refute WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"generate" => false}))
 
       refute WebsocketCodec.request_row_producing_response_payload?("{invalid")
 
-      refute WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(["frame"])
-             )
+      refute WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(["frame"]))
 
-      refute WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(%{"model" => ""})
-             )
+      refute WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"model" => ""}))
 
-      refute WebsocketCodec.request_row_producing_response_payload?(
-               CodexPooler.JSON.encode!(%{"model" => "  "})
-             )
+      refute WebsocketCodec.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"model" => "  "}))
     end
   end
 
   describe "continuity_ordered_payload?/1" do
     test "orders response.processed and tool-result continuations" do
-      assert WebsocketCodec.continuity_ordered_payload?(
-               CodexPooler.JSON.encode!(%{"type" => "response.processed"})
-             )
+      assert WebsocketCodec.continuity_ordered_payload?(CodexPooler.JSON.encode!(%{"type" => "response.processed"}))
 
       assert WebsocketCodec.continuity_ordered_payload?(
                CodexPooler.JSON.encode!(%{
@@ -1820,9 +1828,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         refute WebsocketCodec.continuity_ordered_payload?(CodexPooler.JSON.encode!(payload))
       end)
 
-      refute WebsocketCodec.continuity_ordered_payload?(
-               CodexPooler.JSON.encode!(%{"generate" => false})
-             )
+      refute WebsocketCodec.continuity_ordered_payload?(CodexPooler.JSON.encode!(%{"generate" => false}))
 
       refute WebsocketCodec.continuity_ordered_payload?("{invalid")
     end
@@ -1993,9 +1999,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
       assert state == StreamProtocol.new_sse_block_state()
 
-      assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
-                      %{bytes: bytes, count: 1, max_bytes: 8_388_608},
-                      %{buffer: "websocket_sse", endpoint: "unknown", route_class: "unknown"}}
+      assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized], %{bytes: bytes, count: 1, max_bytes: 8_388_608}, %{buffer: "websocket_sse", endpoint: "unknown", route_class: "unknown"}}
 
       assert bytes > 8_388_608
     end

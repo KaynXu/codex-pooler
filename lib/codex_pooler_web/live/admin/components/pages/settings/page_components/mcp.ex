@@ -187,8 +187,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               <div class="grid min-w-0 gap-1">
                 <p class="truncate font-semibold text-base-content">{key.label}</p>
                 <p class="text-xs text-base-content/55">
-                  Prefix <code class="font-mono">{key.key_prefix}</code>
-                  · Created {datetime_label(key.inserted_at, @datetime_preferences)}
+                  Prefix <code class="font-mono">{key.key_prefix}</code> · Created {datetime_label(key.inserted_at, @datetime_preferences)}
                 </p>
               </div>
 
@@ -251,9 +250,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             id="settings-mcp-created-token-alert"
             class="mt-2 text-sm leading-6 text-base-content/70"
           >
-            It is shown once. Afterwards only the prefix
-            <span class="font-semibold text-base-content">{@created_secret.key.key_prefix}</span>
-            identifies it.
+            It is shown once. Afterwards only the prefix <span class="font-semibold text-base-content">{@created_secret.key.key_prefix}</span> identifies it.
           </p>
         </div>
         <div class="grid gap-5 p-5 sm:p-6">
@@ -300,9 +297,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
           <p class="text-sm font-semibold uppercase tracking-wide text-error">MCP key</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@key.label}?</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Clients authenticating with prefix
-            <span class="font-semibold text-base-content">{@key.key_prefix}</span>
-            start failing immediately. This cannot be undone.
+            Clients authenticating with prefix <span class="font-semibold text-base-content">{@key.key_prefix}</span> start failing immediately. This cannot be undone.
           </p>
         </div>
         <.form
@@ -352,12 +347,10 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
   end
 
   defp mcp_gate_status_class(true),
-    do:
-      "mt-2 inline-flex rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success"
+    do: "mt-2 inline-flex rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-xs font-semibold text-success"
 
   defp mcp_gate_status_class(false),
-    do:
-      "mt-2 inline-flex rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning"
+    do: "mt-2 inline-flex rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-semibold text-warning"
 
   defp datetime_label(datetime, preferences) do
     DateTimeDisplay.format_datetime(datetime, preferences, missing_label: "not yet")

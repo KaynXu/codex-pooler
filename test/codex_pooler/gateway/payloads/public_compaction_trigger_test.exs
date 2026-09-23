@@ -186,11 +186,30 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
                 %{
                   status: 502,
                   code: "invalid_compaction_response",
-                  message:
-                    "upstream compact response did not include encrypted compaction content"
+                  message: "upstream compact response did not include encrypted compaction content",
+                  compaction_invalid_reason: "missing_encrypted_content"
                 }} = CompactionTrigger.adapt_gateway_result(gateway_result(source), mode)
       end
     end
+  end
+
+  test "adaptation failures retain a bounded internal reason" do
+    assert {:error,
+            %{
+              code: "invalid_compaction_response",
+              compaction_invalid_reason: "invalid_json"
+            }} =
+             CompactionTrigger.adapt_gateway_result(
+               {:ok, %{status: 200, headers: [], raw_body: "{invalid"}},
+               :response
+             )
+
+    assert {:error,
+            %{
+              code: "invalid_compaction_response",
+              compaction_invalid_reason: "missing_encrypted_content"
+            }} =
+             CompactionTrigger.adapt_gateway_result(gateway_result(%{}), :response)
   end
 
   test "public selection uses top-level summary only without an output compact candidate" do
@@ -225,7 +244,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
     }
 
     request_without_marker = %{
-      "input" => [returned_item, %{"type" => "compaction_trigger"}],
+      "input" => [returned_item],
       "client_metadata" => %{}
     }
 
@@ -338,8 +357,11 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
     {response, [done["item"] | response["output"]]}
   end
 
-  defp public_result(%{websocket_messages: [done, completed]}, :websocket) do
+  defp public_result(%{websocket_messages: [created, done, completed]}, :websocket) do
     response = completed["response"]
+    assert created["type"] == "response.created"
+    assert created["response"] == %{response | "status" => "in_progress", "output" => []}
+    assert done["output_index"] == 0
     {response, [done["item"] | response["output"]]}
   end
 

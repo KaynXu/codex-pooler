@@ -38,8 +38,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3 do
           upstream_identity_id: Ecto.UUID.t(),
           observation: WebsocketOwnerRequest.observation(),
           reset_probe: CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe.t() | nil,
-          native_codex_response_control:
-            CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
+          native_codex_response_control: CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),
           forward_error_body?: boolean(),

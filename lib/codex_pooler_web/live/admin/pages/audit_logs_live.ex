@@ -37,8 +37,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
        filter_values: %{},
        filter_errors: [],
        pool_filter_options: [],
-       datetime_preferences:
-         DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
+       datetime_preferences: DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
      )}
   end
 
@@ -162,8 +161,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
       audit_logs: audit_logs,
       current_params: params,
       audit_log_pin_at: cursor || newest_cursor(audit_logs),
-      selected_audit_event:
-        selected_audit_event(socket.assigns.selected_audit_event, audit_logs.items),
+      selected_audit_event: selected_audit_event(socket.assigns.selected_audit_event, audit_logs.items),
       filter_form: to_form(form_values, as: :filters, errors: form_errors(filter_errors)),
       filter_values: form_values,
       filter_errors: filter_errors,

@@ -64,15 +64,11 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
   end
 
   @spec record_settlement_written!(LedgerEntry.t() | map()) :: write_result()
-  def record_settlement_written!(
-        %LedgerEntry{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry
-      ) do
+  def record_settlement_written!(%LedgerEntry{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry) do
     write_settlement_fact!(entry, :chronological)
   end
 
-  def record_settlement_written!(
-        %{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry
-      ) do
+  def record_settlement_written!(%{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry) do
     write_settlement_fact!(entry, :chronological)
   end
 
@@ -80,9 +76,7 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
   def record_settlement_written!(%{}), do: :ok
 
   @spec replace_settlement_written!(LedgerEntry.t()) :: write_result()
-  def replace_settlement_written!(
-        %LedgerEntry{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry
-      ) do
+  def replace_settlement_written!(%LedgerEntry{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry) do
     write_settlement_fact!(entry, :replace)
   end
 

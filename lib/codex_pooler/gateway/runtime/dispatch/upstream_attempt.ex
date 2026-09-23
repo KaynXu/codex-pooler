@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Admission
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -15,7 +16,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
-  alias CodexPooler.RouteClass
+  alias CodexPooler.Upstreams.ResponsesAPICompaction
+  alias CodexPooler.Upstreams.ResponsesAPIHistory
+  alias CodexPooler.Upstreams.ResponsesAPITools
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @type callbacks :: %{
           required(:register_continuity) => (term(), term(), term() -> term()),
@@ -25,16 +29,96 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   @spec dispatch(PreparedContext.t(), callbacks()) :: dispatch_result()
   def dispatch(%PreparedContext{context: context} = prepared_context, callbacks) do
-    cond do
-      websocket_upstream?(context.payload, context.request_options) ->
+    case Admission.checkpoint() do
+      :ok ->
+        dispatch_admitted(prepared_context, callbacks)
+
+      {:error, error} ->
+        Finalization.Websocket.finalize_failed(context, %{
+          reason: :owner_drained,
+          error: Map.delete(error, :accounting_disposition),
+          body: "",
+          headers: [],
+          started: context.started
+        })
+    end
+  end
+
+  defp dispatch_admitted(%PreparedContext{context: context} = prepared_context, callbacks) do
+    if UpstreamIdentity.responses_api?(context.identity) do
+      dispatch_http(prepared_context, callbacks)
+    else
+      dispatch_selected_transport(prepared_context, callbacks)
+    end
+  end
+
+  defp dispatch_selected_transport(%PreparedContext{context: context} = prepared_context, callbacks) do
+    case transport_decision(context.request_options) do
+      :websocket ->
         dispatch_websocket(prepared_context, callbacks)
 
-      WebsocketBridge.eligible?(prepared_context) ->
-        dispatch_websocket_bridge(prepared_context, callbacks)
+      :websocket_without_upstream ->
+        fail_closed_websocket_transport(prepared_context)
 
-      true ->
-        dispatch_http(prepared_context, callbacks)
+      :http ->
+        if WebsocketBridge.eligible?(prepared_context) do
+          dispatch_websocket_bridge(prepared_context, callbacks)
+        else
+          dispatch_http(prepared_context, callbacks)
+        end
     end
+  end
+
+  @doc """
+  Chooses the upstream transport family for a selected attempt.
+
+  A turn whose request transport is `websocket` never falls back to HTTP: it
+  uses the upstream websocket when it has a downstream writer or a
+  connection-bound compaction collector, whatever its `stream` flag, and has
+  no upstream path otherwise. Every other transport keeps its HTTP decision,
+  where the public streaming bridge is still considered.
+  """
+  @spec transport_decision(RequestOptions.t()) ::
+          :websocket | :websocket_without_upstream | :http
+  def transport_decision(%RequestOptions{transport: %{transport: "websocket"} = transport} = request_options) do
+    if is_function(transport.websocket_writer, 1) or
+         RequestOptions.connection_bound_compaction?(request_options),
+       do: :websocket,
+       else: :websocket_without_upstream
+  end
+
+  def transport_decision(%RequestOptions{}), do: :http
+
+  @doc """
+  The fixed Pooler error for a websocket turn without a websocket upstream path.
+  """
+  @spec websocket_transport_required_error() :: %{
+          status: 500,
+          code: String.t(),
+          message: String.t(),
+          param: nil
+        }
+  def websocket_transport_required_error do
+    %{
+      status: 500,
+      code: "websocket_transport_required",
+      message: "websocket turn requires the websocket upstream transport",
+      param: nil
+    }
+  end
+
+  # Prepared websocket frames are rejected with the same decision before
+  # reservation in `Service`; a direct `Service.execute/4` caller with a
+  # websocket transport and no writer reaches this branch, which settles the
+  # reserved turn instead of posting its frame body to the HTTP endpoint.
+  defp fail_closed_websocket_transport(%PreparedContext{context: context}) do
+    Finalization.Websocket.finalize_failed(context, %{
+      reason: :websocket_transport_required,
+      error: websocket_transport_required_error(),
+      body: "",
+      headers: [],
+      started: context.started
+    })
   end
 
   # A bridged turn falls back to plain HTTP only with positive proof that the
@@ -66,18 +150,25 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   defp dispatch_http(%PreparedContext{context: context} = prepared_context, callbacks) do
     dispatch_request = dispatch_request(prepared_context)
 
-    case UpstreamDispatch.http_request(dispatch_request) do
-      {:ok, response} ->
-        if HttpAuthRefresh.eligible?(prepared_context, response) do
-          HttpAuthRefresh.handle(prepared_context, response, &dispatch_http(&1, callbacks))
-        else
-          Finalization.handle_http_response(
-            response,
-            context,
-            finalization_callbacks(callbacks)
-          )
-        end
+    with {:ok, response} <- UpstreamDispatch.http_request(dispatch_request),
+         response =
+           ResponsesAPITools.response(
+             response,
+             context.request_options.payload_context.responses_api_tools
+           ),
+         {:ok, response} <- ResponsesAPICompaction.finish(response, context) do
+      response =
+        ResponsesAPIHistory.remember_json(
+          response,
+          context.request_options.payload_context.responses_api_history
+        )
 
+      if HttpAuthRefresh.eligible?(prepared_context, response) do
+        HttpAuthRefresh.handle(prepared_context, response, &dispatch_http(&1, callbacks))
+      else
+        Finalization.handle_http_response(response, context, finalization_callbacks(callbacks))
+      end
+    else
       {:error, reason} ->
         Finalization.handle_dispatch_error(reason, context, elapsed_ms(context.started))
     end
@@ -109,8 +200,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       stream_result: fn response, context ->
         StreamDispatch.streaming_result(response, context, %{
           finalization_callbacks: finalization_callbacks(callbacks),
-          http_first_event_retry:
-            StreamLifecycle.http_first_event_retry(Map.fetch!(callbacks, :retry_dispatch))
+          http_first_event_retry: StreamLifecycle.http_first_event_retry(Map.fetch!(callbacks, :retry_dispatch))
         })
       end
     }
@@ -127,8 +217,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       accounting_request: Keyword.get(opts, :accounting_request),
       accounting_attempt: Keyword.get(opts, :accounting_attempt),
       writer: Keyword.get(opts, :writer),
-      assignment_advertised?:
-        ModelMetadata.assignment_source?(context.model, context.assignment.id),
+      assignment_advertised?: ModelMetadata.assignment_source?(context.model, context.assignment.id),
       native_codex_response_control: native_codex_response_control(context),
       request_options: context.request_options,
       client_retry_dispatch_authority: context.client_retry_dispatch_authority
@@ -159,13 +248,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       nil ->
         %{}
     end
-  end
-
-  defp websocket_upstream?(payload, %RequestOptions{transport: transport} = request_options) do
-    relay? = RouteClass.streaming?(payload) and is_function(transport.websocket_writer, 1)
-    collect_compaction? = RequestOptions.connection_bound_compaction?(request_options)
-
-    transport.transport == "websocket" and (relay? or collect_compaction?)
   end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)

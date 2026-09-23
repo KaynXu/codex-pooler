@@ -28,7 +28,6 @@ defmodule CodexPooler.Files.RequestLog do
         status: status,
         response_status_code: response_status,
         correlation_id: Ecto.UUID.generate(),
-        idempotency_key: request_idempotency_key(request_metadata),
         client_ip: request_metadata.client_ip,
         user_agent: request_metadata.user_agent,
         request_metadata: file_request_metadata(request_metadata, metadata),
@@ -67,23 +66,6 @@ defmodule CodexPooler.Files.RequestLog do
   end
 
   def bridge_route_metadata(_bridge_error), do: %{}
-
-  defp request_idempotency_key(%RequestMetadata{} = request_metadata) do
-    case request_metadata.endpoint do
-      endpoint
-      when endpoint in [
-             "/backend-api/files",
-             "/backend-api/files/uploaded",
-             "/v1/files",
-             "/v1/files/content",
-             "/v1/files/delete"
-           ] ->
-        nil
-
-      _endpoint ->
-        request_metadata.idempotency_key
-    end
-  end
 
   defp file_request_metadata(%RequestMetadata{} = request_metadata, metadata) do
     metadata

@@ -129,8 +129,7 @@ defmodule CodexPooler.Upstreams.Secrets do
         decrypt_upstream_secret(secret)
 
       nil ->
-        {:error,
-         lifecycle_error(:upstream_secret_not_found, "active upstream secret was not found")}
+        {:error, lifecycle_error(:upstream_secret_not_found, "active upstream secret was not found")}
     end
   end
 

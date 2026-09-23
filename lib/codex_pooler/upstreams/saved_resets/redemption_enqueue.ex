@@ -38,9 +38,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueue do
       result = result(identity, status, job)
 
       {:ok, result}
-      |> AccountAudit.record_change(scope, "upstream_account.saved_reset_redeem_enqueue",
-        trigger_kind: Keyword.get(opts, :trigger_kind)
-      )
+      |> AccountAudit.record_change(scope, "upstream_account.saved_reset_redeem_enqueue", trigger_kind: Keyword.get(opts, :trigger_kind))
       |> tap_broadcast("upstream_account_saved_reset_redeem_queued")
     end
   end

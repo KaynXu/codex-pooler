@@ -221,8 +221,7 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
     %{
       at: at,
-      circuit_observed_at:
-        Map.get(opts, :circuit_observed_at) || Map.get(opts, "circuit_observed_at") || at
+      circuit_observed_at: Map.get(opts, :circuit_observed_at) || Map.get(opts, "circuit_observed_at") || at
     }
   end
 

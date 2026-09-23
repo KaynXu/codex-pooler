@@ -22,14 +22,9 @@ defmodule CodexPooler.Accounting.Rollups do
   @unknown_model_code "Unknown model"
   @daily_rollup_conflict_targets %{
     "pool" => {:unsafe_fragment, "(rollup_date, pool_id) WHERE dimension_kind = 'pool'"},
-    "api_key" =>
-      {:unsafe_fragment, "(rollup_date, pool_id, api_key_id) WHERE dimension_kind = 'api_key'"},
-    "pool_upstream_assignment" =>
-      {:unsafe_fragment,
-       "(rollup_date, pool_upstream_assignment_id) WHERE dimension_kind = 'pool_upstream_assignment'"},
-    "upstream_identity" =>
-      {:unsafe_fragment,
-       "(rollup_date, upstream_identity_id) WHERE dimension_kind = 'upstream_identity'"},
+    "api_key" => {:unsafe_fragment, "(rollup_date, pool_id, api_key_id) WHERE dimension_kind = 'api_key'"},
+    "pool_upstream_assignment" => {:unsafe_fragment, "(rollup_date, pool_upstream_assignment_id) WHERE dimension_kind = 'pool_upstream_assignment'"},
+    "upstream_identity" => {:unsafe_fragment, "(rollup_date, upstream_identity_id) WHERE dimension_kind = 'upstream_identity'"},
     "model" => {:unsafe_fragment, "(rollup_date, model_id) WHERE dimension_kind = 'model'"}
   }
 
@@ -133,6 +128,7 @@ defmodule CodexPooler.Accounting.Rollups do
       settled_cost_micros,
       rounded_settled_cost_micros
     FROM source
+    WHERE api_key_id IS NOT NULL
 
     UNION ALL
 
@@ -524,13 +520,18 @@ defmodule CodexPooler.Accounting.Rollups do
   defp daily_rollup_identities(%Request{} = request, %LedgerEntry{} = settlement) do
     [
       %{dimension_kind: "pool", pool_id: request.pool_id},
-      %{dimension_kind: "api_key", pool_id: request.pool_id, api_key_id: request.api_key_id},
+      api_key_identity(request),
       pool_upstream_assignment_identity(request, settlement),
       upstream_identity_identity(request, settlement),
       model_identity(request)
     ]
     |> Enum.reject(&is_nil/1)
   end
+
+  defp api_key_identity(%Request{api_key_id: nil}), do: nil
+
+  defp api_key_identity(%Request{} = request),
+    do: %{dimension_kind: "api_key", pool_id: request.pool_id, api_key_id: request.api_key_id}
 
   defp pool_upstream_assignment_identity(%Request{} = request, %LedgerEntry{} = settlement) do
     if settlement.pool_upstream_assignment_id do
@@ -705,10 +706,8 @@ defmodule CodexPooler.Accounting.Rollups do
       update: [
         set: [
           model_id: ^model_id,
-          estimated_cost_micros:
-            fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
-          settled_cost_micros:
-            fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
+          estimated_cost_micros: fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
+          settled_cost_micros: fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
           updated_at: ^now
         ],
         inc: [
@@ -764,10 +763,8 @@ defmodule CodexPooler.Accounting.Rollups do
     from rollup in DailyRollup,
       update: [
         set: [
-          estimated_cost_micros:
-            fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
-          settled_cost_micros:
-            fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
+          estimated_cost_micros: fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
+          settled_cost_micros: fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
           updated_at: ^now
         ],
         inc: [

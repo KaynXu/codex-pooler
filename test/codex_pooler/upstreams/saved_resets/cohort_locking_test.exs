@@ -24,6 +24,9 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
     handler_id = {__MODULE__, System.unique_integer([:positive, :monotonic])}
     test_pid = self()
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -42,8 +45,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
       assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
                SavedResetRedemption.redeem(assignment,
                  trigger_kind: "gateway_auto",
-                 gateway_auto_context:
-                   gateway_context(assignment, target, [sibling.id, target.id, sibling.id]),
+                 gateway_auto_context: gateway_context(assignment, target, [sibling.id, target.id, sibling.id]),
                  started_at: as_of
                )
 
@@ -70,8 +72,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
     assert {:ok, %{status: :noop, code: "gateway_auto_context_mismatch"}} =
              SavedResetRedemption.redeem(assignment,
                trigger_kind: "gateway_auto",
-               gateway_auto_context:
-                 gateway_context(assignment, target, [target.id, Ecto.UUID.generate()]),
+               gateway_auto_context: gateway_context(assignment, target, [target.id, Ecto.UUID.generate()]),
                started_at: as_of
              )
 

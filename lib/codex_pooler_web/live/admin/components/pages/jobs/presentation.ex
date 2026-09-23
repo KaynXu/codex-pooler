@@ -77,9 +77,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   def format_job_timestamp(nil, _datetime_preferences), do: "No observed run"
 
   def format_job_timestamp(%DateTime{} = datetime, datetime_preferences) do
-    DateTimeDisplay.format_datetime(datetime, datetime_preferences,
-      missing_label: "No observed run"
-    )
+    DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "No observed run")
   end
 
   @spec timestamp_line(String.t(), DateTime.t() | nil, DateTimeDisplay.preferences()) ::
@@ -185,8 +183,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
       visible_open_markers: Enum.take(open_markers, @visible_open_marker_limit),
       open_marker_overflow_count: marker_overflow_count(open_markers, @visible_open_marker_limit),
       visible_failure_markers: Enum.take(failure_markers, @visible_failure_marker_limit),
-      failure_marker_overflow_count:
-        marker_overflow_count(failure_markers, @visible_failure_marker_limit),
+      failure_marker_overflow_count: marker_overflow_count(failure_markers, @visible_failure_marker_limit),
       latest_failure: latest_failure_summary(latest_unresolved_failure),
       activity_label: activity_label(open_markers, failure_markers),
       last_seen_at: job_event_timestamp(latest_job),

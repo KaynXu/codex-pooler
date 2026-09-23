@@ -3,9 +3,12 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   Upstream model catalog discovery and payload normalization.
   """
 
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.EndpointMetadata
+  alias CodexPooler.Upstreams.ResponsesAPI
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
 
   @secret_kind "access_token"
@@ -63,15 +66,18 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   end
 
   @spec fetch_models_for_assignment(map()) :: {:ok, [map()]} | {:error, catalog_error() | term()}
+  def fetch_models_for_assignment(%{identity: %{credential_provenance: "responses_api_key"}} = source),
+    do: ResponsesAPI.fetch_models(source)
+
   def fetch_models_for_assignment(%{assignment: assignment, identity: identity}) do
     with {:ok, token} <-
            Secrets.decrypt_active_secret(identity, @secret_kind),
          {:ok, url} <- model_catalog_url(identity, assignment) do
-      case Req.get(url,
+      case OutboundHTTP.get(url,
              retry: false,
              receive_timeout: 30_000,
-             headers:
-               CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
+             finch: OutboundHTTP.pool_options_for_url(url),
+             headers: CloudflareCookies.request_headers(url, model_catalog_headers(identity, token))
            )
            |> store_cloudflare_cookies(url) do
         {:ok, %{status: 200, body: %{"data" => models}}} when is_list(models) ->
@@ -123,7 +129,11 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
         {"accept", "application/json"}
       ] ++ CodexClientIdentity.headers()
 
-    case present_string(identity.chatgpt_account_id) do
+    # Catalog discovery scopes its request the same way every other upstream
+    # call does: a synthetic `email_`/`local_` account id is not a scope the
+    # provider can resolve, so the header is omitted and the bearer token
+    # speaks for itself.
+    case UpstreamIdentity.account_scope(identity.chatgpt_account_id) do
       nil -> headers
       account_id -> [{"chatgpt-account-id", account_id} | headers]
     end
@@ -148,8 +158,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
       upstream_model_id: upstream_model_id,
       exposed_model_id: exposed_model_id,
       display_name: display_name,
-      supports_responses:
-        bool_attr(attrs, "supports_responses", bool_default(capabilities, "responses", true)),
+      supports_responses: bool_attr(attrs, "supports_responses", bool_default(capabilities, "responses", true)),
       supports_streaming:
         bool_attr(
           attrs,
@@ -222,11 +231,4 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
       _value -> default
     end
   end
-
-  defp present_string(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: value
-  end
-
-  defp present_string(_value), do: nil
 end

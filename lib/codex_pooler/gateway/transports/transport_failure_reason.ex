@@ -117,54 +117,23 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       "reason_class" => safe_reason_class(reason),
       "reason" => safe_metadata_reason(reason),
       "phase" => safe_phase(Map.get(attrs, :phase) || Map.get(attrs, "phase")),
-      "termination_source" =>
-        safe_termination_source(metadata_attr(attrs, "termination_source", :termination_source)),
-      "transport_signal" =>
-        safe_transport_signal(metadata_attr(attrs, "transport_signal", :transport_signal)),
-      "connection_use" =>
-        safe_connection_use(metadata_attr(attrs, "connection_use", :connection_use)),
-      "connection_request_bucket" =>
-        safe_connection_request_bucket(
-          metadata_attr(attrs, "connection_request_bucket", :connection_request_bucket)
-        ),
-      "connection_age_bucket" =>
-        safe_connection_age_bucket(
-          metadata_attr(attrs, "connection_age_bucket", :connection_age_bucket)
-        ),
-      "connection_idle_bucket" =>
-        safe_connection_idle_bucket(
-          metadata_attr(attrs, "connection_idle_bucket", :connection_idle_bucket)
-        ),
-      "websocket_buffer_bucket" =>
-        safe_websocket_buffer_bucket(
-          metadata_attr(attrs, "websocket_buffer_bucket", :websocket_buffer_bucket)
-        ),
-      "websocket_fragment_open" =>
-        safe_boolean(metadata_attr(attrs, "websocket_fragment_open", :websocket_fragment_open)),
+      "termination_source" => safe_termination_source(metadata_attr(attrs, "termination_source", :termination_source)),
+      "transport_signal" => safe_transport_signal(metadata_attr(attrs, "transport_signal", :transport_signal)),
+      "connection_use" => safe_connection_use(metadata_attr(attrs, "connection_use", :connection_use)),
+      "connection_request_bucket" => safe_connection_request_bucket(metadata_attr(attrs, "connection_request_bucket", :connection_request_bucket)),
+      "connection_age_bucket" => safe_connection_age_bucket(metadata_attr(attrs, "connection_age_bucket", :connection_age_bucket)),
+      "connection_idle_bucket" => safe_connection_idle_bucket(metadata_attr(attrs, "connection_idle_bucket", :connection_idle_bucket)),
+      "websocket_buffer_bucket" => safe_websocket_buffer_bucket(metadata_attr(attrs, "websocket_buffer_bucket", :websocket_buffer_bucket)),
+      "websocket_fragment_open" => safe_boolean(metadata_attr(attrs, "websocket_fragment_open", :websocket_fragment_open)),
       "pre_visible_output" => safe_boolean(Map.get(attrs, :pre_visible_output)),
-      "upstream_committed" =>
-        safe_boolean(metadata_attr(attrs, "upstream_committed", :upstream_committed)),
+      "upstream_committed" => safe_boolean(metadata_attr(attrs, "upstream_committed", :upstream_committed)),
       "terminal_seen" => safe_boolean(Map.get(attrs, :terminal_seen)),
-      "terminal_forwarded" =>
-        safe_boolean(metadata_attr(attrs, "terminal_forwarded", :terminal_forwarded)),
-      "last_upstream_event_type" =>
-        safe_last_upstream_event_type(
-          metadata_attr(attrs, "last_upstream_event_type", :last_upstream_event_type)
-        ),
-      "last_upstream_event_class" =>
-        safe_last_upstream_event_class(
-          metadata_attr(attrs, "last_upstream_event_class", :last_upstream_event_class)
-        ),
-      "terminal_candidate_seen" =>
-        safe_boolean(metadata_attr(attrs, "terminal_candidate_seen", :terminal_candidate_seen)),
-      "terminal_candidate_type" =>
-        safe_terminal_candidate_type(
-          metadata_attr(attrs, "terminal_candidate_type", :terminal_candidate_type)
-        ),
-      "terminal_candidate_class" =>
-        safe_terminal_candidate_class(
-          metadata_attr(attrs, "terminal_candidate_class", :terminal_candidate_class)
-        ),
+      "terminal_forwarded" => safe_boolean(metadata_attr(attrs, "terminal_forwarded", :terminal_forwarded)),
+      "last_upstream_event_type" => safe_last_upstream_event_type(metadata_attr(attrs, "last_upstream_event_type", :last_upstream_event_type)),
+      "last_upstream_event_class" => safe_last_upstream_event_class(metadata_attr(attrs, "last_upstream_event_class", :last_upstream_event_class)),
+      "terminal_candidate_seen" => safe_boolean(metadata_attr(attrs, "terminal_candidate_seen", :terminal_candidate_seen)),
+      "terminal_candidate_type" => safe_terminal_candidate_type(metadata_attr(attrs, "terminal_candidate_type", :terminal_candidate_type)),
+      "terminal_candidate_class" => safe_terminal_candidate_class(metadata_attr(attrs, "terminal_candidate_class", :terminal_candidate_class)),
       "terminal_candidate_rejection" =>
         safe_terminal_candidate_rejection(
           metadata_attr(
@@ -174,16 +143,9 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
           )
         ),
       "text_frame_count" => safe_non_negative_integer(Map.get(attrs, :text_frame_count)),
-      "peer_close_code" =>
-        safe_peer_close_code(metadata_attr(attrs, "peer_close_code", :peer_close_code)),
-      "peer_close_reason_present" =>
-        safe_boolean(
-          metadata_attr(attrs, "peer_close_reason_present", :peer_close_reason_present)
-        ),
-      "peer_close_reason_bytes" =>
-        safe_peer_close_reason_bytes(
-          metadata_attr(attrs, "peer_close_reason_bytes", :peer_close_reason_bytes)
-        )
+      "peer_close_code" => safe_peer_close_code(metadata_attr(attrs, "peer_close_code", :peer_close_code)),
+      "peer_close_reason_present" => safe_boolean(metadata_attr(attrs, "peer_close_reason_present", :peer_close_reason_present)),
+      "peer_close_reason_bytes" => safe_peer_close_reason_bytes(metadata_attr(attrs, "peer_close_reason_bytes", :peer_close_reason_bytes))
     }
     |> compact_metadata()
   end
@@ -237,61 +199,26 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   defp sanitize_general_transport_failure_metadata(metadata) do
     %{
       "exception" => safe_exception_name(metadata_attr(metadata, "exception", :exception)),
-      "reason_class" =>
-        safe_reason_class_name(metadata_attr(metadata, "reason_class", :reason_class)),
+      "reason_class" => safe_reason_class_name(metadata_attr(metadata, "reason_class", :reason_class)),
       "reason" => safe_metadata_identifier(metadata_attr(metadata, "reason", :reason)),
       "phase" => safe_phase(metadata_attr(metadata, "phase", :phase)),
-      "termination_source" =>
-        safe_termination_source(
-          metadata_attr(metadata, "termination_source", :termination_source)
-        ),
-      "transport_signal" =>
-        safe_transport_signal(metadata_attr(metadata, "transport_signal", :transport_signal)),
-      "connection_use" =>
-        safe_connection_use(metadata_attr(metadata, "connection_use", :connection_use)),
-      "connection_request_bucket" =>
-        safe_connection_request_bucket(
-          metadata_attr(metadata, "connection_request_bucket", :connection_request_bucket)
-        ),
-      "connection_age_bucket" =>
-        safe_connection_age_bucket(
-          metadata_attr(metadata, "connection_age_bucket", :connection_age_bucket)
-        ),
-      "connection_idle_bucket" =>
-        safe_connection_idle_bucket(
-          metadata_attr(metadata, "connection_idle_bucket", :connection_idle_bucket)
-        ),
-      "websocket_buffer_bucket" =>
-        safe_websocket_buffer_bucket(
-          metadata_attr(metadata, "websocket_buffer_bucket", :websocket_buffer_bucket)
-        ),
-      "websocket_fragment_open" =>
-        safe_boolean(metadata_attr(metadata, "websocket_fragment_open", :websocket_fragment_open)),
-      "pre_visible_output" =>
-        safe_boolean(metadata_attr(metadata, "pre_visible_output", :pre_visible_output)),
-      "upstream_committed" =>
-        safe_boolean(metadata_attr(metadata, "upstream_committed", :upstream_committed)),
+      "termination_source" => safe_termination_source(metadata_attr(metadata, "termination_source", :termination_source)),
+      "transport_signal" => safe_transport_signal(metadata_attr(metadata, "transport_signal", :transport_signal)),
+      "connection_use" => safe_connection_use(metadata_attr(metadata, "connection_use", :connection_use)),
+      "connection_request_bucket" => safe_connection_request_bucket(metadata_attr(metadata, "connection_request_bucket", :connection_request_bucket)),
+      "connection_age_bucket" => safe_connection_age_bucket(metadata_attr(metadata, "connection_age_bucket", :connection_age_bucket)),
+      "connection_idle_bucket" => safe_connection_idle_bucket(metadata_attr(metadata, "connection_idle_bucket", :connection_idle_bucket)),
+      "websocket_buffer_bucket" => safe_websocket_buffer_bucket(metadata_attr(metadata, "websocket_buffer_bucket", :websocket_buffer_bucket)),
+      "websocket_fragment_open" => safe_boolean(metadata_attr(metadata, "websocket_fragment_open", :websocket_fragment_open)),
+      "pre_visible_output" => safe_boolean(metadata_attr(metadata, "pre_visible_output", :pre_visible_output)),
+      "upstream_committed" => safe_boolean(metadata_attr(metadata, "upstream_committed", :upstream_committed)),
       "terminal_seen" => safe_boolean(metadata_attr(metadata, "terminal_seen", :terminal_seen)),
-      "terminal_forwarded" =>
-        safe_boolean(metadata_attr(metadata, "terminal_forwarded", :terminal_forwarded)),
-      "last_upstream_event_type" =>
-        safe_last_upstream_event_type(
-          metadata_attr(metadata, "last_upstream_event_type", :last_upstream_event_type)
-        ),
-      "last_upstream_event_class" =>
-        safe_last_upstream_event_class(
-          metadata_attr(metadata, "last_upstream_event_class", :last_upstream_event_class)
-        ),
-      "terminal_candidate_seen" =>
-        safe_boolean(metadata_attr(metadata, "terminal_candidate_seen", :terminal_candidate_seen)),
-      "terminal_candidate_type" =>
-        safe_terminal_candidate_type(
-          metadata_attr(metadata, "terminal_candidate_type", :terminal_candidate_type)
-        ),
-      "terminal_candidate_class" =>
-        safe_terminal_candidate_class(
-          metadata_attr(metadata, "terminal_candidate_class", :terminal_candidate_class)
-        ),
+      "terminal_forwarded" => safe_boolean(metadata_attr(metadata, "terminal_forwarded", :terminal_forwarded)),
+      "last_upstream_event_type" => safe_last_upstream_event_type(metadata_attr(metadata, "last_upstream_event_type", :last_upstream_event_type)),
+      "last_upstream_event_class" => safe_last_upstream_event_class(metadata_attr(metadata, "last_upstream_event_class", :last_upstream_event_class)),
+      "terminal_candidate_seen" => safe_boolean(metadata_attr(metadata, "terminal_candidate_seen", :terminal_candidate_seen)),
+      "terminal_candidate_type" => safe_terminal_candidate_type(metadata_attr(metadata, "terminal_candidate_type", :terminal_candidate_type)),
+      "terminal_candidate_class" => safe_terminal_candidate_class(metadata_attr(metadata, "terminal_candidate_class", :terminal_candidate_class)),
       "terminal_candidate_rejection" =>
         safe_terminal_candidate_rejection(
           metadata_attr(
@@ -300,18 +227,10 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
             :terminal_candidate_rejection
           )
         ),
-      "text_frame_count" =>
-        safe_non_negative_integer(metadata_attr(metadata, "text_frame_count", :text_frame_count)),
-      "peer_close_code" =>
-        safe_peer_close_code(metadata_attr(metadata, "peer_close_code", :peer_close_code)),
-      "peer_close_reason_present" =>
-        safe_boolean(
-          metadata_attr(metadata, "peer_close_reason_present", :peer_close_reason_present)
-        ),
-      "peer_close_reason_bytes" =>
-        safe_peer_close_reason_bytes(
-          metadata_attr(metadata, "peer_close_reason_bytes", :peer_close_reason_bytes)
-        )
+      "text_frame_count" => safe_non_negative_integer(metadata_attr(metadata, "text_frame_count", :text_frame_count)),
+      "peer_close_code" => safe_peer_close_code(metadata_attr(metadata, "peer_close_code", :peer_close_code)),
+      "peer_close_reason_present" => safe_boolean(metadata_attr(metadata, "peer_close_reason_present", :peer_close_reason_present)),
+      "peer_close_reason_bytes" => safe_peer_close_reason_bytes(metadata_attr(metadata, "peer_close_reason_bytes", :peer_close_reason_bytes))
     }
     |> compact_metadata()
   end

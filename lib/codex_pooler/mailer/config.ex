@@ -91,9 +91,7 @@ defmodule CodexPooler.Mailer.Config do
     %{code: :smtp_test_email_timeout, message: "SMTP test email timed out"}
   end
 
-  def sanitize_delivery_error(
-        {:error, :no_more_hosts, {:network_failure, _host, {:error, :timeout}}}
-      ) do
+  def sanitize_delivery_error({:error, :no_more_hosts, {:network_failure, _host, {:error, :timeout}}}) do
     %{code: :smtp_test_email_timeout, message: "SMTP test email timed out"}
   end
 
@@ -249,9 +247,7 @@ defmodule CodexPooler.Mailer.Config do
     %{code: :smtp_probe_timeout, message: "SMTP probe timed out"}
   end
 
-  def sanitize_probe_error(
-        {:error, :no_more_hosts, {:network_failure, _host, {:error, :timeout}}}
-      ) do
+  def sanitize_probe_error({:error, :no_more_hosts, {:network_failure, _host, {:error, :timeout}}}) do
     %{code: :smtp_probe_timeout, message: "SMTP probe timed out"}
   end
 

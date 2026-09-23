@@ -5,6 +5,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.UsageCoherenceStoreTest do
 
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.Quota.Windows.Routing
   alias CodexPooler.Upstreams.Quota.Windows.UsageCoherence
 
   @key "__quota_usage_coherence_v1"
@@ -104,7 +105,163 @@ defmodule CodexPooler.Upstreams.Quota.Windows.UsageCoherenceStoreTest do
     assert [%{source: "codex_response_headers"}] = Windows.list_quota_windows(identity, now)
   end
 
-  defp record!(identity, source, used_percent, reset_at, observed_at, metadata) do
+  for {label, window_minutes} <- [{"5h", 300}, {"30d", 43_200}] do
+    test "repeated permitted zero-percent #{label} account evidence stays fresh" do
+      %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+      t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+      reset_at = DateTime.add(t0, unquote(window_minutes), :minute)
+
+      assert {:ok, first} =
+               record!(
+                 identity,
+                 "codex_usage_api",
+                 "0",
+                 reset_at,
+                 t0,
+                 safe_status(),
+                 unquote(window_minutes)
+               )
+
+      t1 = DateTime.add(t0, 10, :minute)
+      refreshed_reset_at = DateTime.add(reset_at, 2, :minute)
+
+      assert {:ok, second} =
+               record!(
+                 identity,
+                 "codex_usage_api",
+                 "0",
+                 refreshed_reset_at,
+                 t1,
+                 safe_status(),
+                 unquote(window_minutes)
+               )
+
+      assert second.id == first.id
+      assert Decimal.equal?(second.used_percent, Decimal.new("0"))
+      assert second.active_limit == nil
+      assert second.credits == nil
+      assert DateTime.compare(second.observed_at, t1) == :eq
+      assert DateTime.compare(second.last_sync_at, t1) == :eq
+
+      after_original_ttl = DateTime.add(t0, 16, :minute)
+
+      assert %{eligible?: true, routing_state: :precise, exclusions: []} =
+               Routing.eligibility_from_windows([second], at: after_original_ttl)
+    end
+  end
+
+  test "a reset correction without explicit provider permission cannot refresh a primary zero" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    reset_at = DateTime.add(t0, 300, :minute)
+
+    assert {:ok, first} =
+             record!(identity, "codex_usage_api", "0", reset_at, t0, %{}, 300)
+
+    t1 = DateTime.add(t0, 10, :minute)
+
+    assert {:ok, retained} =
+             record!(
+               identity,
+               "codex_usage_api",
+               "0",
+               DateTime.add(reset_at, 2, :minute),
+               t1,
+               %{},
+               300
+             )
+
+    assert retained.id == first.id
+    assert DateTime.compare(retained.observed_at, t0) == :eq
+    assert DateTime.compare(retained.last_sync_at, t0) == :eq
+  end
+
+  test "permitted idle primary with a full-window sliding reset stays fresh beyond five minutes" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:second)
+    reset_at = DateTime.add(t0, 300, :minute)
+
+    assert {:ok, first} =
+             record!(identity, "codex_usage_api", "0", reset_at, t0, safe_status(), 300)
+
+    for minute <- 1..20 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, current} =
+               record!(
+                 identity,
+                 "codex_usage_api",
+                 "0",
+                 DateTime.add(observed_at, 300, :minute),
+                 observed_at,
+                 safe_status(),
+                 300
+               )
+
+      assert current.id == first.id
+      assert DateTime.compare(current.observed_at, observed_at) == :eq
+      assert DateTime.compare(current.last_sync_at, observed_at) == :eq
+      assert DateTime.compare(current.reset_at, reset_at) == :eq
+      assert %{eligible?: true} = Routing.eligibility_from_windows([current], at: observed_at)
+    end
+  end
+
+  test "large reset drift without full-window timing cannot refresh a zero primary" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:second)
+    reset_at = DateTime.add(t0, 300, :minute)
+    assert {:ok, _} = record!(identity, "codex_usage_api", "0", reset_at, t0, safe_status(), 300)
+    t1 = DateTime.add(t0, 6, :minute)
+
+    assert {:ok, retained} =
+             record!(
+               identity,
+               "codex_usage_api",
+               "0",
+               DateTime.add(reset_at, 12, :minute),
+               t1,
+               safe_status(),
+               300
+             )
+
+    assert DateTime.compare(retained.observed_at, t0) == :eq
+    assert DateTime.compare(retained.reset_at, reset_at) == :eq
+  end
+
+  test "full-window idle timing cannot erase positive primary consumption" do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:second)
+    reset_at = DateTime.add(t0, 300, :minute)
+    assert {:ok, _} = record!(identity, "codex_usage_api", "22", reset_at, t0, safe_status(), 300)
+    t1 = DateTime.add(t0, 6, :minute)
+
+    assert {:ok, retained} =
+             record!(
+               identity,
+               "codex_usage_api",
+               "0",
+               DateTime.add(t1, 300, :minute),
+               t1,
+               safe_status(),
+               300
+             )
+
+    assert Decimal.equal?(retained.used_percent, 22)
+    assert DateTime.compare(retained.reset_at, reset_at) == :eq
+  end
+
+  defp record!(identity, source, used_percent, reset_at, observed_at, metadata),
+    do: record!(identity, source, used_percent, reset_at, observed_at, metadata, 300)
+
+  defp record!(
+         identity,
+         source,
+         used_percent,
+         reset_at,
+         observed_at,
+         metadata,
+         window_minutes
+       ) do
     EvidenceStore.record_evidence(
       identity,
       %{
@@ -112,7 +269,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.UsageCoherenceStoreTest do
         quota_scope: "account",
         quota_family: "account",
         window_kind: "primary",
-        window_minutes: 300,
+        window_minutes: window_minutes,
         used_percent: Decimal.new(used_percent),
         reset_at: reset_at,
         observed_at: observed_at,
@@ -120,8 +277,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.UsageCoherenceStoreTest do
         source: source,
         source_precision: "observed",
         freshness_state: "fresh",
-        metadata:
-          Map.put(metadata, "reset_after_seconds", DateTime.diff(reset_at, observed_at, :second))
+        metadata: Map.put(metadata, "reset_after_seconds", DateTime.diff(reset_at, observed_at, :second))
       },
       observed_at,
       observed_at

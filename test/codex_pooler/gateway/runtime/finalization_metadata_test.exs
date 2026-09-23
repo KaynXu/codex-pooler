@@ -310,8 +310,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
              Accounting.reserve(setup.auth, setup.model, payload, %{
                endpoint: "/backend-api/codex/responses",
                transport: "http_json",
-               correlation_id:
-                 "prompt-cache-dispatch-error-#{System.unique_integer([:positive])}",
+               correlation_id: "prompt-cache-dispatch-error-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -428,8 +427,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
              Accounting.reserve(setup.auth, setup.model, payload, %{
                endpoint: "/backend-api/codex/responses",
                transport: "websocket",
-               correlation_id:
-                 "continuation-guard-finalization-#{System.unique_integer([:positive])}",
+               correlation_id: "continuation-guard-finalization-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 
@@ -598,8 +596,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
 
     assert {:ok, %{status: 200, websocket_messages: []}} =
              Finalization.finalize_terminal_websocket_response(context, %{
-               body:
-                 ~s(data: {"type":"error","error":{"code":"previous_response_not_found"}}\n\n),
+               body: ~s(data: {"type":"error","error":{"code":"previous_response_not_found"}}\n\n),
                terminal: "error",
                status: 200,
                headers: [],
@@ -652,8 +649,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
              Accounting.reserve(setup.auth, setup.model, payload, %{
                endpoint: "/backend-api/codex/responses",
                transport: "websocket",
-               correlation_id:
-                 "continuation-guard-near-miss-#{System.unique_integer([:positive])}",
+               correlation_id: "continuation-guard-near-miss-#{System.unique_integer([:positive])}",
                request_metadata: %{}
              })
 

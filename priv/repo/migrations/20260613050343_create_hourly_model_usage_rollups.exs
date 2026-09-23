@@ -112,12 +112,8 @@ defmodule CodexPooler.Repo.Migrations.CreateHourlyModelUsageRollups do
              name: :hourly_model_usage_rollups_bucket_pool_model_code_uq
            )
 
-    create index(:hourly_model_usage_rollups, [:pool_id, :bucket_started_at, :model_code],
-             name: :hourly_model_usage_rollups_pool_bucket_model_idx
-           )
+    create index(:hourly_model_usage_rollups, [:pool_id, :bucket_started_at, :model_code], name: :hourly_model_usage_rollups_pool_bucket_model_idx)
 
-    create index(:hourly_model_usage_rollups, [:model_code, :bucket_started_at, :pool_id],
-             name: :hourly_model_usage_rollups_model_bucket_pool_idx
-           )
+    create index(:hourly_model_usage_rollups, [:model_code, :bucket_started_at, :pool_id], name: :hourly_model_usage_rollups_model_bucket_pool_idx)
   end
 end

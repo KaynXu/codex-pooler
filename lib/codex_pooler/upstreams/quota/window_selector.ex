@@ -85,10 +85,14 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # their pessimistic pressure keeps winning the merge and masks the restart
   # from operators and routing alike (observed live: a stale rate-limit-event
   # row at 94 percent from the ended cycle displayed as 6 percent remaining
-  # while the account was genuinely unused). Fresh rows are never rejected —
-  # same-cycle resets legitimately drift up to the window's own duration across
-  # provider surfaces — and groups without any fresh reset-bearing row are left
-  # untouched, so an all-stale exhausted group keeps its fail-closed pessimism.
+  # while the account was genuinely unused). Without a confirmed anchor a fresh
+  # row is never rejected — same-cycle resets legitimately drift up to the
+  # window's own duration across provider surfaces. A provider-confirmed reset
+  # outranks that drift, so once `CycleConfirmation` has anchored the running
+  # cycle every row more than a margin behind it is rejected, fresh included
+  # (`reject_fresh?`). Groups with neither a confirmation nor a fresh
+  # reset-bearing row are left untouched, so an all-stale exhausted group keeps
+  # its fail-closed pessimism.
   @prior_cycle_margin_seconds 60 * 60
 
   defp reject_prior_cycle_windows(candidates, as_of) do
@@ -179,10 +183,8 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # so fold them read-side: selection, routing, and operator projections then
   # see a single weekly window regardless of whether the one-shot purge
   # migration has run or been raced by an old writer.
-  defp normalize_legacy_weekly_primary(
-         %Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window
-       ),
-       do: %{window | window_kind: "secondary"}
+  defp normalize_legacy_weekly_primary(%Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window),
+    do: %{window | window_kind: "secondary"}
 
   defp normalize_legacy_weekly_primary(window), do: window
 
@@ -194,15 +196,11 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     |> Descriptors.canonical_logical_window_key()
   end
 
-  defp normalize_scope_dimensions(
-         {"model", family, model, _upstream_model, quota_key, kind, minutes}
-       ),
-       do: {"model", family, model, nil, quota_key, kind, minutes}
+  defp normalize_scope_dimensions({"model", family, model, _upstream_model, quota_key, kind, minutes}),
+    do: {"model", family, model, nil, quota_key, kind, minutes}
 
-  defp normalize_scope_dimensions(
-         {"upstream_model", family, _model, upstream_model, quota_key, kind, minutes}
-       ),
-       do: {"upstream_model", family, nil, upstream_model, quota_key, kind, minutes}
+  defp normalize_scope_dimensions({"upstream_model", family, _model, upstream_model, quota_key, kind, minutes}),
+    do: {"upstream_model", family, nil, upstream_model, quota_key, kind, minutes}
 
   defp normalize_scope_dimensions(logical_key), do: logical_key
 
@@ -264,14 +262,12 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   defp pressure_rank(%Quota.AccountQuotaWindow{}), do: Decimal.new(-1)
 
   defp logical_sort_key(%Quota.AccountQuotaWindow{} = window) do
-    {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope,
-     window.quota_family, window.model || "", window.upstream_model || "",
-     AdditionalMeterIdentity.token(window) || ""}
+    {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope, window.quota_family, window.model || "", window.upstream_model || "", AdditionalMeterIdentity.token(window) || ""}
   end
 
   defp usable_rank(%Quota.AccountQuotaWindow{} = window, as_of) do
     if fresh?(window, as_of) and reset_bearing?(window) and not expired?(window, as_of) and
-         not exhausted?(window) do
+         not used_percent_exhausted?(window) do
       1
     else
       0
@@ -328,9 +324,23 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   defp reset_bearing?(%Quota.AccountQuotaWindow{} = window), do: Evidence.reset_bearing?(window)
   defp expired?(%Quota.AccountQuotaWindow{} = window, as_of), do: Evidence.expired?(window, as_of)
 
-  defp exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}) do
+  # Deliberately the percentage alone, and deliberately not the same question
+  # `Windows.Routing.exhausted?/1` answers. That one decides whether a window
+  # may be routed to at all, and forgives a monthly primary at 100% when it
+  # still holds credits, because the provider reports the included percentage
+  # while the credits carry the real capacity. This one only ranks windows that
+  # are already candidates, and there a window with real percentage headroom
+  # should outrank one relying on credits.
+  #
+  # The two are consulted by one call: `Routing.select_current_account_primary_variant/2`
+  # filters with the routing predicate and then ranks with this one. Merging
+  # them breaks one of the two tests that pin the difference --
+  # `upstreams_test.exs` requires a credit-backed monthly at 100% to stay
+  # eligible, `window_selector_test.exs` requires it to lose to a usable 5h
+  # window.
+  defp used_percent_exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}) do
     Decimal.compare(used_percent, Decimal.new(100)) != :lt
   end
 
-  defp exhausted?(%Quota.AccountQuotaWindow{}), do: false
+  defp used_percent_exhausted?(%Quota.AccountQuotaWindow{}), do: false
 end

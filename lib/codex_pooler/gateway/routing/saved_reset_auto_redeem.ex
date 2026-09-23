@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets
@@ -61,11 +62,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       )
       when code in ["quota_exhausted", :quota_exhausted] and is_map(refresh_plan) and
              is_list(opts) do
-    if all_candidates_excluded_only_by_weekly_exhaustion?(error, refresh_plan) do
-      maybe_redeem_candidate(result, refresh_plan, :blocked_weekly_exhaustion, timestamp, opts)
-    else
-      result
-    end
+    error
+    |> long_window_exhausted_candidates(refresh_plan)
+    |> maybe_redeem_candidate(result, refresh_plan, :blocked_weekly_exhaustion, timestamp, opts)
   end
 
   def maybe_redeem_after_quota_exhaustion(
@@ -140,10 +139,12 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       when is_list(opts),
       do: result
 
-  defp maybe_redeem_candidate(result, refresh_plan, trigger, timestamp, opts) do
-    refresh_plan
-    |> candidate_order()
-    |> Enum.find(&redeemable_candidate?(&1, timestamp))
+  defp maybe_redeem_candidate(candidates, result, refresh_plan, trigger, timestamp, opts) do
+    candidates
+    |> Enum.find(fn candidate ->
+      redeemable_candidate?(candidate, timestamp) and
+        resettable_candidate?(candidate, refresh_plan, timestamp)
+    end)
     |> case do
       {assignment, identity} ->
         redeem_and_refilter(result, refresh_plan, assignment, identity, trigger, timestamp, opts)
@@ -152,6 +153,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         result
     end
   end
+
+  defp resettable_candidate?({_assignment, identity}, refresh_plan, timestamp),
+    do: AutoEligibility.target_windows_resettable?(identity, quota_scope(refresh_plan), timestamp)
 
   defp maybe_redeem_threshold_candidate(result, refresh_plan, timestamp, opts) do
     candidates = candidate_order(refresh_plan)
@@ -202,8 +206,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     case SavedResetRedemption.redeem(assignment,
            trigger_kind: "gateway_auto",
            started_at: scan_timestamp,
-           gateway_auto_context:
-             gateway_auto_context(refresh_plan, assignment, identity, trigger, scan_timestamp),
+           gateway_auto_context: gateway_auto_context(refresh_plan, assignment, identity, trigger, scan_timestamp),
            receive_timeout: 15_000
          ) do
       {:ok, %{applied?: true, code: code} = redeem_result} ->
@@ -389,13 +392,13 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp without_refreshed_route_state(other), do: other
 
-  defp all_candidates_excluded_only_by_weekly_exhaustion?(error, refresh_plan)
+  defp long_window_exhausted_candidates(error, refresh_plan)
        when is_map(error) do
     exclusions = Map.get(error, :candidate_exclusions) || Map.get(error, "candidate_exclusions")
+    candidates = candidate_order(refresh_plan)
 
     candidate_keys =
-      refresh_plan
-      |> candidate_order()
+      candidates
       |> Enum.map(&candidate_key/1)
       |> Enum.reject(&is_nil/1)
       |> MapSet.new()
@@ -407,9 +410,39 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       |> Enum.reject(&is_nil/1)
       |> MapSet.new()
 
-    MapSet.size(candidate_keys) > 0 and MapSet.equal?(candidate_keys, exclusion_keys) and
-      Enum.all?(List.wrap(exclusions), &weekly_account_exhaustion_exclusion?/1)
+    if is_list(exclusions) and MapSet.size(candidate_keys) > 0 and
+         MapSet.equal?(candidate_keys, exclusion_keys) and
+         Enum.all?(List.wrap(exclusions), &(exclusion_key(&1) != nil)) do
+      exclusions_by_candidate = Enum.group_by(exclusions, &exclusion_key/1)
+
+      # A reset repairs its target's supported long account window. Other
+      # excluded candidates may have unrelated blockers; retain their complete
+      # cohort/capacity context for the locked spend fences.
+      Enum.filter(candidates, fn {_assignment, identity} = candidate ->
+        exclusions_by_candidate
+        |> Map.get(candidate_key(candidate))
+        |> account_exhaustion_exclusions?(identity)
+      end)
+    else
+      []
+    end
   end
+
+  defp account_exhaustion_exclusions?([_ | _] = exclusions, identity) do
+    Enum.all?(exclusions, &account_exhaustion_exclusion?/1) and
+      (not Enum.any?(exclusions, fn exclusion ->
+         Enum.any?(
+           reason_token(exclusion, :reasons),
+           &(reason_token(&1, :window_kind) == "primary")
+         )
+       end) or
+         Enum.any?(
+           Windows.list_quota_windows(identity),
+           &WindowClassifier.monthly_primary?/1
+         ))
+  end
+
+  defp account_exhaustion_exclusions?(_missing, _identity), do: false
 
   defp candidate_order(%{filter_input: %{candidates: candidates}}) when is_list(candidates),
     do: candidates
@@ -419,9 +452,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp candidate_order(_refresh_plan), do: []
 
-  defp candidate_key(
-         {%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{id: identity_id}}
-       )
+  defp candidate_key({%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{id: identity_id}})
        when is_binary(assignment_id) and is_binary(identity_id),
        do: {assignment_id, identity_id}
 
@@ -477,8 +508,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         end),
       route_class: route_class(refresh_plan),
       transient_circuit_exclusions: transient_circuit_exclusions(refresh_plan),
-      automatic_confirmation_refs:
-        AutoEligibility.confirmation_refs(trigger, identity, candidate_identity_ids, timestamp),
+      automatic_confirmation_refs: AutoEligibility.confirmation_refs(trigger, identity, candidate_identity_ids, timestamp),
       quota_scope: quota_scope(refresh_plan),
       hard_pinned_continuity?: hard_pinned_continuity?(refresh_plan)
     }
@@ -592,21 +622,19 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp exclusion_key(_exclusion), do: nil
 
-  defp weekly_account_exhaustion_exclusion?(exclusion) when is_map(exclusion) do
+  defp account_exhaustion_exclusion?(exclusion) when is_map(exclusion) do
     reasons = Map.get(exclusion, :reasons) || Map.get(exclusion, "reasons")
 
     is_list(reasons) and reasons != [] and
-      Enum.all?(reasons, &weekly_account_exhaustion_reason?/1)
+      Enum.all?(reasons, &account_exhaustion_reason?/1)
   end
 
-  defp weekly_account_exhaustion_exclusion?(_exclusion), do: false
+  defp account_exhaustion_exclusion?(_exclusion), do: false
 
-  # Two routing shapes describe an exhausted weekly account: the percent-only
-  # weekly exclusion, and the provider-blocked account availability exclusion
-  # (no window kind) that a coherent `allowed=false` receipt produces. Both
-  # only open the scan; the candidate still needs a corroborated exhausted
-  # weekly window and every locked fence before any provider call.
-  defp weekly_account_exhaustion_reason?(reason) when is_map(reason) do
+  # Routing can report a weekly secondary, monthly primary, or provider-blocked
+  # account availability exclusion. These only open the scan: a supported
+  # corroborated long window and every locked fence remain required.
+  defp account_exhaustion_reason?(reason) when is_map(reason) do
     reason_code = Map.get(reason, :reason_codes) || Map.get(reason, "reason_codes")
 
     reason_token(reason, :quota_key) == "account" and
@@ -616,11 +644,12 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       exhausted_account_exclusion_shape?(reason)
   end
 
-  defp weekly_account_exhaustion_reason?(_reason), do: false
+  defp account_exhaustion_reason?(_reason), do: false
 
   defp exhausted_account_exclusion_shape?(reason) do
     case {reason_token(reason, :code), reason_token(reason, :window_kind)} do
       {"quota_weekly_exhausted", "secondary"} -> true
+      {"quota_window_unusable", "primary"} -> true
       {"quota_window_unusable", nil} -> true
       _other -> false
     end
@@ -640,7 +669,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     policy = SavedResets.auto_policy(identity)
 
     saved_reset_available?(identity, policy, timestamp) and
-      redeemable_weekly_window?(candidate, policy, timestamp)
+      redeemable_long_window?(candidate, policy, timestamp)
   end
 
   defp redeemable_candidate?(_candidate, _timestamp), do: false
@@ -698,7 +727,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     AutoEligibility.gateway_auto_ready?(identity, policy, timestamp)
   end
 
-  defp redeemable_weekly_window?(
+  defp redeemable_long_window?(
          {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity},
          policy,
          timestamp

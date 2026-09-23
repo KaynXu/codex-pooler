@@ -8,6 +8,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   alias CodexPooler.Accounting.{
     Attempt,
     LedgerEntry,
+    PreAttemptRelease,
     Request,
     RequestClientRetryLink,
     RequestReplayEntitlement
@@ -16,6 +17,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Platform.ExecutionTerminalProofs
   alias CodexPooler.Repo
 
   @version 1
@@ -25,7 +27,11 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @failed_predecessor_prefix "codex-request-retry:"
   @retry_window_seconds 30
   @task_exception_code "owner_task_exception"
+  @pre_attempt_phase_key PreAttemptRelease.detail_key()
+  @turn_interrupted_phase PreAttemptRelease.turn_interrupted()
+  @stream_error_code "upstream_stream_error"
   @compaction_retry_window_seconds 330
+  @authority_poison_reasons [:malformed_event, :unknown_completed_item, :unknown_response_event]
 
   defmodule SuccessorClaim do
     @moduledoc false
@@ -76,8 +82,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
             successor_request_id: Ecto.UUID.t(),
             link_id: Ecto.UUID.t(),
             successor_claim: String.t(),
-            compaction_owner:
-              %{owner_instance_id: String.t(), downstream_epoch: pos_integer()} | nil
+            compaction_owner: %{owner_instance_id: String.t(), downstream_epoch: pos_integer()} | nil
           }
   end
 
@@ -98,6 +103,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
     defstruct version: 1,
               authority_complete?: false,
               authority_poisoned?: false,
+              authority_poison_reason: nil,
               output_item_done_count: 0,
               output_item_done_count_saturated?: false,
               partial_reasoning_seen?: false,
@@ -105,10 +111,13 @@ defmodule CodexPooler.Accounting.ClientRetry do
               terminal_seen?: false,
               terminal_candidate_seen?: false
 
+    @type poison_reason :: :malformed_event | :unknown_completed_item | :unknown_response_event
+
     @type t :: %__MODULE__{
             version: pos_integer(),
             authority_complete?: boolean(),
             authority_poisoned?: boolean(),
+            authority_poison_reason: poison_reason() | nil,
             output_item_done_count: non_neg_integer(),
             output_item_done_count_saturated?: boolean(),
             partial_reasoning_seen?: boolean(),
@@ -118,8 +127,24 @@ defmodule CodexPooler.Accounting.ClientRetry do
           }
   end
 
+  defmodule NativeHttpProgress do
+    @moduledoc false
+    @enforce_keys [:version, :count, :digest]
+    defstruct version: 1, count: 0, digest: nil
+
+    @type t :: %__MODULE__{
+            version: 1,
+            count: non_neg_integer(),
+            digest: <<_::256>>
+          }
+  end
+
   @type observation_metadata :: %{
-          required(String.t()) => boolean() | non_neg_integer() | String.t()
+          required(String.t()) => boolean() | non_neg_integer() | String.t() | nil
+        }
+
+  @type authority_loss_metadata :: %{
+          required(String.t()) => pos_integer() | String.t()
         }
 
   @type reclaimable_successor :: %{
@@ -215,8 +240,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
       with {:ok, mac} <-
              AppSecretCrypto.hmac_digest(
                :erlang.term_to_binary(
-                 {"codex_pooler.failed_predecessor_resend", 1, original_claim,
-                  predecessor_request_id},
+                 {"codex_pooler.failed_predecessor_resend", 1, original_claim, predecessor_request_id},
                  [:deterministic]
                )
              ) do
@@ -396,8 +420,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
     with {:ok, mac} <-
            AppSecretCrypto.hmac_digest(
              :erlang.term_to_binary(
-               {"codex_pooler.compaction_retry_successor", 1, request.id, request.correlation_id,
-                semantic, replay},
+               {"codex_pooler.compaction_retry_successor", 1, request.id, request.correlation_id, semantic, replay},
                [:deterministic]
              )
            ) do
@@ -495,8 +518,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
              reclaim_owner_valid?(session, owner_lease, input, db_now)
            ),
          {:ok, successor} <- lock_compaction_successor(lineage, request, turn, input) do
-      {:ok,
-       %{request: request, turn: turn, attempt: attempt, db_now: db_now, successor: successor}}
+      {:ok, %{request: request, turn: turn, attempt: attempt, db_now: db_now, successor: successor}}
     else
       {:error, _reason} = error -> error
     end
@@ -601,6 +623,90 @@ defmodule CodexPooler.Accounting.ClientRetry do
   @spec new_observation() :: Observation.t()
   def new_observation, do: %Observation{}
 
+  @spec new_native_http_progress() :: NativeHttpProgress.t() | nil
+  def new_native_http_progress do
+    case native_http_progress_digest(<<0::256>>, :initial) do
+      {:ok, digest} -> %NativeHttpProgress{version: 1, count: 0, digest: digest}
+      {:error, _reason} -> nil
+    end
+  end
+
+  @spec observe_native_http_output_item(NativeHttpProgress.t() | nil, term()) ::
+          NativeHttpProgress.t() | nil
+  def observe_native_http_output_item(%NativeHttpProgress{} = progress, %{} = item) do
+    case native_http_progress_digest(progress.digest, item) do
+      {:ok, digest} -> %{progress | count: progress.count + 1, digest: digest}
+      {:error, _reason} -> nil
+    end
+  end
+
+  def observe_native_http_output_item(_progress, _item), do: nil
+
+  @spec native_http_progress_metadata(NativeHttpProgress.t() | nil) :: map()
+  def native_http_progress_metadata(%NativeHttpProgress{version: 1, count: count, digest: digest})
+      when is_integer(count) and count >= 0 and is_binary(digest) and byte_size(digest) == 32 do
+    %{
+      "version" => 1,
+      "output_item_done_count" => count,
+      "digest" => Base.url_encode64(digest, padding: false)
+    }
+  end
+
+  def native_http_progress_metadata(_progress), do: %{}
+
+  @spec native_http_progress_matches?(map() | term(), [term()]) :: boolean()
+  def native_http_progress_matches?(
+        %{
+          "version" => 1,
+          "output_item_done_count" => expected_count,
+          "digest" => encoded_digest
+        },
+        items
+      )
+      when is_integer(expected_count) and expected_count >= 0 and is_binary(encoded_digest) and
+             is_list(items) do
+    with true <- length(items) == expected_count,
+         {:ok, expected_digest} when byte_size(expected_digest) == 32 <-
+           Base.url_decode64(encoded_digest, padding: false),
+         %NativeHttpProgress{} = progress <- new_native_http_progress(),
+         %NativeHttpProgress{} = observed <- observe_native_http_items(progress, items) do
+      secure_compare(observed.digest, expected_digest)
+    else
+      _invalid -> false
+    end
+  end
+
+  def native_http_progress_matches?(_metadata, _items), do: false
+
+  defp observe_native_http_items(progress, items) do
+    Enum.reduce_while(items, progress, fn item, acc ->
+      case observe_native_http_output_item(acc, item) do
+        %NativeHttpProgress{} = next -> {:cont, next}
+        nil -> {:halt, nil}
+      end
+    end)
+  end
+
+  defp native_http_progress_digest(previous_digest, item)
+       when is_binary(previous_digest) and byte_size(previous_digest) == 32 do
+    AppSecretCrypto.hmac_digest(
+      :erlang.term_to_binary(
+        {"codex_pooler.native_http_progress", 1, previous_digest, normalize_native_http_progress_item(item)},
+        [:deterministic]
+      )
+    )
+  end
+
+  # Codex stamps completed response items with local turn/create metadata before
+  # rebuilding a retry prompt, and clears that metadata again for some provider
+  # paths. It is not provider output and cannot decide whether the retry history
+  # contains the item the Pooler delivered. Every substantive field remains in
+  # the HMAC projection.
+  defp normalize_native_http_progress_item(%{} = item),
+    do: Map.delete(item, "internal_chat_message_metadata_passthrough")
+
+  defp normalize_native_http_progress_item(item), do: item
+
   @spec observe_frame(Observation.t(), term(), DateTime.t()) :: Observation.t()
   def observe_frame(%Observation{} = observation, decoded, %DateTime{} = observed_at) do
     observation
@@ -612,15 +718,20 @@ defmodule CodexPooler.Accounting.ClientRetry do
   def complete_without_terminal(%Observation{} = observation),
     do: %{observation | authority_complete?: true}
 
+  # A lifecycle-only stream (nothing but `response.created`,
+  # `response.in_progress`, `response.queued`, or `codex.*` frames before the
+  # cut) never sets `first_visible_at`; its complete observation is persisted
+  # with a null timestamp so the zero-output evidence is not dropped.
   @spec final_observation_metadata(Observation.t()) :: {:ok, observation_metadata()} | :ineligible
   def final_observation_metadata(
         %Observation{
           version: @version,
           authority_complete?: true,
           authority_poisoned?: false,
-          first_visible_at: %DateTime{} = first_visible_at
+          first_visible_at: first_visible_at
         } = observation
-      ) do
+      )
+      when is_nil(first_visible_at) or is_struct(first_visible_at, DateTime) do
     {:ok,
      %{
        "version" => @version,
@@ -628,13 +739,96 @@ defmodule CodexPooler.Accounting.ClientRetry do
        "output_item_done_count" => observation.output_item_done_count,
        "output_item_done_count_saturated" => observation.output_item_done_count_saturated?,
        "partial_reasoning_seen" => observation.partial_reasoning_seen?,
-       "first_visible_at" => DateTime.to_iso8601(first_visible_at),
+       "first_visible_at" => first_visible_at_metadata(first_visible_at),
        "terminal_seen" => observation.terminal_seen?,
        "terminal_candidate_seen" => observation.terminal_candidate_seen?
      }}
   end
 
   def final_observation_metadata(%Observation{}), do: :ineligible
+
+  # Why an observation lost its authority, kept separately from the witness it
+  # is no longer allowed to be. A poisoned observation is omitted from the
+  # attempt entirely today, so an operator reading a failed websocket turn
+  # cannot tell a malformed frame from a response event this build does not
+  # know yet. The reason travels under its own key, carries no
+  # `authority_complete`, and no admission path reads it: it explains a
+  # fail-closed decision, it never relaxes one.
+  @spec authority_loss_metadata(Observation.t()) :: {:ok, authority_loss_metadata()} | :none
+  def authority_loss_metadata(%Observation{
+        version: @version,
+        authority_poisoned?: true,
+        authority_poison_reason: reason
+      })
+      when reason in @authority_poison_reasons do
+    {:ok, %{"version" => @version, "authority_lost_reason" => Atom.to_string(reason)}}
+  end
+
+  def authority_loss_metadata(%Observation{}), do: :none
+
+  @spec authority_poison_reasons() :: [Observation.poison_reason()]
+  def authority_poison_reasons, do: @authority_poison_reasons
+
+  defp first_visible_at_metadata(nil), do: nil
+  defp first_visible_at_metadata(%DateTime{} = at), do: DateTime.to_iso8601(at)
+
+  # A verified lifecycle-only stream cut: the provider sent only lifecycle
+  # frames before the connection closed under the receive loop, so no output
+  # item, no reasoning, and no terminal reached the client. Turn, request, and
+  # the generation-zero websocket attempt failed together with the stream
+  # code, the complete observation proves the stream stayed lifecycle-only, and
+  # the attempt carries the close evidence the partial-reasoning cut requires.
+  @spec verified_lifecycle_cut?(term(), term(), term()) :: boolean()
+  def verified_lifecycle_cut?(
+        %CodexTurn{status: "failed", error_code: @stream_error_code, completed_at: %DateTime{}},
+        %Request{
+          status: "failed",
+          last_error_code: @stream_error_code,
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          status: "failed",
+          network_error_code: @stream_error_code,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata:
+            %{
+              "native_client_retry_observation" => %{
+                "version" => @version,
+                "authority_complete" => true,
+                "output_item_done_count" => 0,
+                "output_item_done_count_saturated" => false,
+                "partial_reasoning_seen" => false,
+                "first_visible_at" => nil,
+                "terminal_seen" => false,
+                "terminal_candidate_seen" => false
+              }
+            } = metadata
+        }
+      ),
+      do: validate_close_evidence(metadata) == :ok
+
+  def verified_lifecycle_cut?(_turn, _request, _attempt), do: false
+
+  # The postvisible stream cut the client retry contract has always admitted:
+  # visible output that was only partial reasoning, no completed output item,
+  # no terminal, an authority-complete observation, and close evidence.
+  @spec verified_partial_reasoning_cut?(term(), term(), term()) :: boolean()
+  def verified_partial_reasoning_cut?(
+        %CodexTurn{} = turn,
+        %Request{} = request,
+        %Attempt{} = attempt
+      ) do
+    with :ok <- validate_terminal_lifecycle(turn, request, attempt),
+         :ok <- validate_observation(attempt.response_metadata) do
+      validate_close_evidence(attempt.response_metadata) == :ok
+    else
+      {:error, _reason} -> false
+    end
+  end
+
+  def verified_partial_reasoning_cut?(_turn, _request, _attempt), do: false
 
   defp observe_decoded_frame(observation, %{"type" => type} = decoded) when is_binary(type) do
     observation
@@ -645,7 +839,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   end
 
   defp observe_decoded_frame(observation, _decoded),
-    do: %{observation | authority_poisoned?: true}
+    do: poison_authority(observation, :malformed_event)
 
   defp mark_first_visible(%Observation{first_visible_at: nil} = observation, decoded, observed_at) do
     if visible_frame?(decoded),
@@ -694,7 +888,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: increment_done_count(observation)
 
   defp maybe_count_completed_item(observation, "response.output_item.done", _decoded),
-    do: %{increment_done_count(observation) | authority_poisoned?: true}
+    do: observation |> increment_done_count() |> poison_authority(:unknown_completed_item)
 
   defp maybe_count_completed_item(observation, _type, _decoded), do: observation
 
@@ -722,10 +916,21 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defp maybe_poison_unknown_response_event(observation, "response." <> _suffix = type) do
     if known_response_type?(type),
       do: observation,
-      else: %{observation | authority_poisoned?: true}
+      else: poison_authority(observation, :unknown_response_event)
   end
 
   defp maybe_poison_unknown_response_event(observation, _type), do: observation
+
+  # Authority is lost once. The first frame that poisons an observation is the
+  # one that explains the loss; later frames on an already poisoned stream
+  # describe consequences, so the first reason wins.
+  @spec poison_authority(Observation.t(), Observation.poison_reason()) :: Observation.t()
+  defp poison_authority(%Observation{authority_poisoned?: true} = observation, _reason),
+    do: observation
+
+  defp poison_authority(%Observation{} = observation, reason)
+       when reason in @authority_poison_reasons,
+       do: %{observation | authority_poisoned?: true, authority_poison_reason: reason}
 
   defp known_response_type?(type) do
     type in [
@@ -884,11 +1089,28 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, %{
          retry_policy: :native_compaction
-       }),
-       do: validate_compaction_lifecycle(turn, request, attempt)
+       }) do
+    if verified_compaction_execution_failure?(turn, request, attempt),
+      do: :ok,
+      else: validate_compaction_lifecycle(turn, request, attempt)
+  end
 
   defp validate_retry_lifecycle_for_policy(turn, request, attempt, _input),
     do: validate_retry_lifecycle(turn, request, attempt)
+
+  # Local execution failures carry no provider terminal. Compaction still
+  # requires an unseen compact response; ordinary turn retries allow visible
+  # output and must not broaden this policy through their shared matchers.
+  defp verified_compaction_execution_failure?(
+         %CodexTurn{first_visible_output_at: nil} = turn,
+         %Request{endpoint: "/backend-api/codex/responses/compact"} = request,
+         %Attempt{usage_status: "usage_unknown"} = attempt
+       ) do
+    verified_task_exception?(turn, request, attempt) or
+      verified_dead_execution?(turn, request, attempt)
+  end
+
+  defp verified_compaction_execution_failure?(_turn, _request, _attempt), do: false
 
   defp validate_compaction_lifecycle(
          %CodexTurn{
@@ -952,7 +1174,19 @@ defmodule CodexPooler.Accounting.ClientRetry do
       verified_task_exception?(turn, request, attempt) ->
         :ok
 
+      verified_dead_execution?(turn, request, attempt) ->
+        :ok
+
+      verified_proven_owner_crash?(turn, request, attempt) ->
+        :ok
+
       verified_provider_terminal_failure?(turn, request, attempt) ->
+        :ok
+
+      verified_quota_rejection?(turn, request, attempt) and latest_attempt?(attempt) ->
+        :ok
+
+      verified_lifecycle_cut?(turn, request, attempt) ->
         :ok
 
       true ->
@@ -1018,6 +1252,80 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   defp verified_task_exception?(_turn, _request, _attempt), do: false
 
+  @doc false
+  @spec verified_dead_execution?(term(), term(), term()) :: boolean()
+  def verified_dead_execution?(
+        %CodexTurn{
+          status: "interrupted",
+          error_code: "dead_execution_recovered",
+          final_attempt_id: attempt_id,
+          transport_kind: "websocket",
+          completed_at: %DateTime{}
+        },
+        %Request{
+          status: "failed",
+          response_status_code: 499,
+          last_error_code: "dead_execution_recovered",
+          usage_status: "usage_unknown",
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          id: attempt_id,
+          status: "failed",
+          network_error_code: "dead_execution_recovered",
+          transport: "websocket",
+          replay_generation: 0,
+          usage_status: "usage_unknown",
+          owner_instance_id: owner,
+          owner_instance_boot_id: boot,
+          owner_process_id: pid,
+          owner_execution_id: execution,
+          completed_at: %DateTime{}
+        }
+      )
+      when is_binary(attempt_id) and is_binary(owner) and is_binary(boot) and is_binary(pid) and
+             is_binary(execution),
+      do: true
+
+  def verified_dead_execution?(_turn, _request, _attempt), do: false
+
+  # Owner-forwarded cleanup can commit milliseconds before the one-second
+  # terminal-proof publisher reaches PostgreSQL. The row then carries the
+  # generic owner_crashed reason even though exact executor death becomes
+  # durable immediately afterwards. Admit only that exact generation-zero
+  # shape, and only while the matching proof still exists; the existing sealed
+  # payload witness, authorization, session, lineage and retry-window checks
+  # remain mandatory around this predicate.
+  defp verified_proven_owner_crash?(
+         %CodexTurn{
+           status: "interrupted",
+           error_code: "owner_crashed",
+           final_attempt_id: attempt_id,
+           transport_kind: "websocket",
+           completed_at: %DateTime{}
+         },
+         %Request{
+           status: "failed",
+           response_status_code: 499,
+           last_error_code: "owner_crashed",
+           usage_status: "usage_unknown",
+           completed_at: %DateTime{}
+         },
+         %Attempt{
+           id: attempt_id,
+           status: "failed",
+           network_error_code: "owner_crashed",
+           transport: "websocket",
+           replay_generation: 0,
+           usage_status: "usage_unknown",
+           completed_at: %DateTime{}
+         } = attempt
+       )
+       when is_binary(attempt_id),
+       do: ExecutionTerminalProofs.terminal?(attempt)
+
+  defp verified_proven_owner_crash?(_turn, _request, _attempt), do: false
+
   # Only the provider's own terminal failure finalization writes this shape:
   # turn, request, and attempt failed together with the same provider code on
   # the generation-zero websocket attempt. The provider already ended the
@@ -1051,6 +1359,53 @@ defmodule CodexPooler.Accounting.ClientRetry do
        do: ErrorCodes.retryable_first_event_code?(code)
 
   defp verified_provider_terminal_failure?(_turn, _request, _attempt), do: false
+
+  @doc false
+  @spec verified_quota_rejection?(term(), term(), term()) :: boolean()
+  # Only the native receive classifier writes the marker after proving no
+  # provider output and absent or zero usage. A quota code alone is insufficient.
+  def verified_quota_rejection?(
+        %CodexTurn{
+          request_id: request_id,
+          status: "failed",
+          error_code: code,
+          final_attempt_id: attempt_id,
+          transport_kind: "websocket",
+          first_visible_output_at: nil,
+          completed_at: %DateTime{}
+        },
+        %Request{
+          id: request_id,
+          status: "failed",
+          last_error_code: code,
+          transport: "websocket",
+          completed_at: %DateTime{}
+        },
+        %Attempt{
+          id: attempt_id,
+          request_id: request_id,
+          status: "failed",
+          network_error_code: code,
+          transport: "websocket",
+          replay_generation: 0,
+          completed_at: %DateTime{},
+          response_metadata: %{"quota_rejection_before_output" => true}
+        }
+      )
+      when is_binary(request_id) and is_binary(attempt_id) and
+             code in ["usage_limit_reached", "usage_limit_exceeded"],
+      do: true
+
+  def verified_quota_rejection?(_turn, _request, _attempt), do: false
+
+  defp latest_attempt?(%Attempt{} = attempt) do
+    not Repo.exists?(
+      from newer in Attempt,
+        where:
+          newer.request_id == ^attempt.request_id and
+            newer.attempt_number > ^attempt.attempt_number
+    )
+  end
 
   defp verified_claim_only_drain?(%Request{
          status: "failed",
@@ -1087,6 +1442,16 @@ defmodule CodexPooler.Accounting.ClientRetry do
 
   defp verified_pre_attempt_drain?(_turn, _request), do: false
 
+  # The reason alone no longer carries the whole claim. `owner_drained` is a
+  # caller-chosen error code, and any future path that releases a reservation
+  # for that reason at a different boundary would have passed this predicate
+  # unread -- admitting a resend whose predecessor may still hold reserved
+  # budget, which is the one harm this gate exists to prevent. The bounded
+  # phase is what the releasing path *declares*, so requiring both means the
+  # entry has to agree with itself. It fails closed for exactly one cohort:
+  # a release written before icoretech/codex-pooler-findings#187 carries
+  # `unrecorded` and is refused, which costs a resend admitted during the
+  # deploy that lands it and nothing after.
   defp released_without_settlement?(request_id) do
     entries =
       Repo.all(
@@ -1102,7 +1467,10 @@ defmodule CodexPooler.Accounting.ClientRetry do
           entry_kind: "release",
           attempt_id: nil,
           settled_cost_micros: %Decimal{},
-          details: %{"release_reason" => "owner_drained"}
+          details: %{
+            "release_reason" => "owner_drained",
+            @pre_attempt_phase_key => @turn_interrupted_phase
+          }
         } = release,
         %LedgerEntry{entry_kind: "reservation", attempt_id: nil} = reservation
       ] ->
@@ -1219,8 +1587,7 @@ defmodule CodexPooler.Accounting.ClientRetry do
   defp lock_lineage(request_id, _input) do
     Repo.one(
       from link in RequestClientRetryLink,
-        where:
-          link.predecessor_request_id == ^request_id or link.successor_request_id == ^request_id,
+        where: link.predecessor_request_id == ^request_id or link.successor_request_id == ^request_id,
         lock: "FOR UPDATE"
     )
   end

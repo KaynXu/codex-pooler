@@ -220,14 +220,10 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
         end
 
       assert observations == [
-               {:top_level, :sse, %{top_level: fallback, nested: fallback},
-                expected_failed_response(id: "resp_non_map_top_level")},
-               {:top_level, :websocket, %{top_level: fallback, nested: fallback},
-                expected_failed_response(id: "resp_non_map_top_level")},
-               {:nested, :sse, %{top_level: :absent, nested: fallback},
-                expected_failed_response(id: "resp_non_map_nested")},
-               {:nested, :websocket, %{top_level: :absent, nested: fallback},
-                expected_failed_response(id: "resp_non_map_nested")}
+               {:top_level, :sse, %{top_level: fallback, nested: fallback}, expected_failed_response(id: "resp_non_map_top_level")},
+               {:top_level, :websocket, %{top_level: fallback, nested: fallback}, expected_failed_response(id: "resp_non_map_top_level")},
+               {:nested, :sse, %{top_level: :absent, nested: fallback}, expected_failed_response(id: "resp_non_map_nested")},
+               {:nested, :websocket, %{top_level: :absent, nested: fallback}, expected_failed_response(id: "resp_non_map_nested")}
              ]
     end
   end
@@ -291,6 +287,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     end
   end
 
+  @tag slow: "feeds actual 64 MiB terminal and 8 MiB ordinary overflow buffers through the public SSE classifier"
   test "public POST overflow telemetry records the applicable incomplete buffer limit" do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
     test_pid = self()
@@ -300,10 +297,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       :telemetry.attach(
         handler_id,
         event,
-        fn ^event,
-           %{bytes: bytes, count: count, max_bytes: max_bytes},
-           %{buffer: buffer},
-           ^test_pid ->
+        fn ^event, %{bytes: bytes, count: count, max_bytes: max_bytes}, %{buffer: buffer}, ^test_pid ->
           if self() == test_pid do
             send(test_pid, {
               handler_id,
@@ -522,8 +516,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
   test "public POST and GET latch completed then done and duplicate failed only once" do
     cases = [
       {completed("resp_completed_first"), done("resp_done_second"), "response.completed"},
-      {failed_without_nested_code("resp_failed_first"),
-       failed_without_nested_code("resp_failed_second"), "response.failed"}
+      {failed_without_nested_code("resp_failed_first"), failed_without_nested_code("resp_failed_second"), "response.failed"}
     ]
 
     for {first, second, expected_type} <- cases do
@@ -642,16 +635,11 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
   test "public websocket without a stream ID preserves normalized events, sequences, and malformed drops" do
     cases = [
-      {response_event_map("response.created") |> Map.put("sequence_number", 7),
-       "response.created"},
-      {%{"type" => "response.output_text.delta", "delta" => "safe delta", "sequence_number" => 7},
-       "response.output_text.delta"},
-      {completed("resp_no_stream_completed") |> Map.put("sequence_number", 7),
-       "response.completed"},
-      {failed_without_nested_code("resp_no_stream_failed") |> Map.put("sequence_number", 7),
-       "response.failed"},
-      {incomplete("resp_no_stream_incomplete", nil) |> Map.put("sequence_number", 7),
-       "response.incomplete"}
+      {response_event_map("response.created") |> Map.put("sequence_number", 7), "response.created"},
+      {%{"type" => "response.output_text.delta", "delta" => "safe delta", "sequence_number" => 7}, "response.output_text.delta"},
+      {completed("resp_no_stream_completed") |> Map.put("sequence_number", 7), "response.completed"},
+      {failed_without_nested_code("resp_no_stream_failed") |> Map.put("sequence_number", 7), "response.failed"},
+      {incomplete("resp_no_stream_incomplete", nil) |> Map.put("sequence_number", 7), "response.incomplete"}
     ]
 
     for {event, expected_type} <- cases do
@@ -719,19 +707,15 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     stream_id = "stream-echo-2"
 
     cases = [
-      {response_event_map("response.created") |> Map.put("sequence_number", 11),
-       "response.created"},
+      {response_event_map("response.created") |> Map.put("sequence_number", 11), "response.created"},
       {%{
          "type" => "response.output_text.delta",
          "delta" => "safe delta",
          "sequence_number" => 11
        }, "response.output_text.delta"},
-      {completed("resp_stream_completed") |> Map.put("sequence_number", 11),
-       "response.completed"},
-      {failed_without_nested_code("resp_stream_failed") |> Map.put("sequence_number", 11),
-       "response.failed"},
-      {incomplete("resp_stream_incomplete", nil) |> Map.put("sequence_number", 11),
-       "response.incomplete"}
+      {completed("resp_stream_completed") |> Map.put("sequence_number", 11), "response.completed"},
+      {failed_without_nested_code("resp_stream_failed") |> Map.put("sequence_number", 11), "response.failed"},
+      {incomplete("resp_stream_incomplete", nil) |> Map.put("sequence_number", 11), "response.incomplete"}
     ]
 
     for {event, expected_type} <- cases do
@@ -1104,10 +1088,8 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       {%{"id" => "resp_valid-id_9"}, expected_failed_response(id: "resp_valid-id_9")},
       {%{"id" => "invalid"}, expected_failed_response()},
       {%{"id" => "resp_" <> String.duplicate("a", 251)}, expected_failed_response()},
-      {%{"incomplete_details" => %{"reason" => "max_output_tokens", "extra" => true}},
-       expected_failed_response(incomplete_details: %{"reason" => "max_output_tokens"})},
-      {%{"incomplete_details" => %{"reason" => "content_filter"}},
-       expected_failed_response(incomplete_details: %{"reason" => "content_filter"})},
+      {%{"incomplete_details" => %{"reason" => "max_output_tokens", "extra" => true}}, expected_failed_response(incomplete_details: %{"reason" => "max_output_tokens"})},
+      {%{"incomplete_details" => %{"reason" => "content_filter"}}, expected_failed_response(incomplete_details: %{"reason" => "content_filter"})},
       {%{"incomplete_details" => %{"reason" => "other"}}, expected_failed_response()},
       {%{"usage" => "invalid"}, expected_failed_response()},
       {%{

@@ -97,19 +97,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     end
   end
 
-  test "V2 native collector terminal families fail once without retry or replay" do
-    cases = [
-      {"response.failed", response_failed(), {"context_length_exceeded", "input"},
-       {"context_length_exceeded", "response.failed", "input"}, :neutral},
-      {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"},
-       {"server_error", "response.failed", "input"}, :neutral},
-      {"error", top_level_error(), {"invalid_request", "input"},
-       {"invalid_request", "response.failed", "input"}, :neutral},
-      {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil},
-       {"max_output_tokens", "response.incomplete", nil}, :neutral}
-    ]
+  for family <- [:failed, :failure_coded_incomplete, :top_level_error, :ordinary_incomplete] do
+    @tag collector_family: family
+    test "V2 native collector #{family} fails once without retry or replay", %{collector_family: family} do
+      {event_type, terminal, {code, param}, diagnostics} = collector_terminal(family)
 
-    for {event_type, terminal, {code, param}, diagnostics, health} <- cases do
       mode =
         FakeUpstream.sse_stream(
           [native_compaction_item_event(), {event_type, terminal}],
@@ -123,10 +115,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
 
       assert_failure_contract(result, code,
         diagnostics: diagnostics,
-        health: health
+        health: :neutral
       )
     end
   end
+
+  defp collector_terminal(:failed), do: {"response.failed", response_failed(), {"context_length_exceeded", "input"}, {"context_length_exceeded", "response.failed", "input"}}
+  defp collector_terminal(:failure_coded_incomplete), do: {"response.incomplete", failure_coded_incomplete(), {"server_error", "input"}, {"server_error", "response.failed", "input"}}
+  defp collector_terminal(:top_level_error), do: {"error", top_level_error(), {"invalid_request", "input"}, {"invalid_request", "response.failed", "input"}}
+  defp collector_terminal(:ordinary_incomplete), do: {"response.incomplete", ordinary_incomplete(), {"max_output_tokens", nil}, {"max_output_tokens", "response.incomplete", nil}}
 
   test "V2 full-history collector preserves a canonicalized typeless terminal failure" do
     result =
@@ -163,6 +160,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert "sha256_" <> digest = attempt.response_metadata["upstream_error_code"]
     assert byte_size(digest) == 12
     assert attempt.response_metadata["stream_terminal_type"] == "response.failed"
+
+    # A provider terminal is recorded through the provider diagnostics, not as a
+    # collector rejection reason.
+    refute Map.has_key?(attempt.response_metadata, "compaction_invalid_reason")
+
     refute inspect({result, attempt}) =~ source_code
     refute inspect({result, attempt}) =~ @raw_sentinel
   end
@@ -190,6 +192,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
       diagnostics: {nil, nil, nil},
       health: :failed
     )
+
+    attempt = Repo.get_by!(Attempt, pool_upstream_assignment_id: result.selected_assignment.id)
+    assert attempt.response_metadata["compaction_invalid_reason"] == "invalid_compaction"
   end
 
   test "V2 plain pre-terminal interruption stays health-neutral and never retries" do
@@ -338,124 +343,135 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert :ok = FakeUpstream.verify!(first_upstream)
   end
 
-  test "connection-bound compact suppresses websocket auth refresh and reconnect" do
-    anchor = "resp_connection_bound_auth_anchor"
+  for provider_code <- ["invalid_api_key", "server_is_overloaded", "slow_down", "server_error"] do
+    @tag provider_code: provider_code
+    test "connection-bound compact preserves #{provider_code} terminal semantics without automatic replay",
+         %{provider_code: provider_code} do
+      anchor = "resp_connection_bound_auth_anchor"
 
-    # Strict finite scenario: the anchor and the connection-bound compact both
-    # ride the first physical connection; there is no /oauth/token entry and no
-    # retry entry, so a provider refresh or a reconnect fails the fixture as an
-    # unexpected extra request.
-    upstream =
-      start_upstream(
-        # provenance: synthetic_adversarial
-        FakeUpstream.strict_sequence([
-          FakeUpstream.expect_request(
-            method: "WEBSOCKET",
-            websocket_connection_ordinal: 1,
-            json: [valid: true, equals: %{"type" => "response.create"}],
-            respond: completed_websocket_frames(anchor)
-          ),
-          FakeUpstream.expect_request(
-            method: "WEBSOCKET",
-            websocket_connection_ordinal: 1,
-            json: [
-              valid: true,
-              equals: %{"type" => "response.create", "previous_response_id" => anchor}
-            ],
-            respond:
-              FakeUpstream.websocket_text_frames([
-                CodexPooler.JSON.encode!(%{
-                  "type" => "response.failed",
-                  "response" => %{
-                    "status" => "failed",
-                    "error" => %{
-                      "code" => "invalid_api_key",
-                      "param" => "reasoning.effort",
-                      "message" => @raw_sentinel
+      # Strict finite scenario: the anchor and the connection-bound compact both
+      # ride the first physical connection; there is no /oauth/token entry and no
+      # retry entry, so a provider refresh or a reconnect fails the fixture as an
+      # unexpected extra request.
+      upstream =
+        start_upstream(
+          # provenance: synthetic_adversarial
+          FakeUpstream.strict_sequence([
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond: completed_websocket_frames(anchor)
+            ),
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              websocket_connection_ordinal: 1,
+              json: [
+                valid: true,
+                equals: %{"type" => "response.create", "previous_response_id" => anchor}
+              ],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  CodexPooler.JSON.encode!(%{
+                    "type" => "response.failed",
+                    "response" => %{
+                      "status" => "failed",
+                      "error" => %{
+                        "code" => provider_code,
+                        "param" => "reasoning.effort",
+                        "message" => @raw_sentinel
+                      }
                     }
-                  }
-                })
-              ])
-          )
-        ])
-      )
-
-    setup = gateway_setup(upstream, compact?: true)
-
-    assert {:ok, _secret} =
-             Upstreams.store_encrypted_secret(setup.identity, %{
-               secret_kind: "refresh_token",
-               plaintext: "synthetic-compact-refresh-token"
-             })
-
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-
-    assert {:ok,
-            %{
-              codex_session: session,
-              upstream_websocket_session: upstream_websocket_session
-            }} = Websocket.prepare_websocket_session(auth)
-
-    request_options =
-      Websocket.websocket_response_options(
-        %{request_id: "connection-bound-auth-policy"},
-        session,
-        upstream_websocket_session,
-        true
-      )
-
-    assert :ok =
-             Service.execute_websocket_response(
-               auth,
-               ordinary_payload(setup, anchor),
-               request_options,
-               fn _frame -> :ok end
-             )
-
-    result =
-      Service.execute_websocket_response(
-        auth,
-        compact_payload(setup, anchor),
-        request_options,
-        fn frame -> send(self(), {:unexpected_native_frame, frame}) end
-      )
-
-    assert FakeUpstream.count(upstream) == 2
-    refute Enum.any?(FakeUpstream.requests(upstream), &(&1.path == "/oauth/token"))
-    assert FakeUpstream.http_request_count(upstream) == 0
-    assert FakeUpstream.websocket_connection_count(upstream) == 1
-
-    compact_request =
-      Repo.one!(
-        from(request in Request,
-          where:
-            request.pool_id == ^setup.pool.id and
-              request.endpoint == "/backend-api/codex/responses/compact"
+                  })
+                ])
+            )
+          ])
         )
-      )
 
-    assert compact_request.status == "failed"
-    assert compact_request.retry_count == 0
-    refute Map.has_key?(compact_request.request_metadata || %{}, "auth_refresh")
+      setup = gateway_setup(upstream, compact?: true)
 
-    assert [compact_attempt] =
-             Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(setup.identity, %{
+                 secret_kind: "refresh_token",
+                 plaintext: "synthetic-compact-refresh-token"
+               })
 
-    assert compact_attempt.status == "failed"
-    refute compact_attempt.retryable
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert Repo.aggregate(
-             from(entry in LedgerEntry,
-               where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
-             ),
-             :count
-           ) == 1
+      assert {:ok,
+              %{
+                codex_session: session,
+                upstream_websocket_session: upstream_websocket_session
+              }} = Websocket.prepare_websocket_session(auth)
 
-    assert {:error, %{code: _code}} = result
-    refute_received {:unexpected_native_frame, _frame}
-    refute inspect({compact_request, compact_attempt}) =~ @raw_sentinel
-    refute inspect({compact_request, compact_attempt}) =~ "synthetic-compact-refresh-token"
-    assert :ok = FakeUpstream.verify!(upstream)
+      request_options =
+        Websocket.websocket_response_options(
+          %{request_id: "connection-bound-auth-policy"},
+          session,
+          upstream_websocket_session,
+          true
+        )
+
+      assert :ok =
+               Service.execute_websocket_response(
+                 auth,
+                 ordinary_payload(setup, anchor),
+                 request_options,
+                 fn _frame -> :ok end
+               )
+
+      result =
+        Service.execute_websocket_response(
+          auth,
+          compact_payload(setup, anchor),
+          request_options,
+          fn frame -> send(self(), {:unexpected_native_frame, frame}) end
+        )
+
+      assert FakeUpstream.count(upstream) == 2
+      refute Enum.any?(FakeUpstream.requests(upstream), &(&1.path == "/oauth/token"))
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      compact_request =
+        Repo.one!(
+          from(request in Request,
+            where:
+              request.pool_id == ^setup.pool.id and
+                request.endpoint == "/backend-api/codex/responses/compact"
+          )
+        )
+
+      assert compact_request.status == "failed"
+      assert compact_request.retry_count == 0
+      refute Map.has_key?(compact_request.request_metadata || %{}, "auth_refresh")
+
+      assert [compact_attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
+
+      assert compact_attempt.status == "failed"
+      refute compact_attempt.retryable
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert :ok = result
+      assert_received {:unexpected_native_frame, terminal_frame}
+
+      assert %{
+               "type" => "response.failed",
+               "response" => %{"error" => %{"code" => ^provider_code}}
+             } = CodexPooler.JSON.decode!(terminal_frame)
+
+      refute terminal_frame =~ @raw_sentinel
+      refute inspect({compact_request, compact_attempt}) =~ @raw_sentinel
+      refute inspect({compact_request, compact_attempt}) =~ "synthetic-compact-refresh-token"
+      assert :ok = FakeUpstream.verify!(upstream)
+    end
   end
 
   test "connection-bound compact suppresses pre-visible close reconnect" do
@@ -595,8 +611,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     setup = gateway_setup(upstream, compact?: true)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert {:ok,
-            %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} =
+    assert {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} =
              Websocket.prepare_websocket_session(auth)
 
     options =
@@ -810,9 +825,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     setup = gateway_setup(first_upstream, compact?: true)
 
     second =
-      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-candidate",
-        compact?: true
-      )
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-second-candidate", compact?: true)
 
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -923,8 +936,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert [turn] =
              Repo.all(
                from(turn in CodexTurn,
-                 where:
-                   turn.codex_session_id == ^result.session.id and turn.request_id == ^request.id
+                 where: turn.codex_session_id == ^result.session.id and turn.request_id == ^request.id
                )
              )
 
@@ -1003,9 +1015,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     assert Repo.all(from(demotion in BridgeDemotion, where: demotion.pool_id == ^request.pool_id)) ==
              []
 
-    assert Repo.all(
-             from(circuit in RoutingCircuitState, where: circuit.pool_id == ^request.pool_id)
-           ) == []
+    assert Repo.all(from(circuit in RoutingCircuitState, where: circuit.pool_id == ^request.pool_id)) == []
   end
 
   defp compact_payload(setup) do

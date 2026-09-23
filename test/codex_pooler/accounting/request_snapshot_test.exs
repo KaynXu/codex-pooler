@@ -264,8 +264,7 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
                  %{status: "usage_known", input_tokens: 1, output_tokens: 1, total_tokens: 2},
                  %{
                    response_status_code: 200,
-                   attempt_metadata:
-                     RequestOptions.reasoning_effort_attempt_metadata(request_options)
+                   attempt_metadata: RequestOptions.reasoning_effort_attempt_metadata(request_options)
                  }
                )
 

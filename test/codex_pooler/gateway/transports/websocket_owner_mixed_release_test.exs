@@ -13,9 +13,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture, as: Fixture
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
 
   @peer_timeout 10_000
+  # Peer shutdown and the deregistrations that follow it are asynchronous, and this runs in
+  # `on_exit` under four partitions' scheduling pressure. Failure-detection budget, not a
+  # timing contract: a genuinely leaked peer never becomes absent and still fails here.
+  @peer_shutdown_budget_ms 15_000
   @source_commit "a589116bb733fb53c58520637ea70382c68e6bd3"
 
   setup_all do
@@ -33,8 +38,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   test "fixture records the historical legacy request protocol" do
     assert Fixture.provenance() == %{
              source_commit: @source_commit,
-             source_path:
-               "lib/codex_pooler/gateway/transports/websocket/websocket_owner_forwarder.ex",
+             source_path: "lib/codex_pooler/gateway/transports/websocket/websocket_owner_forwarder.ex",
              public_entrypoint: {:remote_submit_request, 4},
              owner_resolution: {:ensure_remote_owner, 4},
              submission: {:submit_remote_owner_request, 5},
@@ -169,9 +173,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     attached = attach!(owner_peer.node, session.id, "corr-current-current")
     request = owner_request(upstream_identity_id, version: 1, submission_notification?: true)
 
-    assert {:rpc_receipt, rpc_arguments,
-            {:websocket_owner_submission_accepted,
-             {:ok, %{terminal: "response.completed", status: 200}}}} =
+    assert {:rpc_receipt, rpc_arguments, {:websocket_owner_submission_accepted, {:ok, %{terminal: "response.completed", status: 200}}}} =
              :erpc.call(proxy.node, Fixture, :call_current_v1, [
                owner_peer.node,
                session.id,
@@ -236,8 +238,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
 
     on_exit(fn ->
       if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
-      refute peer_node in Node.list(:connected)
-      assert_peer_absent!(peer_name)
+      assert_peer_absent!(peer_name, peer_node)
     end)
 
     Process.unlink(peer_pid)
@@ -297,9 +298,16 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     refute_received {:external_network_call, _, _, _, _}
   end
 
-  defp assert_peer_absent!(peer_name) do
-    assert {:ok, names} = :erl_epmd.names()
-    refute Enum.any?(names, fn {name, _port} -> name == Atom.to_charlist(peer_name) end)
+  # Bounded rather than a single sample: `:peer.stop/1` returns before the node has left the
+  # connected list and before epmd has processed the closed registration, so asserting either
+  # immediately asserts a state that is only about to be true.
+  defp assert_peer_absent!(peer_name, peer_node \\ nil) do
+    PeerRegistry.assert_peer_absent!(peer_name,
+      peer_node: peer_node,
+      budget_ms: @peer_shutdown_budget_ms
+    )
+
+    :ok
   end
 
   defp owner_request(identity_id, opts) do
@@ -338,8 +346,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   defp owner_session_fixture(auth, owner_node, suffix) do
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
-               accepted_turn_state:
-                 "mixed-release-#{suffix}-#{System.unique_integer([:positive])}",
+               accepted_turn_state: "mixed-release-#{suffix}-#{System.unique_integer([:positive])}",
                owner_instance_id: Atom.to_string(owner_node)
              })
 

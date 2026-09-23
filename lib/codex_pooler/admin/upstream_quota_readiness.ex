@@ -317,7 +317,8 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
        )
        when active_limit in [nil, 0] and credits in [nil, 0] do
     (WindowClassifier.primary_5h?(window) or WindowClassifier.monthly_primary?(window)) and
-      Decimal.equal?(used_percent, Decimal.new(0))
+      Decimal.equal?(used_percent, Decimal.new(0)) and
+      not match?(%{"rate_limit_allowed" => true, "rate_limit_reached" => false}, window.metadata)
   end
 
   defp usage_zero_capacity_primary_window?(%Quota.AccountQuotaWindow{}), do: false

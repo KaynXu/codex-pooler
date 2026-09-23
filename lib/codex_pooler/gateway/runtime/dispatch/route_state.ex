@@ -94,8 +94,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       when is_list(candidates) do
     %__MODULE__{
       visible_model: visible_model,
-      visible_model_context:
-        Map.get(attrs, :visible_model_context, %{visible_model: visible_model}),
+      visible_model_context: Map.get(attrs, :visible_model_context, %{visible_model: visible_model}),
       visible_models: Map.get(attrs, :visible_models, [visible_model]),
       effective_model_serving_modes: Map.get(attrs, :effective_model_serving_modes, %{}),
       candidate_snapshots: Map.get(attrs, :candidate_snapshots, candidates),
@@ -183,9 +182,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
     route_state
     |> maybe_load_quota_snapshot(routing_candidates)
-    |> put_circuit_snapshots(
-      CircuitState.eligibility_snapshots(auth, model, routing_candidates, route_class)
-    )
+    |> put_circuit_snapshots(CircuitState.eligibility_snapshots(auth, model, routing_candidates, route_class))
   end
 
   # Canonical partition selection loads a snapshot over the wider pre-filter
@@ -238,7 +235,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   @spec quota_snapshot_for_identity(t(), UpstreamIdentity.t() | Ecto.UUID.t()) ::
           RoutingQuotaSnapshot.t()
   def quota_snapshot_for_identity(%__MODULE__{} = route_state, %UpstreamIdentity{id: identity_id}),
-      do: quota_snapshot_for_identity!(route_state, identity_id)
+    do: quota_snapshot_for_identity!(route_state, identity_id)
 
   def quota_snapshot_for_identity(%__MODULE__{} = route_state, identity_id)
       when is_binary(identity_id),
@@ -289,8 +286,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   defp validate_quota_snapshots!(snapshots) do
     valid_entries? =
       Enum.all?(snapshots, fn
-        {identity_id,
-         %RoutingQuotaSnapshot{upstream_identity_id: snapshot_identity_id, as_of: %DateTime{}}}
+        {identity_id, %RoutingQuotaSnapshot{upstream_identity_id: snapshot_identity_id, as_of: %DateTime{}}}
         when identity_id == snapshot_identity_id ->
           true
 

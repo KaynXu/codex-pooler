@@ -220,8 +220,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
       rewrite_output_item = %{
         "type" => "function_call_output",
         "call_id" => "call_near_limit_completed_rewrite",
-        "output" =>
-          oversized_log_fixture("near-limit function", "SANITIZED_NEAR_LIMIT_REWRITE_SENTINEL")
+        "output" => oversized_log_fixture("near-limit function", "SANITIZED_NEAR_LIMIT_REWRITE_SENTINEL")
       }
 
       skipped_output =
@@ -398,8 +397,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
         %{
           "type" => "local_shell_call_output",
           "call_id" => "call_sanitized_#{index}",
-          "output" =>
-            plain_output(index, per_candidate_bytes + extra_byte(index, extra_candidates))
+          "output" => plain_output(index, per_candidate_bytes + extra_byte(index, extra_candidates))
         }
       end)
 

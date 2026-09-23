@@ -146,7 +146,9 @@ defmodule CodexPooler.Accounting.PricingResolution do
         )
     }
 
-    put_serialized_alias_metadata(pricing_metadata, Map.get(pricing, :alias))
+    pricing_metadata
+    |> put_serialized_alias_metadata(Map.get(pricing, :alias))
+    |> put_serialized_price_bucket_fallback(Map.get(pricing, :price_bucket_fallback))
   end
 
   @spec details(map()) :: map()
@@ -164,7 +166,9 @@ defmodule CodexPooler.Accounting.PricingResolution do
       "price_version" => snapshot && snapshot.price_version
     }
 
-    put_serialized_alias_metadata(details, Map.get(pricing, :alias))
+    details
+    |> put_serialized_alias_metadata(Map.get(pricing, :alias))
+    |> put_serialized_price_bucket_fallback(Map.get(pricing, :price_bucket_fallback))
   end
 
   @spec update_request_metadata(map() | nil, map()) :: map()
@@ -255,7 +259,11 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
     context
     |> pricing_resolution_steps()
-    |> Enum.find_value(&resolve_pricing_step(context, &1))
+    |> Enum.find_value(fn step ->
+      context
+      |> resolve_pricing_step(step)
+      |> annotate_price_bucket_fallback(context, step)
+    end)
     |> case do
       nil -> missing_pricing_snapshot(context)
       pricing -> pricing
@@ -338,6 +346,36 @@ defmodule CodexPooler.Accounting.PricingResolution do
     end
   end
 
+  # A resolution step that prices a bucket other than the one the request asked
+  # for keeps that substitution on the record. `price_bucket` alone reports the
+  # bucket that was charged, so a long-context turn settled at default rates is
+  # indistinguishable from an ordinary one; the marker names the requested and
+  # the selected bucket and why they differ. It is provenance only: the amount,
+  # the status and `price_bucket` stay exactly what the step produced.
+  @spec annotate_price_bucket_fallback(map() | nil, pricing_context(), pricing_resolution_step()) ::
+          map() | nil
+  defp annotate_price_bucket_fallback(nil, _context, _step), do: nil
+
+  defp annotate_price_bucket_fallback(pricing, %{price_bucket: requested}, {_match, _availability, requested}),
+    do: pricing
+
+  defp annotate_price_bucket_fallback(pricing, %{price_bucket: requested}, {_match, _availability, selected}) do
+    Map.put(pricing, :price_bucket_fallback, %{
+      "requested" => requested,
+      "selected" => selected,
+      "reason" => price_bucket_fallback_reason(requested, selected)
+    })
+  end
+
+  # Bounded vocabulary. `pricing_resolution_steps/1` defines every substitution
+  # that can happen, so a new fallback pair earns its own reason here rather
+  # than arriving unnamed.
+  @spec price_bucket_fallback_reason(String.t(), String.t()) :: String.t()
+  defp price_bucket_fallback_reason(@long_context_price_bucket, @default_price_bucket),
+    do: "long_context_pricing_absent"
+
+  defp price_bucket_fallback_reason(_requested, _selected), do: "requested_bucket_pricing_absent"
+
   defp priced_snapshot(context, snapshot, alias_metadata \\ nil) do
     priced_snapshot(
       snapshot,
@@ -384,6 +422,14 @@ defmodule CodexPooler.Accounting.PricingResolution do
     end
   end
 
+  # `pricing_identifiers/2` is a precedence, not a set: an explicit
+  # `pricing_ref` is what an operator set this model to be priced as, the
+  # upstream model id is what was actually served, and the requested model is
+  # only what the client typed — under an enforced-model key it need not name
+  # this model at all. Recency is the tie-break *within* one identifier; on its
+  # own it lets a newer snapshot for a lower-precedence identifier decide, and
+  # a pricing import writes one `effective_at` for every model it holds, so
+  # ties were the ordinary case and row id settled them.
   @spec latest_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
           PricingSnapshot.t() | nil
   defp latest_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
@@ -400,6 +446,12 @@ defmodule CodexPooler.Accounting.PricingResolution do
             fragment("?->>'price_bucket'", ps.config) == ^price_bucket and
             fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens",
         order_by: [
+          asc:
+            fragment(
+              "array_position(?, lower(?))",
+              type(^normalized_identifiers, {:array, :string}),
+              ps.model_identifier
+            ),
           desc: ps.effective_at,
           desc: ps.captured_at,
           asc:
@@ -912,6 +964,12 @@ defmodule CodexPooler.Accounting.PricingResolution do
   defp mapped_service_tier("priority"), do: {:ok, "priority"}
   defp mapped_service_tier("ultrafast"), do: {:ok, "ultrafast"}
   defp mapped_service_tier("batch"), do: {:ok, "batch"}
+
+  # Scale is a recognized service tier. Resolve only matching snapshots;
+  # without one, leave pricing explicitly unpriced rather than borrowing
+  # another tier's rate.
+  defp mapped_service_tier("scale"), do: {:ok, "scale"}
+
   defp mapped_service_tier(_tier), do: {:unpriced, "unpriced_unsupported_tier"}
 
   defp normalize_service_tier(tier), do: ServiceTier.canonicalize(tier)
@@ -990,6 +1048,11 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
   defp put_serialized_alias_metadata(serialized, alias_metadata),
     do: Map.put(serialized, "alias", alias_metadata)
+
+  defp put_serialized_price_bucket_fallback(serialized, nil), do: serialized
+
+  defp put_serialized_price_bucket_fallback(serialized, fallback),
+    do: Map.put(serialized, "price_bucket_fallback", fallback)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

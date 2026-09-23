@@ -5,6 +5,20 @@ description: Collect Prometheus metrics, use Grafana dashboards, and investigate
 
 Codex Pooler exposes Prometheus metrics at `/metrics`. Metrics auth is managed from `/admin/system`; when bearer protection is configured, Prometheus must use the matching Kubernetes Secret reference rather than placing the credential in Helm values. `/metrics` is not protected by the runtime firewall.
 
+## Websocket control-path failures
+
+`codex_pooler_gateway_websocket_control_failure_count` counts observed callback failures by `phase` (`init`, `serve`, `terminate`) and bounded `reason`. These failures can happen before request reservation, so an empty request-error table does not rule them out. `cleanup_deferred` means supervised cleanup exceeded the socket's 100 ms wait and continues separately; database and peer-call failures are reported as `database_error` and `process_exit`.
+
+The runtime triage dashboard includes **Websocket Control Path Failure Rate**. Alert on a nonzero five-minute increase, sustained for one minute:
+
+```promql
+sum by (namespace, phase, reason) (
+  increase(codex_pooler_gateway_websocket_control_failure_count[5m])
+) > 0
+```
+
+Correlate alerts with database checkout pressure and owner-cleanup logs. This counter records server-side failures; it does not measure TCP resets or prove that a close frame reached the client.
+
 ## Metrics exposure states
 
 The endpoint has exactly three states:
@@ -15,6 +29,17 @@ The endpoint has exactly three states:
 
 Restore the previous metrics bearer state in `/admin/system` to roll back a
 metrics exposure change.
+
+### Reachability
+
+`/metrics` is served by the app role on the same listener as every other route, so any ingress that routes `/` to the app service also reaches it, and the runtime firewall allowlist does not apply to it. Since background events now reach the app reporter through the relay, that payload describes the whole cluster's declared families rather than one pod's own traffic.
+
+For an internet-facing install, do one of the following before exposing the app service:
+
+- configure a metrics bearer in `/admin/system` and give Prometheus the matching Kubernetes Secret reference, or
+- block `/metrics` at the ingress and scrape the app pods in-cluster instead.
+
+An in-cluster-only install with no external ingress can stay open. Metric payloads carry bounded label vocabularies and counters only, never request content, but they do describe traffic volume, model and transport mix, and failure rates.
 
 Use monitoring for runtime evidence only. Dashboards, alerts, logs, tickets, and copied queries must not include prompts, response bodies, uploaded files, websocket frames, cookies, bearer tokens, upstream secrets, or raw Pool API keys.
 
@@ -34,7 +59,11 @@ monitoring:
 
 The `release` label and scrape interval should match your own Prometheus Operator selectors and scrape budget. For fast OOM investigations, prefer a short interval for the app ServiceMonitor and keep broader Kubernetes collectors at their normal cadence. Worker and scheduler roles don't start the Prometheus reporter because they don't expose `/metrics`; use Kubernetes cgroup metrics and sampler logs for those pods.
 
+Selected background events reach the app reporter through a Postgres relay: pre-attempt reservation releases, saved-reset convergence, quota cycle decisions, and gateway stream outcomes. Direct events carry `via="in_process"`; relayed events carry `via="job_relay"`. The starter dashboard deliberately selects the direct share; keep it authoritative until a production comparison validates the relayed share. Relay claims are at-most-once and never reclaimed. Unclaimed rows expire after one hour. The Job Telemetry Relay row reports backlog, fresh consumers, and durable known loss totals for expiry, buffer overflow, and shutdown leftovers. These shared values use `max` across app observers, not `sum`. Hard kills, unavailable loss persistence, and loss between claim and scrape remain unquantified; durable accounting and quota rows remain authoritative. Graceful shutdown quiesces consumers before readiness withdrawal and attempts a bounded final producer flush, but a flat graph still does not prove the behaviour is absent.
+
 ## Runtime triage dashboard
+
+The reporter folds and renders Prometheus metrics once per second and serves the cached body to scrape requests. Values can therefore lag the latest event by one fold interval; repeated scrapes do not trigger another render.
 
 Build your Grafana or Prometheus dashboard around the signals needed to correlate runtime pressure across memory, request handling, gateway admission, database access, and restarts:
 
@@ -48,18 +77,38 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 8. Ecto query rate, queries per request, hot query sources by safe source and SQL command, unknown query rate, and DB queue p95
 9. routing circuit transition rate by transition, route class, and bounded reason class
 10. saved-reset post-consume convergence rate by bounded source and outcome, plus p95 timing from application to canonical evidence, canonical evidence to lifecycle finish, and application to lifecycle finish
+11. fenced affinity writes per pod by bounded operation and affinity kind
+12. reservations released with no attempt row, by bounded pre-attempt phase and transport
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
 Admission saturation is local to each app pod. `codex_pooler_gateway_admission_running` and `codex_pooler_gateway_admission_queued` report the current state by route class on the reporting pod, not a cluster-wide queue. Every route class reports an explicit value, including zero. Normal exposition is 18 series per app pod, with a bounded ceiling of 20 including the invalid-label fallback. Select or aggregate pods deliberately when comparing capacity across replicas.
 
-The new gateway metrics are bounded at the source. Stream outcomes are `succeeded`, `failed`, `settlement_failed`, or `interrupted`; invalid values become `unknown`. Their downstream and upstream transport labels are `http_sse`, `websocket`, or `unknown`, giving at most 45 series per app pod across five effective outcomes and two three-value transport vocabularies. `settlement_failed` is attempt-scoped, so concurrent failed terminal settlement attempts can each emit it. Websocket bridge fallbacks have at most 20 reason series per app pod, while precommit buffer overflow is a separate untagged counter. Together with the admission gauges and circuit additions, this work adds approximately 266 bounded time series per app pod.
+The gateway metrics are bounded at the source. Stream outcomes are `succeeded`, `failed`, `settlement_failed`, or `interrupted`; invalid values become `unknown`. `interrupted` means the turn lost the party carrying it: its client (`client_disconnected`) or its Pooler-side owner (`owner_drained`, `owner_unavailable`, `owner_crashed`). Every other terminal failure, including provider rejections and owner forwarding refusals, is `failed`, and the same vocabulary decides a turn's `interrupted` terminal status. Their downstream and upstream transport labels are `http_sse`, `websocket`, or `unknown`, giving at most 45 series per `via` value per app pod across five effective outcomes and two three-value transport vocabularies. The two delivery paths plus the invalid-label fallback allow at most 135 stream-outcome series. `settlement_failed` is attempt-scoped, so concurrent failed terminal settlement attempts can each emit it. Websocket bridge fallbacks have at most 20 reason series per app pod, while precommit buffer overflow is a separate untagged counter.
+
+The `interrupted` stream outcome is one of the partial counters listed after the ServiceMonitor example, and so is `codex_pooler_quota_cycle_decision_count`, which is not a gateway metric. Expired-owner recovery settles abandoned turns from the runtime cleanup job, so the `interrupted` outcome under-counts; the accounting request and attempt rows are complete. The quota cycle decision counter carries the request-path share of decisions under `via="in_process"`; account reconciliation, saved-reset redemption, and alert evaluation decide cycles as jobs, and that share arrives through the telemetry relay under `via="job_relay"` (best effort, at most once, one fold behind). The account quota window rows and their evidence history remain the complete record. On a deployment that runs separate `OBAN_MODE=worker` and `scheduler` roles, a low or empty series on either panel means not measured, not absent.
 
 Oversized stream-buffer histogram observations saturate at 128 MiB for Prometheus export, so p95 remains finite. The runtime's raw telemetry event and stream-buffer behavior are unchanged.
 
+### Fenced affinity writes
+
+`codex_pooler_gateway_routing_affinity_stale_write_count` counts the affinity writes the routing fence refused. Both affinity writers order themselves on the row's `updated_at` event clock, so a writer whose event is older than the stored one applies nothing. That refusal is deliberate — routing bookkeeping must never fail a turn whose work is already finalized — and this counter is the only place it is visible. It is incremented only when the statement reports zero affected rows. The event clock is stamped by each writer from its own node clock, deliberately: affinity and demotion are soft ordering hints, the comparison must stay inside the single UPDATE statement so it orders against a writer on another node, and a database-clock stamp would not change what a stale writer may overwrite. The consequence is that the `pod` label names the writer that was refused, not the one that caused the refusal: one pod with a lagging clock shows the rate on itself, while one pod with a clock running ahead makes every other pod show the rate.
+
+Two bounded labels: `operation` is `success_upsert` or `miss_update`, and `affinity_kind` is `codex_session`, `idempotency_key`, or `request_correlation`. Unrecognized values become `unknown`, giving at most 12 series per app pod. No Pool, API-key, assignment, identity, session, request, or affinity-key value is exported, and **no node or instance name is in the payload**: per-replica attribution comes from the scrape target's `pod` label, which is what the dashboard panel groups by.
+
+A low rate spread across pods is ordinary reordering between two nodes finishing overlapping turns on one affinity key, and it costs nothing but the ordering hint for that key. The signal to act on is a sustained rate concentrated on **one pod**. That replica's clock runs behind its peers, so it loses every affinity write it attempts: it keeps serving traffic normally and simply stops contributing prompt-cache steering, invisibly. Compare that pod's clock against the others. Nothing about routing admission, retries, settlement, accounting, or durable metadata changes either way — affinity is an ordering hint within an already eligible shortlist, never an admission filter.
+
+### Pre-attempt reservation releases
+
+`codex_pooler_accounting_reservation_pre_attempt_release_count` counts reservations released **before any attempt row exists**, apart from every settlement of a dispatched attempt. Two bounded labels: `phase` is `routing_rejected`, `turn_interrupted`, `task_exception`, `stale_sweep`, or `unrecorded`, and `transport` is `http_json`, `http_sse`, `http_compact_json`, `websocket`, or `unknown`; unrecognized values become `unknown`, giving at most 30 series per app pod. No Pool, API-key, request, session, or upstream identifier is exported.
+
+`routing_rejected` is a deliberate refusal to dispatch and is ordinary traffic. `turn_interrupted` is a live turn that was interrupted before any attempt existed — the client disconnected, the owner drained or crashed, or its lease expired — and it is the largest of these phases in normal operation; which of those it was is on the release ledger entry, as `release_reason`. `task_exception` is narrower and is not traffic: the process carrying the reservation toward dispatch raised before it created an attempt, so a sustained rate there is a defect in the pre-dispatch path rather than something to explain by client or node churn. `unrecorded` means the releasing path declared no boundary. No release path in the application writes it any more, so a rising `unrecorded` count is itself the signal: a new release site reached the ledger without saying where the reservation stopped being live. `stale_sweep` is the series to act on: it means the six-hour backstop closed a reservation that nothing live ever reached, so a pre-attempt turn was abandoned and only the backstop noticed, six hours later. A steady `stale_sweep` rate is a cleanup-latency signal, not proof of a provider failure and not an accounting leak: the backstop writes a balanced release either way.
+
+Like the saved-reset metric, this one is best-effort per role. Worker and scheduler roles do not run the Prometheus reporter; on a split deployment the `stale_sweep` phase is emitted there and reaches the app reporter through the telemetry relay under `via="job_relay"`, best effort and at most once. The durable record is authoritative in every topology: every pre-attempt release entry carries a `pre_attempt_phase` value in its `details`. An entry with no such key is not a pre-attempt release: it is a settlement-time release, a release written after a terminal attempt whose retry never started (it carries that attempt's id and is released in full, not settled), or a row older than the field.
+
 ### Saved-reset post-consume convergence
 
-`codex_pooler_saved_reset_convergence_count` is a best-effort view of committed post-consume saved-reset transitions observed by scraped **web nodes**. It is not a cluster-wide inventory and does not prove that every persisted transition has been exported: worker and scheduler roles do not run the Prometheus reporter. A convergence performed on another role can still persist its lifecycle metadata for later cross-role reconciliation without appearing in this metric.
+`codex_pooler_saved_reset_convergence_count` is a best-effort view of committed post-consume saved-reset transitions observed by scraped **web nodes**. It is not a cluster-wide inventory and does not prove that every persisted transition has been exported: worker and scheduler roles do not run the Prometheus reporter, and a convergence performed there reaches this metric only through the telemetry relay under `via="job_relay"`, best effort and at most once. The persisted lifecycle metadata remains the complete record for cross-role reconciliation.
 
 The metric and its three timing histograms use only the bounded `source` and `outcome` labels. `source` is one of `reconciliation`, `runtime_headers`, `runtime_websocket_upgrade_headers`, `runtime_websocket_frame_headers`, `runtime_event`, `runtime_error`, `finalizer`, or `unknown`; `outcome` is `confirmed_by_quota`, `reblocked`, `expired`, or `unknown`. No Pool, upstream, account, identity, request, payload, or credit identifier is exported. Missing or malformed source and outcome values become `unknown`; absent, malformed, or time-inconsistent timestamps omit the corresponding timing observation rather than inventing a duration.
 
@@ -266,6 +315,24 @@ histogram_quantile(0.95,
       job="codex-pooler-app"
     }[5m])
   )
+)
+```
+
+```text
+sum by (pod, operation, affinity_kind) (
+  rate(codex_pooler_gateway_routing_affinity_stale_write_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
+)
+```
+
+```text
+sum by (phase, transport) (
+  rate(codex_pooler_accounting_reservation_pre_attempt_release_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
 )
 ```
 

@@ -48,6 +48,54 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
 
   def sanitize_websocket_event(_event), do: {:error, :invalid_event}
 
+  # Public surfaces carry no native controls, so every provider event header
+  # object is dropped whatever the event: the top-level `headers` and the
+  # nested `response.headers` (findings#239). `:unchanged` lets callers keep
+  # the original wire bytes when nothing was dropped.
+  @spec drop_event_headers(term()) :: sanitization_result()
+  def drop_event_headers(event) when is_map(event) do
+    dropped =
+      event
+      |> Map.delete("headers")
+      |> drop_response_headers()
+
+    if dropped == event, do: :unchanged, else: {:changed, dropped}
+  end
+
+  def drop_event_headers(_event), do: {:error, :invalid_event}
+
+  defp drop_response_headers(%{"response" => %{} = response} = event)
+       when is_map_key(response, "headers"),
+       do: Map.put(event, "response", Map.delete(response, "headers"))
+
+  defp drop_response_headers(event), do: event
+
+  # A turn without a Pooler snapshot relays provider metadata with its other
+  # headers intact, but a provider x-models-etag must never reach the client
+  # (compatibility matrix backend_responses_etag.upstream_etag_relay).
+  @spec strip_untrusted_models_etag(term()) :: sanitization_result()
+  def strip_untrusted_models_etag(%{"type" => "codex.response.metadata", "headers" => headers} = event)
+      when is_map(headers) do
+    kept = Map.reject(headers, fn {name, _value} -> models_etag_header_name?(name) end)
+
+    cond do
+      map_size(kept) == map_size(headers) -> :unchanged
+      map_size(kept) == 0 -> {:changed, Map.delete(event, "headers")}
+      true -> {:changed, Map.put(event, "headers", kept)}
+    end
+  end
+
+  def strip_untrusted_models_etag(%{"type" => "codex.response.metadata", "headers" => _invalid} = event),
+    do: {:changed, Map.delete(event, "headers")}
+
+  def strip_untrusted_models_etag(event) when is_map(event), do: :unchanged
+  def strip_untrusted_models_etag(_event), do: {:error, :invalid_event}
+
+  defp models_etag_header_name?(name) when is_binary(name),
+    do: String.downcase(name) == "x-models-etag"
+
+  defp models_etag_header_name?(_name), do: false
+
   @spec pooler_metadata_event(term(), term()) :: metadata_event() | {:error, :invalid_models_etag}
   def pooler_metadata_event(models_etag, provider_headers) do
     if valid_string_value?(models_etag) do

@@ -5,12 +5,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
 
   defstruct media_upload: nil,
+            responses_api_tools: %{},
+            responses_api_history: nil,
             forced_transcription_model: nil,
             native_image_request?: false,
             masked_image_request?: false,
             image_generation_permission_required?: false,
             compaction_trigger_bridge?: false,
             compaction_input_mode: nil,
+            portable_full_history?: false,
             compaction_result_transport: :buffered,
             compaction_result_mode: nil,
             compaction_projection_context: nil,
@@ -18,6 +21,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
             native_codex_turn_metadata: nil
 
   @type t :: %__MODULE__{
+          responses_api_tools: map(),
+          responses_api_history: map() | nil,
           media_upload: map() | nil,
           forced_transcription_model: String.t() | nil,
           native_image_request?: boolean(),
@@ -25,6 +30,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
           image_generation_permission_required?: boolean(),
           compaction_trigger_bridge?: boolean(),
           compaction_input_mode: :incremental | :full_history | nil,
+          portable_full_history?: boolean(),
           compaction_result_transport: :buffered | :sse,
           compaction_result_mode: :native_websocket | :public_websocket | nil,
           compaction_projection_context: CompactionProjectionContext.t() | nil,
@@ -42,8 +48,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
       forced_transcription_model: Map.get(opts, :forced_transcription_model),
       native_image_request?: Map.get(opts, :native_image_request?) === true,
       masked_image_request?: Map.get(opts, :masked_image_request?) === true,
-      image_generation_permission_required?:
-        Map.get(opts, :image_generation_permission_required?) === true,
+      image_generation_permission_required?: Map.get(opts, :image_generation_permission_required?) === true,
       compaction_trigger_bridge?: Map.get(opts, :compaction_trigger_bridge?) === true,
       compaction_input_mode: compaction_input_mode,
       compaction_result_transport: compaction_result_transport(opts),

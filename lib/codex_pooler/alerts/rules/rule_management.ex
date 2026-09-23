@@ -135,8 +135,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
     |> Map.merge(%{
       pool_id: pool_id,
       created_by_user_id: scope.user.id,
-      disabled_at:
-        disabled_at_for_state(Map.get(attrs, :state) || Map.get(attrs, "state"), timestamp),
+      disabled_at: disabled_at_for_state(Map.get(attrs, :state) || Map.get(attrs, "state"), timestamp),
       metadata: Map.get(attrs, :metadata) || Map.get(attrs, "metadata") || %{},
       created_at: timestamp,
       updated_at: timestamp

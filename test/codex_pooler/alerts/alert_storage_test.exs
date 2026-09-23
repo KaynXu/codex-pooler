@@ -34,29 +34,19 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
       assert "is invalid" in errors_on(changeset)[field]
     end
 
-    assert "must be greater than or equal to 5" in errors_on(
-             AlertRule.changeset(%AlertRule{}, %{rule_attrs | cooldown_minutes: 4})
-           ).cooldown_minutes
+    assert "must be greater than or equal to 5" in errors_on(AlertRule.changeset(%AlertRule{}, %{rule_attrs | cooldown_minutes: 4})).cooldown_minutes
 
-    assert "must be less than or equal to 1440" in errors_on(
-             AlertRule.changeset(%AlertRule{}, %{rule_attrs | cooldown_minutes: 1441})
-           ).cooldown_minutes
+    assert "must be less than or equal to 1440" in errors_on(AlertRule.changeset(%AlertRule{}, %{rule_attrs | cooldown_minutes: 1441})).cooldown_minutes
 
     channel_attrs = valid_channel_attrs(now)
 
-    assert "is invalid" in errors_on(
-             AlertChannel.changeset(%AlertChannel{}, %{channel_attrs | channel_type: "telegram"})
-           ).channel_type
+    assert "is invalid" in errors_on(AlertChannel.changeset(%AlertChannel{}, %{channel_attrs | channel_type: "telegram"})).channel_type
 
-    assert "is invalid" in errors_on(
-             AlertChannel.changeset(%AlertChannel{}, %{channel_attrs | state: "archived"})
-           ).state
+    assert "is invalid" in errors_on(AlertChannel.changeset(%AlertChannel{}, %{channel_attrs | state: "archived"})).state
 
     incident_attrs = valid_incident_attrs(pool, now, "alert:invalid:vocab")
 
-    assert "is invalid" in errors_on(
-             AlertIncident.changeset(%AlertIncident{}, %{incident_attrs | state: "closed"})
-           ).state
+    assert "is invalid" in errors_on(AlertIncident.changeset(%AlertIncident{}, %{incident_attrs | state: "closed"})).state
 
     attempt_attrs = valid_delivery_attempt_attrs(Ecto.UUID.generate(), Ecto.UUID.generate(), now)
 
@@ -291,9 +281,7 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
 
     other_receipt =
       %AlertIncidentReceipt{}
-      |> AlertIncidentReceipt.changeset(
-        valid_receipt_attrs(other_operator.id, other_incident.id, now)
-      )
+      |> AlertIncidentReceipt.changeset(valid_receipt_attrs(other_operator.id, other_incident.id, now))
       |> Repo.insert!()
 
     Repo.delete!(incident)

@@ -26,8 +26,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionDirectProvide
       context = %Context{
         test_pid: self(),
         sandbox_owner: self(),
-        scenario_namespace:
-          "direct-#{unquote(variant)}-#{System.unique_integer([:positive, :monotonic])}",
+        scenario_namespace: "direct-#{unquote(variant)}-#{System.unique_integer([:positive, :monotonic])}",
         cleanup_registry: self()
       }
 

@@ -1,4 +1,5 @@
 local releaseBranch = 'release-please--branches--main--components--codex-pooler';
+local releaseNotesBranch = releaseBranch + '--release-notes';
 local registry = 'registry.icorete.ch';
 local image = 'registry.icorete.ch/icoretech/codex-pooler';
 local buildxPlugin = 'plugins/buildx:1.3.23';
@@ -15,7 +16,10 @@ local helmVersion = 'v4.3.0';
     },
     trigger: {
       branch: {
-        exclude: [releaseBranch],
+        // release-please stores oversized PR bodies on a sibling
+        // `--release-notes` branch. Neither branch contains a candidate that
+        // needs the application build pipeline.
+        exclude: [releaseBranch, releaseNotesBranch],
       },
       event: {
         include: ['push'],

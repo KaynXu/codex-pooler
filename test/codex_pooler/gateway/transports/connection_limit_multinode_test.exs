@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.OwnerCleanupPeer, as: Peer
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -12,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
   setup do
     unless Node.alive?() do
       {_, 0} = System.cmd("epmd", ["-daemon"])
+      PeerRegistry.assert_epmd_ready!()
 
       {:ok, _} =
         :net_kernel.start([
@@ -27,6 +29,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
   end
 
   for {owner_index, proxy_index} <- [{0, 1}, {1, 0}] do
+    @tag slow: "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
     test "two real BEAM nodes preserve the replacement lease when owner/proxy roles are #{owner_index}->#{proxy_index}",
          %{peers: peers} do
       owner_node = Enum.at(peers, unquote(owner_index))
@@ -89,6 +92,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
     end
   end
 
+  @tag slow: "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
   test "current owner cancellation settles only the current request across a real proxy hop", %{
     peers: [owner_node, proxy_node]
   } do
@@ -114,6 +118,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
     assert Enum.count(facts.ledger, &(&1.entry_kind == "release")) == 1
   end
 
+  @tag slow: "boots two real BEAM peers with independent PostgreSQL connections for owner handoff and cleanup"
   test "a delayed original cleanup cannot mutate a request after its generation changes on the peer",
        %{peers: [owner_node, proxy_node]} do
     {setup, session} = fixture(owner_node)
@@ -159,7 +164,7 @@ defmodule CodexPooler.Gateway.Transports.ConnectionLimitMultinodeTest do
 
       on_exit(fn ->
         Sandbox.unboxed_run(Repo, fn ->
-          Repo.delete!(setup.pool)
+          CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
           Repo.delete!(setup.identity)
           Repo.delete!(setup.pricing)
         end)

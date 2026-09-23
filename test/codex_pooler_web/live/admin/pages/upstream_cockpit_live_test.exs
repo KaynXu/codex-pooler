@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   import Ecto.Query
   import Phoenix.LiveViewTest
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
   alias CodexPooler.Admin.UpstreamRoutingReadiness
@@ -783,8 +784,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     {:ok, pool} =
       Pools.create_pool(scope, %{slug: "cockpit-relink-cancel", name: "Cockpit Relink Cancel"})
 
-    %{identity: identity} =
+    %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{account_label: "Cockpit Relink Cancel Account"})
+
+    failed_request =
+      recent_event_request_fixture(pool, assignment, %{
+        status: "failed",
+        admitted_at: DateTime.add(DateTime.utc_now(), -2, :minute),
+        correlation_id: "cancel-relink-retained-request"
+      })
 
     flow =
       insert_oauth_flow!(pool, identity, scope.user, %{
@@ -795,13 +803,53 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
     assert has_element?(view, "#upstream-cockpit-relink")
 
+    _ = render_async(view)
+    handler_id = {__MODULE__, :cancel_relink_metrics, make_ref()}
+    test_pid = self()
+    identity_binary = Ecto.UUID.dump!(identity.id)
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               identity_binary in (metadata[:params] || []) and
+               String.contains?(to_string(metadata[:query]), "percentile_disc") do
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              15_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
     view
     |> element("#upstream-cockpit-relink-cancel")
     |> render_click()
 
+    assert_receive {^handler_id, query_pid}, 5_000
+
+    try do
+      refute has_element?(view, "#upstream-cockpit-relink")
+      assert has_element?(view, "#upstream-event-summary", "OAuth relink cancelled")
+
+      assert has_element?(
+               view,
+               "#upstream-event-summary button[phx-value-request-id='#{failed_request.request.id}']"
+             )
+    after
+      :telemetry.detach(handler_id)
+      send(query_pid, {handler_id, :release})
+    end
+
+    _ = render_async(view)
     assert Repo.get!(OAuthFlow, flow.id).status == "cancelled"
-    refute has_element?(view, "#upstream-cockpit-relink")
-    assert has_element?(view, "#upstream-event-summary", "OAuth relink cancelled")
   end
 
   test "shows lane labels only when they differ from the account name", %{
@@ -856,164 +904,106 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-vitals-token-refresh dd[title]")
   end
 
-  @tag :credential_expiry_cockpit
-  test "cockpit uses canonical credential expiry for vitals and recovery actions", %{
-    conn: conn,
-    scope: scope
-  } do
-    configure_upstream_secret_key!()
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    future = DateTime.add(now, 2, :hour)
-    past = DateTime.add(now, -2, :hour)
-    raw_expiry_value = runtime_secret("cockpit-expiry-raw-metadata")
+  for {scenario, status, expiry_state, expected_value, replacement?} <- [
+        {:future, "paused", "known_future", "expires", false},
+        {:past, "paused", "known_past", "expired", true},
+        {:unknown, "paused", "unavailable", "expiry unavailable", false},
+        {:mixed, "paused", "unavailable", "expiry unavailable", false},
+        {:legacy, "refresh_failed", "known_past", "expired", true},
+        {:missing_secret, "paused", "known_future", "expires", true},
+        {:reauth, "reauth_required", "known_future", "expires", true}
+      ] do
+    @tag :credential_expiry_cockpit
+    @tag credential_expiry_scenario: scenario
+    test "cockpit uses canonical #{scenario} credential expiry for vitals and recovery actions", %{conn: conn, scope: scope, credential_expiry_scenario: scenario} do
+      configure_upstream_secret_key!()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      future = DateTime.add(now, 2, :hour)
+      past = DateTime.add(now, -2, :hour)
+      raw_expiry_value = runtime_secret("cockpit-expiry-raw-metadata")
 
-    future_account =
-      status_fixture!(scope, "expiry-future", %{
-        identity_status: "paused",
-        identity_metadata: canonical_known_expiry_metadata(future)
-      })
+      metadata =
+        case scenario do
+          kind when kind in [:future, :missing_secret] ->
+            canonical_known_expiry_metadata(future)
 
-    past_account =
-      status_fixture!(scope, "expiry-past", %{
-        identity_status: "paused",
-        identity_metadata: canonical_known_expiry_metadata(past)
-      })
+          :past ->
+            canonical_known_expiry_metadata(past)
 
-    unknown_account =
-      status_fixture!(scope, "expiry-unknown", %{
-        identity_status: "paused",
-        identity_metadata: canonical_unknown_expiry_metadata()
-      })
+          :unknown ->
+            canonical_unknown_expiry_metadata()
 
-    mixed_account =
-      status_fixture!(scope, "expiry-mixed", %{
-        identity_status: "paused",
-        identity_metadata: %{
-          "credential_epoch" => 2,
-          "access_token_expires_at" => DateTime.to_iso8601(past),
-          "token_refresh" => %{
-            "status" => "succeeded",
-            "access_token_expiry" => %{
-              "version" => 1,
-              "credential_epoch" => 1,
-              "state" => "known",
-              "source" => "explicit"
+          :mixed ->
+            %{
+              "credential_epoch" => 2,
+              "access_token_expires_at" => DateTime.to_iso8601(past),
+              "token_refresh" => %{
+                "status" => "succeeded",
+                "access_token_expiry" => %{
+                  "version" => 1,
+                  "credential_epoch" => 1,
+                  "state" => "known",
+                  "source" => "explicit"
+                }
+              },
+              "raw_expiry_value" => raw_expiry_value
             }
-          },
-          "raw_expiry_value" => raw_expiry_value
-        }
-      })
 
-    legacy_account =
-      status_fixture!(scope, "expiry-legacy", %{
-        identity_status: "refresh_failed",
-        identity_metadata: %{"access_token_expires_at" => DateTime.to_iso8601(past)}
-      })
+          :legacy ->
+            %{"access_token_expires_at" => DateTime.to_iso8601(past)}
 
-    missing_secret_account =
-      status_fixture!(scope, "expiry-missing-secret", %{
-        identity_status: "paused",
-        identity_metadata: canonical_known_expiry_metadata(future)
-      })
+          :reauth ->
+            canonical_known_expiry_metadata(future, %{
+              "status" => "reauth_required",
+              "reason" => %{
+                "code" => "credential_refresh_failed",
+                "message" => "credential refresh was rejected"
+              }
+            })
+        end
 
-    reauth_account =
-      status_fixture!(scope, "expiry-reauth", %{
-        identity_status: "reauth_required",
-        identity_metadata:
-          canonical_known_expiry_metadata(future, %{
-            "status" => "reauth_required",
-            "reason" => %{
-              "code" => "credential_refresh_failed",
-              "message" => "credential refresh was rejected"
-            }
-          })
-      })
+      slug_suffix = scenario |> Atom.to_string() |> String.replace("_", "-")
 
-    for %{identity: identity} <- [
-          future_account,
-          past_account,
-          unknown_account,
-          mixed_account,
-          legacy_account,
-          reauth_account
-        ] do
-      assert {:ok, _secret} =
-               Upstreams.store_encrypted_secret(identity, %{
-                 secret_kind: "access_token",
-                 plaintext: runtime_secret("cockpit-expiry-#{identity.id}")
-               })
-    end
+      %{identity: identity} =
+        status_fixture!(scope, "expiry-#{slug_suffix}", %{
+          identity_status: unquote(status),
+          identity_metadata: metadata
+        })
 
-    assert {:ok, future_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, future_account.identity.id)
+      if scenario != :missing_secret do
+        assert {:ok, _secret} =
+                 Upstreams.store_encrypted_secret(identity, %{
+                   secret_kind: "access_token",
+                   plaintext: runtime_secret("cockpit-expiry-#{identity.id}")
+                 })
+      end
 
-    assert future_cockpit.header.credential_expiry.state == "known_future"
-    assert future_cockpit.header.secret_status == :present
-    assert future_cockpit.header.refresh_status == "succeeded"
+      assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+      assert cockpit.header.credential_expiry.state == unquote(expiry_state)
 
-    assert future_cockpit.actions.replace_auth_json == %{
-             available?: false,
-             reason: "credential replacement is not needed"
-           }
+      if scenario == :future do
+        assert cockpit.header.secret_status == :present
+        assert cockpit.header.refresh_status == "succeeded"
+      end
 
-    assert {:ok, past_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, past_account.identity.id)
+      if scenario == :reauth do
+        assert cockpit.actions.refresh_token == %{available?: false, reason: "token refresh is unavailable"}
+      end
 
-    assert past_cockpit.header.credential_expiry.state == "known_past"
-    assert past_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
+      expected_action =
+        if unquote(replacement?),
+          do: %{available?: true, reason: nil},
+          else: %{available?: false, reason: "credential replacement is not needed"}
 
-    for account <- [unknown_account, mixed_account] do
-      assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, account.identity.id)
-      assert cockpit.header.credential_expiry.state == "unavailable"
+      assert cockpit.actions.replace_auth_json == expected_action
+      {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+      action_id = "#cockpit-replace-auth-json-upstream-account-#{identity.id}"
 
-      assert cockpit.actions.replace_auth_json == %{
-               available?: false,
-               reason: "credential replacement is not needed"
-             }
-    end
-
-    assert {:ok, legacy_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, legacy_account.identity.id)
-
-    assert legacy_cockpit.header.credential_expiry.state == "known_past"
-    assert legacy_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
-
-    assert {:ok, missing_secret_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, missing_secret_account.identity.id)
-
-    assert missing_secret_cockpit.header.credential_expiry.state == "known_future"
-
-    assert missing_secret_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
-
-    assert {:ok, reauth_cockpit} =
-             UpstreamCockpitReadModel.load_visible(scope, reauth_account.identity.id)
-
-    assert reauth_cockpit.header.credential_expiry.state == "known_future"
-    assert reauth_cockpit.actions.replace_auth_json == %{available?: true, reason: nil}
-
-    assert reauth_cockpit.actions.refresh_token == %{
-             available?: false,
-             reason: "token refresh is unavailable"
-           }
-
-    for {account, expected_value} <- [
-          {future_account, "expires"},
-          {past_account, "expired"},
-          {unknown_account, "expiry unavailable"},
-          {mixed_account, "expiry unavailable"},
-          {legacy_account, "expired"},
-          {missing_secret_account, "expires"},
-          {reauth_account, "expires"}
-        ] do
-      {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{account.identity.id}")
-      action_id = "#cockpit-replace-auth-json-upstream-account-#{account.identity.id}"
-
-      assert has_element?(view, "#upstream-vitals-access-token", expected_value)
+      assert has_element?(view, "#upstream-vitals-access-token", unquote(expected_value))
       assert has_element?(view, "#upstream-vitals-access-token dd[title]")
       refute render(view) =~ raw_expiry_value
 
-      if account == past_account or account == legacy_account or account == missing_secret_account or
-           account == reauth_account do
+      if unquote(replacement?) do
         refute has_element?(view, "#{action_id}[disabled]")
         refute has_element?(view, "#{action_id}[title]")
       else
@@ -1748,6 +1738,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
       assert has_element?(
                view,
+               "#upstream-event-summary-loading-state",
+               "Loading recent activity"
+             )
+
+      refute has_element?(view, "#upstream-event-summary-empty")
+
+      assert has_element?(
+               view,
                "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
                "…"
              )
@@ -1765,6 +1763,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(view, "#upstream-cockpit[aria-busy='false']")
     refute has_element?(view, "#request-health-loading-state")
+    refute has_element?(view, "#upstream-event-summary-loading-state")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
 
     assert has_element?(
@@ -2503,8 +2502,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         assignment_label: long_assignment_label,
         plan_label: "Enterprise",
         identity_metadata: %{
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(1, :hour) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(1, :hour) |> DateTime.to_iso8601(),
           "token_refresh" => %{"status" => "imported"},
           "safe_auth_json_label" => auth_json_secret,
           "cookie" => cookie_secret,
@@ -5182,6 +5180,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "/admin/request-logs?request_id=#{failed_request.request.id}&upstream_identity_id=#{identity.id}"
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
 
     assert has_element?(view, "#upstream-event-summary")
     assert has_element?(view, "#upstream-event-summary [data-role='recent-event-row']")
@@ -5306,6 +5305,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert cockpit.recent_events.items == []
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
 
     assert has_element?(view, "#upstream-event-summary")
     assert has_element?(view, "#upstream-event-summary-empty")
@@ -5531,8 +5531,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         chatgpt_account_id: raw_stored_account_id,
         identity_status: "refresh_failed",
         identity_metadata: %{
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
           "token_refresh" => %{
             "status" => "failed",
             "reason" => %{
@@ -5691,8 +5690,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         chatgpt_account_id: raw_stored_account_id,
         identity_status: "refresh_failed",
         identity_metadata: %{
-          "access_token_expires_at" =>
-            DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.to_iso8601(),
           "token_refresh" => %{
             "status" => "failed",
             "reason" => %{
@@ -5959,8 +5957,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         })
         |> Ecto.Changeset.change(%{
           started_at: DateTime.add(Map.fetch!(attrs, :admitted_at), attempt_number - 1, :second),
-          network_error_code:
-            Map.get(attrs, :extra_attempt_network_error_code, "upstream_retryable_failure")
+          network_error_code: Map.get(attrs, :extra_attempt_network_error_code, "upstream_retryable_failure")
         })
         |> Repo.update!()
       end
@@ -5982,8 +5979,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         transport: Map.get(attrs, :transport, "http_json"),
         status: status,
         usage_status: Map.get(attrs, :usage_status, "usage_known"),
-        correlation_id:
-          Map.get(attrs, :correlation_id, "request-health-#{System.unique_integer([:positive])}"),
+        correlation_id: Map.get(attrs, :correlation_id, "request-health-#{System.unique_integer([:positive])}"),
         request_metadata: Map.get(attrs, :request_metadata, %{}),
         response_status_code: Map.get(attrs, :response_status_code, response_status_code(status)),
         last_error_code: Map.get(attrs, :last_error_code, request_error_code(status))
@@ -6002,8 +5998,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       |> Ecto.Changeset.change(%{
         started_at: admitted_at,
         completed_at: completed_at,
-        network_error_code:
-          Map.get(attrs, :attempt_network_error_code, request_error_code(status))
+        network_error_code: Map.get(attrs, :attempt_network_error_code, request_error_code(status))
       })
       |> Repo.update!()
 
@@ -6012,8 +6007,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       pool_upstream_assignment_id: assignment.id,
       upstream_identity_id: assignment.upstream_identity_id,
       occurred_at: completed_at,
-      usage_status:
-        Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known"))
+      usage_status: Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known"))
     })
 
     %{request: request, attempt: attempt}
@@ -6184,7 +6178,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     test "cockpit auth.json #{source} stale import keeps the mounted recovery form usable until explicit resubmission",
          %{conn: conn, sandbox_owner: sandbox_owner, sandbox_settings_cache: settings_cache} do
       source = unquote(source)
-      fixture = committed_auth_json_recovery_fixture!()
+      fixture = committed_auth_json_recovery_fixture!(sandbox_owner, settings_cache)
       barrier = make_ref()
       sensitive_sentinel = fixture.sensitive_sentinel
 
@@ -6288,11 +6282,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         :telemetry.detach(handler_id)
         send(holder.pid, {barrier, :advance})
         stop_live_view_proxy!(view)
-        # The resubmitted import updated the committed identity inside the
-        # sandboxed transaction, whose row lock would block the unboxed delete
-        # until the owner exits; release the sandbox before cleaning up.
-        DataCase.stop_sandbox(sandbox_owner, settings_cache)
-        cleanup_committed_auth_json_recovery_fixture!(fixture)
       end
     end
   end
@@ -6331,9 +6320,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     end
   end
 
-  defp committed_auth_json_recovery_fixture! do
+  # Registered before the commit and keyed on the suffix every committed key derives from, never
+  # scoped in `try/after`: the stale-import holder and its monitor are linked tasks, so an assertion
+  # failing in either kills the test process before an enclosing `after` runs, and the committed
+  # pool and identity would outlive the test. The sandbox is stopped first because the resubmitted
+  # import updates the committed identity inside the sandboxed transaction, whose row lock would
+  # block the unboxed delete until the owner exits; `DataCase.stop_sandbox/2` is idempotent, so
+  # the case template's own teardown still runs after it.
+  defp committed_auth_json_recovery_fixture!(sandbox_owner, settings_cache) do
+    suffix = System.unique_integer([:positive])
+
+    register_unboxed_cleanup!(fn ->
+      DataCase.stop_sandbox(sandbox_owner, settings_cache)
+      delete_committed_auth_json_recovery_fixture!(suffix)
+    end)
+
     Sandbox.unboxed_run(Repo, fn ->
-      suffix = System.unique_integer([:positive])
       account_id = "acct-cockpit-mounted-recovery-#{suffix}"
       email = "cockpit-mounted-recovery-#{suffix}@example.com"
       pool = pool_fixture(%{slug: "cockpit-mounted-recovery-#{suffix}", name: "Cockpit recovery"})
@@ -6357,18 +6359,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     end)
   end
 
-  defp cleanup_committed_auth_json_recovery_fixture!(fixture) do
-    Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(
-        from identity in UpstreamIdentity,
-          where: identity.id == ^fixture.identity.id
-      )
+  defp delete_committed_auth_json_recovery_fixture!(suffix) do
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.chatgpt_account_id == ^"acct-cockpit-mounted-recovery-#{suffix}"
+    )
 
-      Repo.delete_all(
-        from pool in CodexPooler.Pools.Pool,
-          where: pool.id == ^fixture.pool.id
-      )
-    end)
+    Repo.delete_all(
+      from pool in CodexPooler.Pools.Pool,
+        where: pool.slug == ^"cockpit-mounted-recovery-#{suffix}"
+    )
+
+    :ok
   end
 
   defp stop_live_view_proxy!(view) do
@@ -6405,6 +6407,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   defp attach_import_preparation_probe!(handler_id, target) do
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :telemetry.attach(
       handler_id,
       [:codex_pooler, :repo, :query],
@@ -6474,8 +6479,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       active_secrets:
         Repo.aggregate(
           from(secret in EncryptedSecret,
-            where:
-              secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
+            where: secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
           ),
           :count
         ),

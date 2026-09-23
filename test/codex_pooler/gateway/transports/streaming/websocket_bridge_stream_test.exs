@@ -656,8 +656,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
     assert_receive {^ref, {:preflight, {:fallback, :owner_unavailable}}}, @detection_timeout_ms
 
-    assert_receive {:fallback, [:codex_pooler, :gateway, :websocket_bridge, :fallback],
-                    %{count: 1}, %{reason: "owner_unavailable"}},
+    assert_receive {:fallback, [:codex_pooler, :gateway, :websocket_bridge, :fallback], %{count: 1}, %{reason: "owner_unavailable"}},
                    @detection_timeout_ms
 
     refute_received {^ref, {:bridge_error, _reason}}
@@ -838,9 +837,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert %{active_turn: nil} = :sys.get_state(owner)
     relay_pid = stream.relay
 
-    assert_receive {:trace, ^relay_pid, :receive,
-                    {:websocket_owner_frame, "real-owner-timeout", 1,
-                     {:error, :upstream_websocket_terminal_delivery_timeout, _safe_payload}}},
+    assert_receive {:trace, ^relay_pid, :receive, {:websocket_owner_frame, "real-owner-timeout", 1, {:error, :upstream_websocket_terminal_delivery_timeout, _safe_payload}}},
                    @detection_timeout_ms
 
     assert :erlang.resume_process(submitter_pid)
@@ -892,8 +889,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
 
     downstream_sender = fn pid, message ->
       case message do
-        {:websocket_owner_frame, _correlation_id, _epoch,
-         {:error, :upstream_websocket_terminal_delivery_timeout, _safe_payload}} ->
+        {:websocket_owner_frame, _correlation_id, _epoch, {:error, :upstream_websocket_terminal_delivery_timeout, _safe_payload}} ->
           WebsocketOwnerNodeHarness.controlled_result(
             test_pid,
             controls,
@@ -1200,8 +1196,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
       assert_receive {^over_ref, {:data, _data}}, @detection_timeout_ms
     end)
 
-    assert_receive {:overflow, [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow],
-                    %{count: 1, frames: 65}, %{max_frames: 64, max_bytes: 1_048_576}},
+    assert_receive {:overflow, [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow], %{count: 1, frames: 65}, %{max_frames: 64, max_bytes: 1_048_576}},
                    @detection_timeout_ms
 
     owner_frame(over_limit, :complete)
@@ -1234,9 +1229,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert_receive {^ref, {:preflight, :stream}}, @detection_timeout_ms
     assert_receive {^ref, {:data, _data}}, @detection_timeout_ms
 
-    assert_receive {:overflow, [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow],
-                    %{bytes: 1_048_577, count: 1, frames: 1},
-                    %{max_bytes: 1_048_576, max_frames: 64}},
+    assert_receive {:overflow, [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow], %{bytes: 1_048_577, count: 1, frames: 1}, %{max_bytes: 1_048_576, max_frames: 64}},
                    @detection_timeout_ms
 
     owner_frame(stream, :complete)
@@ -1247,8 +1240,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   defp await_controlled_barrier(stage, controls) do
     release_ref = Map.fetch!(controls, stage)
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
-                    ^release_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid, ^release_ref},
                    @detection_timeout_ms
 
     barrier_pid

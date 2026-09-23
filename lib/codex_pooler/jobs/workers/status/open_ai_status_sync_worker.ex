@@ -18,6 +18,14 @@ defmodule CodexPooler.Jobs.OpenAIStatusSyncWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) when is_map(args) do
+    if CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled,
+      do: poll(args),
+      else: {:cancel, :openai_status_polling_disabled}
+  end
+
+  def perform(%Oban.Job{}), do: {:cancel, :invalid_openai_status_sync_args}
+
+  defp poll(args) do
     opts = [now: parse_now(Map.get(args, "now"))]
 
     opts =
@@ -34,7 +42,7 @@ defmodule CodexPooler.Jobs.OpenAIStatusSyncWorker do
         :ok
 
       {:error, %{code: code}} ->
-        if transient_code?(code),
+        if code == "sync_failed",
           do: {:error, {:status_feed, code}},
           else: {:cancel, {:status_feed, code}}
 
@@ -42,12 +50,6 @@ defmodule CodexPooler.Jobs.OpenAIStatusSyncWorker do
         {:error, :status_feed_sync_failed}
     end
   end
-
-  def perform(%Oban.Job{}), do: {:cancel, :invalid_openai_status_sync_args}
-
-  defp transient_code?(code) when code in [:network_error, :upstream_unavailable], do: true
-  defp transient_code?(code) when code in ["network_error", "upstream_unavailable"], do: true
-  defp transient_code?(_code), do: false
 
   defp parse_now(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do

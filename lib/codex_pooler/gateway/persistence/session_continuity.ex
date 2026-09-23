@@ -52,7 +52,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   def start_codex_session(auth, %RequestOptions{} = opts) do
     now = now()
     session_key = session_key(opts)
-    owner = owner_instance_id(opts)
+    owner = OwnerLease.owner_instance(opts)
 
     with :ok <- authorize_runtime_session(auth, opts) do
       Repo.transaction(fn ->
@@ -123,7 +123,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp start_codex_session_from_previous_response_id(auth, opts, previous_response_id) do
     now = now()
-    owner = owner_instance_id(opts)
+    owner = OwnerLease.owner_instance(opts)
 
     with :ok <- authorize_runtime_session(auth, opts) do
       Repo.transaction(fn ->
@@ -137,7 +137,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp start_codex_session_from_turn_state(auth, opts, turn_state) do
     now = now()
-    owner = owner_instance_id(opts)
+    owner = OwnerLease.owner_instance(opts)
 
     with :ok <- authorize_runtime_session(auth, opts) do
       Repo.transaction(fn ->
@@ -164,7 +164,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       opts.runtime.api_key_runtime_epoch || auth.api_key.runtime_revocation_epoch
 
     Repo.transaction(fn ->
-      case Access.authorize_api_key_runtime_turn(auth.api_key, captured_epoch) do
+      case Access.authorize_api_key_runtime_turn_for_read(auth.api_key, captured_epoch) do
         {:ok, _authorization} -> :ok
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -275,8 +275,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp lock_continuity_owner!(%CodexSession{id: session_id}, %RequestOptions{}) do
-    session = codex_session_for_update!(session_id)
-    {session, nil, now()}
+    case codex_session_for_update(session_id) do
+      %CodexSession{} = session -> {session, nil, now()}
+      nil -> Repo.rollback(:owner_unavailable)
+    end
   end
 
   defp renew_continuity_owner!(
@@ -315,6 +317,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp renew_validated_owner!(session, lease, opts, now) do
+    case OwnerLease.validate_renewal_presence(lease, now) do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+
     expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
 
     renewed_lease =
@@ -354,6 +361,20 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   @spec renew_owner_token(session_ref(), Ecto.UUID.t() | String.t(), opts()) ::
           {:ok, CodexSession.t()} | {:error, :stale_owner | :owner_unavailable}
   defdelegate renew_owner_token(session_ref, owner_lease_token, opts), to: OwnerLease
+
+  @spec renew_owner_token(
+          session_ref(),
+          Ecto.UUID.t() | String.t(),
+          opts(),
+          [OwnerLease.renewal_option()]
+        ) ::
+          {:ok, CodexSession.t()}
+          | {:error,
+             :stale_owner
+             | :owner_unavailable
+             | {:lock_timeout, __MODULE__.LockWaitDiagnostics.t()}}
+  defdelegate renew_owner_token(session_ref, owner_lease_token, opts, renewal_opts),
+    to: OwnerLease
 
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
   defdelegate start_codex_turn(session, request, opts), to: TurnLifecycle
@@ -414,11 +435,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     to: OwnerLease,
     as: :replace_unavailable
 
-  @spec codex_session_for_update!(Ecto.UUID.t()) :: CodexSession.t()
-  defp codex_session_for_update!(session_id) do
-    Repo.one!(codex_session_for_update_query(session_id))
-  end
-
   defp codex_session_for_update(session_id) do
     Repo.one(codex_session_for_update_query(session_id))
   end
@@ -430,24 +446,33 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp upsert_session_for_start!(auth, opts, session_key, owner, now) do
-    existing_session = existing_session_for_start!(auth, opts, session_key, now)
-
-    case existing_session do
-      %CodexSession{} = session ->
+    case existing_session_for_start!(auth, opts, session_key, now) do
+      {%CodexSession{} = session, _preferred_assignment_id} ->
         update_existing_session!(session, auth, opts, owner, now)
 
-      nil ->
+      {nil, preferred_assignment_id} ->
         maybe_test_block_before_session_insert()
-        insert_new_session!(auth, opts, session_key, owner, now)
+        insert_new_session!(auth, opts, session_key, owner, now, preferred_assignment_id)
     end
   end
 
+  # Returns the session to reuse, if any, together with the assignment the
+  # replacement should softly prefer when there is nothing to reuse. The
+  # preference is produced by the same transaction and row locks that close the
+  # lease-expired sessions, so the assignment cannot change underneath the
+  # insert that follows.
   defp existing_session_for_start!(auth, opts, session_key, now) do
     resolved_session = Aliases.resolved_session_for_update(auth, opts, session_key, now)
 
-    if is_nil(resolved_session) do
-      ExpiredSessions.close_for_key!(auth.pool.id, session_key, now)
-    end
+    preferred_assignment_id =
+      if is_nil(resolved_session) do
+        ExpiredSessions.close_for_key!(
+          auth.pool.id,
+          auth.api_key.id,
+          session_key,
+          now
+        ).preferred_assignment_id
+      end
 
     reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, resolved_session)
 
@@ -457,7 +482,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       Repo.rollback(:owner_unavailable)
     end
 
-    existing_session
+    {existing_session, preferred_assignment_id}
   end
 
   defp reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, nil) do
@@ -480,7 +505,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Ecto.Changeset.change(%{
       api_key_id: auth.api_key.id,
       status: @session_active,
-      owner_instance_id: owner,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       owner_lease_token: session.owner_lease_token || Ecto.UUID.generate(),
       owner_lease_expires_at: DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second),
       last_heartbeat_at: now,
@@ -491,14 +517,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Repo.update!()
   end
 
-  defp insert_new_session!(auth, opts, session_key, owner, now) do
+  defp insert_new_session!(auth, opts, session_key, owner, now, preferred_assignment_id) do
     attrs = %{
       pool_id: auth.pool.id,
       api_key_id: auth.api_key.id,
       session_key: session_key,
       conversation_key: conversation_key(opts),
       status: @session_active,
-      owner_instance_id: owner,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       owner_lease_token: Ecto.UUID.generate(),
       owner_lease_expires_at: DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second),
       last_heartbeat_at: now,
@@ -511,12 +538,24 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Repo.insert(mode: :savepoint)
     |> case do
       {:ok, %CodexSession{} = session} ->
-        session
+        put_recreation_preference(session, preferred_assignment_id)
 
       {:error, %Ecto.Changeset{} = changeset} ->
         recover_session_start_conflict!(changeset, auth, opts, session_key, owner, now)
     end
   end
+
+  # Carries the closed session's assignment on the replacement struct only, for
+  # the request that recreated it. Nothing is persisted: writing it to
+  # `pool_upstream_assignment_id` would make routing filter on it, and on a
+  # websocket turn it could even escalate to a hard pin. The conflict-recovery
+  # path deliberately does not receive it, because a recovered session already
+  # carries its own assignment.
+  defp put_recreation_preference(%CodexSession{} = session, assignment_id)
+       when is_binary(assignment_id),
+       do: %{session | recreated_from_assignment_id: assignment_id}
+
+  defp put_recreation_preference(%CodexSession{} = session, _assignment_id), do: session
 
   defp session_start_changeset(%CodexSession{} = session, attrs) do
     session
@@ -530,9 +569,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     if session_key_unique_constraint?(changeset) do
       case active_session_for_update(auth, opts, session_key, now) do
         %CodexSession{} = session ->
-          Logger.info(
-            "session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session"
-          )
+          Logger.info("session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session")
 
           update_existing_session!(session, auth, opts, owner, now)
 
@@ -652,6 +689,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defp authenticated_owner_attach_blocked?(_auth, _opts, _session_key, _now), do: false
 
   defp authenticated_owner_attach_requires_existing?(%RequestOptions{
+         openai_compatibility: %{source_endpoint: "/v1/responses"},
+         continuity: %{authenticated_owner_attach: true, previous_response_id: nil}
+       }),
+       do: false
+
+  defp authenticated_owner_attach_requires_existing?(%RequestOptions{
          continuity: %{
            authenticated_owner_attach: true,
            accepted_turn_state: nil,
@@ -707,12 +750,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   defp conversation_key(%RequestOptions{} = request_options) do
     request_options.continuity.conversation_key |> blank_to_nil()
-  end
-
-  defp owner_instance_id(%RequestOptions{} = request_options) do
-    request_options.continuity.owner_instance_id
-    |> blank_to_nil()
-    |> Kernel.||(Atom.to_string(node()))
   end
 
   defp pool_upstream_assignment_id(%RequestOptions{} = request_options) do

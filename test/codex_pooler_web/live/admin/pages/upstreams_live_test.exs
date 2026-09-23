@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   import Phoenix.LiveViewTest
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Access.Invite
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
@@ -91,8 +92,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
             account_label: label,
             identity_metadata: %{
               "credential_epoch" => 1,
-              AccountAvailabilityStore.metadata_key() =>
-                AccountAvailabilityStore.encode!(state, as_of, 1)
+              AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(state, as_of, 1)
             }
           })
 
@@ -1037,9 +1037,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       Pools.create_pool(scope, %{slug: "oauth-flow-summaries", name: "OAuth Flow Summaries"})
 
     assert {:ok, %{flow: browser_flow, authorization_url: authorization_url}} =
-             Upstreams.start_browser_oauth(scope, pool,
-               metadata: %{"source" => "admin_upstreams_test"}
-             )
+             Upstreams.start_browser_oauth(scope, pool, metadata: %{"source" => "admin_upstreams_test"})
 
     device_auth_id = runtime_secret("oauth-flow-device-auth-id")
 
@@ -1153,6 +1151,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#oauth-link-authorization-step", "Authorization page")
     assert has_element?(view, "#oauth-link-callback-url")
     assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
+    # The copy-then-paste figure belongs to this route only: it draws the move
+    # the operator has to make in a browser the pooler cannot reach.
+    assert has_element?(view, "#oauth-link-callback-demo[data-role='oauth-callback-paste-demo']")
     assert has_element?(view, "#oauth-link-submit-callback")
     # Nothing to open yet: a pending flow has no linked identity to point at.
     refute has_element?(view, "#oauth-link-open-cockpit")
@@ -1444,6 +1445,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> render_click()
 
     assert has_element?(view, "#oauth-link-device-code", "CODE-UI")
+    # Nothing is pasted back on this route, so the paste figure stays away.
+    refute has_element?(view, "[data-role='oauth-callback-paste-demo']")
 
     assert has_element?(
              view,
@@ -1859,13 +1862,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
-    active_badge_id = "upstream-account-#{active_identity.id}-saved-reset-count"
-
     active_badge_selector =
-      "##{active_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Open saved reset bank: 2 saved resets'][aria-controls='saved-reset-policy-dialog'][aria-haspopup='dialog'][phx-click='open_saved_reset_policy'][phx-value-id='#{active_identity.id}']"
+      "#upstream-account-#{active_identity.id}-saved-reset-meter-open"
 
-    assert has_element?(view, active_badge_selector, "2")
-    assert has_element?(view, "#{active_badge_selector} .hero-battery-100.size-3.text-current")
+    refute has_element?(view, "#upstream-account-#{active_identity.id}-saved-reset-count")
+    assert has_element?(view, active_badge_selector)
 
     refute has_element?(view, "#upstream-saved-reset-count-popover-#{active_identity.id}")
 
@@ -1956,7 +1957,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     active_card = view |> element("#upstream-account-#{active_identity.id}") |> render()
-    active_badge_class = html_element_class(active_card, active_badge_id)
 
     assert Regex.match?(
              ~r/data-role="upstream-saved-reset-meter-count"[^>]*>\s*x2\s*<\/span>/,
@@ -1987,12 +1987,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         "upstream-account-#{active_identity.id}-saved-reset-meter-segment-3"
       )
 
-    assert active_badge_class =~ "bg-success/15"
-    assert active_badge_class =~ "text-success"
-    assert active_badge_class =~ "border-success/40"
-    refute active_badge_class =~ "bg-(--color-reset-bank)/10"
-    refute active_badge_class =~ "text-(--color-reset-bank)"
-    refute active_badge_class =~ "border-dashed"
     refute active_usage_panel_class =~ "max-h-"
     refute active_usage_panel_class =~ "overflow-hidden"
     assert active_usage_panel_class =~ "transition-opacity"
@@ -2016,7 +2010,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert active_pools_trigger_class =~ "hover:border-primary/25"
 
     assert upstream_header_badge_order(active_card) == [
-             active_badge_id,
              "upstream-account-#{active_identity.id}-plan-label"
            ]
 
@@ -2123,9 +2116,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-account-#{active_identity.id}-saved-reset-panel")
 
     view
-    |> element(
-      "#upstream-account-#{active_identity.id}-pools-panel-trigger[aria-expanded='true']"
-    )
+    |> element("#upstream-account-#{active_identity.id}-pools-panel-trigger[aria-expanded='true']")
     |> render_click()
 
     assert has_element?(
@@ -2133,12 +2124,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "#upstream-account-#{active_identity.id}-panel-switcher[data-panel-view='usage']"
            )
 
-    inactive_badge_id = "upstream-account-#{inactive_identity.id}-saved-reset-count"
-
     inactive_badge_selector =
-      "##{inactive_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Open saved reset bank: 1 saved reset'][aria-controls='saved-reset-policy-dialog'][aria-haspopup='dialog'][phx-click='open_saved_reset_policy'][phx-value-id='#{inactive_identity.id}']"
+      "#upstream-account-#{inactive_identity.id}-saved-reset-meter-open"
 
-    assert has_element?(view, inactive_badge_selector, "1")
+    refute has_element?(view, "#upstream-account-#{inactive_identity.id}-saved-reset-count")
+    assert has_element?(view, inactive_badge_selector)
 
     assert has_element?(
              view,
@@ -2154,10 +2144,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     refute has_element?(view, "#upstream-account-#{inactive_identity.id}-saved-reset-meter-reset")
 
-    assert has_element?(
-             view,
-             "#{inactive_badge_selector} .hero-battery-100.size-3[class*='--color-reset-bank']"
-           )
+    refute has_element?(view, "#{inactive_badge_selector} [class*='hero-']")
 
     refute has_element?(view, "#upstream-account-#{inactive_identity.id}-saved-reset-panel")
     refute has_element?(view, "#upstream-account-#{legacy_identity.id}-saved-reset-panel")
@@ -2168,7 +2155,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     inactive_card = view |> element("#upstream-account-#{inactive_identity.id}") |> render()
-    inactive_badge_class = html_element_class(inactive_card, inactive_badge_id)
 
     inactive_saved_meter_segment_1_class =
       html_element_class(
@@ -2176,14 +2162,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         "upstream-account-#{inactive_identity.id}-saved-reset-meter-segment-1"
       )
 
-    assert inactive_badge_class =~ "bg-(--color-reset-bank)/10"
-    assert inactive_badge_class =~ "text-(--color-reset-bank)"
-    assert inactive_badge_class =~ "border-(--color-reset-bank)/40"
-    refute inactive_badge_class =~ "border-dashed"
     assert inactive_saved_meter_segment_1_class =~ "bg-(--color-reset-bank)/80"
 
     assert upstream_header_badge_order(inactive_card) == [
-             inactive_badge_id,
              "upstream-account-#{inactive_identity.id}-plan-label"
            ]
 
@@ -2257,9 +2238,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     legacy_badge_selector =
-      "#upstream-account-#{legacy_identity.id}-saved-reset-count[aria-label='Open saved reset bank: 1 saved reset'][phx-click='open_saved_reset_policy']"
+      "#upstream-account-#{legacy_identity.id}-saved-reset-meter-open[phx-click='open_saved_reset_policy']"
 
-    assert has_element?(view, legacy_badge_selector, "1")
+    assert has_element?(view, legacy_badge_selector)
 
     view |> element(legacy_badge_selector) |> render_click()
 
@@ -2310,6 +2291,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     action_selector = "#saved-reset-policy-upstream-account-#{identity.id}"
     assert has_element?(view, action_selector, "Saved resets")
+    assert has_element?(view, "#{action_selector} .hero-building-library-micro")
 
     view |> element(action_selector) |> render_click()
 
@@ -2556,7 +2538,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#saved-reset-last-auto-redemption-cause",
-             "Last automatic redemption · Request · weekly exhausted"
+             "Last automatic redemption · Request · long-window quota exhausted"
            )
 
     refute render(view) =~ "saved-reset-dialog-auto-sensitive-sentinel"
@@ -3384,7 +3366,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id} header[data-role='upstream-account-card-header'].flex-col.items-stretch.justify-between.py-3[class~='sm:flex-row'][class~='sm:items-center']"
+             "#upstream-account-#{identity.id} header[data-role='upstream-account-card-header'].flex.items-center.justify-between.gap-2.py-3"
            )
 
     assert has_element?(
@@ -3394,7 +3376,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-header-actions.items-center.self-end[class~='sm:self-center'] #upstream-account-#{identity.id}-plan-label.self-center",
+             "#upstream-account-#{identity.id}-header-actions.items-center.shrink-0.self-center #upstream-account-#{identity.id}-plan-label.self-center",
              "Team"
            )
 
@@ -3854,9 +3836,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, view, html} = live(conn, ~p"/admin/upstreams")
 
     limit_ids =
-      Regex.scan(~r/id="(upstream-account-#{identity.id}-limit-[^"]+)"/, html,
-        capture: :all_but_first
-      )
+      Regex.scan(~r/id="(upstream-account-#{identity.id}-limit-[^"]+)"/, html, capture: :all_but_first)
       |> List.flatten()
 
     assert limit_ids == Enum.uniq(limit_ids)
@@ -5126,8 +5106,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Routing ready",
              tone: :success,
              reason_code: "routing_ready",
-             reason:
-               "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+             reason: "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: %{routing_ready_now?: true}
@@ -5151,8 +5130,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Assignment unavailable",
              tone: :warning,
              reason_code: "assignment_unavailable",
-             reason:
-               "No active, healthy, eligible pool assignment is available for this upstream account.",
+             reason: "No active, healthy, eligible pool assignment is available for this upstream account.",
              identity_status: "active",
              assignment_ready?: false,
              quota_readiness: %{routing_ready_now?: true}
@@ -5292,8 +5270,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Circuit protection active",
              tone: :error,
              reason_code: "circuit_routes_blocked",
-             reason:
-               "One or more model and route lanes are blocked; unaffected routes may remain available.",
+             reason: "One or more model and route lanes are blocked; unaffected routes may remain available.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: blocked_quota
@@ -5323,8 +5300,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Circuit recovery in progress",
              tone: :warning,
              reason_code: "circuit_recovering",
-             reason:
-               "One or more model and route lanes are recovering; unaffected routes may remain available.",
+             reason: "One or more model and route lanes are recovering; unaffected routes may remain available.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: recovering_quota
@@ -5339,8 +5315,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Routing ready",
              tone: :success,
              reason_code: "routing_ready",
-             reason:
-               "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+             reason: "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
              identity_status: "active",
              assignment_ready?: true,
              quota_readiness: clear_quota
@@ -5723,8 +5698,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              label: "Assignment unavailable",
              tone: :warning,
              reason_code: "assignment_unavailable",
-             reason:
-               "No active, healthy, eligible pool assignment is available for this upstream account."
+             reason: "No active, healthy, eligible pool assignment is available for this upstream account."
            } = accounts[assignment_identity.id].routing_readiness
 
     assert %{
@@ -6299,8 +6273,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         assignment_metadata: %{"quota_priming" => %{"status" => "known"}},
         identity_metadata: %{
           "credential_epoch" => 1,
-          AccountAvailabilityStore.metadata_key() =>
-            AccountAvailabilityStore.encode!(:available, now, 1)
+          AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, now, 1)
         }
       })
 
@@ -7233,8 +7206,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       upstream_assignment_fixture(pool, %{
         account_label: "Reauthentication priority",
         identity_status: "reauth_required",
-        identity_metadata:
-          credential_expiry_metadata(:known, future_deadline) |> Map.merge(reset_metadata)
+        identity_metadata: credential_expiry_metadata(:known, future_deadline) |> Map.merge(reset_metadata)
       })
 
     assert {:ok, _secret} =
@@ -7801,7 +7773,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-json-live", name: "auth.json Live"})
     access_token = jwt_token(%{"exp" => future_unix()})
     refresh_token = runtime_secret("auth-json-refresh")
-    auth_json = auth_json_fixture(access_token: access_token, refresh_token: refresh_token)
+    email = unique_user_email()
+
+    auth_json =
+      auth_json_fixture(access_token: access_token, refresh_token: refresh_token, email: email)
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
@@ -7823,7 +7798,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert identity.metadata["auth_json_imported"] == true
     assert assignment.pool_id == pool.id
     assert assignment.status == "active"
-    assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
+    assert has_element?(view, "#upstream-account-#{identity.id}", email)
     refute has_element?(view, "#upstream-account-#{identity.id}", "acct_fixture_auth_json")
     refute has_element?(view, "#upstream-account-#{identity.id}", "auth.json import")
     refute has_element?(view, "#upstream-account-#{identity.id}", "stored account id")
@@ -7851,7 +7826,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-json-file", name: "auth.json File"})
     access_token = jwt_token(%{"exp" => future_unix(), "source" => "file"})
     refresh_token = runtime_secret("auth-json-file-refresh")
-    auth_json = auth_json_fixture(access_token: access_token, refresh_token: refresh_token)
+    email = unique_user_email()
+
+    auth_json =
+      auth_json_fixture(access_token: access_token, refresh_token: refresh_token, email: email)
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
     open_auth_json_import_dialog(view)
@@ -7873,7 +7851,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     identity = Repo.one!(UpstreamIdentity)
     assert identity.metadata["auth_json_imported"] == true
-    assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
+    assert has_element?(view, "#upstream-account-#{identity.id}", email)
     refute has_element?(view, "#auth-json-import-dialog")
 
     html = render(view)
@@ -7982,19 +7960,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     second_access = jwt_token(%{"exp" => future_unix(), "nonce" => "shared-target"})
     first_refresh = runtime_secret("shared-source-refresh")
     second_refresh = runtime_secret("shared-target-refresh")
+    email = unique_user_email()
 
     assert {:ok, %{identity: identity, assignment: source_assignment}} =
              Upstreams.import_codex_auth_json(
                scope,
                source_pool,
-               auth_json_fixture(access_token: first_access, refresh_token: first_refresh)
+               auth_json_fixture(
+                 access_token: first_access,
+                 refresh_token: first_refresh,
+                 email: email
+               )
              )
 
     assert {:ok, %{identity: same_identity, assignment: target_assignment}} =
              Upstreams.import_codex_auth_json(
                scope,
                target_pool,
-               auth_json_fixture(access_token: second_access, refresh_token: second_refresh)
+               auth_json_fixture(
+                 access_token: second_access,
+                 refresh_token: second_refresh,
+                 email: email
+               )
              )
 
     assert same_identity.id == identity.id
@@ -8003,7 +7990,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert Repo.aggregate(UpstreamIdentity, :count) == 1
     assert Repo.aggregate(PoolUpstreamAssignment, :count) == 2
-    assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
+    assert has_element?(view, "#upstream-account-#{identity.id}", email)
     assert has_element?(view, "#upstream-account-#{identity.id}", "2 Pools")
 
     assert has_element?(
@@ -8650,8 +8637,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp blocked_auth_metadata(status) do
     %{
-      "access_token_expires_at" =>
-        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601(),
+      "access_token_expires_at" => DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601(),
       "token_refresh" => %{
         "status" => status,
         "reason" => %{
@@ -8765,8 +8751,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         quota_evidence_age: nil,
         credential_expiry: %{state: "unavailable", expires_at: nil, age: nil}
       },
-      access_token_label:
-        Keyword.get(opts, :access_token_label, "access token expiry unavailable"),
+      access_token_label: Keyword.get(opts, :access_token_label, "access token expiry unavailable"),
       secret_status: Keyword.get(opts, :secret_status, :expired),
       reauth_required?: status == "reauth_required",
       reauth_reason_code: nil,
@@ -8976,7 +8961,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            sandbox_settings_cache: settings_cache
          } do
       source = unquote(source)
-      fixture = committed_auth_json_recovery_fixture!()
+      fixture = committed_auth_json_recovery_fixture!(sandbox_owner, settings_cache)
       barrier = make_ref()
       sensitive_sentinel = fixture.sensitive_sentinel
 
@@ -9078,20 +9063,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         :telemetry.detach(handler_id)
         send(holder.pid, {barrier, :advance})
         stop_live_view_proxy!(view)
-        # The resubmitted import updated the committed identity inside the
-        # sandboxed transaction, whose row lock would block the unboxed delete
-        # until the owner exits; release the sandbox before cleaning up.
-        DataCase.stop_sandbox(sandbox_owner, settings_cache)
-        cleanup_committed_auth_json_recovery_fixture!(fixture)
       end
     end
   end
 
-  defp committed_auth_json_recovery_fixture! do
+  # Registered before the commit and keyed on the suffix every committed key derives from, never
+  # scoped in `try/after`: the stale-import holder and its monitor are linked tasks, so an assertion
+  # failing in either kills the test process before an enclosing `after` runs, and the committed
+  # pool and identity would outlive the test. The sandbox is stopped first because the resubmitted
+  # import updates the committed identity inside the sandboxed transaction, whose row lock would
+  # block the unboxed delete until the owner exits; `DataCase.stop_sandbox/2` is idempotent, so
+  # the case template's own teardown still runs after it.
+  defp committed_auth_json_recovery_fixture!(sandbox_owner, settings_cache) do
+    suffix = System.unique_integer([:positive])
+
+    register_unboxed_cleanup!(fn ->
+      DataCase.stop_sandbox(sandbox_owner, settings_cache)
+      delete_committed_auth_json_recovery_fixture!(suffix)
+    end)
+
     Sandbox.unboxed_run(Repo, fn ->
-      suffix = System.unique_integer([:positive])
       account_id = "acct-mounted-recovery-#{suffix}"
-      email = "fixture-user@example.com"
+      # Committed, so derived per call: a literal shared with the sandboxed auth.json tests would
+      # collide with any identity another committed run leaves on the same address.
+      email = "mounted-recovery-#{suffix}@example.com"
       pool = pool_fixture(%{slug: "mounted-recovery-#{suffix}", name: "Mounted recovery"})
 
       %{identity: identity} =
@@ -9112,18 +9107,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     end)
   end
 
-  defp cleanup_committed_auth_json_recovery_fixture!(fixture) do
-    Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(
-        from identity in UpstreamIdentity,
-          where: identity.id == ^fixture.identity.id
-      )
+  defp delete_committed_auth_json_recovery_fixture!(suffix) do
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.chatgpt_account_id == ^"acct-mounted-recovery-#{suffix}"
+    )
 
-      Repo.delete_all(
-        from pool in CodexPooler.Pools.Pool,
-          where: pool.id == ^fixture.pool.id
-      )
-    end)
+    Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.slug == ^"mounted-recovery-#{suffix}")
+
+    :ok
   end
 
   defp stop_live_view_proxy!(view) do
@@ -9160,6 +9152,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   defp attach_import_preparation_probe!(handler_id, target) do
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :telemetry.attach(
       handler_id,
       [:codex_pooler, :repo, :query],
@@ -9229,8 +9224,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       active_secrets:
         Repo.aggregate(
           from(secret in EncryptedSecret,
-            where:
-              secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
+            where: secret.upstream_identity_id == ^fixture.identity.id and secret.status == "active"
           ),
           :count
         ),
@@ -9489,8 +9483,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   defp auth_json_fixture(opts) do
+    email = Keyword.get(opts, :email, "fixture-user@example.com")
+
     tokens = %{
-      "id_token" => Keyword.get(opts, :id_token, id_token_fixture()),
+      "id_token" => Keyword.get_lazy(opts, :id_token, fn -> id_token_fixture(email) end),
       "access_token" => Keyword.fetch!(opts, :access_token),
       "refresh_token" => Keyword.fetch!(opts, :refresh_token),
       "account_id" => Keyword.get(opts, :account_id, "acct_fixture_auth_json")
@@ -9505,9 +9501,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> CodexPooler.JSON.encode!()
   end
 
-  defp id_token_fixture do
+  defp id_token_fixture(email) do
     jwt_token(%{
-      "email" => "fixture-user@example.com",
+      "email" => email,
       "https://api.openai.com/auth" => %{
         "chatgpt_account_id" => "acct_fixture_auth_json",
         "chatgpt_user_id" => "user_fixture_auth_json",
@@ -9613,8 +9609,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     "http://localhost:1455/auth/callback?" <>
       URI.encode_query([
         {"code", code},
-        {"scope",
-         "openid profile email offline_access api.connectors.read api.connectors.invoke"},
+        {"scope", "openid profile email offline_access api.connectors.read api.connectors.invoke"},
         {"provider_extra", "ignored"},
         {"state", state}
       ])
@@ -9732,6 +9727,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     test_pid = self()
     handler_id = {__MODULE__, test_pid, System.unique_integer([:positive])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -9752,6 +9750,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
        when is_pid(query_pid) and is_function(fun, 0) do
     test_pid = self()
     handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

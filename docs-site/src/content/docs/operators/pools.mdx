@@ -260,6 +260,20 @@ Assign more than one upstream when you want load distribution, fallback, quota f
 
 When a saved edit changes upstream assignments for an active Pool, Codex Pooler enqueues an immediate asynchronous catalog sync for that Pool so model source metadata can refresh without waiting for the 30-minute scheduler. The sync does not bypass runtime eligibility checks or change the routing state held by in-flight requests or already-open streams.
 
+### Sharing One Upstream Across Pools
+
+Assigning the same upstream account to more than one Pool is supported and is usually what you want: it pools quota and gives each Pool fallback without a dedicated account.
+
+**Nobody can read anyone else's prompts.** Codex Pooler never stores prompts, and nothing described below gives any caller a way to retrieve, list or reconstruct content they do not already have. If you are evaluating whether this is safe to use, that is the answer.
+
+The detail worth knowing is about the provider's prompt-prefix cache, which exists to make repeated prefixes cheaper. That cache matches on content, and it is not partitioned per upstream account the way you might expect: measured against a provider in September 2026, content sent under one upstream account came back as cached input tokens under a different one. Those accounts each had their own account and user identifiers; whether the provider also groups them under one organisation is not something Codex Pooler can see, so treat the boundary as the provider's to define. Either way this is the provider's own behaviour and it applies to anyone sharing accounts, with or without Codex Pooler in front of it.
+
+The only thing that behaviour exposes is a yes-or-no answer about bytes you already hold. If you send a prefix and the response reports cached input tokens, you learn that those exact bytes had been sent before by someone sharing the account. You had to possess them to send them, so you learn nothing about content you did not already have, and there is no way to go from a cache hit to anything you were not already holding.
+
+Where that could matter in practice is a shared artifact rather than someone's typing: if you already have a document, a system prompt or a code file, you could use this to test whether it had previously been sent through the same account. Guessing a colleague's prompt is not a realistic use of it — provider caches match long exact prefixes, so you would need the text verbatim first.
+
+For a single team or operator this is simply an efficiency and needs no action. If your Pools are separate customers or separate legal entities, and even that yes-or-no answer about a shared file is more than you want between them, give each its own upstream accounts. No Codex Pooler setting changes it, because the cache lives at the provider.
+
 ## API Keys Step
 
 The API keys step selects existing Pool API keys assigned to the Pool. Assigning a key lets that client credential use this Pool. Creating or rotating the raw key happens on the API keys page, where the raw secret is shown only once.
@@ -323,7 +337,7 @@ Codex, OpenCode, and other supported public OpenAI-compatible clients keep their
 
 Masked Images edits need an eligible Full Responses host with image-input support. Auto can supply one when the catalog resolves that host to Full; there is no need to force every model to Full. An exact requested model explicitly configured Lite remains unavailable for masked edits, and the adapter does not override that setting. Without an eligible Full host, masked edits return `400 unsupported_parameter` (`mask`) before dispatch or accounting reservation. Unmasked native Images requests continue to use their existing route. See [Responses Full and Lite](/reference/responses-lite-vs-full/#image-generation-and-masked-edits).
 
-Full never silently downgrades. A generic ordinary Responses HTTP failure under the explicit Full override keeps the upstream status but returns only a fixed server-owned error; provider message, body, code, param, and extra fields are not returned. Request-log detail drawers show the configured, effective, and source labels when each request or attempt has a complete validated snapshot; a non-rate-limit 4xx is classified as `full_upstream_rejection`, a 429 as `upstream_rate_limited`, and an ordinary 5xx as `upstream_status`. They do not retain the upstream error text, request payload, prompt, response body, or credentials. Auto, Lite, compact or unrelated routes, and established model-unavailability responses keep their existing response behavior. Review provider support, then explicitly select `Auto` or `Lite` and retry as a new request or turn.
+Full never silently downgrades. An ordinary Responses HTTP failure under the explicit Full override keeps the upstream status and a server-owned message, and on a non-rate-limit 4xx it relays the same bounded rejection `type`, `code`, and `param` the attempt already records; the provider message, body, and extra fields are not returned. Request-log detail drawers show the configured, effective, and source labels when each request or attempt has a complete validated snapshot; a non-rate-limit 4xx is classified as `upstream_status`, a 429 as `upstream_rate_limited`, and an ordinary 5xx as `upstream_status`. The error code does not record the serving mode, so the same provider rejection carries the same code under Auto, Lite, and Full, and the mode is read from the serving-mode snapshot instead. They do not retain the upstream error text, request payload, prompt, response body, or credentials. Auto, Lite, compact or unrelated routes, and established model-unavailability responses keep their existing response behavior. Review provider support, then explicitly select `Auto` or `Lite` and retry as a new request or turn.
 
 Serving modes are database-backed Pool configuration. There is no global environment variable or Helm value for them.
 
@@ -339,7 +353,7 @@ When a Pool is not behaving as expected, check it in this order:
 6. inspect recent Requests 5h, TPS 5h, and Traffic 24h for changes in load
 7. open Request logs filtered from the card footer for request-level metadata
 8. for request-compression questions, inspect `payload_compression` status, reason, route class, candidate counts, and savings display in the Request log row
-9. for explicit Full failures, inspect `full_upstream_rejection` for non-rate-limit 4xx, `upstream_rate_limited` for 429, or `upstream_status` for 5xx, the upstream status, and only the three bounded serving-mode labels before selecting `Auto` or `Lite`
+9. for explicit Full failures, inspect `upstream_status` for non-rate-limit 4xx and for 5xx or `upstream_rate_limited` for 429, the upstream status, and the three bounded serving-mode labels, which are what identify the failure as a Full one, before selecting `Auto` or `Lite`
 10. check Audit logs when a Pool, upstream assignment, API key, routing setting, or model serving mode changed recently
 
 If all upstreams fail eligibility, routing cannot use them even if the Pool card looks active. The card shows Pool-level configuration, while final routing also depends on upstream status, model support, quota evidence, route health, and continuity constraints.

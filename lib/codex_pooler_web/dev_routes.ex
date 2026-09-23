@@ -46,6 +46,9 @@ defmodule CodexPoolerWeb.DevRoutes do
 
           forward "/native-compaction/trace", CodexPooler.Dev.NativeCompactionTrace.Plug
 
+          forward "/native-compaction/preaccounting",
+                  CodexPooler.Dev.NativeCompactionPreaccounting.Plug
+
           forward "/native-compaction/pre-attempt-drain",
                   CodexPooler.Dev.NativePreAttemptDrain.Plug
         end

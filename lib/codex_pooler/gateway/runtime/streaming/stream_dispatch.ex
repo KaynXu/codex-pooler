@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
+  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
@@ -77,25 +78,54 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
+  # The deferred closure runs in the connection process after the request is
+  # already reserved and the attempt dispatched. Register it so a rollout drain
+  # can reach this exact stream; the registration is refcounted, so a
+  # first-event retry's nested stream keeps the one token the relay selects on.
   defp stream_result(response, %SelectedCandidateContext{} = context, callbacks) do
     fn conn ->
       response_context = %ResponseContext{context: context, response: response}
 
-      StreamRelay.run(
-        stream_relay_state(conn, context.request_options, response),
-        response,
-        stream_relay_handlers(response_context, response, :http_conn, callbacks)
-      )
-      |> http_stream_result()
+      drain_token =
+        DeferredStreamRegistry.register(%{
+          request_id: context.reserved.request.id,
+          attempt_id: attempt_id(context.attempt)
+        })
+
+      try do
+        result =
+          StreamRelay.run(
+            stream_relay_state(conn, context, response),
+            response,
+            response_context
+            |> stream_relay_handlers(response, :http_conn, callbacks)
+            |> put_drain_token(drain_token)
+          )
+          |> http_stream_result()
+
+        DeferredStreamRegistry.finish(
+          drain_token,
+          if(match?({:error, _}, result), do: :failed, else: :completed)
+        )
+
+        result
+      catch
+        kind, reason ->
+          DeferredStreamRegistry.finish(drain_token, :failed)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
     end
   end
+
+  defp put_drain_token(handlers, nil), do: handlers
+  defp put_drain_token(handlers, drain_token), do: Map.put(handlers, :drain_token, drain_token)
 
   defp websocket_stream_result(response, writer, %SelectedCandidateContext{} = context, callbacks) do
     fn ->
       response_context = %ResponseContext{context: context, response: response}
 
       StreamRelay.run(
-        stream_relay_state(:websocket, context.request_options, response),
+        stream_relay_state(:websocket, context, response),
         response,
         stream_relay_handlers(response_context, response, {:websocket, writer}, callbacks)
       )
@@ -118,6 +148,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     )
     |> with_http_delivery_receipt(response_context)
     |> Map.merge(%{
+      buffer_telemetry_opts: buffer_telemetry_opts(response_context),
       write_chunk: http_stream_writer(response_context),
       write_keepalive: http_sse_keepalive_writer(response_context.response),
       before_finalize_failure: http_stream_terminal_failure_writer(response_context),
@@ -140,11 +171,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     # `before_finalize_success` keys prevents the HTTP synthetic terminal from
     # leaking onto the GET /v1/responses websocket. Do not add either key here.
     |> Map.merge(%{
+      buffer_telemetry_opts: buffer_telemetry_opts(response_context),
       keepalive_interval_ms: 0,
       write_keepalive: fn state -> {:ok, state} end,
       write_chunk: websocket_stream_writer(response_context, writer)
     })
   end
+
+  # The relay cannot name its own transport or route class; the request options
+  # already carry both, so hand them over and let `BufferTelemetry` derive the
+  # tags. Without this a truncated HTTP SSE body is recorded as
+  # transport/route_class "unknown" and cannot be attributed.
+  defp buffer_telemetry_opts(%ResponseContext{context: %{request_options: request_options}}),
+    do: [request_options: request_options]
 
   # `Finalization.Streaming` replaces the attempt's response metadata
   # wholesale, so the downstream delivery receipt is merged only after either
@@ -203,9 +242,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp chunk_write_failure?(_reason), do: false
 
   defp write_downstream_chunk(state, data) do
+    case write_downstream_chunk_preserving_state(state, data) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason, _state} -> {:error, reason}
+    end
+  end
+
+  defp write_downstream_chunk_preserving_state(state, data) do
     case update_relay_target(state, &Plug.Conn.chunk(&1, data)) do
       {:ok, state} -> {:ok, DownstreamDeliveryEvidence.record_write(state, data)}
-      {:error, _reason} = error -> error
+      {:error, reason} -> {:error, reason, state}
     end
   end
 
@@ -217,7 +263,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     request = context.reserved.request
 
     fn state, data ->
-      {data, state} =
+      {data, state, _delivery} =
         normalize_stream_data(response_context, state, data, &visible_websocket_data?/1)
 
       {messages, websocket_sse_block_state} =
@@ -235,7 +281,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp visible_websocket_data?(data), do: is_binary(data) and data != ""
 
-  defp stream_relay_state(:websocket = target, %RequestOptions{} = opts, response) do
+  defp stream_relay_state(
+         :websocket = target,
+         %SelectedCandidateContext{request_options: %RequestOptions{} = opts},
+         response
+       ) do
     target
     |> base_stream_relay_state(opts, response)
     |> put_first_event_state(StreamAttempt.first_event_state())
@@ -244,13 +294,29 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> Map.put(:websocket_sse_block_state, StreamProtocol.new_sse_block_state())
   end
 
-  defp stream_relay_state(target, %RequestOptions{} = opts, response) do
+  defp stream_relay_state(
+         target,
+         %SelectedCandidateContext{
+           request_options: %RequestOptions{} = opts,
+           reserved: %{request: request}
+         },
+         response
+       ) do
     target
     |> base_stream_relay_state(opts, response)
+    |> maybe_enable_native_http_progress(request)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())
   end
+
+  defp maybe_enable_native_http_progress(
+         state,
+         %{request_metadata: %{"native_http_claim_arm" => "post_compaction_resume"}}
+       ),
+       do: DownstreamStream.enable_native_http_progress(state)
+
+  defp maybe_enable_native_http_progress(state, _request), do: state
 
   defp base_stream_relay_state(target, %RequestOptions{} = opts, response) do
     DownstreamStream.initial_state(target, opts, stream_source(response))
@@ -353,6 +419,38 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     do: {:retry, Map.put(failure, :withheld_body, buffer <> data)}
 
   defp attach_withheld_body(classification, _previous_state, _data), do: classification
+
+  # A retryable terminal may arrive after lifecycle or response metadata, but
+  # before the provider has committed model output to the client. Those records
+  # carry candidate-specific response ids, model headers, verification,
+  # moderation, safety, and turn-state state. Retain them on the downstream
+  # connection until this attempt commits. A retry discards the failed
+  # candidate's bytes; the successful attempt flushes its own exactly once.
+  @withheld_preamble :codex_pooler_withheld_retry_preamble
+
+  defp withheld_preamble(%{target: %Plug.Conn{private: private}}),
+    do: Map.get(private, @withheld_preamble, "")
+
+  defp withhold_preamble(%{target: %Plug.Conn{} = target} = state, preamble)
+       when is_binary(preamble) and preamble != "" do
+    target =
+      Plug.Conn.put_private(target, @withheld_preamble, withheld_preamble(state) <> preamble)
+
+    %{state | target: target}
+  end
+
+  defp withhold_preamble(state, _preamble), do: state
+
+  defp take_withheld_preamble(%{target: %Plug.Conn{} = target} = state) do
+    {withheld_preamble(state), %{state | target: %{target | private: Map.delete(target.private, @withheld_preamble)}}}
+  end
+
+  defp take_withheld_preamble(state), do: {"", state}
+
+  defp discard_withheld_preamble(%{target: %Plug.Conn{} = target} = state),
+    do: %{state | target: %{target | private: Map.delete(target.private, @withheld_preamble)}}
+
+  defp discard_withheld_preamble(state), do: state
 
   # The first-event classifier can hold a large first event until the stream
   # ends, so both finalize hooks must flush the held bytes through the normal
@@ -465,30 +563,53 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp flush_buffered_first_event(%ResponseContext{} = response_context, state) do
     case first_event_state(state) do
       %{buffer: ""} ->
-        {:ok, state}
+        write_eof_normalized_stream_data(response_context, state)
 
       %{buffer: buffer} = first_event ->
         state = put_first_event_state(state, %{first_event | buffer: ""})
-        write_flushed_first_event(response_context, state, buffer)
+
+        write_flushed_first_event(
+          response_context,
+          state,
+          terminate_complete_sse_block_at_eof(buffer)
+        )
+    end
+  end
+
+  # A first-event terminal can be structurally complete when the upstream EOF
+  # supplies the only missing SSE blank line. The ordinary relay receives that
+  # separator in a later chunk; at EOF, add it only when the entire buffer
+  # becomes complete, then send it through the same normalizer and preamble
+  # gate as every other downstream write.
+  defp terminate_complete_sse_block_at_eof(buffer) do
+    terminated = buffer <> "\n\n"
+
+    with {[_block], ""} <- StreamProtocol.complete_sse_blocks(terminated, bounded?: false),
+         {:ok, %{kind: kind}} <- StreamProtocol.terminal_outcome(terminated),
+         true <- kind in [:completed, :incomplete, :failed] do
+      terminated
+    else
+      _incomplete_or_nonterminal -> buffer
     end
   end
 
   defp write_flushed_first_event(%ResponseContext{} = response_context, state, buffer) do
-    {downstream_data, state} =
-      normalize_stream_data(
-        response_context,
-        state,
-        buffer,
-        &StreamProtocol.stream_data_visible?/1
-      )
+    case write_stream_data_preserving_state(response_context, state, buffer) do
+      {:ok, state} -> write_eof_normalized_stream_data(response_context, state)
+      {:error, reason, state} -> {:chunk_error, state, reason}
+    end
+  end
 
-    if downstream_data == "" do
-      {:ok, state}
-    else
-      case write_downstream_chunk(state, downstream_data) do
-        {:ok, state} -> {:ok, state}
-        {:error, reason} -> {:chunk_error, state, reason}
-      end
+  defp write_eof_normalized_stream_data(
+         %ResponseContext{context: %{payload: payload, request_options: opts}},
+         state
+       ) do
+    {data, state, delivery} =
+      DownstreamStream.flush_eof_delivery(DownstreamStream.endpoint(payload, opts), opts, state)
+
+    case write_normalized_stream_data_preserving_state(state, data, delivery) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason, state} -> {:chunk_error, state, reason}
     end
   end
 
@@ -580,18 +701,69 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp write_stream_data(%ResponseContext{} = response_context, conn, data) do
-    {downstream_data, conn} =
+    case write_stream_data_preserving_state(response_context, conn, data) do
+      {:ok, conn} -> {:ok, conn}
+      {:error, reason, _conn} -> {:error, reason}
+    end
+  end
+
+  defp write_stream_data_preserving_state(%ResponseContext{} = response_context, conn, data) do
+    {downstream_data, conn, delivery} =
       normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_visible?/1)
 
-    if downstream_data == "" do
-      {:ok, conn}
-    else
-      write_downstream_chunk(conn, downstream_data)
+    write_normalized_stream_data_preserving_state(conn, downstream_data, delivery)
+  end
+
+  defp write_normalized_stream_data_preserving_state(conn, downstream_data, nil) do
+    {preamble, downstream_data, _preamble_seen?} =
+      StreamProtocol.partition_preamble_blocks(downstream_data)
+
+    write_normalized_stream_data_preserving_state(conn, downstream_data, %{
+      preamble: preamble,
+      data: downstream_data,
+      commits?: downstream_data != "" and commits_withheld_preamble?(downstream_data)
+    })
+  end
+
+  defp write_normalized_stream_data_preserving_state(conn, _data, %{
+         preamble: preamble,
+         data: downstream_data,
+         commits?: commits?
+       }) do
+    conn = withhold_preamble(conn, preamble)
+
+    cond do
+      downstream_data == "" ->
+        {:ok, conn}
+
+      commits? ->
+        {preamble, conn} = take_withheld_preamble(conn)
+        write_normalized_chunk_and_commit_progress(conn, preamble <> downstream_data)
+
+      true ->
+        write_normalized_chunk_and_commit_progress(conn, downstream_data)
     end
+  end
+
+  defp write_normalized_chunk_and_commit_progress(state, data) do
+    case write_downstream_chunk_preserving_state(state, data) do
+      {:ok, state} -> {:ok, DownstreamStream.commit_native_http_progress(state)}
+      {:error, reason, state} -> {:error, reason, state}
+    end
+  end
+
+  defp commits_withheld_preamble?(data) do
+    StreamProtocol.stream_data_visible?(data) or
+      match?(
+        {:ok, %{kind: kind}} when kind in [:completed, :incomplete, :failed],
+        StreamProtocol.terminal_outcome(data)
+      )
   end
 
   defp reset_first_event_retry_state(conn) do
     conn
+    |> discard_withheld_preamble()
+    |> Map.delete(:responses_api_tools_state)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())
@@ -602,10 +774,30 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> Map.fetch!(:http_first_event_retry)
     |> then(fn retry ->
       retry.(response_context,
+        retry_allowed?: not candidate_specific_http_headers_committed?(response_context),
         reset_state: &reset_first_event_retry_state/1,
         write_final_event: &write_final_first_event(response_context, &1, &2),
         stream_candidate: &stream_candidate_result/2
       )
+    end)
+  end
+
+  defp candidate_specific_http_headers_committed?(%ResponseContext{
+         context: context,
+         response: response
+       }) do
+    candidate_headers = [
+      "openai-model",
+      "x-reasoning-included",
+      "x-codex-safety-buffering-enabled",
+      "x-codex-safety-buffering-faster-model",
+      "x-codex-turn-state"
+    ]
+
+    response
+    |> stream_headers(context)
+    |> Enum.any?(fn {name, _value} ->
+      name in candidate_headers
     end)
   end
 
@@ -675,7 +867,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
     case maybe_mark_visible_output(state, reserved.request, context.attempt, data, visible_data?) do
       {:ok, state} ->
-        DownstreamStream.normalize_data(
+        DownstreamStream.normalize_delivery(
           data,
           DownstreamStream.endpoint(payload, opts),
           opts,
@@ -683,7 +875,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         )
 
       {:error, :stale_generation, state} ->
-        {"", state}
+        {"", state, nil}
     end
   end
 

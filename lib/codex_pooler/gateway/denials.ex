@@ -37,9 +37,7 @@ defmodule CodexPooler.Gateway.Denials do
         payload: payload,
         opts: opts
       }) do
-    status = policy_status(reason)
-    reason_code = to_string(reason)
-    message = policy_message(reason)
+    %{status: status, code: reason_code, message: message} = denial = policy_denial_error(reason)
 
     _ignored =
       Accounting.record_denied_request(
@@ -56,11 +54,43 @@ defmodule CodexPooler.Gateway.Denials do
         )
       )
 
-    {:error, error(status, reason_code, message)}
+    {:error, denial}
   end
+
+  @doc """
+  The one status and message for an API-key policy reason, as a marked denial.
+  `PreDispatch` and `log_policy/1` both answer a reason through this mapping,
+  so the same condition cannot surface with two statuses or two messages
+  (findings#221). A reason without a dedicated message keeps its atom as the
+  wire code and the generic policy message.
+  """
+  @spec policy_denial_error(atom()) :: map()
+  def policy_denial_error(reason) when is_atom(reason),
+    do: policy_error(policy_status(reason), Atom.to_string(reason), policy_message(reason))
+
+  @doc """
+  A policy denial the Pooler authors (never relayed from an upstream), marked
+  by construction so `/v1` renders its own code and message instead of the
+  upstream redaction. Every producer of such a denial builds it here, so a
+  new producer cannot forget the marker (findings#221).
+  """
+  @spec policy_error(pos_integer(), String.t(), String.t(), String.t() | nil) :: map()
+  def policy_error(status, code, message, param \\ nil)
+      when is_integer(status) and is_binary(code) and is_binary(message),
+      do: Map.put(error(status, code, message, param), :pooler_policy, true)
 
   @spec log_gateway(Context.t(), CodexPooler.Accounting.Request.t() | nil) :: {:error, map()}
   def log_gateway(context, turn_claim \\ nil)
+
+  def log_gateway(
+        %Context{reason: %{code: :api_key_concurrency_limit_exceeded}} = context,
+        turn_claim
+      ) do
+    log_gateway(
+      %{context | reason: policy_denial_error(:api_key_concurrency_limit_exceeded)},
+      turn_claim
+    )
+  end
 
   def log_gateway(
         %Context{
@@ -91,6 +121,7 @@ defmodule CodexPooler.Gateway.Denials do
           %{"gateway_denial" => gateway_metadata(reason_code, message, reason)},
           turn_claim
         )
+        |> fresh_unclaimed_concurrency_correlation(turn_claim, reason)
         |> maybe_put_turn_claim(turn_claim)
         |> update_in([:request_metadata], fn metadata ->
           metadata
@@ -109,6 +140,17 @@ defmodule CodexPooler.Gateway.Denials do
 
   defp maybe_put_turn_claim(attrs, nil), do: attrs
   defp maybe_put_turn_claim(attrs, request), do: Map.put(attrs, :turn_claim, request)
+
+  # An unreserved retry is a new rejection, not a durable execution claim.
+  # A websocket's handshake request id is shared by all its response.create frames.
+  defp fresh_unclaimed_concurrency_correlation(
+         attrs,
+         nil,
+         %{pooler_policy: true, code: "api_key_concurrency_limit_exceeded"}
+       ),
+       do: Map.put(attrs, :correlation_id, Ecto.UUID.generate())
+
+  defp fresh_unclaimed_concurrency_correlation(attrs, _turn_claim, _reason), do: attrs
 
   @spec enforced_model_metadata(RequestOptions.t()) :: String.t() | nil
   def enforced_model_metadata(%RequestOptions{
@@ -135,7 +177,6 @@ defmodule CodexPooler.Gateway.Denials do
       endpoint: endpoint,
       transport: request_options.transport.transport,
       correlation_id: RequestOptions.websocket_denial_correlation_id(request_options, turn_claim),
-      idempotency_key: request_options.request_metadata.idempotency_key,
       client_ip: request_options.request_metadata.client_ip,
       user_agent: request_options.request_metadata.user_agent,
       requested_model: requested_model(model, payload, endpoint),
@@ -220,7 +261,12 @@ defmodule CodexPooler.Gateway.Denials do
     end
   end
 
+  # The runtime auth boundary answers a disabled key with 401 (the credential
+  # is not usable); the gateway policy path said 403 for the same reason. One
+  # status for one condition (findings#221).
   defp policy_status(:api_key_missing), do: 401
+  defp policy_status(:api_key_disabled), do: 401
+  defp policy_status(:api_key_concurrency_limit_exceeded), do: 429
   defp policy_status(_reason), do: 403
 
   defp policy_message(:api_key_missing), do: "api key is required"
@@ -228,6 +274,11 @@ defmodule CodexPooler.Gateway.Denials do
   defp policy_message(:api_key_policy_malformed), do: "api key policy is invalid"
   defp policy_message(:model_not_allowed), do: "api key is not allowed to use this model"
 
-  defp error(status, code, message, param \\ nil),
+  defp policy_message(:api_key_concurrency_limit_exceeded),
+    do: "api key active request limit reached; retry shortly"
+
+  defp policy_message(_reason), do: "api key policy denied this request"
+
+  defp error(status, code, message, param),
     do: %{status: status, code: code, message: message, param: param}
 end

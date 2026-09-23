@@ -207,21 +207,17 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
           state: "circuit_protection_active",
           label: "Circuit protection active",
           tone: :error,
-          reason:
-            "One or more model and route lanes are blocked; unaffected routes may remain available.",
+          reason: "One or more model and route lanes are blocked; unaffected routes may remain available.",
           reason_code: "circuit_routes_blocked",
-          recovery_action:
-            "Wait for circuit protection to clear before relying on affected routes."
+          recovery_action: "Wait for circuit protection to clear before relying on affected routes."
         },
         :recovering => %{
           state: "circuit_recovering",
           label: "Circuit recovery in progress",
           tone: :warning,
-          reason:
-            "One or more model and route lanes are recovering; unaffected routes may remain available.",
+          reason: "One or more model and route lanes are recovering; unaffected routes may remain available.",
           reason_code: "circuit_recovering",
-          recovery_action:
-            "Wait for circuit recovery to complete before relying on affected routes."
+          recovery_action: "Wait for circuit recovery to complete before relying on affected routes."
         }
       }
 
@@ -332,8 +328,7 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
       status: "active",
       metadata: %{
         "credential_epoch" => 1,
-        AccountAvailabilityStore.metadata_key() =>
-          AccountAvailabilityStore.encode!(:blocked, @as_of, 1)
+        AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:blocked, @as_of, 1)
       }
     }
 

@@ -8,8 +8,7 @@ defmodule CodexPooler.Accounts.SessionNotifier do
     Phoenix.PubSub.broadcast(
       CodexPooler.PubSub,
       user_sessions_topic(user_id),
-      {:disconnect_user_sessions,
-       %{user_id: user_id, except_live_socket_id: Keyword.get(opts, :except_live_socket_id)}}
+      {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: Keyword.get(opts, :except_live_socket_id)}}
     )
   end
 

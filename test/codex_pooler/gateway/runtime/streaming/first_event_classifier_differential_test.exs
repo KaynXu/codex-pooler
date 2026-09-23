@@ -63,12 +63,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
       end
     end
 
+    # `response.created` and `response.in_progress` are relayed downstream but
+    # carry no output, so they do not close the retry window: a terminal error
+    # behind them is still safe to serve on another candidate.
     defp retry_window_event(block) do
       case StreamProtocol.first_complete_event(block <> "\n\n") do
         {:ok, event} ->
-          if StreamProtocol.downstream_visible_event?(event) or
-               not is_nil(StreamProtocol.terminal_outcome_event(event)),
-             do: {:ok, event}
+          cond do
+            not is_nil(StreamProtocol.terminal_outcome_event(event)) -> {:ok, event}
+            StreamProtocol.retry_window_preamble_event?(event) -> nil
+            StreamProtocol.downstream_visible_event?(event) -> {:ok, event}
+            true -> nil
+          end
 
         :incomplete ->
           nil
@@ -78,9 +84,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     defp direct_retry_window_event(buffer) do
       case StreamProtocol.first_complete_event(buffer) do
         {:ok, event} ->
-          if StreamProtocol.downstream_visible_event?(event),
-            do: {:ok, event},
-            else: :incomplete
+          if StreamProtocol.downstream_visible_event?(event) and
+               not StreamProtocol.retry_window_preamble_event?(event),
+             do: {:ok, event},
+             else: :incomplete
 
         :incomplete ->
           :incomplete
@@ -246,8 +253,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
 
     assert state.buffer == "\n\n"
 
-    assert {{:write, "\n\n" <> ^visible}, _state} =
+    assert {{:write, "\n\n" <> ^visible}, next_state} =
              StreamAttempt.classify_first_event(visible, state)
+
+    # The preamble is relayed but keeps the retry window open.
+    assert next_state.classified? == false
   end
 
   test "parser residue owns a bounded copy of a slice from a much larger binary" do
@@ -319,6 +329,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     end
   end
 
+  @tag slow: "starts a real production compiler subprocess and executes its artifact"
   test "production compilation omits test-only gates and buffers ordinary residue" do
     source = Path.expand("lib/codex_pooler/gateway/runtime/streaming/stream_attempt.ex")
     compile_dir = claim_production_compile_dir()
@@ -328,27 +339,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
         ["-pa", List.to_string(code_path)]
       end)
 
-    elixirc = System.find_executable("elixirc") || flunk("elixirc executable not found")
-
-    {compile_output, compile_status} =
-      System.cmd(
-        elixirc,
-        [
-          "-e",
-          "Mix.start(); Mix.env(:prod)",
-          "--ignore-module-conflict",
-          "--warnings-as-errors",
-          "-o",
-          compile_dir
-        ] ++
-          code_path_args ++ [source],
-        env: [{"MIX_ENV", "prod"}],
-        stderr_to_stdout: true
-      )
-
-    assert compile_status == 0, compile_output
-
     script = """
+    Mix.start()
+    Mix.env(:prod)
+    Code.compiler_options(ignore_module_conflict: true)
+    {:ok, _, []} = Kernel.ParallelCompiler.compile_to_path([#{inspect(source)}], #{inspect(compile_dir)})
     module = CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
     false = function_exported?(module, :classify_first_event, 4)
 
@@ -365,7 +360,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     {output, status} =
       System.cmd(
         elixir,
-        code_path_args ++ ["-pa", compile_dir, "-e", script],
+        code_path_args ++ ["-e", script],
         env: [{"MIX_ENV", "prod"}],
         stderr_to_stdout: true
       )
@@ -453,7 +448,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
       "}\r\n\r\n"
     ]
 
-    {results, state} =
+    {results, _state} =
       Enum.map_reduce(chunks, StreamAttempt.first_event_state(), fn chunk, state ->
         {classification, state} = StreamAttempt.classify_first_event(chunk, state)
         {{classification, state}, state}
@@ -470,17 +465,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     assert second == Enum.at(chunks, 1) <> Enum.at(chunks, 2)
     assert first_state == %{classified?: false, buffer: ""}
     assert buffered_state.classified? == false
-    assert end_state == %{classified?: true, buffer: ""}
-    assert_classified_parser_state(state)
+    # The final block is `response.created`: relayed, and the window stays open.
+    assert end_state == %{classified?: false, buffer: ""}
   end
 
   defp assert_fold_equivalent(label, iteration, chunks, assignment_advertised?, left, right) do
     left_state = Reference.first_event_state()
     right_state = StreamAttempt.first_event_state()
 
-    Enum.reduce(Enum.with_index(chunks, 1), {left_state, right_state}, fn {chunk, index},
-                                                                          {left_state,
-                                                                           right_state} ->
+    Enum.reduce(Enum.with_index(chunks, 1), {left_state, right_state}, fn {chunk, index}, {left_state, right_state} ->
       {left_classification, left_state} = left.(chunk, left_state, assignment_advertised?)
       {right_classification, right_state} = right.(chunk, right_state, assignment_advertised?)
 
@@ -489,9 +482,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
           state_projection(left_state) == state_projection(right_state)
 
       unless equivalent? do
-        flunk(
-          "#{label} iteration=#{iteration} chunk=#{index} sizes=#{inspect(Enum.map(chunks, &byte_size/1))}"
-        )
+        flunk("#{label} iteration=#{iteration} chunk=#{index} sizes=#{inspect(Enum.map(chunks, &byte_size/1))}")
       end
 
       {left_state, right_state}
@@ -567,20 +558,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
 
   defp classification_projection({classification, state}),
     do: {classification, state_projection(state)}
-
-  defp assert_classified_parser_state(state) do
-    assert state == %{
-             classified?: true,
-             buffer: "",
-             parser: %{
-               block_state: %{buffer: "", skip_leading_lf?: false},
-               residue_empty?: true,
-               blocks_seen: 0,
-               matched: nil,
-               line_skip_leading_lf?: false
-             }
-           }
-  end
 
   defp random_stream(rng) do
     {kind, rng} =

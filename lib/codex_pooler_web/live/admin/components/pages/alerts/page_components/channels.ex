@@ -96,9 +96,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
                   id={"alert-channel-row-#{channel.id}-secret"}
                   class="text-xs text-base-content/70"
                 >
-                  Signing secret {AlertChannelForm.secret_status_label(
-                    channel.webhook_signing_secret_key_version
-                  )}
+                  Signing secret {AlertChannelForm.secret_status_label(channel.webhook_signing_secret_key_version)}
                 </td>
                 <td class="text-right">
                   <div class="flex justify-end gap-2">

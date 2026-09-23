@@ -495,9 +495,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
              } = failed_attempt.response_metadata["upstream_websocket_connection"]
 
       assert [full_retry_attempt] =
-               Repo.all(
-                 from(attempt in Attempt, where: attempt.request_id == ^full_retry_request.id)
-               )
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^full_retry_request.id))
 
       assert %{
                "generation" => 2,
@@ -1560,9 +1558,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
   test "gateway debug mode logs safe continuation decisions and stores request metadata" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{gateway_debug?: true}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{gateway_debug?: true})
 
     on_exit(fn ->
       if previous_env,
@@ -1659,6 +1655,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.ContinuationTest do
 
     try do
       previous_logger_level = Logger.level()
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> Logger.configure(level: previous_logger_level) end)
 
       log =
         try do

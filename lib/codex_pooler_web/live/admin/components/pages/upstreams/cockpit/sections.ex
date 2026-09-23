@@ -82,9 +82,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         </div>
       </div>
 
-      <%!-- Unreachable through load_visible, which only projects identities
-      holding a visible-pool assignment; kept as a guard for cockpits built
-      from other account snapshots. --%>
       <div :if={@cockpit.assignments.empty?} class="p-4">
         <AdminComponents.empty_state
           id="upstream-assignments-empty"
@@ -385,6 +382,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   """
   attr :cockpit, :map, required: true
   attr :datetime_preferences, :map, required: true
+  attr :request_data_loaded?, :boolean, default: true
+  attr :request_data_loading?, :boolean, default: false
 
   def recent_events_section(assigns) do
     ~H"""
@@ -401,6 +400,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
+          <span
+            :if={@request_data_loading?}
+            id="upstream-event-summary-loading"
+            class="inline-flex items-center gap-1.5 text-xs text-base-content/55"
+            role="status"
+          >
+            <.icon name="hero-arrow-path" class="admin-loading-icon size-3.5" />
+            <span>Loading recent activity</span>
+          </span>
           <.link
             id="upstream-event-summary-request-logs-link"
             href={Formatting.request_logs_path(@cockpit)}
@@ -496,7 +504,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         </article>
       </div>
 
-      <div :if={@cockpit.recent_events.items == []} class="p-4">
+      <div
+        :if={!@request_data_loaded? && @request_data_loading? && @cockpit.recent_events.items == []}
+        class="p-4"
+      >
+        <AdminComponents.empty_state
+          id="upstream-event-summary-loading-state"
+          title="Loading recent activity"
+          description="Request and account events will appear here when the current snapshot is ready."
+          icon="hero-arrow-path"
+          loading?={true}
+        />
+      </div>
+
+      <div
+        :if={!@request_data_loaded? && !@request_data_loading? && @cockpit.recent_events.items == []}
+        class="p-4"
+      >
+        <AdminComponents.empty_state
+          id="upstream-event-summary-error-state"
+          title="Recent activity is not available"
+          description="Refresh the account data to try again."
+          icon="hero-clipboard-document-list"
+        />
+      </div>
+
+      <div :if={@request_data_loaded? && @cockpit.recent_events.items == []} class="p-4">
         <AdminComponents.empty_state
           id="upstream-event-summary-empty"
           title="No recent upstream events"

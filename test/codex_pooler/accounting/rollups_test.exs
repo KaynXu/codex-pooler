@@ -2,7 +2,6 @@ defmodule CodexPooler.Accounting.RollupsTest do
   use CodexPooler.DataCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Ecto.Migration.Runner
 
   alias CodexPooler.Accounting
 
@@ -365,7 +364,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2024-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
       parent = self()
 
       rebuild =
@@ -430,7 +429,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2021-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
 
       request =
         Sandbox.unboxed_run(Repo, fn ->
@@ -441,9 +440,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
               "settlement-only-source"
             )
 
-          Repo.delete_all(
-            from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-          )
+          Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date)
 
           request
         end)
@@ -488,7 +485,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2023-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
       parent = self()
 
       mutation =
@@ -548,7 +545,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
       setup = Sandbox.unboxed_run(Repo, &accounting_setup/0)
       rollup_date = Date.add(~D[2022-01-01], -rem(System.unique_integer([:positive]), 10_000))
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
-      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, setup.identity.id, rollup_date) end)
+      on_exit(fn -> cleanup_unboxed_pool!(setup, rollup_date) end)
 
       Sandbox.unboxed_run(Repo, fn ->
         insert_legacy_request!(
@@ -557,9 +554,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
           "concurrent-rebuild-source"
         )
 
-        Repo.delete_all(
-          from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-        )
+        Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date)
       end)
 
       parent = self()
@@ -807,112 +802,6 @@ defmodule CodexPooler.Accounting.RollupsTest do
 
       assert hourly_rollup_summary_rows(bucket, DateTime.add(bucket, 3_600, :second)) ==
                incremental_rows
-    end
-
-    test "automatic migration repairs stale rollups for affected unknown-usage buckets" do
-      setup = accounting_setup()
-      bucket = ~U[2026-06-13 16:00:00.000000Z]
-      rollup_date = DateTime.to_date(bucket)
-
-      known_request =
-        request_fixture(%{pool: setup.pool, api_key: setup.api_key}, %{
-          model_id: setup.model.id,
-          status: "succeeded",
-          retry_count: 1
-        })
-
-      unknown_request =
-        request_fixture(%{pool: setup.pool, api_key: setup.api_key}, %{
-          model_id: setup.model.id,
-          status: "failed",
-          retry_count: 3
-        })
-
-      insert_settlement!(known_request, %{
-        occurred_at: DateTime.add(bucket, 21 * 60, :second),
-        input_tokens: 12,
-        cached_input_tokens: 4,
-        output_tokens: 6,
-        reasoning_tokens: 2,
-        total_tokens: 20,
-        estimated_cost_micros: "140.5",
-        settled_cost_micros: "120.25"
-      })
-
-      unknown_settlement =
-        insert_settlement!(unknown_request, %{
-          usage_status: "usage_unknown",
-          occurred_at: DateTime.add(bucket, 31 * 60, :second),
-          input_tokens: 8_000,
-          cached_input_tokens: 500,
-          output_tokens: 1_400,
-          reasoning_tokens: 99,
-          total_tokens: 9_999,
-          estimated_cost_micros: "8888",
-          settled_cost_micros: "7777"
-        })
-
-      insert_stale_daily_rollup!(setup.pool, setup.api_key, rollup_date, %{
-        request_count: 99,
-        success_count: 98,
-        failure_count: 1,
-        retry_count: 77,
-        input_tokens: 9_000,
-        total_tokens: 9_000,
-        estimated_cost_micros: "9000",
-        settled_cost_micros: "9000"
-      })
-
-      insert_stale_hourly_rollup!(setup.pool, setup.model, bucket, %{
-        request_count: 99,
-        success_count: 98,
-        failure_count: 1,
-        retry_count: 77,
-        input_tokens: 9_000,
-        total_tokens: 9_000,
-        estimated_cost_micros: "9000",
-        settled_cost_micros: "9000"
-      })
-
-      run_unknown_usage_projection_migration!()
-      run_unknown_usage_projection_migration!()
-
-      assert Repo.get!(LedgerEntry, unknown_settlement.id).total_tokens == 9_999
-
-      assert daily_rollup_summary_rows(rollup_date, "api_key") == [
-               %{
-                 dimension_kind: "api_key",
-                 request_count: 2,
-                 success_count: 1,
-                 failure_count: 1,
-                 retry_count: 4,
-                 input_tokens: 12,
-                 cached_input_tokens: 4,
-                 output_tokens: 6,
-                 reasoning_tokens: 2,
-                 total_tokens: 20,
-                 estimated_cost_micros: "140.5",
-                 settled_cost_micros: "120.25"
-               }
-             ]
-
-      assert hourly_rollup_summary_rows(bucket, DateTime.add(bucket, 3_600, :second)) == [
-               %{
-                 bucket_started_at: bucket,
-                 model_code: setup.model.exposed_model_id,
-                 request_count: 2,
-                 success_count: 1,
-                 failure_count: 1,
-                 retry_count: 4,
-                 input_tokens: 12,
-                 cached_input_tokens: 4,
-                 output_tokens: 6,
-                 reasoning_tokens: 2,
-                 total_tokens: 20,
-                 estimated_cost_micros: "140.5",
-                 settled_cost_micros: "120.25"
-               }
-             ]
     end
 
     test "recorded settlement increments an existing hourly model row through the conflict path" do
@@ -1453,27 +1342,29 @@ defmodule CodexPooler.Accounting.RollupsTest do
     """)
   end
 
-  defp cleanup_unboxed_pool!(pool_id, identity_id, rollup_date) do
+  # Deletes by primary key. `accounting_setup/1` gives every call its own price version, so
+  # matching on a literal version here would delete another fixture's row on a good day and
+  # leak this one on a bad one.
+  defp cleanup_unboxed_pool!(setup, rollup_date) do
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(
-        from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
-      )
-
-      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
-      Repo.delete_all(from request in Request, where: request.pool_id == ^pool_id)
-      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^pool_id)
+      Repo.delete_all(from request in Request, where: request.pool_id == ^setup.pool.id)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
 
       Repo.delete_all(
         from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
-          where: identity.id == ^identity_id
+          where: identity.id == ^setup.identity.id
       )
 
       Repo.delete_all(
         from snapshot in CodexPooler.Catalog.PricingSnapshot,
-          where:
-            snapshot.model_identifier == "provider-gpt-accounting-mini" and
-              snapshot.price_version == "test-v1"
+          where: snapshot.id == ^setup.pricing.id
       )
+
+      # Last: deleting the day's requests and ledger rows invalidates its coverage again, which
+      # writes the coverage row back for the date.
+      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
+
+      Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date)
     end)
   end
 
@@ -1513,32 +1404,6 @@ defmodule CodexPooler.Accounting.RollupsTest do
         )
       end)
     end)
-  end
-
-  defp run_unknown_usage_projection_migration! do
-    Runner.run(
-      Repo,
-      Repo.config(),
-      20_260_626_133_501,
-      unknown_usage_projection_migration(),
-      :forward,
-      :up,
-      :up,
-      log: false
-    )
-  end
-
-  defp unknown_usage_projection_migration do
-    module = CodexPooler.Repo.Migrations.RepairUnknownUsageAccountingProjections
-
-    unless Code.ensure_loaded?(module) do
-      Code.require_file(
-        "../../../priv/repo/migrations/20260626133501_repair_unknown_usage_accounting_projections.exs",
-        __DIR__
-      )
-    end
-
-    module
   end
 
   defp drop_request_model_foreign_key! do

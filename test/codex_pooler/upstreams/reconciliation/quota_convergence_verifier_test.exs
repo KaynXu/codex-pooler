@@ -16,9 +16,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.QuotaConvergenceVerifierTest do
 
   test "rejects malformed observations and expectation mismatches" do
     assert {:error, %{code: "no_accepted_selector"}} =
-             QuotaConvergenceVerifier.run(
-               candidate_source: [%{candidate() | provider_window: %{}}]
-             )
+             QuotaConvergenceVerifier.run(candidate_source: [%{candidate() | provider_window: %{}}])
 
     assert {:error, %{code: "unstable_pairs"}} =
              run_with_samples("stable", [sample("10", true), sample("11", true)])

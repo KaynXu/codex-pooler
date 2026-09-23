@@ -292,9 +292,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
       refute Enum.any?(probe.covered_descriptors, &(elem(&1, 4) == "account"))
 
       assert {:ok, _identity} =
-               PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-                 observed_at: observed_at
-               )
+               PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
       assert [%AccountQuotaWindow{window_minutes: 300}] = account_rows(identity)
     end
@@ -411,9 +409,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     assert model_window.model == "Account"
 
     assert {:ok, _identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               observed_at: observed_at
-             )
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
     assert [persisted] = account_rows(identity)
     assert persisted.quota_scope == "model"
@@ -479,9 +475,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
       refute Enum.any?(probe.covered_descriptors, &(elem(&1, 0) == "account"))
 
       assert {:ok, _identity} =
-               PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-                 observed_at: observed_at
-               )
+               PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
       assert account_rows(identity) == []
 
@@ -665,9 +659,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
              )
 
     assert {:ok, _identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               observed_at: DateTime.add(observed_at, 1, :second)
-             )
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: DateTime.add(observed_at, 1, :second))
 
     rows = Windows.list_evidence(identity)
     refute Enum.any?(rows, &(&1.source == "codex_usage_api" and &1.quota_key == "account"))
@@ -711,9 +703,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     %{identity: identity, assignment: assignment} = assignment_with_fake(fake)
 
     assert {:ok, identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               observed_at: observed_at
-             )
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
     blocked_snapshot = Repo.reload!(identity).metadata[AccountAvailabilityStore.metadata_key()]
     assert blocked_snapshot["observed_at"] == "2026-08-20T10:11:12.000000Z"
@@ -729,9 +719,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
       )
 
       assert {:ok, identity} =
-               PoolReconciliation.refresh_quota_from_usage(Repo.reload!(identity), assignment,
-                 observed_at: DateTime.add(observed_at, 1, :second)
-               )
+               PoolReconciliation.refresh_quota_from_usage(Repo.reload!(identity), assignment, observed_at: DateTime.add(observed_at, 1, :second))
 
       assert Repo.reload!(identity).metadata[AccountAvailabilityStore.metadata_key()] ==
                blocked_snapshot
@@ -755,9 +743,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     )
 
     assert {:ok, identity} =
-             PoolReconciliation.refresh_quota_from_usage(Repo.reload!(identity), assignment,
-               observed_at: DateTime.add(observed_at, 2, :second)
-             )
+             PoolReconciliation.refresh_quota_from_usage(Repo.reload!(identity), assignment, observed_at: DateTime.add(observed_at, 2, :second))
 
     assert get_in(Repo.reload!(identity).metadata, [
              AccountAvailabilityStore.metadata_key(),
@@ -787,9 +773,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     )
 
     assert {:ok, identity} =
-             PoolReconciliation.refresh_quota_from_usage(Repo.reload!(identity), assignment,
-               observed_at: DateTime.add(observed_at, 3, :second)
-             )
+             PoolReconciliation.refresh_quota_from_usage(Repo.reload!(identity), assignment, observed_at: DateTime.add(observed_at, 3, :second))
 
     refute Map.has_key?(Repo.reload!(identity).metadata, AccountAvailabilityStore.metadata_key())
   end
@@ -828,8 +812,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
         plan_label: "legacy_plan",
         metadata:
           Map.merge(identity.metadata, %{
-            AccountAvailabilityStore.metadata_key() =>
-              AccountAvailabilityStore.encode!(:blocked, prior_observed_at, 1),
+            AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:blocked, prior_observed_at, 1),
             "saved_resets" => %{
               "version" => 1,
               "observed_at" => DateTime.to_iso8601(prior_observed_at),
@@ -848,9 +831,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     assert {:error, :forced_bundle_rollback} =
              Repo.transaction(fn ->
                assert {:ok, _identity} =
-                        PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-                          observed_at: observed_at
-                        )
+                        PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
                Repo.rollback(:forced_bundle_rollback)
              end)
@@ -879,9 +860,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     %{identity: identity, assignment: assignment} = assignment_with_fake(fake)
 
     assert {:ok, identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               observed_at: observed_at
-             )
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
     prior = Repo.reload!(identity).metadata[AccountAvailabilityStore.metadata_key()]
 
@@ -895,9 +874,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     )
 
     assert {:ok, identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               observed_at: DateTime.add(observed_at, 1, :second)
-             )
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: DateTime.add(observed_at, 1, :second))
 
     assert Repo.reload!(identity).metadata[AccountAvailabilityStore.metadata_key()] == prior
   end
@@ -916,16 +893,13 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     %{identity: identity, assignment: assignment} = assignment_with_fake(fake)
 
     assert {:ok, identity} =
-             PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               observed_at: observed_at
-             )
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment, observed_at: observed_at)
 
     prior = Repo.reload!(identity).metadata[AccountAvailabilityStore.metadata_key()]
 
     FakeUpstream.set_mode(
       fake,
-      {:path_json,
-       %{"/backend-api/wham/usage" => {200, absent}, "/backend-api/codex/usage" => {200, absent}}}
+      {:path_json, %{"/backend-api/wham/usage" => {200, absent}, "/backend-api/codex/usage" => {200, absent}}}
     )
 
     assert {:error, _reason} = PoolReconciliation.refresh_quota_from_usage(identity, assignment)

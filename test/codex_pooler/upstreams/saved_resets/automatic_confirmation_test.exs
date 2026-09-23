@@ -369,12 +369,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmationTest do
 
       metadata =
         %{}
-        |> AutomaticConfirmation.observe(
-          observation(@first, binding: unreported, available_count: nil)
-        )
-        |> AutomaticConfirmation.observe(
-          observation(@second, binding: unreported, available_count: nil)
-        )
+        |> AutomaticConfirmation.observe(observation(@first, binding: unreported, available_count: nil))
+        |> AutomaticConfirmation.observe(observation(@second, binding: unreported, available_count: nil))
 
       assert AutomaticConfirmation.state(metadata) == "confirmed"
       refute AutomaticConfirmation.confirmed?(metadata, @second)

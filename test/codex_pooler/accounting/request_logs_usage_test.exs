@@ -4,13 +4,360 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.LedgerEntry
+  alias CodexPooler.Accounting.Reporting
   alias CodexPooler.Accounting.Rollups
   alias CodexPooler.Accounting.UsageResponses
+  alias CodexPooler.Accounts.Scope
+  alias CodexPooler.AccountsFixtures
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
 
   import CodexPooler.PoolerFixtures
+
+  test "pre-attempt failure retains admission without provisional or measured request-log spend" do
+    setup = CodexPooler.AccountingTestSupport.accounting_setup()
+    as_of = ~U[2026-09-20 12:00:00.000000Z]
+
+    assert {:ok, before_usage} =
+             Accounting.build_api_key_self_usage(setup.pool, setup.api_key, as_of: as_of)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id},
+               %{
+                 now: as_of
+               }
+             )
+
+    assert Accounting.reservation_outstanding?(reserved.request)
+
+    assert {:ok, _failed} =
+             Accounting.finalize_reservation_failure(reserved.request, %{
+               last_error_code: "no_available_upstream",
+               pre_attempt_phase: "routing_rejected",
+               now: as_of
+             })
+
+    refute Accounting.reservation_outstanding?(reserved.request)
+
+    assert Repo.aggregate(
+             from(a in CodexPooler.Accounting.Attempt,
+               where: a.request_id == ^reserved.request.id
+             ),
+             :count
+           ) == 0
+
+    assert Repo.all(
+             from(e in LedgerEntry,
+               where: e.request_id == ^reserved.request.id,
+               order_by: e.entry_kind,
+               select: e.entry_kind
+             )
+           ) == ["release", "reservation"]
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(setup.pool)
+    assert log.id == reserved.request.id
+    assert log.status == "failed"
+    assert log.token_counts.total_tokens == nil
+    assert log.token_counts.input_tokens == nil
+    assert log.token_counts.output_tokens == nil
+    assert log.cost.usd == nil
+    refute log.cost.status == "priced"
+
+    assert {:ok, after_usage} =
+             Accounting.build_api_key_self_usage(setup.pool, setup.api_key, as_of: as_of)
+
+    assert after_usage.total_tokens == before_usage.total_tokens
+    assert after_usage.total_cost_usd == before_usage.total_cost_usd
+    assert after_usage.total_cost_status == before_usage.total_cost_status
+
+    assert %{current_value: 1, remaining_value: 59} =
+             usage_limit(after_usage.limits, "request_count", "minute")
+
+    assert after_usage.budget_usage.daily == %{
+             known_total_tokens: 0,
+             provisional_total_tokens: 0,
+             pending_total_tokens: 0,
+             effective_total_tokens: 0,
+             admission_count: 1
+           }
+
+    assert after_usage.budget_usage.daily == after_usage.budget_usage.weekly
+    pricing_boundary_receipt("pre_attempt", log, after_usage)
+  end
+
+  test "deleted-key history stays reportable without entering another key's budget windows" do
+    owner = AccountsFixtures.bootstrap_owner_fixture()
+    scope = Scope.for_user(owner.user, ["instance_owner"])
+    setup = active_api_key_fixture()
+    as_of = ~U[2026-09-20 12:00:00.000000Z]
+    request = request_fixture(setup)
+    entry = ledger_entry_fixture(request, %{total_tokens: 123, occurred_at: as_of})
+    Rollups.accumulate!(request, entry)
+    assert {:ok, _} = CodexPooler.Access.delete_api_key(scope, setup.api_key)
+    assert Repo.get!(LedgerEntry, entry.id).api_key_id == nil
+
+    assert Reporting.token_totals_by_pool_ids(
+             [setup.pool.id],
+             DateTime.add(as_of, -1),
+             DateTime.add(as_of, 1)
+           ) == %{setup.pool.id => 123}
+
+    other = active_api_key_fixture(setup.pool)
+
+    assert {:ok, usage} =
+             Accounting.build_api_key_self_usage(setup.pool, other.api_key, as_of: as_of)
+
+    assert usage.total_tokens == 0
+    assert usage.total_cost_usd == nil
+    assert usage.limits == []
+    assert usage.budget_usage.daily.effective_total_tokens == 0
+    assert usage.budget_usage.weekly.effective_total_tokens == 0
+
+    refute Repo.exists?(
+             from r in CodexPooler.Accounting.DailyRollup,
+               where: r.api_key_id == ^setup.api_key.id and r.dimension_kind == "api_key"
+           )
+  end
+
+  test "missing and null usage counters stay provisional while measured zero is known" do
+    setup = CodexPooler.AccountingTestSupport.accounting_setup()
+    as_of = ~U[2026-09-20 12:00:00.000000Z]
+
+    for usage <- [
+          %{status: "usage_unknown"},
+          %{status: "usage_unknown", total_tokens: nil},
+          %{status: "usage_known", input_tokens: 0, output_tokens: 0, total_tokens: 0}
+        ] do
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id},
+                 %{now: as_of}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, _} =
+               Accounting.finalize_failure(reserved.request, attempt, %{
+                 usage: Map.put(usage, :recorded_at, as_of),
+                 now: as_of
+               })
+    end
+
+    assert {:ok, usage} =
+             Accounting.build_api_key_self_usage(setup.pool, setup.api_key, as_of: as_of)
+
+    assert usage.total_tokens == 0
+
+    assert %{
+             known_total_tokens: 0,
+             provisional_total_tokens: 1_024,
+             pending_total_tokens: 0,
+             effective_total_tokens: 1_024,
+             admission_count: 3
+           } = usage.budget_usage.daily
+  end
+
+  test "budget windows separate measured, provisional and old pending usage at one as_of" do
+    setup = CodexPooler.AccountingTestSupport.accounting_setup()
+    as_of = ~U[2026-09-20 12:00:00.000000Z]
+
+    CodexPooler.AccountingTestSupport.update_default_policy!(setup.api_key, %{
+      max_tokens_per_day: 2_000,
+      max_tokens_per_week: 4_000
+    })
+
+    known = request_fixture(setup)
+
+    settlement =
+      ledger_entry_fixture(known, %{
+        total_tokens: 100,
+        settled_cost_micros: 250_000,
+        details: %{"settled_cost_micros" => "250000"},
+        occurred_at: as_of
+      })
+
+    Rollups.accumulate!(known, settlement)
+
+    pending = request_fixture(setup, %{status: "in_progress", completed_at: nil})
+
+    ledger_entry_fixture(pending, %{
+      entry_kind: "reservation",
+      usage_status: "usage_unknown",
+      total_tokens: 512,
+      occurred_at: DateTime.add(as_of, -8, :day)
+    })
+
+    unknown = request_fixture(setup, %{usage_status: "usage_unknown"})
+
+    unknown_entry =
+      ledger_entry_fixture(unknown, %{
+        usage_status: "usage_unknown",
+        total_tokens: 512,
+        details: %{"estimated_from_reserve" => true},
+        occurred_at: as_of
+      })
+
+    Rollups.accumulate!(unknown, unknown_entry)
+    future = request_fixture(setup)
+    ledger_entry_fixture(future, %{total_tokens: 9_999, occurred_at: DateTime.add(as_of, 1)})
+    other = active_api_key_fixture(setup.pool)
+    ledger_entry_fixture(request_fixture(other), %{total_tokens: 8_888, occurred_at: as_of})
+
+    assert {:ok, usage} =
+             Accounting.build_v1_usage_for_api_key(setup.pool, setup.api_key, as_of: as_of)
+
+    assert usage.total_tokens == 100
+    assert usage.total_cost_usd == 0.25
+
+    for window <- [:daily, :weekly] do
+      assert usage.budget_usage[window] == %{
+               known_total_tokens: 100,
+               provisional_total_tokens: 512,
+               pending_total_tokens: 512,
+               effective_total_tokens: 1_124,
+               admission_count: 0
+             }
+    end
+
+    assert %{current_value: 1_124, remaining_value: 876} =
+             usage_limit(usage.limits, "total_tokens", "daily")
+
+    assert %{current_value: 1_124, remaining_value: 2_876} =
+             usage_limit(usage.limits, "total_tokens", "weekly")
+  end
+
+  test "late measured correction replaces provisional pressure and pricing once at original time" do
+    setup = CodexPooler.AccountingTestSupport.accounting_setup()
+    as_of = ~U[2026-09-20 12:00:00.000000Z]
+
+    setup.pricing
+    |> Ecto.Changeset.change(effective_at: DateTime.add(as_of, -60))
+    |> Repo.update!()
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id},
+               %{now: as_of}
+             )
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, failed} =
+             Accounting.finalize_failure(reserved.request, attempt, %{
+               last_error_code: "owner_drained",
+               usage: %{status: "usage_unknown", recorded_at: as_of},
+               now: as_of
+             })
+
+    assert {:ok, before_usage} =
+             Accounting.build_api_key_self_usage(setup.pool, setup.api_key, as_of: as_of)
+
+    assert before_usage.total_tokens == 0
+    assert before_usage.total_cost_usd == nil
+    assert before_usage.total_cost_status == "unpriced"
+    refute Accounting.reservation_outstanding?(failed.request)
+    assert %{items: [unknown_log], total: 1} = Accounting.list_request_logs(setup.pool)
+    assert unknown_log.id == failed.request.id
+    assert unknown_log.status == "failed"
+    assert unknown_log.usage_status == "usage_unknown"
+    assert unknown_log.token_counts.total_tokens == nil
+    assert unknown_log.token_counts.input_tokens == nil
+    assert unknown_log.token_counts.output_tokens == nil
+    assert unknown_log.cost.usd == nil
+    assert unknown_log.cost.status == "unpriced"
+    pricing_boundary_receipt("unknown_post_attempt", unknown_log, before_usage)
+
+    assert %{
+             provisional_total_tokens: 512,
+             known_total_tokens: 0,
+             pending_total_tokens: 0,
+             admission_count: 1
+           } = before_usage.budget_usage.daily
+
+    correction = %{
+      status: "usage_known",
+      source: "late_owner_completion",
+      input_tokens: 10,
+      output_tokens: 20,
+      total_tokens: 30,
+      recorded_at: DateTime.add(as_of, 1, :day)
+    }
+
+    for disposition <- [:replaced, :reused] do
+      assert {:ok, %{finalization_disposition: ^disposition}} =
+               Accounting.finalize_success_with_disposition(
+                 failed.request,
+                 failed.attempt,
+                 correction,
+                 %{now: DateTime.add(as_of, 1, :day)}
+               )
+
+      assert {:ok, corrected} =
+               Accounting.build_api_key_self_usage(setup.pool, setup.api_key, as_of: as_of)
+
+      assert corrected.total_tokens == 30
+      assert Decimal.equal?(corrected.total_cost_usd, Decimal.new("0.000500"))
+
+      assert %{
+               provisional_total_tokens: 0,
+               known_total_tokens: 30,
+               pending_total_tokens: 0,
+               effective_total_tokens: 30,
+               admission_count: 1
+             } = corrected.budget_usage.daily
+
+      assert corrected.budget_usage.daily == corrected.budget_usage.weekly
+      refute Accounting.reservation_outstanding?(failed.request)
+      assert %{items: [known_log], total: 1} = Accounting.list_request_logs(setup.pool)
+      assert known_log.id == failed.request.id
+      assert known_log.token_counts.total_tokens == 30
+      assert known_log.token_counts.input_tokens == 10
+      assert known_log.token_counts.output_tokens == 20
+      assert known_log.cost.status == "priced"
+      assert Decimal.equal?(known_log.cost.usd, Decimal.new("0.000500"))
+
+      assert Repo.aggregate(
+               from(e in LedgerEntry,
+                 where:
+                   e.request_id == ^failed.request.id and e.entry_kind == "settlement" and
+                     e.amount_status == "recorded"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(e in LedgerEntry,
+                 where:
+                   e.request_id == ^failed.request.id and e.entry_kind == "settlement" and
+                     e.amount_status == "voided"
+               ),
+               :count
+             ) == 1
+
+      pricing_boundary_receipt("known_#{disposition}", known_log, corrected)
+    end
+  end
+
+  defp pricing_boundary_receipt(phase, log, usage) do
+    CodexPooler.TestDiagnostics.puts(
+      "pricing_boundary #{phase} " <>
+        inspect(%{
+          log_tokens: log.token_counts && log.token_counts.total_tokens,
+          log_cost: log.cost,
+          measured_tokens: usage.total_tokens,
+          measured_cost: usage.total_cost_usd,
+          budget: usage.budget_usage.daily
+        })
+    )
+  end
 
   test "request log entries are metadata-only and usage shape is v1-compatible" do
     %{pool: pool, api_key: api_key} =
@@ -195,13 +542,13 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
     assert self_usage.total_cost_status == "priced"
     assert Decimal.equal?(self_usage.total_cost_usd, Decimal.new("0.250000"))
 
-    assert %{current_value: 30, remaining_value: 970} =
+    assert %{current_value: 1_000, remaining_value: 0} =
              usage_limit(self_usage.limits, "total_tokens", "daily")
 
-    assert %{current_value: 30, remaining_value: 970} =
+    assert %{current_value: 1_000, remaining_value: 0} =
              usage_limit(self_usage.limits, "credits", "daily")
 
-    assert %{current_value: 2, remaining_value: 58} =
+    assert %{current_value: 0, remaining_value: 60} =
              usage_limit(self_usage.limits, "request_count", "minute")
 
     assert {:ok, v1_usage} =
@@ -213,15 +560,21 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
     assert v1_usage.total_cost_status == "priced"
     assert v1_usage.total_cost_usd == 0.25
 
-    assert %{current_value: 30, remaining_value: 970} =
+    assert %{current_value: 1_000, remaining_value: 0} =
              usage_limit(v1_usage.limits, "total_tokens", "daily")
 
     assert {:ok, codex_usage} =
              Accounting.build_codex_usage_for_api_key(pool, api_key, as_of: DateTime.add(now, 60))
 
     assert codex_usage.plan_type == "api_key"
-    assert codex_usage.credits.balance == "970"
-    assert codex_usage.rate_limit.primary_window.used_percent == 3
+    assert codex_usage.credits.balance == "0"
+    assert codex_usage.rate_limit.primary_window.used_percent == 100
+
+    assert {:ok, unknown_usage} = Accounting.build_api_key_self_usage(pool, unknown_only_key)
+    assert unknown_usage.total_tokens == 0
+    assert unknown_usage.total_cost_usd == nil
+    assert unknown_usage.total_cost_status == "unpriced"
+    assert unknown_usage.budget_usage.daily.provisional_total_tokens == 9_100
   end
 
   test "model-scoped additional quota stays outside request settlement and account credits" do
@@ -298,7 +651,7 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
              )
            ) == ["release", "reservation", "settlement"]
 
-    assert {:ok, self_usage} = Accounting.build_api_key_self_usage(pool, api_key, as_of: now)
+    assert {:ok, self_usage} = Accounting.build_api_key_self_usage(pool, api_key)
     assert self_usage.request_count == 1
     assert self_usage.total_tokens == 10
     assert usage_limit(self_usage.limits, "credits", "daily").remaining_value == 990

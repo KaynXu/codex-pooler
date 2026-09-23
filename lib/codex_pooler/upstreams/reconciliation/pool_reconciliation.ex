@@ -15,6 +15,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.Quota.AccountAvailabilityStore
   alias CodexPooler.Upstreams.Quota.CreditBalanceStore
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
+  alias CodexPooler.Upstreams.ResponsesAPI
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutomaticConfirmation
   alias CodexPooler.Upstreams.SavedResets.Convergence
@@ -69,6 +70,9 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     assignment_id = assignment_id(assignment_or_id)
 
     case load_active_assignment_with_identity(pool_id, assignment_id) do
+      {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{credential_provenance: "responses_api_key"} = identity} ->
+        ResponsesAPI.reconcile(assignment, identity)
+
       {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity} ->
         with {:ok, identity} <- LegacyAccessTokenExpiry.repair(identity) do
           quota_step =
@@ -454,8 +458,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   defp reconciliation_quota_source(identity, assignment, opts, persisted_window_reuse_at) do
     cond do
       Keyword.has_key?(opts, :quota_windows) ->
-        {:windows, Keyword.get(opts, :quota_windows), Keyword.get(opts, :identity_attrs, %{}),
-         CredentialFencing.credential_epoch(identity)}
+        {:windows, Keyword.get(opts, :quota_windows), Keyword.get(opts, :identity_attrs, %{}), CredentialFencing.credential_epoch(identity)}
 
       windows = metadata_quota_windows(identity, assignment) ->
         {:windows, windows, %{}, CredentialFencing.credential_epoch(identity)}
@@ -764,10 +767,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       {:apply, _canonical_observed_at} ->
         snapshot = SavedResets.usage_snapshot(payload, observed_at, usage_url, identity)
         {snapshot, ledger_change} = compose_saved_reset_state(identity, snapshot, observed_at)
+        {microsecond, _precision} = observed_at.microsecond
 
         attrs = %{
           metadata: Map.put(identity.metadata || %{}, "saved_resets", snapshot),
-          updated_at: observed_at
+          updated_at: %{observed_at | microsecond: {microsecond, 6}}
         }
 
         attrs =
@@ -1085,8 +1089,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     assignment
     |> PoolUpstreamAssignment.changeset(%{
       metadata: Map.put(metadata, "last_reconciliation", summary),
-      last_successful_refresh_at:
-        if(status == :succeeded, do: timestamp, else: assignment.last_successful_refresh_at),
+      last_successful_refresh_at: if(status == :succeeded, do: timestamp, else: assignment.last_successful_refresh_at),
       updated_at: timestamp
     })
     |> Repo.update!()

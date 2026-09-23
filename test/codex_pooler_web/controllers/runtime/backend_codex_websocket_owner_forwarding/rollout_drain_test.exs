@@ -87,9 +87,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-clean-exit", "stable-ws-owner-clean-exit",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-clean-exit", "stable-ws-owner-clean-exit", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     payload = websocket_payload(setup, "deadline expiry while owner turn is active")
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
@@ -189,8 +187,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     assert :ok = WebsocketOwnerSession.drain_owner(owner_pid)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
 
-    assert_receive {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id,
-                    {:error, :owner_drained, safe_payload}}
+    assert_receive {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, {:error, :owner_drained, safe_payload}}
 
     assert safe_payload.metadata.reason == "owner_drained"
 
@@ -268,8 +265,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     assert :ok = WebsocketOwnerSession.drain_owner(owner_pid)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
 
-    assert_receive {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id,
-                    {:error, :owner_drained, safe_payload}}
+    assert_receive {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, {:error, :owner_drained, safe_payload}}
 
     assert safe_payload.metadata.reason == "owner_drained"
 
@@ -300,9 +296,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-rollout-wait-disconnect", "rollout-wait-disconnect",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-rollout-wait-disconnect", "rollout-wait-disconnect", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     payload = websocket_payload(setup, "disconnect while rollout drain waits")
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
@@ -407,8 +401,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     payload = websocket_payload(setup, "synthetic rollout terminal ordering")
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                    1_000
 
     harness = start_rollout_drain_harness()
@@ -459,8 +452,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
     assert %{turns_completed: 1, turns_aborted: 0} = Task.await(drain_task, 1_000)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid, ^release_ref},
                    1_000
 
     send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -687,9 +679,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-rollout-drain-active-request", "rollout-drain-active-request",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-rollout-drain-active-request", "rollout-drain-active-request", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     payload = websocket_payload(setup, "rollout drain while owner request is active")
 
@@ -746,9 +736,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-rollout-drain-active-request", "rollout-drain-active-request",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-rollout-drain-active-request", "rollout-drain-active-request", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     payload = websocket_payload(setup, "rollout drain while owner request is active")
 
@@ -948,9 +936,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.RolloutDra
     logs =
       capture_info_log(fn ->
         {:ok, recovered_state} =
-          owner_socket(auth, recovered_request_id, turn_state,
-            websocket_owner_forwarder_opts: forwarder_opts
-          )
+          owner_socket(auth, recovered_request_id, turn_state, websocket_owner_forwarder_opts: forwarder_opts)
 
         try do
           recovered_payload =

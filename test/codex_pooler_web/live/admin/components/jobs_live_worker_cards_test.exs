@@ -181,9 +181,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
              "refresh failed"
            )
 
-    render_click(
-      element(view, "#{card} #{failure_panel_selector(job)} [data-role='failure-panel-close']")
-    )
+    render_click(element(view, "#{card} #{failure_panel_selector(job)} [data-role='failure-panel-close']"))
 
     assert_patch(view, ~p"/admin/jobs")
 
@@ -799,8 +797,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
           %{
             "attempt" => 1,
             "kind" => "RuntimeError",
-            "error" =>
-              "upstream timeout authorization=Bearer secret-token-123 prompt=raw-prompt-text"
+            "error" => "upstream timeout authorization=Bearer secret-token-123 prompt=raw-prompt-text"
           }
         ],
         args: %{"prompt" => "raw-arg-prompt"},
@@ -819,9 +816,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
              "#{worker_card_selector(:account_reconciliation)} #{failure_panel_selector(job)}[data-open='false'][aria-hidden='true']"
            )
 
-    render_click(
-      element(view, "#{worker_card_selector(:account_reconciliation)} #job-failure-#{job.id}")
-    )
+    render_click(element(view, "#{worker_card_selector(:account_reconciliation)} #job-failure-#{job.id}"))
 
     assert has_element?(
              view,
@@ -869,8 +864,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
         }
       ]
     )
@@ -935,8 +929,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
         }
       ]
     )
@@ -977,8 +970,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
         }
       ]
     )
@@ -1040,8 +1032,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
         errors: [
           %{
             "attempt" => 1,
-            "error" =>
-              "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
+            "error" => "** (Oban.PerformError) CodexPooler.Jobs.AccountReconciliationWorker failed with {:error, \"account reconciliation partial: quota_refresh_auth_unavailable\"}"
           }
         ]
       )
@@ -1083,8 +1074,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.CatalogSyncWorker failed with {:error, %{code: :catalog_sync_failed, message: \"upstream secret could not be decrypted\"}}"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.CatalogSyncWorker failed with {:error, %{code: :catalog_sync_failed, message: \"upstream secret could not be decrypted\"}}"
         }
       ]
     )
@@ -1125,8 +1115,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
       errors: [
         %{
           "attempt" => 1,
-          "error" =>
-            "** (Oban.PerformError) CodexPooler.Jobs.TokenRefreshWorker failed with :discard"
+          "error" => "** (Oban.PerformError) CodexPooler.Jobs.TokenRefreshWorker failed with :discard"
         }
       ]
     )
@@ -1243,6 +1232,9 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
   defp capture_repo_queries(fun) when is_function(fun, 0) do
     test_pid = self()
     handler_id = {__MODULE__, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

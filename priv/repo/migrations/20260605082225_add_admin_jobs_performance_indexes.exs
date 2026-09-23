@@ -30,8 +30,6 @@ defmodule CodexPooler.Repo.Migrations.AddAdminJobsPerformanceIndexes do
   def down do
     execute("DROP INDEX CONCURRENTLY IF EXISTS public.oban_jobs_admin_unfinished_inserted_id_idx")
 
-    execute(
-      "DROP INDEX CONCURRENTLY IF EXISTS public.oban_jobs_admin_completed_target_resolution_idx"
-    )
+    execute("DROP INDEX CONCURRENTLY IF EXISTS public.oban_jobs_admin_completed_target_resolution_idx")
   end
 end

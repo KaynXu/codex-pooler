@@ -6,46 +6,22 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.OperationalStatus
+  alias CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+  alias CodexPooler.Platform.Readiness
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL
 
   setup do
-    previous_config =
-      Application.get_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController)
+    CodexPooler.TestAppEnv.restore_on_exit(Readiness)
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalStatus)
+    CodexPooler.TestAppEnv.restore_on_exit(RolloutDrain)
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
-    previous_operational_status_config = Application.get_env(:codex_pooler, OperationalStatus)
-    previous_rollout_drain_config = Application.get_env(:codex_pooler, RolloutDrain)
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
-
-    on_exit(fn ->
-      if previous_config do
-        Application.put_env(
-          :codex_pooler,
-          CodexPoolerWeb.Operations.HealthController,
-          previous_config
-        )
-      else
-        Application.delete_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController)
-      end
-
-      if previous_operational_status_config do
-        Application.put_env(:codex_pooler, OperationalStatus, previous_operational_status_config)
-      else
-        Application.delete_env(:codex_pooler, OperationalStatus)
-      end
-
-      if previous_rollout_drain_config do
-        Application.put_env(:codex_pooler, RolloutDrain, previous_rollout_drain_config)
-      else
-        Application.delete_env(:codex_pooler, RolloutDrain)
-      end
-
-      if previous_operational_settings do
-        Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
-      else
-        Application.delete_env(:codex_pooler, OperationalSettings)
-      end
-    end)
+    # The grace window is a per-node fact that outlives a single test, so every
+    # test here starts from a node that has never been ready.
+    :ok = Readiness.reset_state!()
+    on_exit(&Readiness.reset_state!/0)
   end
 
   test "GET /healthz returns a lightweight liveness response", %{conn: conn} do
@@ -58,6 +34,91 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     conn = get(conn, ~p"/readyz")
 
     assert json_response(conn, 200) == %{"status" => "ready"}
+  end
+
+  test "GET /readyz withdraws readiness when this image's migrations are not applied",
+       %{conn: conn} do
+    assert conn |> get(~p"/readyz") |> json_response(200) == %{"status" => "ready"}
+
+    # The database the pod was routed to no longer carries this image's schema.
+    # Connectivity is untouched, which is exactly why `select 1` reported ready.
+    Repo.query!("DELETE FROM schema_migrations")
+
+    {conn, log} = with_log([level: :info], fn -> get(recycle(conn), ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+    assert log =~ "readiness probe failed path=/readyz reason_class=migrations_missing"
+  end
+
+  test "GET /readyz withdraws readiness immediately when the schema is gone", %{conn: conn} do
+    assert conn |> get(~p"/readyz") |> json_response(200) == %{"status" => "ready"}
+
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.MissingSchemaProbe)
+
+    # A missing relation is permanent until an operator acts, so the grace
+    # window that protects a connectivity blip must not apply to it.
+    {conn, log} = with_log([level: :info], fn -> get(recycle(conn), ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+    assert log =~ "readiness probe failed path=/readyz reason_class=undefined_table"
+  end
+
+  test "GET /readyz returns 503 when packaged migrations cannot be verified", %{conn: conn} do
+    missing =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-missing-migrations-#{System.unique_integer([:positive])}"
+      )
+
+    Application.put_env(:codex_pooler, Readiness, migrations_path: missing)
+
+    {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+
+    assert log =~
+             "readiness probe failed path=/readyz reason_class=migration_directory_unreadable"
+  end
+
+  test "GET /readyz bounds query encoding exceptions as sanitized 503 responses", %{conn: conn} do
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.EncodingErrorProbe)
+
+    {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+    assert log =~ "readiness probe failed path=/readyz reason_class=DBConnection.EncodeError"
+    refute log =~ "example-secret"
+  end
+
+  test "GET /readyz keeps readiness through a brief connectivity failure", %{conn: conn} do
+    assert conn |> get(~p"/readyz") |> json_response(200) == %{"status" => "ready"}
+
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.UnavailableReadinessProbe)
+
+    # Every pod sees a database blip at the same instant. Withdrawing here
+    # would empty the Service of endpoints for a fault that heals itself.
+    {conn, log} = with_log([level: :info], fn -> get(recycle(conn), ~p"/readyz") end)
+
+    assert json_response(conn, 200) == %{"status" => "ready"}
+
+    assert log =~
+             "readiness probe degraded path=/readyz reason_class=DBConnection.ConnectionError"
+
+    refute log =~ "readiness probe failed"
+  end
+
+  test "GET /readyz withdraws readiness on connectivity failure before any success",
+       %{conn: conn} do
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.UnavailableReadinessProbe)
+
+    # A pod that has never reached the database holds no endpoint, so refusing
+    # it costs the Service nothing and keeps a broken rollout from reporting success.
+    {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+
+    assert log =~
+             "readiness probe failed path=/readyz reason_class=DBConnection.ConnectionError"
   end
 
   @tag :capture_log
@@ -73,9 +134,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
       use_instance_settings?: false
     )
 
-    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      readiness_probe: __MODULE__.UnavailableReadinessProbe
-    )
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.UnavailableReadinessProbe)
 
     assert conn |> get(~p"/healthz") |> json_response(200) == %{"status" => "ok"}
 
@@ -89,9 +148,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
     Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path)
 
-    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      readiness_probe: __MODULE__.AvailableReadinessProbe
-    )
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.AvailableReadinessProbe)
 
     conn = get(conn, ~p"/readyz")
 
@@ -105,9 +162,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
     Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path)
 
-    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      readiness_probe: __MODULE__.AvailableReadinessProbe
-    )
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.AvailableReadinessProbe)
 
     assert conn |> get(~p"/readyz") |> json_response(503) == %{"status" => "unavailable"}
     refute_received :available_readiness_probe_called
@@ -127,9 +182,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
     Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path)
 
-    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      readiness_probe: __MODULE__.UnexpectedReadinessProbe
-    )
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.UnexpectedReadinessProbe)
 
     {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
 
@@ -142,32 +195,28 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
        %{conn: conn} do
     activity_registry = :"health-rollout-activity-#{System.unique_integer([:positive])}"
     drain_name = :"health-rollout-drain-#{System.unique_integer([:positive])}"
-    deadline = observed_drain_deadline(self())
+    stream_registry = :"health-rollout-streams-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: activity_registry})
+    # Draining marks a registry drained for good, so keep the deferred-stream
+    # registry local rather than flipping the global one for later tests.
+    start_supervised!({DeferredStreamRegistry, name: stream_registry})
 
-    start_supervised!(
-      {RolloutDrain, name: drain_name, activity_registry: activity_registry, deadline: deadline}
-    )
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry})
 
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
 
     Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path())
 
-    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      readiness_probe: __MODULE__.UnexpectedReadinessProbe
-    )
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.UnexpectedReadinessProbe)
 
     refute ActivityRegistry.draining?()
 
     assert %{result: :ok, owners_seen: 0} =
-             RolloutDrain.start_drain(name: drain_name, timeout_ms: 100, deadline: deadline)
+             RolloutDrain.start_drain(name: drain_name, timeout_ms: 100)
 
     assert ActivityRegistry.draining?(name: activity_registry)
     refute ActivityRegistry.draining?()
-    assert_receive {:health_rollout_drain_worker, drain_worker}
-    drain_worker_ref = Process.monitor(drain_worker)
-    assert_receive {:DOWN, ^drain_worker_ref, :process, ^drain_worker, drain_worker_reason}
-    assert drain_worker_reason in [:normal, :noproc]
+    assert RolloutDrain.draining?(name: drain_name)
 
     {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
 
@@ -199,9 +248,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   end
 
   test "readiness failures emit sanitized warning and no accounting request row", %{conn: conn} do
-    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      readiness_probe: __MODULE__.UnavailableReadinessProbe
-    )
+    Application.put_env(:codex_pooler, Readiness, sql_probe: __MODULE__.UnavailableReadinessProbe)
 
     before_count = Repo.aggregate(Request, :count)
 
@@ -211,7 +258,10 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
       end)
 
     assert json_response(conn, 503) == %{"status" => "unavailable"}
-    assert log =~ "readiness probe failed path=/readyz reason_class=RuntimeError"
+
+    assert log =~
+             "readiness probe failed path=/readyz reason_class=DBConnection.ConnectionError"
+
     refute log =~ "database refused example-secret"
     refute log =~ "GET /readyz"
     refute log =~ "Sent 503"
@@ -229,34 +279,12 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     assert Enum.all?(events, &(&1.log_level == :info))
   end
 
-  defp observed_drain_deadline(parent) do
-    %{
-      now_ms: fn ->
-        unless Process.get({__MODULE__, :health_drain_worker_reported}, false) do
-          Process.put({__MODULE__, :health_drain_worker_reported}, true)
-          send(parent, {:health_rollout_drain_worker, self()})
-        end
-
-        System.monotonic_time(:millisecond)
-      end,
-      schedule_wait: fn recipient, wait_token, wait_ms ->
-        Process.send_after(recipient, {:rollout_drain_wait_elapsed, wait_token}, wait_ms)
-      end,
-      cancel_wait: fn timer_ref, wait_token ->
-        _result = Process.cancel_timer(timer_ref)
-
-        receive do
-          {:rollout_drain_wait_elapsed, ^wait_token} -> :ok
-        after
-          0 -> :ok
-        end
-      end
-    }
-  end
-
   defp capture_endpoint_log_decisions(fun) do
     test_pid = self()
     handler_id = {__MODULE__, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach_many(
@@ -265,8 +293,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
         fn event, _measurements, metadata, destination ->
           send(
             destination,
-            {:endpoint_log_decision, event, metadata.conn.request_path,
-             endpoint_log_level(metadata)}
+            {:endpoint_log_decision, event, metadata.conn.request_path, endpoint_log_level(metadata)}
           )
         end,
         test_pid
@@ -306,9 +333,9 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   end
 
   defmodule AvailableReadinessProbe do
-    def query(_repo, _statement, _params, _opts) do
+    def query(repo, statement, params, opts) do
       send(self(), :available_readiness_probe_called)
-      {:ok, %{}}
+      SQL.query(repo, statement, params, opts)
     end
   end
 
@@ -319,9 +346,27 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     end
   end
 
+  defmodule MissingSchemaProbe do
+    def query(_repo, _statement, _params, _opts) do
+      {:error,
+       %Postgrex.Error{
+         postgres: %{
+           code: :undefined_table,
+           message: "relation \"public.schema_migrations\" does not exist"
+         }
+       }}
+    end
+  end
+
   defmodule UnavailableReadinessProbe do
     def query(_repo, _statement, _params, _opts) do
-      {:error, %RuntimeError{message: "database refused example-secret"}}
+      {:error, %DBConnection.ConnectionError{message: "database refused example-secret"}}
+    end
+  end
+
+  defmodule EncodingErrorProbe do
+    def query(_repo, _statement, _params, _opts) do
+      raise DBConnection.EncodeError, "raw value example-secret"
     end
   end
 end

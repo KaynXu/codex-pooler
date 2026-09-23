@@ -13,6 +13,7 @@ defmodule CodexPooler.Access.APIKey do
   @type reasoning_effort :: String.t()
   @type t :: %__MODULE__{
           dashboard_access: boolean(),
+          max_active_requests: pos_integer() | nil,
           enforced_reasoning_effort: reasoning_effort() | nil,
           maximum_reasoning_effort: reasoning_effort() | nil,
           runtime_revocation_epoch: non_neg_integer()
@@ -27,6 +28,7 @@ defmodule CodexPooler.Access.APIKey do
     field :status, :string
     field :runtime_revocation_epoch, :integer, default: 0
     field :dashboard_access, :boolean, default: false
+    field :max_active_requests, :integer
     field :expires_at, :utc_datetime_usec
     field :last_used_at, :utc_datetime_usec
     field :allowed_model_identifiers, {:array, :string}
@@ -50,6 +52,7 @@ defmodule CodexPooler.Access.APIKey do
       :key_hash,
       :status,
       :dashboard_access,
+      :max_active_requests,
       :expires_at,
       :last_used_at,
       :allowed_model_identifiers,
@@ -76,6 +79,11 @@ defmodule CodexPooler.Access.APIKey do
       :dashboard_access
     ])
     |> validate_inclusion(:status, ["active", "paused", "revoked"])
+    |> validate_number(:max_active_requests,
+      greater_than: 0,
+      less_than_or_equal_to: 2_147_483_647
+    )
+    |> check_constraint(:max_active_requests, name: :api_keys_max_active_requests_positive)
     |> validate_string_list(:allowed_model_identifiers)
     |> validate_model_identifier(:enforced_model_identifier)
     |> validate_inclusion(:enforced_reasoning_effort, @reasoning_efforts)
@@ -171,9 +179,7 @@ defmodule CodexPooler.Access.APIKey do
         not metadata_labels_valid?(Map.get(metadata, "labels", Map.get(metadata, :labels, []))) ->
           [metadata: "labels must be a list of strings"]
 
-        not metadata_notes_valid?(
-          Map.get(metadata, "operator_notes", Map.get(metadata, :operator_notes))
-        ) ->
+        not metadata_notes_valid?(Map.get(metadata, "operator_notes", Map.get(metadata, :operator_notes))) ->
           [metadata: "operator_notes must be a string"]
 
         true ->

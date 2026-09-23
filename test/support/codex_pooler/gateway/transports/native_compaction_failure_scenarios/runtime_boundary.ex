@@ -362,8 +362,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCompactionFailureScenarios.Runtim
           from(attempt in Attempt, where: attempt.request_id in ^request_ids),
           :count
         ),
-      turns:
-        Repo.aggregate(from(turn in CodexTurn, where: turn.request_id in ^request_ids), :count),
+      turns: Repo.aggregate(from(turn in CodexTurn, where: turn.request_id in ^request_ids), :count),
       reservations:
         Repo.aggregate(
           from(entry in LedgerEntry,

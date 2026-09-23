@@ -8,14 +8,13 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
   alias CodexPooler.Gateway.Routing.{CircuitHealth, CircuitState}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
-    old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    old_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -30,7 +29,6 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     update_circuit_settings(%{"circuit_open_seconds" => 60, "circuit_half_open_probe_limit" => 1})
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, old_config)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -782,10 +780,8 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
              in_db_observer_with_backend_pid(fn ->
                %{
                  exact_lane: CircuitState.eligible?(auth, model, assignment, "proxy_http"),
-                 sibling_assignment:
-                   CircuitState.eligible?(auth, model, sibling_assignment, "proxy_http"),
-                 sibling_model:
-                   CircuitState.eligible?(auth, sibling_model, assignment, "proxy_http"),
+                 sibling_assignment: CircuitState.eligible?(auth, model, sibling_assignment, "proxy_http"),
+                 sibling_model: CircuitState.eligible?(auth, sibling_model, assignment, "proxy_http"),
                  sibling_route: CircuitState.eligible?(auth, model, assignment, "proxy_stream"),
                  retained_state: Repo.get!(RoutingCircuitState, written.id)
                }
@@ -846,8 +842,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       |> Repo.update!()
     end)
 
-    assert {:ok,
-            %{admission: :probe, state: %RoutingCircuitState{status: "half_open"} = first_probe}} =
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{status: "half_open"} = first_probe}} =
              in_db_observer(fn ->
                CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
              end)
@@ -1096,6 +1091,9 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     parent = self()
     handler_id = "routing-circuit-state-test-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -1275,8 +1273,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
   end
 
   defp cleanup_fixture(pool_id, upstream_identity_ids) do
-    pool = Repo.get(Pool, pool_id)
-    if pool, do: Repo.delete!(pool)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
 
     Repo.delete_all(
       from identity in UpstreamIdentity,

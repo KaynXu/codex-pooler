@@ -24,8 +24,7 @@ defmodule CodexPooler.Gateway.Websocket.OwnerCleanup do
           attempt_id: Ecto.UUID.t(),
           replay_generation: non_neg_integer(),
           downstream_epoch: pos_integer(),
-          native_replay_binding:
-            CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil
+          native_replay_binding: CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil
         }
 
   @spec capture(map(), map(), map(), non_neg_integer()) :: t() | nil

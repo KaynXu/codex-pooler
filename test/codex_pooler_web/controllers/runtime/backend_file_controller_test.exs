@@ -15,7 +15,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
-    old_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,
@@ -27,12 +27,53 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
       finalize_retry_interval_ms: 0
     )
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, Files, old_config)
-      Application.put_env(:codex_pooler, FileBridge, old_bridge_config)
-    end)
+    on_exit(fn -> Application.put_env(:codex_pooler, Files, old_config) end)
 
     :ok
+  end
+
+  # findings#191: the file bridge relays an upstream create status verbatim, so
+  # this is the real path on which Codex Pooler authors an error envelope at a
+  # status it did not choose. Every one of these used to render
+  # `invalid_request_error` -- the terminal class -- including the throttle and
+  # the two server-side failures, which is the whole defect the ticket names.
+  @tag :file_bridge_error_classification
+  test "a relayed upstream file-create status renders the class that status implies" do
+    for {upstream_status, expected_type} <- [
+          {429, "rate_limit_error"},
+          {502, "server_error"},
+          {503, "server_error"},
+          {403, "invalid_request_error"}
+        ] do
+      setup = active_api_key_fixture()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.file_protocol_create_error(upstream_status,
+            file_id: "file_relayed_#{upstream_status}"
+          )
+        )
+
+      active_upstream_assignment_fixture(setup.pool, %{
+        chatgpt_account_id: "acct_file_relayed_#{upstream_status}",
+        metadata: %{"base_url" => FakeUpstream.url(upstream)},
+        access_token: "file-relayed-#{upstream_status}-token"
+      })
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> post(~p"/backend-api/files", %{"file_name" => "sample.txt", "file_size" => 12})
+
+      assert %{"error" => %{"code" => code, "type" => type}} =
+               json_response(conn, upstream_status)
+
+      assert code == "upstream_file_bridge_failed"
+
+      assert type == expected_type,
+             "upstream #{upstream_status} rendered #{type}, expected #{expected_type}"
+    end
   end
 
   @tag :schema_bridge_metadata
@@ -357,14 +398,13 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
 
     assert Repo.aggregate(
              from(request in Request,
-               where:
-                 request.pool_id == ^setup.pool.id and request.api_key_id == ^setup.api_key.id
+               where: request.pool_id == ^setup.pool.id and request.api_key_id == ^setup.api_key.id
              ),
              :count
            ) == 2
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
-    assert Enum.all?(requests, &is_nil(&1.idempotency_key))
+    refute :idempotency_key in Request.__schema__(:fields)
     assert Repo.aggregate(IdempotencyKey, :count) == 0
     refute inspect(requests) =~ idempotency_key
     refute inspect(requests) =~ "first body"
@@ -439,7 +479,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
       )
 
     assert length(finalize_requests) == 2
-    assert Enum.all?(finalize_requests, &is_nil(&1.idempotency_key))
+    refute :idempotency_key in Request.__schema__(:fields)
     refute inspect(Enum.map(finalize_requests, & &1.request_metadata)) =~ idempotency_key
     refute inspect(Enum.map(finalize_requests, & &1.request_metadata)) =~ "finalize body"
   end

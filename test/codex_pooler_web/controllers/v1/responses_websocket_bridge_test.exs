@@ -31,6 +31,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
 
@@ -98,15 +99,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp set_upstream_receive_timeout!(timeout_ms) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
     settings = %{OperationalSettings.current() | upstream_receive_timeout_ms: timeout_ms}
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: settings,
       use_instance_settings?: false
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp set_bridge_preflight_timeout!(timeout_ms) do
@@ -135,16 +134,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp created_event(id) do
-    {"response.created",
-     %{"type" => "response.created", "response" => %{"id" => id, "status" => "in_progress"}}}
+    {"response.created", %{"type" => "response.created", "response" => %{"id" => id, "status" => "in_progress"}}}
   end
 
   # Native websocket frames for `{event_type, payload}` tuples: one text frame
   # per event, no SSE framing.
   defp websocket_frames(events) do
-    FakeUpstream.websocket_text_frames(
-      Enum.map(events, fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end)
-    )
+    FakeUpstream.websocket_text_frames(Enum.map(events, fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end))
   end
 
   # One strict native bridge turn pinned to a physical upstream connection.
@@ -322,6 +318,26 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     end
   end
 
+  # The bridged downstream stays attached until the HTTP relay consumes the
+  # stream, so this waits only for the owner to settle the upstream turn.
+  defp await_owner_turn_settled(owner, attempts_left \\ 1_000)
+
+  defp await_owner_turn_settled(_owner, 0),
+    do: flunk("websocket owner did not settle the upstream turn")
+
+  defp await_owner_turn_settled(owner, attempts_left) do
+    case :sys.get_state(owner) do
+      %{active_turn: nil} = state ->
+        state
+
+      _active ->
+        receive do
+        after
+          1 -> await_owner_turn_settled(owner, attempts_left - 1)
+        end
+    end
+  end
+
   defp await_owner_bridge_idle(owner, attempts_left \\ 1_000)
 
   defp await_owner_bridge_idle(owner, 0), do: :sys.get_state(owner)
@@ -439,11 +455,219 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
-  test "bridged turns preserve the downstream SSE", %{conn: conn} do
+  test "bridged turns derive the Codex routing hint on the upstream websocket handshake", %{
+    conn: conn
+  } do
+    upstream_model = "provider-bridge-routing-hint-model"
+
     upstream =
       start_upstream(
-        FakeUpstream.sse_stream([created_event("resp_parity"), completed_event("resp_parity")])
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (handshake routing hint; replies invented)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            headers: [
+              required: %{"x-codex-routing-hint" => "model=#{upstream_model};tier=priority"},
+              forbidden: ["session-id", "thread-id", "x-client-request-id"]
+            ],
+            json: [
+              valid: true,
+              equals: %{
+                "type" => "response.create",
+                "model" => upstream_model,
+                "service_tier" => "priority"
+              }
+            ],
+            respond: websocket_frames([completed_event("resp_bridge_routing_hint")])
+          )
+        ])
       )
+
+    setup =
+      gateway_setup(upstream,
+        upstream_model_id: upstream_model,
+        model_metadata: %{"upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}}
+      )
+
+    session = "routing-hint-session-#{System.unique_integer([:positive])}"
+
+    response =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("x-session-id", session)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=forged")
+      |> put_req_header("thread-id", "forged-thread-id")
+      |> put_req_header("x-client-request-id", "forged-client-request-id")
+      |> post(
+        "/v1/responses",
+        setup |> stream_payload("routing hint turn") |> Map.put("service_tier", "fast")
+      )
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_bridge_routing_hint"
+    assert :ok = FakeUpstream.verify!(upstream)
+    refute inspect(FakeUpstream.requests(upstream)) =~ "forged"
+  end
+
+  test "bridged turns carry the tenant-derived provider session-id on the handshake and nowhere else",
+       %{conn: conn} do
+    cache_key = "bridged-derived-session-cache-key"
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_unused")]))
+    setup = gateway_setup(upstream)
+
+    # The trusted Pool and API key ids of the authenticated principal survive
+    # into the bridged owner options, so the bridged handshake derives the same
+    # id the /v1 HTTP path would send for this conversation.
+    expected =
+      TransportEnvelope.prompt_cache_session_id(
+        %{pool_id: setup.pool.id, api_key_id: setup.api_key.id},
+        cache_key
+      )
+
+    assert is_binary(expected)
+
+    FakeUpstream.set_mode(
+      upstream,
+      # provenance: synthetic_adversarial (invented completed reply; the derived handshake session-id is the claim)
+      FakeUpstream.strict_sequence([
+        FakeUpstream.expect_request(
+          method: "WEBSOCKET",
+          path: "/backend-api/codex/responses",
+          websocket_connection_ordinal: 1,
+          headers: [
+            required: %{"session-id" => expected},
+            forbidden: ["thread-id", "x-client-request-id", "x-session-id"]
+          ],
+          json: [valid: true, required: ["prompt_cache_key"]],
+          respond: websocket_frames([completed_event("resp_bridge_derived_session")])
+        )
+      ])
+    )
+
+    {response, logs} =
+      with_log(fn ->
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> put_req_header(
+          "x-session-id",
+          "derived-session-#{System.unique_integer([:positive])}"
+        )
+        |> put_req_header("session-id", "caller-session-fixture")
+        |> put_req_header("thread-id", "caller-thread-fixture")
+        |> put_req_header("x-client-request-id", "caller-client-request-fixture")
+        |> post(
+          "/v1/responses",
+          setup
+          |> stream_payload("derived session id turn")
+          |> Map.put("prompt_cache_key", cache_key)
+        )
+      end)
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_bridge_derived_session"
+    assert :ok = FakeUpstream.verify!(upstream)
+
+    # A caller-supplied session header never reaches the provider.
+    refute inspect(FakeUpstream.requests(upstream)) =~ "caller-"
+
+    # The derived value is as sensitive as the client key it comes from, so the
+    # handshake header is its only egress: the dispatch egress observation emits
+    # header names only, and no finalization path carries the value into the
+    # downstream stream, the request and attempt rows, or the logs.
+    request = latest_request(setup.pool)
+    assert [attempt] = attempts_for(request)
+    assert attempt.transport == "websocket"
+
+    refute logs =~ expected
+    refute response.resp_body =~ expected
+
+    for row <- [request, attempt] do
+      refute inspect(row, limit: :infinity, printable_limit: :infinity) =~ expected
+    end
+  end
+
+  test "bridged turns keep one upstream websocket when the routing tier changes", %{conn: conn} do
+    upstream_model = "provider-bridge-tier-switch-model"
+    priority_hint = "model=#{upstream_model};tier=priority"
+
+    upstream =
+      start_upstream(
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs websocket_connection and build_websocket_headers (socket and first handshake hint kept across turns; replies invented)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-codex-routing-hint" => priority_hint}],
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create", "service_tier" => "priority"}
+            ],
+            respond: websocket_frames([completed_event("resp_bridge_tier_priority")])
+          ),
+          FakeUpstream.expect_request(
+            method: "WEBSOCKET",
+            path: "/backend-api/codex/responses",
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"x-codex-routing-hint" => priority_hint}],
+            json: [
+              valid: true,
+              equals: %{"type" => "response.create"},
+              forbidden: ["service_tier"]
+            ],
+            respond: websocket_frames([completed_event("resp_bridge_tier_default")])
+          )
+        ])
+      )
+
+    setup =
+      gateway_setup(upstream,
+        upstream_model_id: upstream_model,
+        model_metadata: %{"upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}}
+      )
+
+    session = "tier-switch-session-#{System.unique_integer([:positive])}"
+
+    priority =
+      post_stream(
+        conn,
+        setup,
+        session,
+        setup |> stream_payload("priority turn") |> Map.put("service_tier", "priority")
+      )
+
+    assert priority.status == 200
+    assert completed_id(priority.resp_body) == "resp_bridge_tier_priority"
+    assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert [attempt] = attempts_for(latest_request(setup.pool))
+
+    assert %{"lifecycle_id" => lifecycle_id, "generation" => 1, "reused" => false} =
+             upstream_connection(attempt)
+
+    default = post_stream(conn, setup, session, stream_payload(setup, "default tier turn"))
+
+    assert default.status == 200
+    assert completed_id(default.resp_body) == "resp_bridge_tier_default"
+    assert [^connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert [default_attempt] = attempts_for(latest_request(setup.pool))
+
+    assert %{
+             "lifecycle_id" => ^lifecycle_id,
+             "generation" => 1,
+             "reused" => true,
+             "reconnected" => false
+           } = upstream_connection(default_attempt)
+
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "bridged turns preserve the downstream SSE", %{conn: conn} do
+    upstream =
+      start_upstream(FakeUpstream.sse_stream([created_event("resp_parity"), completed_event("resp_parity")]))
 
     setup = gateway_setup(upstream)
     session = "parity-session-#{System.unique_integer([:positive])}"
@@ -565,8 +789,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              WebsocketOwnerContract.safe_error_payload(:owner_unavailable, nil)
 
     owner_frame =
-      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
-       {:error, :owner_unavailable, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:error, :owner_unavailable, safe_payload}}
 
     assert {:push, {:text, payload}, ^state} =
              CodexResponsesSocket.handle_info(owner_frame, state)
@@ -647,8 +870,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              WebsocketOwnerContract.safe_error_payload(:upstream_stream_error, nil)
 
     owner_frame =
-      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
-       {:error, :upstream_stream_error, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:error, :upstream_stream_error, safe_payload}}
 
     {_result, log} =
       with_log(fn ->
@@ -674,8 +896,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
 
     owner_frame =
-      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
-       {:error, :owner_drained, safe_payload}}
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:error, :owner_drained, safe_payload}}
 
     {_result, log} =
       with_log(fn ->
@@ -1489,9 +1710,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     # Guards the preflight against reordering the first event behind the
     # terminal marker: the non-terminal response.created must survive.
     upstream =
-      start_upstream(
-        FakeUpstream.sse_stream([created_event("resp_multi"), completed_event("resp_multi")])
-      )
+      start_upstream(FakeUpstream.sse_stream([created_event("resp_multi"), completed_event("resp_multi")]))
 
     setup = gateway_setup(upstream)
     session = "multi-session-#{System.unique_integer([:positive])}"
@@ -1584,8 +1803,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "a bridged stream dying after visible output finalizes as a failed request", %{conn: conn} do
     created_event =
-      {"response.created",
-       %{"type" => "response.created", "response" => %{"id" => "resp_dead_t1"}}}
+      {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_dead_t1"}}}
 
     visible_event =
       {"response.output_text.delta",
@@ -2415,8 +2633,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   test "a downstream disconnect during a bridged turn finalizes as client_disconnected and frees the owner",
        %{conn: _conn} do
-    # The follow-up turn must bridge on a fresh physical connection after the
-    # abandoned socket is closed.
+    # The abandoned turn's upstream reply completes before the downstream write
+    # fails, so its connection stays healthy and the follow-up reuses it.
     upstream =
       start_upstream(
         FakeUpstream.strict_sequence([
@@ -2427,7 +2645,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
               completed_event("resp_disconnect_t1")
             ])
           ),
-          strict_bridge_turn(2, websocket_frames([completed_event("resp_disconnect_t2")]))
+          strict_bridge_turn(1, websocket_frames([completed_event("resp_disconnect_t2")]))
         ])
       )
 
@@ -2444,8 +2662,25 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         public_openai_responses_stream: true
       })
 
+    # Mark the origin the public controller marks, so both turns derive the same
+    # upstream handshake and share one connection key.
+    request_options =
+      RequestOptions.mark_openai_compatibility_origin(
+        request_options,
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
     assert {:ok, %{stream: stream}} =
              RuntimeGateway.execute(auth, endpoint, payload, request_options)
+
+    # Wait for the owner to settle the completed upstream turn (its submitter
+    # exited) before the downstream write fails, so the cancellation can never
+    # race the upstream completion into closing a healthy socket.
+    completed_request = latest_request(setup.pool)
+    turn = Repo.one!(from t in CodexTurn, where: t.request_id == ^completed_request.id)
+    assert {:ok, owner} = WebsocketOwnerSession.lookup(turn.codex_session_id)
+    assert %{active_turn: nil} = await_owner_turn_settled(owner)
 
     # The client goes away before the first chunk can be written downstream.
     closed_conn = %{
@@ -2476,9 +2711,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert is_binary(lifecycle_id)
     assert settlement_count(request) == 1
 
-    # The owner session must not stay wedged on the interrupted turn: caller
-    # cancellation closes that abandoned upstream socket, so the next turn
-    # bridges again on the same lifecycle's next generation.
+    # The owner session must not stay wedged on the interrupted turn: the next
+    # turn bridges again on the same lifecycle and generation.
     second =
       Phoenix.ConnTest.build_conn()
       |> auth(setup)
@@ -2487,13 +2721,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert second.status == 200
     assert completed_id(second.resp_body) == "resp_disconnect_t2"
-    assert FakeUpstream.websocket_connection_count(upstream) == 2
-
-    assert [^disconnect_connection_id, reconnect_connection_id] =
-             FakeUpstream.websocket_connection_ids(upstream)
-
-    assert is_reference(reconnect_connection_id)
-    refute reconnect_connection_id == disconnect_connection_id
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [^disconnect_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
 
     second_request = latest_request(setup.pool)
     assert second_request.id != request.id
@@ -2503,12 +2732,140 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert %{
              "lifecycle_id" => ^lifecycle_id,
-             "generation" => 2,
-             "reused" => false,
+             "generation" => 1,
+             "reused" => true,
              "reconnected" => false
            } = upstream_connection(second_attempt)
 
     assert settlement_count(second_request) == 1
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  @abandoned_turn_detection_budget_ms 15_000
+
+  test "a downstream disconnect while the upstream reply is in flight closes the abandoned socket",
+       %{conn: _conn} do
+    release_ref = make_ref()
+
+    in_flight_frames =
+      Enum.map(
+        [
+          created_event("resp_inflight_t1"),
+          {"response.output_text.delta",
+           %{
+             "type" => "response.output_text.delta",
+             "response_id" => "resp_inflight_t1",
+             "output_index" => 0,
+             "content_index" => 0,
+             "delta" => "visible before disconnect"
+           }}
+        ],
+        fn {_type, payload} -> CodexPooler.JSON.encode!(payload) end
+      )
+
+    upstream =
+      start_upstream(
+        # The first reply is held after visible output with no terminal, so the
+        # disconnect abandons an in-flight upstream turn.
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          strict_bridge_turn(
+            1,
+            FakeUpstream.barrier_websocket_frames(in_flight_frames,
+              notify: self(),
+              release_ref: release_ref
+            )
+          ),
+          strict_bridge_turn(2, websocket_frames([completed_event("resp_inflight_t2")]))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = "inflight-disconnect-session-#{System.unique_integer([:positive])}"
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, %{endpoint: endpoint, payload: payload, request_options: request_options}} =
+      ResponsesCompat.coerce(stream_payload(setup, "in-flight disconnect turn"), %{
+        session_header: session,
+        session_header_source: "x-session-id",
+        upstream_endpoint: "/backend-api/codex/responses",
+        public_openai_responses_stream: true
+      })
+
+    request_options =
+      RequestOptions.mark_openai_compatibility_origin(
+        request_options,
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
+    closed_conn = %{
+      Phoenix.ConnTest.build_conn()
+      | adapter: {ClosedChunkAdapter, nil},
+        state: :chunked
+    }
+
+    parent = self()
+
+    disconnect_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        {:ok, %{stream: stream}} =
+          RuntimeGateway.execute(auth, endpoint, payload, request_options)
+
+        stream.(closed_conn)
+      end)
+
+    for ordinal <- [0, 1] do
+      assert_receive {:fake_upstream_frame_barrier, ^ordinal, _handler, ^release_ref},
+                     @abandoned_turn_detection_budget_ms
+
+      assert :ok = FakeUpstream.release_frame(upstream, release_ref)
+    end
+
+    # Both frames are on the wire and no terminal follows: the reply is in flight.
+    assert_receive {:fake_upstream_frame_barrier, 2, handler, ^release_ref},
+                   @abandoned_turn_detection_budget_ms
+
+    handler_monitor = Process.monitor(handler)
+
+    assert {:ok, _conn} = Task.await(disconnect_task, @abandoned_turn_detection_budget_ms)
+    assert [abandoned_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+
+    # The released handler can only exit once the Pooler closed its socket; a
+    # live abandoned socket would keep it waiting for the next request.
+    assert :ok = FakeUpstream.release_frame(upstream, release_ref)
+
+    assert_receive {:DOWN, ^handler_monitor, :process, ^handler, _reason},
+                   @abandoned_turn_detection_budget_ms
+
+    request = latest_request(setup.pool)
+    assert request.status == "failed"
+    assert request.last_error_code == "client_disconnected"
+    assert [attempt] = attempts_for(request)
+    assert attempt.network_error_code == "client_disconnected"
+
+    follow_up =
+      Phoenix.ConnTest.build_conn()
+      |> auth(setup)
+      |> put_req_header("x-session-id", session)
+      |> post("/v1/responses", stream_payload(setup, "in-flight disconnect follow-up"))
+
+    assert follow_up.status == 200
+    assert completed_id(follow_up.resp_body) == "resp_inflight_t2"
+
+    assert [^abandoned_connection_id, fresh_connection_id] =
+             FakeUpstream.websocket_connection_ids(upstream)
+
+    refute fresh_connection_id == abandoned_connection_id
+    assert [follow_up_attempt] = attempts_for(latest_request(setup.pool))
+
+    # The killed submit records no connection result for the abandoned attempt;
+    # generation two proves the same owner lifecycle reconnected.
+    assert %{"generation" => 2, "reused" => false} = upstream_connection(follow_up_attempt)
+
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
@@ -2655,8 +3012,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "an unknown event type commits the bridge so a later close stays fatal", %{conn: conn} do
     events = [
       created_event("resp_unknown_commit"),
-      {"response.entirely_new_event",
-       %{"type" => "response.entirely_new_event", "response_id" => "resp_unknown_commit"}}
+      {"response.entirely_new_event", %{"type" => "response.entirely_new_event", "response_id" => "resp_unknown_commit"}}
     ]
 
     # Exactly one websocket submission is permitted; an HTTP replay would
@@ -2840,6 +3196,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       [:codex_pooler, :gateway, :stream, :finalization]
     ]
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach_many(
         handler_id,
@@ -2896,7 +3255,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       queued_response_payloads: :queue.new(),
       public_response_task_pid: nil,
       public_response_stream_id: nil,
-      public_response_start_error_ref: nil,
       public_responses_websocket_state: nil,
       public_turn_task_done?: false,
       public_turn_owner_complete?: false,
@@ -2928,7 +3286,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         queued_response_payloads: :queue.new(),
         public_response_task_pid: task_pid,
         public_response_stream_id: stream_id,
-        public_response_start_error_ref: nil,
         public_responses_websocket_state: nil,
         public_turn_task_done?: false,
         public_turn_owner_complete?: false,

@@ -104,8 +104,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
       state: "open",
       label: "Open",
       title: "Unauthenticated scrapes allowed",
-      description:
-        "No metrics bearer token is stored, so /metrics returns 200 without Authorization.",
+      description: "No metrics bearer token is stored, so /metrics returns 200 without Authorization.",
       badge_class: "badge badge-warning badge-sm font-semibold"
     }
   end
@@ -115,8 +114,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Metrics do
       state: "protected",
       label: "Protected",
       title: "Exact bearer token required",
-      description:
-        "A metrics bearer token is stored, so /metrics requires the exact Bearer token.",
+      description: "A metrics bearer token is stored, so /metrics requires the exact Bearer token.",
       badge_class: "badge badge-success badge-sm font-semibold"
     }
   end

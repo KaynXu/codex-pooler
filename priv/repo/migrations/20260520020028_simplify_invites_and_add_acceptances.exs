@@ -34,15 +34,11 @@ defmodule CodexPooler.Repo.Migrations.SimplifyInvitesAndAddAcceptances do
 
     execute("ALTER TABLE public.invite_redemptions RENAME TO invite_acceptances")
 
-    execute(
-      "ALTER TABLE public.invite_acceptances RENAME COLUMN consumed_by_email TO accepted_by_email"
-    )
+    execute("ALTER TABLE public.invite_acceptances RENAME COLUMN consumed_by_email TO accepted_by_email")
 
     execute("ALTER TABLE public.invite_acceptances RENAME COLUMN consumed_at TO accepted_at")
 
-    execute(
-      "ALTER TABLE public.invite_acceptances DROP CONSTRAINT invite_redemptions_status_check"
-    )
+    execute("ALTER TABLE public.invite_acceptances DROP CONSTRAINT invite_redemptions_status_check")
 
     alter table(:invite_acceptances) do
       remove :status
@@ -149,15 +145,11 @@ defmodule CodexPooler.Repo.Migrations.SimplifyInvitesAndAddAcceptances do
 
     execute("ALTER TABLE public.invite_acceptances RENAME COLUMN accepted_at TO consumed_at")
 
-    execute(
-      "ALTER TABLE public.invite_acceptances RENAME COLUMN accepted_by_email TO consumed_by_email"
-    )
+    execute("ALTER TABLE public.invite_acceptances RENAME COLUMN accepted_by_email TO consumed_by_email")
 
     execute("ALTER TABLE public.invite_acceptances RENAME TO invite_redemptions")
 
-    create unique_index(:invite_redemptions, [:invite_id, :upstream_identity_id],
-             name: :invite_redemptions_invite_identity_uq
-           )
+    create unique_index(:invite_redemptions, [:invite_id, :upstream_identity_id], name: :invite_redemptions_invite_identity_uq)
 
     execute("ALTER TABLE public.invites DROP CONSTRAINT invites_status_check")
 
@@ -183,17 +175,11 @@ defmodule CodexPooler.Repo.Migrations.SimplifyInvitesAndAddAcceptances do
     CHECK (status = ANY (ARRAY['active'::text, 'revoked'::text, 'expired'::text]))
     """)
 
-    execute(
-      "ALTER TABLE public.invites ADD CONSTRAINT invites_check CHECK (redemptions_used <= max_redemptions)"
-    )
+    execute("ALTER TABLE public.invites ADD CONSTRAINT invites_check CHECK (redemptions_used <= max_redemptions)")
 
-    execute(
-      "ALTER TABLE public.invites ADD CONSTRAINT invites_max_redemptions_check CHECK (max_redemptions > 0)"
-    )
+    execute("ALTER TABLE public.invites ADD CONSTRAINT invites_max_redemptions_check CHECK (max_redemptions > 0)")
 
-    execute(
-      "ALTER TABLE public.invites ADD CONSTRAINT invites_redemptions_used_check CHECK (redemptions_used >= 0)"
-    )
+    execute("ALTER TABLE public.invites ADD CONSTRAINT invites_redemptions_used_check CHECK (redemptions_used >= 0)")
 
     alter table(:invites) do
       remove :accepted_at

@@ -16,6 +16,10 @@ defmodule CodexPooler.Jobs.TokenRefreshWorker do
 
   alias CodexPooler.Upstreams.Auth.TokenRefresh
 
+  # The ceiling the exponential backoff already tops out at, so a provider
+  # interval cannot park a job for longer than an ordinary retry would.
+  @max_snooze_seconds 3_600
+
   @impl Oban.Worker
   def timeout(%Oban.Job{}), do: :timer.seconds(45)
 
@@ -26,11 +30,26 @@ defmodule CodexPooler.Jobs.TokenRefreshWorker do
     case TokenRefresh.refresh_access_token(identity_id,
            trigger_kind: trigger_kind
          ) do
-      {:ok, %{status: :active}} -> :ok
-      {:ok, %{status: :refresh_failed, retryable?: true, reason: reason}} -> {:error, reason}
-      {:ok, %{status: status}} when status in [:reauth_required, :noop] -> :discard
-      {:error, :refresh_in_progress, _metadata} -> {:snooze, 5}
-      {:error, reason} -> {:error, reason}
+      # A provider that named its own interval outranks the exponential backoff
+      # below, which would otherwise burn attempts against a deadline we were
+      # already told about.
+      {:ok, %{retryable?: true, retry_after_seconds: seconds}} when is_integer(seconds) and seconds > 0 ->
+        {:snooze, min(seconds, @max_snooze_seconds)}
+
+      {:ok, %{retryable?: true, reason: reason}} ->
+        {:error, reason}
+
+      {:ok, %{status: :active}} ->
+        :ok
+
+      {:ok, %{status: status}} when status in [:reauth_required, :noop] ->
+        :discard
+
+      {:error, :refresh_in_progress, _metadata} ->
+        {:snooze, 5}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

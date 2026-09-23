@@ -14,6 +14,34 @@ defmodule CodexPooler.FakeUpstream do
 
   @type t :: %__MODULE__{pid: pid(), server: pid(), supervisor: pid(), url: String.t()}
 
+  @typedoc """
+  How an HTTP barrier-SSE reply treats the client going away mid-tail (the
+  websocket transport of the same scenario writes frames and has no client
+  close to observe).
+
+    * `:fail` (default) keeps the strict complete-delivery contract: a write
+      that finds the client gone raises with the scenario's owner correlator.
+    * `:expected` is for cancellation scenarios that end the client path on
+      purpose before releasing the held tail: the first write that finds the
+      client gone stops the tail, emits no delivery acknowledgement for it, and
+      records one bounded outcome readable through `sse_outcomes/1`.
+
+  Every other write error fails in both modes.
+  """
+  @type barrier_sse_settings :: %{
+          required(:on_client_close) => :fail | :expected,
+          required(:owner) => String.t()
+        }
+
+  @type sse_outcome :: %{
+          required(:scenario) => :barrier_sse,
+          required(:owner) => String.t(),
+          required(:outcome) => :client_closed_expected,
+          required(:chunk_index) => pos_integer(),
+          required(:chunk_count) => non_neg_integer(),
+          required(:reason) => :closed | :enotconn | :einval | :econnaborted | :econnreset | :epipe
+        }
+
   @type mode ::
           {:json, non_neg_integer(), map()}
           | {:json_headers, non_neg_integer(), map(), [{String.t(), String.t()}]}
@@ -34,12 +62,11 @@ defmodule CodexPooler.FakeUpstream do
           | {:abrupt_close_mid_stream, [String.t()]}
           | :close_before_headers
           | {:websocket_text, [String.t()]}
+          | {:websocket_text_then_abrupt_close, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
-          | {:websocket_terminal_then_close_barrier, String.t(), non_neg_integer(), String.t(),
-             pid(), reference()}
+          | {:websocket_terminal_then_close_barrier, String.t(), non_neg_integer(), String.t(), pid(), reference()}
           | {:websocket_connection_limit_terminal_barrier, atom(), pid(), reference()}
-          | {:websocket_close_without_terminal_barrier, non_neg_integer(), String.t(), pid(),
-             reference()}
+          | {:websocket_close_without_terminal_barrier, non_neg_integer(), String.t(), pid(), reference()}
           | {:websocket_init_barrier, mode(), pid(), reference()}
           | {:websocket_frame_barrier, [String.t()], pid(), reference()}
           | {:sequence, [mode()]}
@@ -47,7 +74,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:repeat_last, [mode()]}
           | {:expect_request, keyword(), mode()}
           | {:scenario_failure, String.t()}
-          | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
+          | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference(), barrier_sse_settings()}
           | {:malformed_json, non_neg_integer(), String.t()}
           | {:json_error, non_neg_integer(), map()}
           | {:non_json_error, non_neg_integer(), String.t()}
@@ -56,8 +83,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:timeout_mid_stream, String.t(), pid() | nil, reference()}
           | {:websocket_upgrade_timeout, pid() | nil, reference()}
           | {:websocket_idle_timeout, pid(), reference()}
-          | {:websocket_upgrade_error, non_neg_integer(), map(), [{String.t(), String.t()}],
-             pid() | nil, reference() | nil}
+          | {:websocket_upgrade_error, non_neg_integer(), map(), [{String.t(), String.t()}], pid() | nil, reference() | nil}
 
   @doc "Starts a local fake upstream server for the given response mode."
   def start_link(mode, opts \\ []) do
@@ -276,6 +302,34 @@ defmodule CodexPooler.FakeUpstream do
   def json_response_with_headers(payload, headers, status \\ 200),
     do: {:json_headers, status, payload, headers}
 
+  @spec compaction_stream(map(), [{String.t(), String.t()}]) :: mode()
+  def compaction_stream(payload, headers \\ []) do
+    items =
+      List.wrap(Map.get(payload, "output")) ++
+        Enum.map(
+          List.wrap(Map.get(payload, "compaction_summary")),
+          &Map.put_new(&1, "type", "compaction_summary")
+        )
+
+    events =
+      Enum.map(
+        items,
+        &{"response.output_item.done", %{"type" => "response.output_item.done", "item" => &1}}
+      )
+
+    sse_stream(
+      events ++
+        [
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => Map.put_new(payload, "status", "completed")
+           }}
+        ],
+      headers: headers
+    )
+  end
+
   def raw_response(body, opts \\ []) when is_binary(body) and is_list(opts) do
     {:raw_body, Keyword.get(opts, :status, 200), body, Keyword.get(opts, :headers, [])}
   end
@@ -285,20 +339,17 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   def barrier_json_response(payload, opts) when is_map(payload) and is_list(opts) do
-    {:barrier_json, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:barrier_json, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def gated_json_headers(payload, opts) when is_map(payload) and is_list(opts) do
-    {:gated_json_headers, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:gated_json_headers, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def gated_sse_headers(events, opts) when is_list(events) and is_list(opts) do
     chunks = Enum.map(events, &sse_chunk/1) ++ ["data: [DONE]\n\n"]
 
-    {:gated_sse_headers, chunks, Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:gated_sse_headers, chunks, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def reject_json_field(
@@ -333,6 +384,20 @@ defmodule CodexPooler.FakeUpstream do
     {:file_protocol, opts |> file_protocol_config() |> Map.put(:mode, :non_json_error)}
   end
 
+  @doc """
+  A file create that the upstream refuses with `status`.
+
+  The file bridge relays an upstream create status verbatim, so this is the
+  boundary where a throttled or unavailable upstream becomes a Codex
+  Pooler-authored error envelope at that same status (findings#191).
+  """
+  def file_protocol_create_error(status, opts \\ []) when is_integer(status) do
+    {:file_protocol,
+     opts
+     |> file_protocol_config()
+     |> Map.merge(%{mode: :create_error, create_error_status: status})}
+  end
+
   def file_protocol_finalize_retry(opts \\ []) do
     {:file_protocol, opts |> file_protocol_config() |> Map.put(:mode, :finalize_retry)}
   end
@@ -357,6 +422,17 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   @doc """
+  Pushes `messages` as native text frames, then drops the TCP connection
+  without a websocket close frame, so the Pooler's Mint receive loop observes
+  the transport close (`Mint.TransportError` with reason `:closed`) rather than
+  a peer close frame or a terminal.
+  """
+  @spec websocket_text_frames_then_abrupt_close([iodata()]) :: mode()
+  def websocket_text_frames_then_abrupt_close(messages) when is_list(messages) do
+    {:websocket_text_then_abrupt_close, Enum.map(messages, &IO.iodata_to_binary/1)}
+  end
+
+  @doc """
   Native websocket analogue of `barrier_sse_stream/2`: pushes `messages` as text
   frames one at a time and holds before every push.
 
@@ -375,8 +451,7 @@ defmodule CodexPooler.FakeUpstream do
   """
   @spec barrier_websocket_frames([iodata()], keyword()) :: mode()
   def barrier_websocket_frames(messages, opts) when is_list(messages) and is_list(opts) do
-    {:websocket_frame_barrier, Enum.map(messages, &IO.iodata_to_binary/1),
-     Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
+    {:websocket_frame_barrier, Enum.map(messages, &IO.iodata_to_binary/1), Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   @doc "Releases the frame barrier currently held for `release_ref` and records its acknowledgement."
@@ -454,8 +529,7 @@ defmodule CodexPooler.FakeUpstream do
         {false,
          %{
            state
-           | frame_barriers_waiting:
-               Map.put(state.frame_barriers_waiting, release_ref, {handler, ordinal})
+           | frame_barriers_waiting: Map.put(state.frame_barriers_waiting, release_ref, {handler, ordinal})
          }}
       end
     end)
@@ -484,8 +558,7 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   def generic_5xx(status \\ 503) when status in 500..599 do
-    {:json_error, status,
-     %{"error" => %{"code" => "server_error", "message" => "synthetic server failure"}}}
+    {:json_error, status, %{"error" => %{"code" => "server_error", "message" => "synthetic server failure"}}}
   end
 
   def delayed_sse_stream(events, opts) do
@@ -514,8 +587,7 @@ defmodule CodexPooler.FakeUpstream do
     before_terminal = Enum.map(events, &sse_chunk/1)
     terminal = [sse_chunk(terminal_event), "data: [DONE]\n\n"]
 
-    {:gated_terminal_sse, before_terminal, terminal, Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:gated_terminal_sse, before_terminal, terminal, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def abrupt_close_mid_stream(events) when is_list(events) do
@@ -524,6 +596,17 @@ defmodule CodexPooler.FakeUpstream do
 
   def close_before_headers, do: :close_before_headers
 
+  @doc """
+  Holds an SSE reply at chunk `barrier_after` until the owning test releases it.
+
+  Options: `:notify` and `:release_ref` (required), `:barrier_after` (default
+  1), `:done` (default true), `:on_client_close` (`:fail` by default or
+  `:expected`, see `t:barrier_sse_settings/0`), and `:owner`, a bounded
+  correlator (`[A-Za-z0-9_.:-]`, at most 80 bytes) that names the scenario in
+  every write-failure error and recorded outcome so a CI log identifies its
+  caller. It defaults to the calling test file and line (`file_test.exs:line`)
+  when the fixture is built inside a test.
+  """
   def barrier_sse_stream(events, opts) do
     include_done? = Keyword.get(opts, :done, true)
     barrier_after = Keyword.get(opts, :barrier_after, 1)
@@ -533,7 +616,82 @@ defmodule CodexPooler.FakeUpstream do
     chunks = Enum.map(events, &sse_chunk/1)
     chunks = if include_done?, do: chunks ++ ["data: [DONE]\n\n"], else: chunks
 
-    {:barrier_sse, chunks, barrier_after, notify, release_ref}
+    {:barrier_sse, chunks, barrier_after, notify, release_ref,
+     barrier_sse_settings(
+       Keyword.get(opts, :on_client_close, :fail),
+       Keyword.get_lazy(opts, :owner, &default_barrier_sse_owner/0)
+     )}
+  end
+
+  defp barrier_sse_settings(on_client_close, owner)
+       when on_client_close in [:fail, :expected] and is_binary(owner) do
+    unless byte_size(owner) in 1..80 and Regex.match?(~r/^[A-Za-z0-9_.:-]+$/, owner) do
+      raise ArgumentError, "barrier SSE owner must be a bounded [A-Za-z0-9_.:-] correlator"
+    end
+
+    %{on_client_close: on_client_close, owner: owner}
+  end
+
+  defp barrier_sse_settings(on_client_close, _owner) when on_client_close in [:fail, :expected],
+    do: raise(ArgumentError, "barrier SSE owner must be a binary correlator")
+
+  defp barrier_sse_settings(_on_client_close, _owner),
+    do: raise(ArgumentError, "barrier SSE on_client_close must be :fail or :expected")
+
+  # `barrier_sse_stream/2` runs in the owning test process, so the nearest
+  # `*_test.exs` frame names the caller (`file.exs:line`); a scenario may still
+  # pass `:owner` for a more specific label. No test frame yields the generic
+  # label rather than a guess.
+  #
+  # Two accepted residuals (findings#226). `:current_stacktrace` is truncated to
+  # the `backtrace_depth` system flag (default 8) and the test frame sits 3-4 up
+  # today, so it fits; a future helper layer between the caller and this
+  # function could push it past the cut, and the label would fall back to
+  # `barrier_sse` rather than name the wrong caller. Pass `:owner` explicitly if
+  # you add such a layer. Derived labels also carry the `.exs` extension
+  # (`fake_upstream_test.exs:687`) while hand-written owners do not
+  # (`fake_upstream_test:expected_close`); that is cosmetic, the charset allows
+  # `.`, and the two forms stay distinguishable.
+  defp default_barrier_sse_owner do
+    {:current_stacktrace, frames} = Process.info(self(), :current_stacktrace)
+
+    Enum.find_value(frames, "barrier_sse", fn
+      {_module, _function, _arity, location} ->
+        file = to_string(Keyword.get(location, :file, ""))
+        line = Keyword.get(location, :line)
+
+        if String.ends_with?(file, "_test.exs") and is_integer(line) do
+          bounded_owner("#{Path.basename(file)}:#{line}")
+        end
+
+      _frame ->
+        nil
+    end)
+  end
+
+  defp bounded_owner(label) do
+    label = String.replace(label, ~r/[^A-Za-z0-9_.:-]/, "-")
+    if byte_size(label) in 1..80, do: label, else: "barrier_sse"
+  end
+
+  @doc """
+  Bounded outcomes barrier-SSE replies recorded for this fake, oldest first.
+  Today only an expected client close is recorded (`t:sse_outcome/0`).
+  """
+  @spec sse_outcomes(t()) :: [sse_outcome()]
+  def sse_outcomes(%__MODULE__{pid: pid}) do
+    Agent.get(pid, fn state -> Enum.reverse(state.sse_outcomes) end)
+  end
+
+  defmodule SseWriteError do
+    @moduledoc "A barrier-SSE reply could not deliver a chunk; carries only bounded scenario metadata."
+    defexception [:owner, :chunk_index, :chunk_count, :reason, :mode]
+
+    @impl true
+    def message(%__MODULE__{} = error) do
+      "fake upstream barrier SSE owner=#{error.owner} mode=#{error.mode} " <>
+        "chunk #{error.chunk_index}/#{error.chunk_count} write failed: #{error.reason}"
+    end
   end
 
   def websocket_sse_then_close(events, opts \\ []) do
@@ -549,9 +707,7 @@ defmodule CodexPooler.FakeUpstream do
       when (is_map(terminal) or is_binary(terminal)) and is_list(opts) do
     terminal = if is_map(terminal), do: CodexPooler.JSON.encode!(terminal), else: terminal
 
-    {:websocket_terminal_then_close_barrier, terminal, Keyword.get(opts, :code, 1000),
-     Keyword.get(opts, :reason, "synthetic terminal close"), Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:websocket_terminal_then_close_barrier, terminal, Keyword.get(opts, :code, 1000), Keyword.get(opts, :reason, "synthetic terminal close"), Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   @spec websocket_connection_limit_terminal_barrier(keyword()) :: mode()
@@ -562,15 +718,12 @@ defmodule CodexPooler.FakeUpstream do
       raise ArgumentError, "connection-limit terminal shape must be :top_level or :nested"
     end
 
-    {:websocket_connection_limit_terminal_barrier, shape, Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:websocket_connection_limit_terminal_barrier, shape, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   @spec websocket_close_without_terminal_barrier(keyword()) :: mode()
   def websocket_close_without_terminal_barrier(opts) when is_list(opts) do
-    {:websocket_close_without_terminal_barrier, Keyword.get(opts, :code, 1000),
-     Keyword.get(opts, :reason, "synthetic close without terminal"),
-     Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
+    {:websocket_close_without_terminal_barrier, Keyword.get(opts, :code, 1000), Keyword.get(opts, :reason, "synthetic close without terminal"), Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   @spec websocket_connection_alive?(t(), pos_integer()) :: boolean()
@@ -602,16 +755,13 @@ defmodule CodexPooler.FakeUpstream do
       Agent.update(pid, fn state ->
         %{
           state
-          | required_acknowledgements:
-              MapSet.put(state.required_acknowledgements, {:peer_close, close_ref})
+          | required_acknowledgements: MapSet.put(state.required_acknowledgements, {:peer_close, close_ref})
         }
       end)
 
       send(
         websocket_pid,
-        {:fake_upstream_close_websocket, Keyword.get(opts, :code, 1000),
-         Keyword.get(opts, :reason, "synthetic peer close"), Keyword.fetch!(opts, :notify),
-         close_ref}
+        {:fake_upstream_close_websocket, Keyword.get(opts, :code, 1000), Keyword.get(opts, :reason, "synthetic peer close"), Keyword.fetch!(opts, :notify), close_ref}
       )
 
       :ok
@@ -640,8 +790,7 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   def websocket_init_barrier(mode, opts) when is_list(opts) do
-    {:websocket_init_barrier, mode, Keyword.fetch!(opts, :notify),
-     Keyword.fetch!(opts, :release_ref)}
+    {:websocket_init_barrier, mode, Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def malformed_json(body \\ "{not-json", status \\ 200), do: {:malformed_json, status, body}
@@ -653,23 +802,19 @@ defmodule CodexPooler.FakeUpstream do
   def non_json_502(body \\ "bad gateway"), do: {:non_json_error, 502, body}
 
   def timeout_before_headers(opts \\ []) when is_list(opts) do
-    {:timeout_before_headers, Keyword.get(opts, :notify),
-     Keyword.get(opts, :release_ref, make_ref())}
+    {:timeout_before_headers, Keyword.get(opts, :notify), Keyword.get(opts, :release_ref, make_ref())}
   end
 
   def timeout_after_sse_headers(opts \\ []) when is_list(opts) do
-    {:timeout_after_sse_headers, Keyword.get(opts, :notify),
-     Keyword.get(opts, :release_ref, make_ref())}
+    {:timeout_after_sse_headers, Keyword.get(opts, :notify), Keyword.get(opts, :release_ref, make_ref())}
   end
 
   def timeout_mid_stream(first_chunk \\ "data: partial\n\n", opts \\ []) do
-    {:timeout_mid_stream, first_chunk, Keyword.get(opts, :notify),
-     Keyword.get(opts, :release_ref, make_ref())}
+    {:timeout_mid_stream, first_chunk, Keyword.get(opts, :notify), Keyword.get(opts, :release_ref, make_ref())}
   end
 
   def websocket_upgrade_timeout(opts \\ []) when is_list(opts) do
-    {:websocket_upgrade_timeout, Keyword.get(opts, :notify),
-     Keyword.get(opts, :release_ref, make_ref())}
+    {:websocket_upgrade_timeout, Keyword.get(opts, :notify), Keyword.get(opts, :release_ref, make_ref())}
   end
 
   def websocket_idle_timeout(opts) when is_list(opts) do
@@ -677,8 +822,7 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   def websocket_upgrade_error(payload, opts \\ []) when is_map(payload) and is_list(opts) do
-    {:websocket_upgrade_error, Keyword.get(opts, :status, 401), payload,
-     Keyword.get(opts, :headers, []), Keyword.get(opts, :notify), Keyword.get(opts, :release_ref)}
+    {:websocket_upgrade_error, Keyword.get(opts, :status, 401), payload, Keyword.get(opts, :headers, []), Keyword.get(opts, :notify), Keyword.get(opts, :release_ref)}
   end
 
   defp initial_state(mode) do
@@ -695,6 +839,7 @@ defmodule CodexPooler.FakeUpstream do
       strict_total: strict_entry_count(mode),
       strict_consumed: 0,
       scenario_failures: [],
+      sse_outcomes: [],
       required_acknowledgements: MapSet.new(),
       acknowledged: MapSet.new(),
       frame_barriers_waiting: %{},
@@ -739,8 +884,7 @@ defmodule CodexPooler.FakeUpstream do
   defp handle_websocket(
          pid,
          conn,
-         {:sequence,
-          [{:websocket_upgrade_error, _status, _payload, _headers, _notify, _ref} = mode | _rest]}
+         {:sequence, [{:websocket_upgrade_error, _status, _payload, _headers, _notify, _ref} = mode | _rest]}
        ) do
     handle_websocket(pid, conn, mode)
   end
@@ -874,8 +1018,7 @@ defmodule CodexPooler.FakeUpstream do
 
     Logger.warning("fake upstream scenario failure " <> failure)
 
-    {{:scenario_failure, failure},
-     %{state | scenario_failures: [failure | state.scenario_failures]}}
+    {{:scenario_failure, failure}, %{state | scenario_failures: [failure | state.scenario_failures]}}
   end
 
   defp take_response_mode_from_state(state, request) do
@@ -898,8 +1041,7 @@ defmodule CodexPooler.FakeUpstream do
             # owning test fails on a downstream assertion before `verify!/1`.
             Logger.warning("fake upstream scenario failure " <> diagnostic)
 
-            {{:scenario_failure, diagnostic},
-             %{state | scenario_failures: [diagnostic | state.scenario_failures]}}
+            {{:scenario_failure, diagnostic}, %{state | scenario_failures: [diagnostic | state.scenario_failures]}}
         end
 
       mode ->
@@ -1055,6 +1197,7 @@ defmodule CodexPooler.FakeUpstream do
   defp validate_mode!(_mode), do: :ok
 
   defp native_websocket_mode?({:websocket_text, _messages}), do: true
+  defp native_websocket_mode?({:websocket_text_then_abrupt_close, _messages}), do: true
   defp native_websocket_mode?({:websocket_frame_barrier, _, _, _}), do: true
   defp native_websocket_mode?({:websocket_sse_then_close, _chunks, _code, _reason}), do: true
   defp native_websocket_mode?({:websocket_terminal_then_close_barrier, _, _, _, _, _}), do: true
@@ -1203,8 +1346,7 @@ defmodule CodexPooler.FakeUpstream do
   defp respond(
          _pid,
          conn,
-         {:reject_json_field, field, success_status, success_payload, error_status,
-          error_payload},
+         {:reject_json_field, field, success_status, success_payload, error_status, error_payload},
          request
        ) do
     if is_map(request.json) and Map.has_key?(request.json, field) do
@@ -1221,8 +1363,7 @@ defmodule CodexPooler.FakeUpstream do
   defp respond(
          _pid,
          conn,
-         {:require_json_field, field, success_status, success_payload, error_status,
-          error_payload},
+         {:require_json_field, field, success_status, success_payload, error_status, error_payload},
          request
        ) do
     if is_map(request.json) and Map.has_key?(request.json, field) do
@@ -1337,23 +1478,41 @@ defmodule CodexPooler.FakeUpstream do
     Process.exit(self(), :kill)
   end
 
-  defp respond(_pid, conn, {:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do
+  defp respond(
+         pid,
+         conn,
+         {:barrier_sse, chunks, barrier_after, notify, release_ref, settings},
+         _request
+       ) do
     conn =
       conn
       |> Plug.Conn.put_resp_header("cache-control", "no-cache")
       |> Plug.Conn.put_resp_content_type("text/event-stream")
       |> Plug.Conn.send_chunked(200)
 
-    maybe_wait_for_sse_barrier(0, barrier_after, notify, release_ref)
+    maybe_wait_for_sse_barrier(conn, 0, barrier_after, notify, release_ref)
+    chunk_count = length(chunks)
 
     chunks
     |> Enum.with_index(1)
-    |> Enum.reduce(conn, fn {chunk, index}, conn ->
-      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
-      notify_chunk_sent(notify, index)
-      maybe_wait_for_sse_barrier(index, barrier_after, notify, release_ref)
+    |> Enum.reduce_while(conn, fn {chunk, index}, conn ->
+      # A write result is never assumed: the chunk-delivered acknowledgement
+      # follows only a successful write, so a failed tail write can never be
+      # reported as delivered.
+      case Plug.Conn.chunk(conn, chunk) do
+        {:ok, conn} ->
+          notify_chunk_sent(notify, index)
+          maybe_wait_for_sse_barrier(conn, index, barrier_after, notify, release_ref)
+          {:cont, conn}
 
-      conn
+        {:error, reason} ->
+          {:halt,
+           barrier_sse_write_failed(pid, conn, settings, notify, release_ref, %{
+             chunk_index: index,
+             chunk_count: chunk_count,
+             reason: reason
+           })}
+      end
     end)
   end
 
@@ -1457,9 +1616,10 @@ defmodule CodexPooler.FakeUpstream do
         ),
       upload_status: Map.get(opts, :upload_status, 201),
       upload_body: Map.get(opts, :upload_body, ""),
-      unauthorized_payload:
-        Map.get(opts, :unauthorized_payload, %{"error" => %{"code" => "invalid_api_key"}}),
-      error_body: Map.get(opts, :error_body, "fake upstream file finalize failure")
+      unauthorized_payload: Map.get(opts, :unauthorized_payload, %{"error" => %{"code" => "invalid_api_key"}}),
+      error_body: Map.get(opts, :error_body, "fake upstream file finalize failure"),
+      create_error_status: Map.get(opts, :create_error_status, 429),
+      create_error_payload: Map.get(opts, :create_error_payload, %{"error" => %{"code" => "rate_limit_exceeded"}})
     }
   end
 
@@ -1467,6 +1627,16 @@ defmodule CodexPooler.FakeUpstream do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(401, CodexPooler.JSON.encode!(payload))
+  end
+
+  defp file_protocol_create_response(conn, %{
+         mode: :create_error,
+         create_error_status: status,
+         create_error_payload: payload
+       }) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(status, CodexPooler.JSON.encode!(payload))
   end
 
   defp file_protocol_create_response(conn, %{mode: :non_json_error, error_body: body}) do
@@ -1547,6 +1717,71 @@ defmodule CodexPooler.FakeUpstream do
   defp notify_chunk_sent(nil, _index), do: :ok
   defp notify_chunk_sent(pid, index), do: send(pid, {:fake_upstream_chunk_sent, index})
 
+  # What a zero-timeout recv reports once the peer closed.
+  @client_gone_recv_reasons [:closed, :econnreset]
+  # What a write to a peer that went away can report, Bandit's own closure set
+  # plus the broken pipe a half-closed socket yields.
+  @client_gone_write_reasons [:closed, :enotconn, :einval, :econnaborted, :econnreset, :epipe]
+  # The client going away (`:closed`, or the reset the kernel reports for the
+  # same event) is the one write failure a cancellation scenario may expect:
+  # it ends the tail with one bounded outcome and a notification, never an
+  # acknowledgement. In strict mode, and for every other write error, the
+  # handler fails with the owner correlator in its message.
+
+  defp barrier_sse_write_failed(
+         pid,
+         conn,
+         %{on_client_close: :expected, owner: owner},
+         notify,
+         release_ref,
+         %{reason: reason} = failure
+       )
+       when reason in @client_gone_write_reasons do
+    outcome = %{
+      scenario: :barrier_sse,
+      owner: owner,
+      outcome: :client_closed_expected,
+      chunk_index: failure.chunk_index,
+      chunk_count: failure.chunk_count,
+      reason: reason
+    }
+
+    Agent.update(pid, fn state -> %{state | sse_outcomes: [outcome | state.sse_outcomes]} end)
+
+    if is_pid(notify) do
+      send(notify, {:fake_upstream_client_closed, failure.chunk_index, self(), release_ref})
+    end
+
+    conn
+  end
+
+  defp barrier_sse_write_failed(_pid, _conn, settings, _notify, _release_ref, failure) do
+    raise SseWriteError,
+      owner: settings.owner,
+      chunk_index: failure.chunk_index,
+      chunk_count: failure.chunk_count,
+      reason: safe_write_reason(failure.reason),
+      mode: settings.on_client_close
+  end
+
+  defp safe_write_reason(reason) when is_atom(reason), do: reason
+
+  # Bandit returns `Exception.message/1` text for non-transport errors; keep
+  # it when it is a bounded identifier, otherwise fingerprint it.
+  defp safe_write_reason(reason) when is_binary(reason) do
+    if byte_size(reason) <= 80 and Regex.match?(~r/^[A-Za-z0-9_.:-]+$/, reason),
+      do: reason,
+      else: "sha256:" <> short_hash(reason)
+  end
+
+  defp safe_write_reason(reason), do: "sha256:" <> short_hash(reason)
+
+  defp short_hash(term),
+    do:
+      :crypto.hash(:sha256, :erlang.term_to_binary(term))
+      |> Base.encode16(case: :lower)
+      |> String.slice(0, 12)
+
   defp wait_for_delay(interval_ms) do
     receive do
     after
@@ -1554,17 +1789,66 @@ defmodule CodexPooler.FakeUpstream do
     end
   end
 
-  defp maybe_wait_for_sse_barrier(index, index, notify, release_ref) when is_pid(notify) do
-    send(notify, {:fake_upstream_chunk_barrier, index, self(), release_ref})
+  @barrier_release_timeout_ms 30_000
+  @barrier_poll_ms 20
 
+  defp maybe_wait_for_sse_barrier(conn, index, index, notify, release_ref) when is_pid(notify) do
+    send(notify, {:fake_upstream_chunk_barrier, index, self(), release_ref})
+    deadline = System.monotonic_time(:millisecond) + @barrier_release_timeout_ms
+    await_sse_barrier_release(conn, index, notify, release_ref, deadline, false)
+  end
+
+  defp maybe_wait_for_sse_barrier(_conn, _index, _barrier_after, _notify, _release_ref), do: :ok
+
+  # While parked, the handler watches its own socket the way Bandit does
+  # (`recv(socket, 0, 0)`): a peer that closed is reported to the owning test
+  # exactly once as `{:fake_upstream_client_gone, index, handler, release_ref}`,
+  # so a scenario that closes its client can wait for the server-side
+  # observation before releasing the tail instead of racing the FIN.
+  defp await_sse_barrier_release(conn, index, notify, release_ref, deadline, gone_reported?) do
     receive do
       {:fake_upstream_release_chunk, ^release_ref} -> :ok
     after
-      30_000 -> raise "timed out waiting for fake upstream SSE barrier release"
+      @barrier_poll_ms ->
+        if System.monotonic_time(:millisecond) > deadline do
+          raise "timed out waiting for fake upstream SSE barrier release"
+        end
+
+        gone_reported? =
+          if not gone_reported? and client_gone?(conn) do
+            send(notify, {:fake_upstream_client_gone, index, self(), release_ref})
+            true
+          else
+            gone_reported?
+          end
+
+        await_sse_barrier_release(conn, index, notify, release_ref, deadline, gone_reported?)
     end
   end
 
-  defp maybe_wait_for_sse_barrier(_index, _barrier_after, _notify, _release_ref), do: :ok
+  # Bandit keeps the socket passive while the plug runs, so a zero-timeout
+  # recv distinguishes "still open, no data" from a peer close. Observing the
+  # close also closes the port, so the next write fails deterministically.
+  # Any other shape (active socket, unknown adapter) answers false and leaves
+  # detection to the write result.
+  defp client_gone?(%Plug.Conn{
+         adapter: {Bandit.Adapter, %{transport: %{socket: %ThousandIsland.Socket{} = socket}}}
+       }) do
+    case ThousandIsland.Socket.recv(socket, 0, 0) do
+      {:error, reason} when reason in @client_gone_recv_reasons ->
+        true
+
+      {:error, _still_open_or_active} ->
+        false
+
+      {:ok, _bytes} ->
+        # No barrier scenario has its client speak mid-response; bytes here
+        # would otherwise be swallowed before Bandit's keep-alive read.
+        raise "fake upstream barrier SSE received client bytes while parked"
+    end
+  end
+
+  defp client_gone?(_conn), do: false
 
   defp wait_for_timeout_release(stage, notify, release_ref) do
     if is_pid(notify) do
@@ -1638,8 +1922,7 @@ defmodule CodexPooler.FakeUpstream do
               websocket_connection_ids: [
                 opaque_connection_id | Map.get(agent_state, :websocket_connection_ids, [])
               ],
-              websocket_pids:
-                MapSet.put(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
+              websocket_pids: MapSet.put(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
               websocket_pids_by_connection:
                 Map.put(
                   Map.get(agent_state, :websocket_pids_by_connection, %{}),
@@ -1664,6 +1947,28 @@ defmodule CodexPooler.FakeUpstream do
 
     def handle_info({:fake_upstream_close_websocket, code, reason}, state),
       do: {:stop, :normal, {code, reason}, state}
+
+    # The pushed frames are already written to the socket; killing the
+    # connection process closes it without a close frame. `terminate/2` does
+    # not run for a killed process, so drop its registration first.
+    def handle_info(:fake_upstream_abrupt_close_websocket, %{pid: pid} = state) do
+      websocket_pid = self()
+
+      Agent.update(pid, fn agent_state ->
+        %{
+          agent_state
+          | websocket_pids: MapSet.delete(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
+            websocket_pids_by_connection:
+              Map.delete(
+                Map.get(agent_state, :websocket_pids_by_connection, %{}),
+                state.connection_id
+              )
+        }
+      end)
+
+      Process.exit(websocket_pid, :kill)
+      {:ok, state}
+    end
 
     def handle_info(
           {:fake_upstream_close_websocket, code, reason, notify, close_ref},
@@ -1711,8 +2016,7 @@ defmodule CodexPooler.FakeUpstream do
       Agent.update(pid, fn agent_state ->
         %{
           agent_state
-          | websocket_pids:
-              MapSet.delete(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
+          | websocket_pids: MapSet.delete(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid),
             websocket_pids_by_connection:
               Map.delete(
                 Map.get(agent_state, :websocket_pids_by_connection, %{}),
@@ -1788,6 +2092,11 @@ defmodule CodexPooler.FakeUpstream do
     defp handle_websocket_message({:close, code, reason}, state),
       do: {:stop, reason, {code, reason}, state}
 
+    defp handle_websocket_message({:push_then_abrupt_close, messages}, state) do
+      send(self(), :fake_upstream_abrupt_close_websocket)
+      {:push, Enum.map(messages, &{:text, &1}), state}
+    end
+
     defp handle_websocket_message({:push_then_close, messages, code, reason}, state) do
       send(self(), {:fake_upstream_close_websocket, code, reason})
       {:push, Enum.map(messages, &{:text, &1}), state}
@@ -1856,8 +2165,7 @@ defmodule CodexPooler.FakeUpstream do
       do: [CodexPooler.JSON.encode!(payload)]
 
     defp websocket_messages(
-           {:reject_json_field, field, _success_status, success_payload, error_status,
-            error_payload},
+           {:reject_json_field, field, _success_status, success_payload, error_status, error_payload},
            request
          ) do
       if is_map(request.json) and Map.has_key?(request.json, field) do
@@ -1874,8 +2182,7 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp websocket_messages(
-           {:require_json_field, field, _success_status, success_payload, error_status,
-            error_payload},
+           {:require_json_field, field, _success_status, success_payload, error_status, error_payload},
            request
          ) do
       if is_map(request.json) and Map.has_key?(request.json, field) do
@@ -1904,8 +2211,7 @@ defmodule CodexPooler.FakeUpstream do
            {:delayed_terminal_sse, before_terminal, terminal, notify, release_ref},
            _request
          ) do
-      {:delayed_terminal, Enum.flat_map(before_terminal, &messages_from_sse_chunk/1),
-       Enum.flat_map(terminal, &messages_from_sse_chunk/1), notify, release_ref}
+      {:delayed_terminal, Enum.flat_map(before_terminal, &messages_from_sse_chunk/1), Enum.flat_map(terminal, &messages_from_sse_chunk/1), notify, release_ref}
     end
 
     defp websocket_messages({:timeout_mid_stream, first_chunk, notify, release_ref}, _request) do
@@ -1922,6 +2228,9 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp websocket_messages({:websocket_text, messages}, _request), do: messages
+
+    defp websocket_messages({:websocket_text_then_abrupt_close, messages}, _request),
+      do: {:push_then_abrupt_close, messages}
 
     defp websocket_messages({:websocket_frame_barrier, frames, notify, release_ref}, _request),
       do: {:frame_barriers, frames, notify, release_ref}
@@ -1951,7 +2260,10 @@ defmodule CodexPooler.FakeUpstream do
       {:barrier_close, code, reason, notify, release_ref}
     end
 
-    defp websocket_messages({:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do
+    defp websocket_messages(
+           {:barrier_sse, chunks, barrier_after, notify, release_ref, _settings},
+           _request
+         ) do
       maybe_wait_for_sse_barrier(0, barrier_after, notify, release_ref)
 
       chunks
@@ -1981,6 +2293,25 @@ defmodule CodexPooler.FakeUpstream do
           "error" => %{"message" => body}
         })
       ]
+
+    # Path-routed modes answer a native websocket turn like the matching HTTP
+    # route: a JSON route pushes its payload as one text frame (an error status
+    # as one type:error frame), and a nested mode keeps its websocket shape.
+    defp websocket_messages({:path_json, routes}, request) do
+      case Map.get(routes, request.path) do
+        {status, payload} when is_integer(status) and status in 200..299 ->
+          [CodexPooler.JSON.encode!(payload)]
+
+        {status, payload} when is_integer(status) ->
+          websocket_messages({:json_error, status, payload}, request)
+
+        nil ->
+          {:close, 1011, "unsupported fake websocket mode"}
+
+        mode ->
+          websocket_messages(mode, request)
+      end
+    end
 
     defp websocket_messages(_mode, _request),
       do: {:close, 1011, "unsupported fake websocket mode"}
@@ -2034,6 +2365,7 @@ defmodule CodexPooler.FakeUpstream do
 
       receive do
         {:fake_upstream_release_chunk, ^release_ref} -> :ok
+        {:EXIT, _from, reason} -> exit(reason)
       after
         30_000 -> raise "timed out waiting for fake upstream websocket SSE barrier release"
       end
@@ -2054,8 +2386,7 @@ defmodule CodexPooler.FakeUpstream do
         [frame | rest] ->
           send(self(), {:fake_upstream_frame_barrier_continue, barrier.release_ref})
 
-          {:push, {:text, frame},
-           Map.put(state, :frame_barrier, %{barrier | frames: rest, pushed: pushed + 1})}
+          {:push, {:text, frame}, Map.put(state, :frame_barrier, %{barrier | frames: rest, pushed: pushed + 1})}
       end
     end
 
@@ -2081,11 +2412,17 @@ defmodule CodexPooler.FakeUpstream do
       end
     end
 
+    # The handler traps exits, so a plain receive would leave a barrier held at
+    # stop until ThousandIsland's 15 s `shutdown_timeout` brutal-kills it; leave
+    # on the shutdown exit instead. `:before_init` is the exception: lifecycle
+    # tests release it after the fake started stopping to prove the state
+    # Agent outlives a connection that is still initializing.
     defp await_websocket_barrier(stage, notify, release_ref) do
       send(notify, {:fake_upstream_websocket_barrier, stage, self(), release_ref})
 
       receive do
         {:fake_upstream_release_websocket, ^release_ref} -> :ok
+        {:EXIT, _from, reason} when stage != :before_init -> exit(reason)
       after
         30_000 -> raise "timed out waiting for fake upstream websocket barrier release"
       end

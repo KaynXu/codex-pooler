@@ -118,6 +118,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
               <Sections.recent_events_section
                 cockpit={@cockpit}
                 datetime_preferences={@datetime_preferences}
+                request_data_loaded?={@request_metrics_loaded?}
+                request_data_loading?={@request_metrics_loading? || @request_metrics_running?}
               />
             </div>
           </div>

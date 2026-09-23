@@ -11,11 +11,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Metadata}
   alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.Gateway.Websocket.DirectCleanup
 
   # Dialyzer cannot prove the JSON-decoded websocket terminal auth signatures that
   # UpstreamWebsocketSession classifies at runtime, so it marks this retry branch
@@ -47,6 +50,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     context = prepared_context.context
 
     case dispatch_websocket_request_with_owner_recovery(prepared_context, dispatch_request) do
+      {:error, %{reason: {:quota_exhausted_first_event, failure}} = response} ->
+        handle_quota_exhausted_first_event(context, dispatch_request, response, failure)
+
       {:error, %{reason: {:assignment_model_unavailable_first_event, failure}} = response} ->
         handle_assignment_model_unavailable_first_event(
           context,
@@ -58,6 +64,28 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
 
       result ->
         handle_dispatch_result(result, prepared_context, dispatch_request, callbacks, started)
+    end
+  end
+
+  defp handle_quota_exhausted_first_event(context, dispatch_request, response, failure) do
+    SideEffects.observe_websocket_response(context, response)
+
+    if context.allow_retry? and first_event_retry_policy(context) == :same_assignment and
+         context.request_options.payload_context.portable_full_history? do
+      response_context = retryable_websocket_response_context(context, response)
+
+      case Finalization.record_retryable_first_event_stream_failure(
+             Map.get(response, :body, ""),
+             failure,
+             response_context,
+             record_health?: false
+           ) do
+        {:stale_generation, finalized} -> {:ok, finalized}
+        {:ok, _recorded_failure} -> {:retry, :upstream_quota_exhausted}
+        {:error, _reason} = error -> error
+      end
+    else
+      finalize_retryable_first_websocket_event(context, dispatch_request, response, failure)
     end
   end
 
@@ -119,6 +147,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
         end
 
       {:error, response} ->
+        # A connect-phase failure keeps HEAD's policy: candidate failover while
+        # the route plan has another candidate, otherwise a single finalized
+        # attempt. It never takes the same-assignment retry (findings#208).
         Finalization.finalize_failed_websocket_response(
           context,
           Map.put(response, :started, started)
@@ -207,8 +238,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
               token: refreshed_token
           }
 
-          {:ok, retry_prepared_context,
-           retry_dispatch_request(retry_prepared_context, dispatch_request)}
+          {:ok, retry_prepared_context, retry_dispatch_request(retry_prepared_context, dispatch_request)}
         end
 
       {:error, _reason} = error ->
@@ -509,11 +539,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           "websocket_auth_refresh_first_event",
           context.request_options
         )
-        |> Map.merge(
-          Metadata.upstream_websocket_connection_attempt_metadata(
-            response_context.upstream_websocket_connection
-          )
-        )
+        |> Map.merge(Metadata.upstream_websocket_connection_attempt_metadata(response_context.upstream_websocket_connection))
         |> Map.put("auth_refresh_trigger", AuthRefresh.trigger_kind(:websocket)),
       retry_count: context.retry_count,
       before_finalize: fn ->
@@ -599,18 +625,35 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     }
   end
 
+  # The handshake header is promoted to the failure's `code`/`upstream_code`,
+  # so it takes the websocket diagnostic code bound (`DiagnosticTaxonomy`): a
+  # known code or an ASCII identifier of at most 80 bytes stays cleartext,
+  # anything else is fingerprinted rather than used as a code, and a blank
+  # value is absent so the `unauthorized` fallback applies (findings#238).
   defp auth_header_error_code(headers) when is_list(headers) do
     Enum.find_value(headers, fn {name, value} ->
       if String.downcase(to_string(name)) == "x-openai-authorization-error" do
-        to_string(value)
+        bounded_auth_error_code(to_string(value))
       end
     end)
   end
 
   defp auth_header_error_code(_headers), do: nil
 
+  defp bounded_auth_error_code(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> DiagnosticTaxonomy.identifier(trimmed)
+    end
+  end
+
   defp create_same_assignment_retry_context(context) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{
+           admitted_attempt_bind:
+             DirectCleanup.attempt_callback(
+               context.request_options.runtime.direct_cleanup,
+               context.reserved.request
+             ),
            model: context.model,
            pricing_snapshot: Map.get(context.reserved, :pricing_snapshot),
            upstream_identity: context.identity,
@@ -664,10 +707,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
        when is_function(writer, 1) do
     request_id
     |> WebsocketCodec.stream_messages(Map.get(upstream_response, :body, ""))
-    |> Enum.each(writer)
+    |> Enum.each(&writer.(sanitize_retry_terminal(&1)))
   end
 
   defp deliver_retry_exhausted_websocket_failure(_dispatch_request, _upstream_response), do: :ok
+
+  defp sanitize_retry_terminal(frame) do
+    with {:ok, event} <- CodexPooler.JSON.decode(frame),
+         {:changed, sanitized} <- NativeCodexResponseControl.sanitize_websocket_event(event) do
+      CodexPooler.JSON.encode!(sanitized)
+    else
+      _unchanged -> frame
+    end
+  end
 
   @spec dispatch_websocket_request_with_owner_recovery(PreparedContext.t(), DispatchRequest.t()) ::
           {:ok, map()} | {:error, map()}

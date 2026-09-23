@@ -27,9 +27,7 @@ defmodule CodexPooler.Repo.Migrations.CreateApiKeyUsageBuckets do
       add :updated_at, :utc_datetime_usec, null: false
     end
 
-    create constraint(:api_key_usage_buckets, :api_key_usage_buckets_minute_boundary_check,
-             check: "bucket_started_at = date_trunc('minute', bucket_started_at)"
-           )
+    create constraint(:api_key_usage_buckets, :api_key_usage_buckets_minute_boundary_check, check: "bucket_started_at = date_trunc('minute', bucket_started_at)")
 
     flush()
 

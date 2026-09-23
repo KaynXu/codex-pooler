@@ -114,12 +114,9 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       Repo.aggregate(from(event in AuditEvent, where: event.actor_user_id == ^admin.id), :count)
 
     for {event, params} <- [
-          {"validate_instance_settings",
-           %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
-          {"save_instance_settings",
-           %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
-          {"autosave_instance_settings",
-           %{"instance_settings" => %{"mcp" => %{"enabled" => "true"}}}},
+          {"validate_instance_settings", %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
+          {"save_instance_settings", %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
+          {"autosave_instance_settings", %{"instance_settings" => %{"mcp" => %{"enabled" => "true"}}}},
           {"test_smtp", %{}},
           {"import_sample_data", %{}},
           {"import_pricing_catalog", %{}}
@@ -500,6 +497,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(view, "#instance-settings-upstream-connect-timeout-ms[value='15000']")
     assert has_element?(view, "#instance-settings-upstream-pool-timeout-ms[value='15000']")
     assert has_element?(view, "#instance-settings-upstream-receive-timeout-ms[value='300000']")
+    assert has_element?(view, "#instance-settings-upstream-conn-max-idle-time-ms[value='45000']")
     assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
     assert InstanceSettings.get!().gateway.upstream_pool_timeout_ms == 99_999
     assert InstanceSettings.get!().gateway.upstream_connect_timeout_ms == 88_888
@@ -1644,7 +1642,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   test "saving X-Forwarded-For depth changes the next runtime request without restart", %{
     conn: conn
   } do
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -1653,10 +1651,6 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       |> Keyword.delete(:settings)
       |> Keyword.put(:use_instance_settings?, true)
     )
-
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
-    end)
 
     assert {:ok, _settings} =
              InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
@@ -1836,6 +1830,157 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert persisted.gateway.websocket_idle_timeout_ms == 444_000
   end
 
+  test "renders the upstream connection idle bound in the upstream timing group", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "tbody[data-runtime-limit-group='upstream'] #instance-settings-upstream-conn-max-idle-time-ms[name='instance_settings[gateway][upstream_conn_max_idle_time_ms]'][value='45000'][min='1000'][max='3600000']"
+           )
+
+    assert has_element?(
+             view,
+             "label[for='instance-settings-upstream-conn-max-idle-time-ms']",
+             "Connection idle bound (ms)"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-hint-upstream-conn-max-idle-time-ms",
+             "never interrupts an in-flight or streaming request"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-unit-upstream-conn-max-idle-time-ms",
+             "ms"
+           )
+  end
+
+  test "renders the proactive token refresh margin in the credential refresh group", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "tbody[data-runtime-limit-group='token_refresh'] #instance-settings-upstream-token-refresh-margin-seconds[name='instance_settings[gateway][upstream_token_refresh_margin_seconds]'][value='172800'][min='3600'][max='1209600']"
+           )
+
+    assert has_element?(
+             view,
+             "label[for='instance-settings-upstream-token-refresh-margin-seconds']",
+             "Proactive refresh margin (s)"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-hint-upstream-token-refresh-margin-seconds",
+             "cannot age into required re-authentication"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-unit-upstream-token-refresh-margin-seconds",
+             "s"
+           )
+  end
+
+  test "saves and resets proactive credential refresh through the gateway card", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    selector = "#instance-settings-upstream-token-refresh-proactive-enabled"
+    assert has_element?(view, selector <> "[checked]")
+
+    view
+    |> element("#instance-settings-gateway-form")
+    |> render_submit(%{
+      "instance_settings" => %{
+        "gateway" => %{"upstream_token_refresh_proactive_enabled" => "false"}
+      }
+    })
+
+    assert InstanceSettings.get!().gateway.upstream_token_refresh_proactive_enabled == false
+    refute has_element?(view, selector <> "[checked]")
+    render_click(element(view, "#instance-settings-gateway-reset-token_refresh"))
+    assert has_element?(view, selector <> "[checked]")
+    assert InstanceSettings.get!().gateway.upstream_token_refresh_proactive_enabled == false
+  end
+
+  test "validates, saves, audits, and reloads the upstream connection idle bound", %{
+    conn: conn,
+    user: user
+  } do
+    settings = InstanceSettings.ensure_singleton!()
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    view
+    |> element("#instance-settings-gateway-form")
+    |> render_change(%{
+      "_target" => ["instance_settings", "gateway", "upstream_conn_max_idle_time_ms"],
+      "instance_settings" => %{
+        "_group" => "gateway",
+        "lock_version" => Integer.to_string(settings.lock_version),
+        "gateway" => %{"upstream_conn_max_idle_time_ms" => "30000"}
+      }
+    })
+
+    assert has_element?(view, "#instance-settings-upstream-conn-max-idle-time-ms[value='30000']")
+    assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
+    assert InstanceSettings.get!().gateway.upstream_conn_max_idle_time_ms == 45_000
+
+    saved_html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"upstream_conn_max_idle_time_ms" => "30000"}
+        }
+      })
+
+    assert saved_html =~ "Gateway controls saved"
+    assert InstanceSettings.get!().gateway.upstream_conn_max_idle_time_ms == 30_000
+
+    event = Repo.get_by!(AuditEvent, action: "instance_settings.update", actor_user_id: user.id)
+    assert get_in(event.details, ["changed_keys"]) == ["gateway.upstream_conn_max_idle_time_ms"]
+
+    {:ok, reloaded_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-upstream-conn-max-idle-time-ms[value='30000']"
+           )
+  end
+
+  test "renders an inline upstream connection idle bound error without persisting it", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"upstream_conn_max_idle_time_ms" => "999"}
+        }
+      })
+
+    assert html =~ "Gateway controls could not be saved"
+
+    assert has_element?(
+             view,
+             "#instance-settings-upstream-conn-max-idle-time-ms[aria-invalid='true']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-label-line-upstream-conn-max-idle-time-ms #instance-settings-upstream-conn-max-idle-time-ms-error",
+             "must be greater than or equal to 1000"
+           )
+
+    assert InstanceSettings.get!().gateway.upstream_conn_max_idle_time_ms == 45_000
+  end
+
   test "renders constrained compressed JSON encoding controls and help copy", %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
@@ -1949,6 +2094,20 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              "label[for=\"instance-settings-circuit-success-threshold\"]",
              "Circuit close successes"
            )
+  end
+
+  test "saves the status polling toggle through the operator settings form", %{conn: conn} do
+    {:ok, view, _} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    assert has_element?(view, "#instance-settings-openai-status-polling-enabled[checked]")
+
+    view
+    |> element("#instance-settings-operator-form")
+    |> render_submit(%{
+      "instance_settings" => %{"operator" => %{"openai_status_polling_enabled" => "false"}}
+    })
+
+    refute InstanceSettings.get!().operator.openai_status_polling_enabled
+    refute has_element?(view, "#instance-settings-openai-status-polling-enabled[checked]")
   end
 
   test "saves gateway, file, and transcription limits as one card", %{conn: conn, user: user} do

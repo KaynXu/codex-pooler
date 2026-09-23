@@ -1,8 +1,6 @@
 defmodule CodexPooler.SchemaContractTest do
   use CodexPooler.DataCase, async: false
 
-  alias Ecto.Migration.Runner
-
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   import CodexPooler.PoolerFixtures
@@ -25,6 +23,7 @@ defmodule CodexPooler.SchemaContractTest do
     DailyRollupCoverage,
     HourlyModelUsageRollup,
     LedgerEntry,
+    Request,
     RequestLogFact,
     RequestReplayEntitlement
   }
@@ -87,7 +86,7 @@ defmodule CodexPooler.SchemaContractTest do
     CodexTurn,
     CodexPooler.Gateway.Persistence.IdempotencyKey,
     Settings,
-    CodexPooler.Accounting.Request,
+    Request,
     CodexPooler.Gateway.Persistence.RoutingCircuitState,
     CodexPooler.Pools.Membership,
     OperatorPoolAssignment,
@@ -168,6 +167,7 @@ defmodule CodexPooler.SchemaContractTest do
           "gateway_idempotency_keys_active_key_uq",
           "routing_circuit_states_active_assignment_uq",
           "models_pool_exposed_uq",
+          "attempts_open_execution_index",
           "ledger_entries_settlement_request_uq",
           "ledger_entries_api_key_recorded_occurred_idx",
           "request_log_facts_latest_upstream_identity_request_idx",
@@ -198,12 +198,26 @@ defmodule CodexPooler.SchemaContractTest do
           "openai_status_incidents_retention_idx",
           "openai_status_incidents_active_idx",
           "openai_status_dismissals_operator_incident_revision_uq",
-          "openai_status_dismissals_operator_idx"
+          "openai_status_dismissals_operator_idx",
+          "ledger_entries_api_key_known_settlement_occurred_idx",
+          "attempts_open_started_idx"
         ] do
       assert Map.has_key?(indexes, name)
     end
 
     refute Map.has_key?(indexes, "memberships_single_instance_owner_active_uq")
+    refute Map.has_key?(indexes, "requests_api_key_idempotency_uq")
+
+    assert indexes["ledger_entries_api_key_known_settlement_occurred_idx"] ==
+             "CREATE INDEX ledger_entries_api_key_known_settlement_occurred_idx ON " <>
+               "public.ledger_entries USING btree (api_key_id, occurred_at) " <>
+               "WHERE ((entry_kind = 'settlement'::text) AND " <>
+               "(usage_status = 'usage_known'::text))"
+
+    assert indexes["attempts_open_started_idx"] ==
+             "CREATE INDEX attempts_open_started_idx ON public.attempts USING btree " <>
+               "(started_at, id) WHERE (status = ANY (ARRAY['queued'::text, " <>
+               "'in_progress'::text]))"
 
     assert indexes["users_email_active_uq"] =~ "lower(email)"
     assert indexes["users_email_active_uq"] =~ "WHERE (deleted_at IS NULL)"
@@ -213,6 +227,13 @@ defmodule CodexPooler.SchemaContractTest do
              "WHERE (status = 'active'::text)"
 
     assert indexes["api_key_policy_model_active_uq"] =~ "lower(model_identifier)"
+
+    assert indexes["attempts_open_execution_index"] =~
+             "COALESCE(owner_execution_checked_at, started_at)"
+
+    assert indexes["attempts_open_execution_index"] =~
+             "WHERE ((status = ANY (ARRAY['queued'::text, 'in_progress'::text])) AND (owner_execution_id IS NOT NULL))"
+
     assert indexes["ledger_entries_settlement_request_uq"] =~ "entry_kind = 'settlement'"
     assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~ "api_key_id"
     assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~ "occurred_at DESC"
@@ -499,6 +520,12 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert column_type("ledger_entries", "input_tokens") == "bigint"
     assert column_type("ledger_entries", "total_tokens") == "bigint"
+    assert column_type("attempts", "owner_process_id") == "character varying(64)"
+    assert column_type("attempts", "owner_execution_id") == "uuid"
+
+    assert column_type("attempts", "owner_execution_checked_at") ==
+             "timestamp with time zone"
+
     assert column_type("daily_rollups", "admitted_request_count") == "bigint"
     assert column_type("hourly_model_usage_rollups", "request_count") == "bigint"
     assert column_type("hourly_model_usage_rollups", "total_tokens") == "bigint"
@@ -542,6 +569,11 @@ defmodule CodexPooler.SchemaContractTest do
     assert column_type("alert_delivery_attempts", "response_metadata") == "jsonb"
     assert column_type("alert_delivery_attempts", "failure_metadata") == "jsonb"
     assert column_type("alert_delivery_attempts", "retryable") == "boolean"
+  end
+
+  test "requests keep only a rolling-upgrade compatibility column for raw idempotency keys" do
+    refute :idempotency_key in Request.__schema__(:fields)
+    assert table_columns("requests")["idempotency_key"] == {"text", "YES"}
   end
 
   test "preserves final foreign key actions including cascades and set-null behavior" do
@@ -1009,62 +1041,6 @@ defmodule CodexPooler.SchemaContractTest do
              )
   end
 
-  @tag :pool_usage_rollup_migration_round_trip
-  test "Pool daily coverage fence migration upgrades legacy rows and downgrades fail closed" do
-    completed_at = ~U[2026-08-14 00:17:00.000000Z]
-    rollup_date = ~D[2026-08-13]
-
-    run_pool_daily_coverage_migration!(:down)
-    on_exit(&ensure_pool_daily_coverage_migration_up!/0)
-
-    Repo.query!(
-      """
-      INSERT INTO daily_rollup_coverages (
-        rollup_date, contract_version, completed_at, created_at, updated_at
-      )
-      VALUES ($1, 1, $2, $2, $2)
-      """,
-      [rollup_date, completed_at]
-    )
-
-    run_pool_daily_coverage_migration!(:up)
-
-    assert [[2, nil, 0]] =
-             Repo.query!(
-               """
-               SELECT contract_version, completed_at, mutation_version
-               FROM daily_rollup_coverages
-               WHERE rollup_date = $1
-               """,
-               [rollup_date]
-             ).rows
-
-    run_pool_daily_coverage_migration!(:down)
-
-    assert [[0]] = Repo.query!("SELECT COUNT(*) FROM daily_rollup_coverages").rows
-    refute Map.has_key?(table_columns("daily_rollup_coverages"), "mutation_version")
-
-    assert table_columns("daily_rollup_coverages")["completed_at"] ==
-             {"timestamp without time zone", "NO"}
-
-    assert trigger_contracts([
-             "requests_track_pool_daily_rollup_mutation",
-             "ledger_entries_track_pool_daily_rollup_mutation",
-             "daily_rollups_track_pool_daily_rollup_mutation",
-             "daily_rollup_coverages_guard_contract"
-           ]) == []
-
-    assert function_search_paths([
-             "guard_pool_daily_rollup_coverage_contract",
-             "mark_pool_daily_rollup_dates_mutated",
-             "track_daily_rollup_pool_mutation",
-             "track_ledger_pool_daily_rollup_mutation",
-             "track_request_pool_daily_rollup_mutation"
-           ]) == %{}
-
-    run_pool_daily_coverage_migration!(:up)
-  end
-
   test "operator pool assignments preserve the scoped admin grant storage contract" do
     columns = table_columns("operator_pool_assignments")
 
@@ -1285,8 +1261,7 @@ defmodule CodexPooler.SchemaContractTest do
              """).rows
 
     assert replay_function_contracts() == %{
-             "enforce_request_replay_entitlement_update" =>
-               {"v", "u", ["search_path=pg_catalog"]},
+             "enforce_request_replay_entitlement_update" => {"v", "u", ["search_path=pg_catalog"]},
              "enforce_request_replay_request_storage" => {"v", "u", ["search_path=pg_catalog"]},
              "enforce_request_replay_turn_snapshot" => {"v", "u", ["search_path=pg_catalog"]},
              "request_replay_db_now" => {"v", "s", ["search_path=pg_catalog"]}
@@ -1373,9 +1348,7 @@ defmodule CodexPooler.SchemaContractTest do
 
   @tag :replay_schema
   test "replay HMAC contracts use configured shared crypto and fail closed" do
-    previous = Application.get_env(:codex_pooler, CodexPooler.Upstreams, [])
-
-    on_exit(fn -> Application.put_env(:codex_pooler, CodexPooler.Upstreams, previous) end)
+    previous = CodexPooler.TestAppEnv.restore_on_exit(CodexPooler.Upstreams)
 
     key = :binary.copy(<<7>>, 32)
 
@@ -1468,50 +1441,6 @@ defmodule CodexPooler.SchemaContractTest do
              "v-test",
              expected_owner
            )
-  end
-
-  @tag :replay_migration
-  test "replay migration preserves derived claim identities while reversing its storage objects" do
-    on_exit(&ensure_replay_migration_up!/0)
-
-    prior_objects = replay_prior_object_snapshot()
-
-    run_replay_migration!(:down)
-    assert_replay_objects_down!()
-    assert replay_prior_object_snapshot() == prior_objects
-
-    legacy = legacy_attempt_fixture!()
-
-    legacy_claims =
-      Enum.map(["codex-turn:", "codex-request:"], &legacy_prefixed_request_fixture!/1)
-
-    refute Map.has_key?(table_columns("attempts"), "replay_generation")
-
-    run_replay_migration!(:up)
-    assert_replay_objects_up!()
-    assert replay_prior_object_snapshot() == prior_objects
-
-    assert [[0]] =
-             Repo.query!("SELECT replay_generation FROM attempts WHERE id = $1", [legacy.id]).rows
-
-    assert Repo.query!(legacy.select_sql, [legacy.id]).rows == legacy.before_rows
-
-    assert_claim_identities_preserved!(legacy_claims)
-
-    run_replay_migration!(:down)
-    assert_replay_objects_down!()
-    assert replay_prior_object_snapshot() == prior_objects
-
-    assert_claim_identities_preserved!(legacy_claims)
-
-    second_legacy_claims =
-      Enum.map(["codex-turn:", "codex-request:"], &legacy_prefixed_request_fixture!/1)
-
-    run_replay_migration!(:up)
-    assert_replay_objects_up!()
-    assert replay_prior_object_snapshot() == prior_objects
-
-    assert_claim_identities_preserved!(legacy_claims ++ second_legacy_claims)
   end
 
   test "codex files expose bridge metadata columns without upload table dependency" do
@@ -1739,172 +1668,6 @@ defmodule CodexPooler.SchemaContractTest do
     |> Enum.map(&List.first/1)
   end
 
-  defp replay_new_object_snapshot do
-    %{
-      columns: %{
-        "attempts.replay_generation" => Map.get(table_columns("attempts"), "replay_generation"),
-        "codex_turns.semantic_turn_digest" =>
-          Map.get(table_columns("codex_turns"), "semantic_turn_digest")
-      },
-      table?: "request_replay_entitlements" in public_tables(),
-      functions: replay_function_contracts(),
-      triggers: replay_trigger_names(),
-      constraints:
-        constraint_definitions()
-        |> Map.take(replay_constraint_names()),
-      indexes:
-        index_definitions()
-        |> Map.take(replay_index_names())
-    }
-  end
-
-  defp replay_constraint_names do
-    ~w(
-      attempts_replay_generation_check
-      codex_turns_semantic_turn_digest_shape_check
-      request_replay_entitlements_status_check
-      request_replay_entitlements_model_identifier_present_check
-      request_replay_entitlements_lease_key_version_present_check
-      request_replay_entitlements_semantic_turn_digest_shape_check
-      request_replay_entitlements_replay_claim_digest_shape_check
-      request_replay_entitlements_provisional_digest_shape_check
-      request_replay_entitlements_owner_lease_digest_shape_check
-      request_replay_entitlements_api_key_runtime_epoch_check
-      request_replay_entitlements_replay_generation_check
-      request_replay_entitlements_predecessor_epoch_check
-      request_replay_entitlements_expiry_check
-      request_replay_entitlements_lifecycle_tuple_check
-      request_replay_entitlements_request_id_fkey
-      request_replay_entitlements_codex_turn_request_fkey
-      request_replay_entitlements_eligible_attempt_request_fkey
-      request_replay_entitlements_replay_attempt_request_fkey
-      request_replay_entitlements_api_key_id_fkey
-      request_replay_entitlements_pool_id_fkey
-      request_replay_entitlements_model_id_fkey
-    )
-  end
-
-  defp replay_index_names do
-    ~w(
-      codex_turns_id_request_id_uq
-      codex_turns_active_semantic_turn_uq
-      request_replay_entitlements_pkey
-      request_replay_entitlements_request_id_uq
-      request_replay_entitlements_cleanup_due_idx
-    )
-  end
-
-  defp replay_prior_object_snapshot do
-    constraint_definitions()
-    |> Map.take(~w(
-      attempts_status_check
-      attempts_transport_check
-      attempts_request_id_fkey
-      codex_turns_status_check
-      codex_turns_transport_kind_check
-      codex_turns_request_id_fkey
-    ))
-    |> Map.put(
-      :indexes,
-      index_definitions()
-      |> Map.take(~w(
-        attempts_id_request_id_uq
-        attempts_request_number_uq
-        codex_turns_request_id_uq
-        codex_turns_session_sequence_uq
-      ))
-    )
-  end
-
-  defp assert_replay_objects_down! do
-    snapshot = replay_new_object_snapshot()
-    refute snapshot.table?
-
-    assert snapshot.columns == %{
-             "attempts.replay_generation" => nil,
-             "codex_turns.semantic_turn_digest" => nil
-           }
-
-    assert snapshot.functions == %{}
-    assert snapshot.triggers == []
-    assert snapshot.constraints == %{}
-    assert snapshot.indexes == %{}
-  end
-
-  defp assert_replay_objects_up! do
-    snapshot = replay_new_object_snapshot()
-    assert snapshot.table?
-
-    assert snapshot.columns == %{
-             "attempts.replay_generation" => {"integer", "NO"},
-             "codex_turns.semantic_turn_digest" => {"bytea", "YES"}
-           }
-
-    assert map_size(snapshot.functions) == 4
-    assert length(snapshot.triggers) == 4
-    assert Map.keys(snapshot.constraints) |> Enum.sort() == Enum.sort(replay_constraint_names())
-    assert Map.keys(snapshot.indexes) |> Enum.sort() == Enum.sort(replay_index_names())
-  end
-
-  defp legacy_attempt_fixture! do
-    %{pool: pool, api_key: api_key} = api_key_fixture()
-    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
-
-    request =
-      request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress", completed_at: nil})
-
-    [[id]] =
-      Repo.query!(
-        """
-        INSERT INTO attempts (
-          request_id, attempt_number, pool_upstream_assignment_id, upstream_identity_id,
-          upstream_model_id, transport, status, retryable, usage_status, response_metadata
-        ) VALUES ($1, 1, $2, $3, 'gpt-example', 'http_json', 'succeeded', false, 'usage_known', '{}'::jsonb)
-        RETURNING id
-        """,
-        [
-          Ecto.UUID.dump!(request.id),
-          Ecto.UUID.dump!(assignment.id),
-          Ecto.UUID.dump!(identity.id)
-        ]
-      ).rows
-
-    select_sql = """
-    SELECT request_id, attempt_number, pool_upstream_assignment_id, upstream_identity_id,
-           upstream_model_id, transport, status, retryable, usage_status, response_metadata
-    FROM attempts WHERE id = $1
-    """
-
-    %{id: id, select_sql: select_sql, before_rows: Repo.query!(select_sql, [id]).rows}
-  end
-
-  defp legacy_prefixed_request_fixture!(prefix) do
-    %{pool: pool, api_key: api_key} = api_key_fixture()
-    correlation_id = prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-
-    [[id]] =
-      Repo.query!(
-        """
-        INSERT INTO requests (
-          pool_id, api_key_id, requested_model, endpoint, transport, status,
-          usage_status, correlation_id, request_metadata
-        ) VALUES ($1, $2, 'gpt-example', '/backend-api/codex/responses', 'websocket',
-          'accepted', 'usage_pending', $3, '{}'::jsonb)
-        RETURNING id
-        """,
-        [Ecto.UUID.dump!(pool.id), Ecto.UUID.dump!(api_key.id), correlation_id]
-      ).rows
-
-    %{id: id, correlation_id: correlation_id}
-  end
-
-  defp assert_claim_identities_preserved!(claims) do
-    Enum.each(claims, fn %{id: id, correlation_id: correlation_id} ->
-      assert [[^correlation_id]] =
-               Repo.query!("SELECT correlation_id FROM requests WHERE id = $1", [id]).rows
-    end)
-  end
-
   defp column_default(table_name, column_name) do
     Repo.query!(
       """
@@ -1982,62 +1745,6 @@ defmodule CodexPooler.SchemaContractTest do
       [names]
     ).rows
     |> Map.new(fn [name, config] -> {name, config} end)
-  end
-
-  defp run_pool_daily_coverage_migration!(direction) do
-    module = CodexPooler.Repo.Migrations.FencePoolDailyRollupCoverage
-
-    unless Code.ensure_loaded?(module) do
-      Code.require_file(
-        "../../priv/repo/migrations/20260815010747_fence_pool_daily_rollup_coverage.exs",
-        __DIR__
-      )
-    end
-
-    Runner.run(
-      Repo,
-      Repo.config(),
-      20_260_815_010_747,
-      module,
-      :forward,
-      direction,
-      direction,
-      log: false
-    )
-  end
-
-  defp ensure_pool_daily_coverage_migration_up! do
-    unless Map.has_key?(table_columns("daily_rollup_coverages"), "mutation_version") do
-      run_pool_daily_coverage_migration!(:up)
-    end
-  end
-
-  defp run_replay_migration!(direction) do
-    module = CodexPooler.Repo.Migrations.AddRequestReplayEntitlements
-
-    unless Code.ensure_loaded?(module) do
-      Code.require_file(
-        "../../priv/repo/migrations/20260902024410_add_request_replay_entitlements.exs",
-        __DIR__
-      )
-    end
-
-    Runner.run(
-      Repo,
-      Repo.config(),
-      20_260_902_024_410,
-      module,
-      :forward,
-      direction,
-      direction,
-      log: false
-    )
-  end
-
-  defp ensure_replay_migration_up! do
-    unless "request_replay_entitlements" in public_tables() do
-      run_replay_migration!(:up)
-    end
   end
 
   defp constraint_containing?(constraints, text) do

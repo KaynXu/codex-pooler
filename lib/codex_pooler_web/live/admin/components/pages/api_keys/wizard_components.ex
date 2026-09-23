@@ -508,8 +508,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   defp title(:edit), do: "Edit API key"
 
   defp description(:create),
-    do:
-      "Define Pool ownership, model access, enforced request fields, and limits before copying the generated secret once."
+    do: "Define Pool ownership, model access, enforced request fields, and limits before copying the generated secret once."
 
   defp description(:edit), do: "Update policy sections without exposing stored secret material."
 

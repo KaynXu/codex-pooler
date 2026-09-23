@@ -69,6 +69,21 @@ defmodule CodexPooler.Upstreams.ReadContractTest do
     assert Upstreams.list_visible_upstream_identities(scope) == []
   end
 
+  test "owners retain visibility of active identities without Pool assignments" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner)
+    assigned_pool = pool_fixture()
+    %{identity: assigned} = upstream_assignment_fixture(assigned_pool, %{account_label: "Zulu"})
+    unassigned = active_upstream_identity_fixture(%{account_label: "Alpha"})
+    deleted = active_upstream_identity_fixture(%{account_label: "Deleted"})
+
+    deleted
+    |> Ecto.Changeset.change(%{status: "deleted"})
+    |> Repo.update!()
+
+    assert Upstreams.list_visible_upstream_identities(scope) == [unassigned, assigned]
+  end
+
   test "revoked membership cannot reuse a cached owner role to list identities" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     scope = Scope.for_user(owner)

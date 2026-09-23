@@ -10,6 +10,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.{Cache, Settings}
+  alias CodexPooler.PeerRegistry
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
 
   defmodule FailingRepo do
@@ -167,21 +168,25 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   setup do
-    previous = Application.get_env(:codex_pooler, InstanceSettings, [])
-    previous_cache = Application.get_env(:codex_pooler, Cache, [])
+    # `nil` when absent, so `restore_application_env/2` deletes the key instead of writing `[]`.
+    # The env restores stay ahead of the cache reset, as before: the cache reads `InstanceSettings`
+    # when it reloads and `Cache` when it restarts.
+    previous = Application.get_env(:codex_pooler, InstanceSettings)
+    previous_cache = Application.get_env(:codex_pooler, Cache)
     previous_test_timer = Application.get_env(:codex_pooler, TestTimer)
     previous_scripted_repo = Application.get_env(:codex_pooler, ScriptedRepo)
-    Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
-    Repo.delete_all(Settings)
-    InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, InstanceSettings, previous)
+      restore_application_env(InstanceSettings, previous)
       restore_application_env(Cache, previous_cache)
       InstanceSettings.reset_cache_for_test()
       restore_application_env(TestTimer, previous_test_timer)
       restore_application_env(ScriptedRepo, previous_scripted_repo)
     end)
+
+    Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous || [], :repo))
+    Repo.delete_all(Settings)
+    InstanceSettings.reset_cache_for_test()
 
     :ok
   end
@@ -201,6 +206,8 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.gateway.circuit_success_threshold == 1
     assert settings.gateway.websocket_idle_timeout_ms == 1_800_000
     assert Map.get(settings.gateway, :websocket_owner_idle_timeout_ms) == 1_800_000
+    assert Map.get(settings.gateway, :upstream_conn_max_idle_time_ms) == 45_000
+    assert Map.get(settings.gateway, :upstream_token_refresh_margin_seconds) == 172_800
     assert settings.files.max_size_bytes == 25 * 1024 * 1024
     assert settings.transcription.max_upload_bytes == 26_214_400
 
@@ -385,6 +392,88 @@ defmodule CodexPooler.InstanceSettingsTest do
     end
   end
 
+  test "changeset accepts inclusive upstream connection idle bound limits" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert {:ok, minimum} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"upstream_conn_max_idle_time_ms" => 1_000}
+             })
+
+    assert Map.get(minimum.gateway, :upstream_conn_max_idle_time_ms) == 1_000
+
+    assert {:ok, maximum} =
+             InstanceSettings.update_system_settings(InstanceSettings.get!(), %{
+               "gateway" => %{"upstream_conn_max_idle_time_ms" => 3_600_000}
+             })
+
+    assert Map.get(maximum.gateway, :upstream_conn_max_idle_time_ms) == 3_600_000
+    assert maximum.gateway.upstream_connect_timeout_ms == 15_000
+  end
+
+  test "changeset rejects upstream connection idle bound values outside the bounded range" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    for invalid <- [0, 999, 3_600_001, "infinity", "not-a-number", nil] do
+      assert {:error, changeset} =
+               InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"upstream_conn_max_idle_time_ms" => invalid}
+               })
+
+      assert Map.get(errors_on(changeset).gateway, :upstream_conn_max_idle_time_ms) != []
+    end
+
+    assert InstanceSettings.get!().lock_version == settings.lock_version
+  end
+
+  test "changeset accepts inclusive proactive token refresh margin limits" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert {:ok, minimum} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"upstream_token_refresh_margin_seconds" => 3_600}
+             })
+
+    assert Map.get(minimum.gateway, :upstream_token_refresh_margin_seconds) == 3_600
+
+    assert {:ok, maximum} =
+             InstanceSettings.update_system_settings(InstanceSettings.get!(), %{
+               "gateway" => %{"upstream_token_refresh_margin_seconds" => 1_209_600}
+             })
+
+    assert Map.get(maximum.gateway, :upstream_token_refresh_margin_seconds) == 1_209_600
+    assert maximum.gateway.upstream_connect_timeout_ms == 15_000
+  end
+
+  test "proactive refresh defaults on and can be disabled without changing its margin" do
+    settings = InstanceSettings.ensure_singleton!()
+    assert Map.get(settings.gateway, :upstream_token_refresh_proactive_enabled) == true
+
+    assert {:ok, changed} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"upstream_token_refresh_proactive_enabled" => false}
+             })
+
+    assert changed.gateway.upstream_token_refresh_proactive_enabled == false
+    assert changed.gateway.upstream_token_refresh_margin_seconds == 172_800
+    assert InstanceSettings.current().gateway.upstream_token_refresh_proactive_enabled == false
+  end
+
+  test "changeset rejects proactive token refresh margin values outside the bounded range" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    for invalid <- [0, 3_599, 1_209_601, "forever", "not-a-number", nil] do
+      assert {:error, changeset} =
+               InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"upstream_token_refresh_margin_seconds" => invalid}
+               })
+
+      assert Map.get(errors_on(changeset).gateway, :upstream_token_refresh_margin_seconds) != []
+    end
+
+    assert InstanceSettings.get!().lock_version == settings.lock_version
+  end
+
   test "development helper setting is boolean-only and rejects stored script URLs" do
     settings = InstanceSettings.ensure_singleton!()
 
@@ -518,9 +607,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill forwarded client policy without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'"
-    )
+    Repo.query!("UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -558,9 +645,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "legacy singleton settings rows backfill the websocket owner idle timeout without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET gateway = gateway - 'websocket_owner_idle_timeout_ms'"
-    )
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'websocket_owner_idle_timeout_ms'")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -578,12 +663,47 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert updated.gateway.websocket_idle_timeout_ms == 1_800_000
   end
 
+  test "legacy singleton settings rows backfill the upstream connection idle bound without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'upstream_conn_max_idle_time_ms'")
+
+    InstanceSettings.reset_cache_for_test()
+
+    assert Map.get(InstanceSettings.current().gateway, :upstream_conn_max_idle_time_ms) == 45_000
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(Repo.reload!(legacy), %{
+               "files" => %{"upload_ttl_seconds" => 600}
+             })
+
+    assert updated.files.upload_ttl_seconds == 600
+    assert Map.get(updated.gateway, :upstream_conn_max_idle_time_ms) == 45_000
+  end
+
+  test "legacy singleton settings rows backfill the proactive token refresh margin without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'upstream_token_refresh_margin_seconds'")
+
+    InstanceSettings.reset_cache_for_test()
+
+    assert Map.get(InstanceSettings.current().gateway, :upstream_token_refresh_margin_seconds) ==
+             172_800
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(Repo.reload!(legacy), %{
+               "files" => %{"upload_ttl_seconds" => 600}
+             })
+
+    assert updated.files.upload_ttl_seconds == 600
+    assert Map.get(updated.gateway, :upstream_token_refresh_margin_seconds) == 172_800
+  end
+
   test "legacy singleton settings rows backfill development helper flags without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
-    Repo.query!(
-      "UPDATE instance_settings SET development = '{\"impeccable_live_enabled\": false}'::jsonb"
-    )
+    Repo.query!("UPDATE instance_settings SET development = '{\"impeccable_live_enabled\": false}'::jsonb")
 
     InstanceSettings.reset_cache_for_test()
 
@@ -685,7 +805,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   test "primed current/0 reads do not require a synchronous cache process call" do
     expected = InstanceSettings.current()
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       assert InstanceSettings.current() == expected
@@ -825,7 +945,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert InstanceSettings.current().lock_version == settings.lock_version
 
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       assert InstanceSettings.current().lock_version == settings.lock_version
@@ -839,7 +959,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert :ok = InstanceSettings.reset_cache_for_test()
 
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       assert InstanceSettings.current().source == :fallback_defaults
@@ -925,7 +1045,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   @tag :failure_modes
   test "current/0 returns fallback defaults before the cache process starts" do
     cache = Process.whereis(Cache)
-    Process.unregister(Cache)
+    hide_cache_name_until_exit!(cache)
 
     try do
       settings = InstanceSettings.current()
@@ -1035,8 +1155,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert_receive {TestTimer, :scheduled, _ref4, _cache, {Cache, {:retry, generation4}}, 30}
     assert %{attempt: 3, generation: ^generation4} = :sys.get_state(Cache).retry_timer
 
-    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}},
-                     _delay}
+    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}}, _delay}
 
     configure_scripted_repo(database_settings, :none)
     send(Cache, {Cache, {:retry, generation4}})
@@ -1056,16 +1175,14 @@ defmodule CodexPooler.InstanceSettingsTest do
     configure_scripted_cache(database_settings, :load)
     _fallback = InstanceSettings.current()
 
-    assert_receive {TestTimer, :scheduled, retry_ref, _cache, {Cache, {:retry, stale_generation}},
-                    10}
+    assert_receive {TestTimer, :scheduled, retry_ref, _cache, {Cache, {:retry, stale_generation}}, 10}
 
     send(Cache, {Cache, {:updated, database_settings.lock_version + 1}})
     _ = :sys.get_state(Cache)
 
     assert_receive {TestTimer, :cancelled, ^retry_ref}
 
-    assert_receive {TestTimer, :scheduled, _new_ref, _cache,
-                    {Cache, {:retry, current_generation}}, 10}
+    assert_receive {TestTimer, :scheduled, _new_ref, _cache, {Cache, {:retry, current_generation}}, 10}
 
     refute current_generation == stale_generation
     flush_scripted_repo_calls()
@@ -1075,8 +1192,7 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     refute_received {ScriptedRepo, _operation}
 
-    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}},
-                     _delay}
+    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}}, _delay}
 
     assert %{generation: ^current_generation} = :sys.get_state(Cache).retry_timer
   end
@@ -1110,6 +1226,14 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert InstanceSettings.current().lock_version == database_settings.lock_version
     :ok = Cache.subscribe_applied()
     flush_applied_events()
+
+    # Also on_exit, where it runs before the sandbox teardown restores the cache through this
+    # process: the ExUnit timeout kills the test before the restart below, and every later test
+    # in the run would find the cache stopped.
+    on_exit(fn ->
+      if is_nil(Process.whereis(Cache)),
+        do: Supervisor.restart_child(CodexPooler.Supervisor, Cache)
+    end)
 
     assert :ok = Supervisor.terminate_child(CodexPooler.Supervisor, Cache)
     :persistent_term.erase({Cache, :current})
@@ -1405,9 +1529,7 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert {:ok, updated} =
              settings
-             |> InstanceSettings.update_system_settings(
-               InstanceSettings.put_metrics_bearer_token(%{}, token)
-             )
+             |> InstanceSettings.update_system_settings(InstanceSettings.put_metrics_bearer_token(%{}, token))
 
     assert updated.metrics.bearer_token_status == :configured
     assert updated.metrics.bearer_token_fingerprint =~ "sha256:"
@@ -1510,6 +1632,17 @@ defmodule CodexPooler.InstanceSettingsTest do
     end
   end
 
+  # Also on_exit: the ExUnit timeout or a linked crash kills the test before its `after` re-registers
+  # the cache, and every later test in the run would find the cache process without its name.
+  defp hide_cache_name_until_exit!(cache) do
+    on_exit(fn ->
+      if is_pid(cache) and Process.alive?(cache) and is_nil(Process.whereis(Cache)),
+        do: Process.register(cache, Cache)
+    end)
+
+    Process.unregister(Cache)
+  end
+
   defp restore_application_env(module, nil), do: Application.delete_env(:codex_pooler, module)
 
   defp restore_application_env(module, value),
@@ -1585,6 +1718,7 @@ defmodule CodexPooler.InstanceSettingsTest do
 
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"])
+        PeerRegistry.assert_epmd_ready!()
         true
     end
   end

@@ -14,8 +14,7 @@ defmodule CodexPooler.Upstreams.Import do
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type import_result ::
           {:ok, map()}
-          | {:error,
-             Ecto.Changeset.t() | lifecycle_error() | IdentityLifecycle.identity_conflict()}
+          | {:error, Ecto.Changeset.t() | lifecycle_error() | IdentityLifecycle.identity_conflict()}
 
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   def import_codex_auth_json(scope, pool, content) do

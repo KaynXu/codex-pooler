@@ -32,6 +32,24 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :confirmed
   end
 
+  test "monthly account evidence confirms zero, reblocks exhaustion and ignores pre-consume data" do
+    for {percent, observed_at, expected} <- [
+          {"0", @now, :confirmed},
+          {"100", @now, :reblocked},
+          {"0", DateTime.add(@consumed_at, -1, :second), :pending}
+        ] do
+      monthly =
+        window(
+          window_kind: "primary",
+          window_minutes: 43_200,
+          used_percent: Decimal.new(percent),
+          observed_at: observed_at
+        )
+
+      assert PostResetEvidence.classify([monthly], @consumed_at, @now) == expected
+    end
+  end
+
   test "fresh exhausted post-consume account evidence reblocks" do
     windows = [window(used_percent: Decimal.new("100"))]
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :reblocked

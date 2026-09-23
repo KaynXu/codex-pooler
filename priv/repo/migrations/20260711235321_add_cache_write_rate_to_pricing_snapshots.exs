@@ -6,9 +6,7 @@ defmodule CodexPooler.Repo.Migrations.AddCacheWriteRateToPricingSnapshots do
       add :cache_write_token_micros, :decimal
     end
 
-    create constraint(:pricing_snapshots, :pricing_snapshots_cache_write_token_micros_check,
-             check: "cache_write_token_micros IS NULL OR cache_write_token_micros >= 0"
-           )
+    create constraint(:pricing_snapshots, :pricing_snapshots_cache_write_token_micros_check, check: "cache_write_token_micros IS NULL OR cache_write_token_micros >= 0")
 
     drop index(:pricing_snapshots, [], name: :pricing_snapshots_version_uq)
 

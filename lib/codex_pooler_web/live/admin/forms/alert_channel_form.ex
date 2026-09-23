@@ -167,8 +167,7 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
     do: Map.drop(attrs, ["email_to"])
 
   defp prune_channel_type_fields(attrs),
-    do:
-      Map.drop(attrs, ["endpoint_url", "webhook_signing_secret", "webhook_signing_secret_action"])
+    do: Map.drop(attrs, ["endpoint_url", "webhook_signing_secret", "webhook_signing_secret_action"])
 
   defp drop_blank_optional_values(attrs, mode) do
     Enum.reduce(

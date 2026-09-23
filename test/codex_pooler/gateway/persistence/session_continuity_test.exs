@@ -17,14 +17,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     SessionContinuity
   }
 
-  alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, OwnerWitness}
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, ExpiredSessions, OwnerWitness}
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias Ecto.Adapters.SQL.Sandbox
 
   setup tags do
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     if tags[:session_start_race] do
       Application.put_env(
@@ -50,7 +50,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     end
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -59,6 +58,62 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   end
 
   describe "continuity response aliases" do
+    test "public websocket session headers create independent sessions without an HTTP warmup" do
+      auth = auth_fixture()
+
+      options = fn header ->
+        RequestOptions.for_websocket(%{authenticated_owner_attach: true, session_header: header})
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/responses",
+          "/backend-api/codex/responses"
+        )
+      end
+
+      assert {:ok, first} = Gateway.start_codex_session(auth, options.("public-session-one"))
+      assert {:ok, same} = Gateway.start_codex_session(auth, options.("public-session-one"))
+      assert {:ok, second} = Gateway.start_codex_session(auth, options.("public-session-two"))
+      assert first.id == same.id
+      refute first.id == second.id
+
+      %{api_key: other_key} =
+        active_api_key_fixture(auth.pool, %{created_by_user_id: auth.pool.created_by_user_id})
+
+      other_auth = %{auth | api_key: other_key}
+
+      assert {:error, :owner_unavailable} =
+               Gateway.start_codex_session(other_auth, options.("public-session-one"))
+
+      anchored =
+        options.("unknown-public-session")
+        |> RequestOptions.put_continuity(previous_response_id: "resp_unknown")
+
+      assert {:error, :owner_unavailable} = Gateway.start_codex_session(auth, anchored)
+
+      native =
+        RequestOptions.for_websocket(%{
+          authenticated_owner_attach: true,
+          session_header: "unknown-native-session"
+        })
+
+      assert {:error, :owner_unavailable} = Gateway.start_codex_session(auth, native)
+    end
+
+    test "completed websocket continuity returns unavailable after key deletion cascades its session" do
+      %{auth: auth, session: session} = owner_session_fixture()
+      Repo.delete!(auth.api_key)
+      assert Repo.get(CodexSession, session.id) == nil
+
+      assert {:error, :owner_unavailable} =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"id" => "resp_deleted_key_completion"},
+                 owner_request_options([])
+               )
+
+      assert response_aliases_for_session(session.id) == []
+    end
+
     test "current HTTP owner starts one turn and registers one alias with equal renewed deadlines" do
       %{auth: auth, session: session} = owner_session_fixture()
       request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
@@ -137,15 +192,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     @tag :session_start_race
     @tag timeout: 30_000
     test "HTTP continuity registration revalidates its witness after waiting for the session lock" do
+      %{user: owner} = committed_bootstrap_owner_fixture!()
+
       fixture =
         Sandbox.unboxed_run(Repo, fn ->
-          reset_bootstrap_state_fixture!()
-          auth = auth_fixture()
+          auth = auth_fixture(owner)
           session = continuity_session_fixture(auth, "registration-lock-wait")
           %{auth: auth, session: Repo.get!(CodexSession, session.id)}
         end)
-
-      on_exit(fn -> Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end) end)
 
       parent = self()
       barrier = make_ref()
@@ -402,17 +456,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
   @tag :session_start_race
   test "concurrent first start for the same session key reuses the winning session" do
-    auth =
-      Sandbox.unboxed_run(Repo, fn ->
-        reset_bootstrap_state_fixture!()
-        auth_fixture()
-      end)
-
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        reset_bootstrap_state_fixture!()
-      end)
-    end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+    auth = Sandbox.unboxed_run(Repo, fn -> auth_fixture(owner) end)
 
     parent = self()
     barrier = make_ref()
@@ -565,8 +610,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
              contested_start_results(
                [
                  {primary_auth, %{owner_instance_id: "node-a"}},
-                 {alternate_auth,
-                  %{owner_instance_id: "node-b", authenticated_owner_attach: true}}
+                 {alternate_auth, %{owner_instance_id: "node-b", authenticated_owner_attach: true}}
                ],
                owner_attach_key,
                :first_wins
@@ -721,14 +765,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     initial_session = Repo.get!(CodexSession, session.id)
     initial_lease = active_lease!(session.id)
 
-    assert DateTime.diff(
-             initial_session.owner_lease_expires_at,
-             initial_session.updated_at,
-             :second
-           ) ==
-             45
+    assert initial_session.owner_lease_expires_at == initial_lease.expires_at
 
-    assert DateTime.diff(initial_lease.expires_at, initial_lease.renewed_at, :second) == 45
+    assert DateTime.diff(initial_lease.expires_at, initial_lease.renewed_at, :microsecond) ==
+             45_000_000
 
     update_gateway_settings(%{"bridge_owner_lease_ttl_seconds" => 120})
 
@@ -750,14 +790,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert renewed_session.id == session.id
     assert renewed_lease.id == initial_lease.id
 
-    assert DateTime.diff(
-             renewed_session.owner_lease_expires_at,
-             renewed_session.updated_at,
-             :second
-           ) ==
-             120
+    # Reacquisition uses the locked DB clock; session.updated_at uses the app clock.
+    assert renewed_session.owner_lease_expires_at == renewed_lease.expires_at
 
-    assert DateTime.diff(renewed_lease.expires_at, renewed_lease.renewed_at, :second) == 120
+    assert DateTime.diff(renewed_lease.expires_at, renewed_lease.renewed_at, :microsecond) ==
+             120_000_000
 
     assert DateTime.compare(
              renewed_session.owner_lease_expires_at,
@@ -1209,25 +1246,199 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert active_lease_id == before_lease.id
   end
 
-  defp unboxed_auth_fixture! do
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
-    end)
+  describe "lease-expiry recreation assignment preference" do
+    test "replacement session prefers the closed session's assignment without persisting it" do
+      auth = auth_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+      session_key = "recreation-preferred-#{System.unique_integer([:positive])}"
 
-    Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      auth_fixture()
-    end)
+      expired_session = expired_assigned_session!(auth, session_key, assignment)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-replacement"
+               })
+
+      refute replacement.id == expired_session.id
+      assert replacement.recreated_from_assignment_id == assignment.id
+      assert is_nil(replacement.pool_upstream_assignment_id)
+      assert %CodexSession{status: "closed"} = Repo.get!(CodexSession, expired_session.id)
+
+      reloaded = Repo.get!(CodexSession, replacement.id)
+      assert is_nil(reloaded.recreated_from_assignment_id)
+      assert is_nil(reloaded.pool_upstream_assignment_id)
+    end
+
+    test "a first-ever session for a key carries no preference" do
+      auth = auth_fixture()
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: "recreation-first-#{System.unique_integer([:positive])}",
+                 owner_instance_id: "node-a"
+               })
+
+      assert is_nil(session.recreated_from_assignment_id)
+    end
+
+    test "an expired session with no bound assignment donates nothing" do
+      auth = auth_fixture()
+      session_key = "recreation-unassigned-#{System.unique_integer([:positive])}"
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-a"
+               })
+
+      expire_owner_lease!(session.id)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-b"
+               })
+
+      refute replacement.id == session.id
+      assert is_nil(replacement.recreated_from_assignment_id)
+    end
+
+    test "a live session is reused and carries no recreation preference" do
+      auth = auth_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+      session_key = "recreation-live-#{System.unique_integer([:positive])}"
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-a"
+               })
+
+      session
+      |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment.id})
+      |> Repo.update!()
+
+      assert {:ok, %CodexSession{} = reused} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-b"
+               })
+
+      assert reused.id == session.id
+      assert reused.pool_upstream_assignment_id == assignment.id
+      assert is_nil(reused.recreated_from_assignment_id)
+    end
+
+    test "another api key's expired session never donates its assignment" do
+      auth = auth_fixture()
+      %{api_key: other_api_key} = active_api_key_fixture(auth.pool)
+      other_auth = %{pool: auth.pool, api_key: other_api_key}
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+      session_key = "recreation-other-key-#{System.unique_integer([:positive])}"
+
+      expired_assigned_session!(other_auth, session_key, assignment)
+
+      assert {:ok, %CodexSession{} = replacement} =
+               Gateway.start_codex_session(auth, %{
+                 session_key: session_key,
+                 owner_instance_id: "node-b"
+               })
+
+      assert is_nil(replacement.recreated_from_assignment_id)
+    end
+
+    # The partial unique index codex_sessions_pool_session_key_uq admits only
+    # one reconnectable session per (pool_id, lower(session_key)), so a
+    # multi-row database fixture cannot be built. The selection rule is
+    # therefore proven as a pure function.
+    test "picks the most recently active expired session regardless of input order" do
+      api_key_id = Ecto.UUID.generate()
+      freshest_assignment_id = Ecto.UUID.generate()
+
+      snapshots = [
+        expired_snapshot(api_key_id, Ecto.UUID.generate(), heartbeat_shift_seconds: -600),
+        expired_snapshot(api_key_id, freshest_assignment_id, heartbeat_shift_seconds: -5),
+        expired_snapshot(api_key_id, Ecto.UUID.generate(), heartbeat_shift_seconds: -60)
+      ]
+
+      assert ExpiredSessions.preferred_assignment_id(snapshots, api_key_id) ==
+               freshest_assignment_id
+
+      assert ExpiredSessions.preferred_assignment_id(Enum.reverse(snapshots), api_key_id) ==
+               freshest_assignment_id
+    end
+
+    test "ranks a missing heartbeat last and ignores rows that cannot donate" do
+      api_key_id = Ecto.UUID.generate()
+      heartbeat_assignment_id = Ecto.UUID.generate()
+
+      snapshots = [
+        expired_snapshot(api_key_id, Ecto.UUID.generate(),
+          heartbeat_shift_seconds: nil,
+          updated_shift_seconds: 600
+        ),
+        expired_snapshot(api_key_id, heartbeat_assignment_id, heartbeat_shift_seconds: -600),
+        expired_snapshot(api_key_id, nil, heartbeat_shift_seconds: 0),
+        expired_snapshot(Ecto.UUID.generate(), Ecto.UUID.generate(), heartbeat_shift_seconds: 0)
+      ]
+
+      assert ExpiredSessions.preferred_assignment_id(snapshots, api_key_id) ==
+               heartbeat_assignment_id
+    end
+
+    test "returns no preference when nothing belongs to the api key" do
+      api_key_id = Ecto.UUID.generate()
+
+      snapshots = [
+        expired_snapshot(Ecto.UUID.generate(), Ecto.UUID.generate(), heartbeat_shift_seconds: 0)
+      ]
+
+      assert is_nil(ExpiredSessions.preferred_assignment_id(snapshots, api_key_id))
+      assert is_nil(ExpiredSessions.preferred_assignment_id([], api_key_id))
+    end
+  end
+
+  defp expired_assigned_session!(auth, session_key, assignment) do
+    assert {:ok, %CodexSession{} = session} =
+             Gateway.start_codex_session(auth, %{
+               session_key: session_key,
+               owner_instance_id: "node-expired"
+             })
+
+    session
+    |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment.id})
+    |> Repo.update!()
+
+    expire_owner_lease!(session.id)
+    Repo.get!(CodexSession, session.id)
+  end
+
+  defp expired_snapshot(api_key_id, assignment_id, opts) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    heartbeat_shift = Keyword.get(opts, :heartbeat_shift_seconds)
+
+    %{
+      id: Ecto.UUID.generate(),
+      api_key_id: api_key_id,
+      pool_upstream_assignment_id: assignment_id,
+      last_heartbeat_at: heartbeat_shift && DateTime.add(now, heartbeat_shift, :second),
+      updated_at: DateTime.add(now, Keyword.get(opts, :updated_shift_seconds, 0), :second),
+      created_at: now
+    }
+  end
+
+  # The committed owner registers its own removal before the commit, and its Pools cascade to every
+  # session, lease, alias and turn the cases commit under them.
+  defp unboxed_auth_fixture! do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+    Sandbox.unboxed_run(Repo, fn -> auth_fixture(owner) end)
   end
 
   defp unboxed_same_pool_auths! do
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
-    end)
+    %{user: owner} = committed_bootstrap_owner_fixture!()
 
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture()
       pool = pool_fixture(%{created_by_user_id: owner.id})
       %{api_key: primary_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
       %{api_key: alternate_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
@@ -1305,8 +1516,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     Sandbox.unboxed_run(Repo, fn -> refute_raw_turn_state_session_key!(pool_id, turn_state) end)
   end
 
-  defp auth_fixture do
-    %{user: owner} = bootstrap_owner_fixture()
+  defp auth_fixture, do: auth_fixture(bootstrap_owner_fixture().user)
+
+  defp auth_fixture(owner) do
     pool = pool_fixture(%{created_by_user_id: owner.id})
     %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
     %{pool: pool, api_key: api_key}
@@ -1455,6 +1667,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
   defp capture_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do

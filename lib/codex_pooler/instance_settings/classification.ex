@@ -32,19 +32,13 @@ defmodule CodexPooler.InstanceSettings.Classification do
   ]
 
   @bucket_notes %{
-    env_only_boot:
-      "Boot, release, topology, or crypto-root values that must remain process environment or release config.",
-    db_runtime_live:
-      "DB-backed settings that runtime consumers can read per request or per operation without cache coordination.",
-    db_runtime_cached:
-      "DB-backed settings that should flow through the instance settings cache and PubSub invalidation.",
-    db_requires_restart:
-      "Reserved for future DB-recorded settings that are operator-visible but cannot take effect until restart.",
+    env_only_boot: "Boot, release, topology, or crypto-root values that must remain process environment or release config.",
+    db_runtime_live: "DB-backed settings that runtime consumers can read per request or per operation without cache coordination.",
+    db_runtime_cached: "DB-backed settings that should flow through the instance settings cache and PubSub invalidation.",
+    db_requires_restart: "Reserved for future DB-recorded settings that are operator-visible but cannot take effect until restart.",
     secret_env_only: "Secret release/runtime values that are intentionally not DB-managed.",
-    secret_encrypted_db:
-      "DB-backed write-only secrets that must be recoverable by the application at use time.",
-    secret_hmac_db:
-      "DB-backed write-only secrets that must be verified but never recovered after save."
+    secret_encrypted_db: "DB-backed write-only secrets that must be recoverable by the application at use time.",
+    secret_hmac_db: "DB-backed write-only secrets that must be verified but never recovered after save."
   }
   @codex_env_prefix "CODEX" <> "_POOLER_"
   @storage_types [:environment, :database, :encrypted_database_secret, :hmac_database_secret]
@@ -58,8 +52,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: ["DATABASE_URL"],
       storage: :environment,
       reloadability: :boot,
-      notes:
-        "Ecto repository boot connection string; unavailable before the DB-backed settings row can exist.",
+      notes: "Ecto repository boot connection string; unavailable before the DB-backed settings row can exist.",
       sensitive?: true
     },
     %{
@@ -182,8 +175,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [@codex_env_prefix <> "UPSTREAM_SECRET_KEY"],
       storage: :environment,
       reloadability: :boot,
-      notes:
-        "Existing upstream secret root; later DB-managed app secrets reuse this root instead of adding another one.",
+      notes: "Existing upstream secret root; later DB-managed app secrets reuse this root instead of adding another one.",
       sensitive?: true
     },
     %{
@@ -234,8 +226,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: ["RELEASE_COOKIE"],
       storage: :environment,
       reloadability: :boot,
-      notes:
-        "Cluster authentication secret consumed by the release/VM, not by the instance settings system.",
+      notes: "Cluster authentication secret consumed by the release/VM, not by the instance settings system.",
       sensitive?: true
     },
     %{
@@ -246,8 +237,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :live,
-      notes:
-        "Backend file size, TTL, and cleanup cadence should be managed as typed file settings."
+      notes: "Backend file size, TTL, and cleanup cadence should be managed as typed file settings."
     },
     %{
       key: :transcription_upload_max,
@@ -257,8 +247,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :live,
-      notes:
-        "Multipart audio upload limit should apply to new transcription requests without restart."
+      notes: "Multipart audio upload limit should apply to new transcription requests without restart."
     },
     %{
       key: :gateway_debug,
@@ -298,8 +287,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "New websocket owners capture the bounded post-detach retention window from cached instance settings."
+      notes: "New websocket owners capture the bounded post-detach retention window from cached instance settings."
     },
     %{
       key: :upstream_timeouts,
@@ -309,7 +297,27 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :live,
-      notes: "Timeout options are attached to each new upstream request."
+      notes: "Timeout and pooled-connection idle bound options are attached to each new upstream request."
+    },
+    %{
+      key: :upstream_token_refresh_margin,
+      bucket: :db_runtime_cached,
+      group: :gateway,
+      label: "Proactive token refresh margin",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes: "Scheduled token refresh recovery resolves this margin from cached instance settings when each pass runs; changes affect later passes, not in-flight refreshes."
+    },
+    %{
+      key: :upstream_token_refresh_proactive_enabled,
+      bucket: :db_runtime_cached,
+      group: :gateway,
+      label: "Proactive token refresh",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes: "Expiry-based refresh selection and queued scheduled active claims recheck this setting; recovery and reactive refresh remain enabled."
     },
     %{
       key: :model_context_window_overrides,
@@ -352,6 +360,16 @@ defmodule CodexPooler.InstanceSettings.Classification do
       notes: "Operator email generation should read this at send time."
     },
     %{
+      key: :openai_status_polling_enabled,
+      bucket: :db_runtime_cached,
+      group: :operator,
+      label: "OpenAI status polling",
+      env_names: [],
+      storage: :database,
+      reloadability: :live,
+      notes: "Disables outbound status.openai.com polls while retaining last-known incidents."
+    },
+    %{
       key: :firewall_allowlist,
       bucket: :db_runtime_cached,
       group: :ingress,
@@ -359,8 +377,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "CIDR/exact IP allowlist is security-sensitive runtime policy and should flow through cached settings."
+      notes: "CIDR/exact IP allowlist is security-sensitive runtime policy and should flow through cached settings."
     },
     %{
       key: :trusted_proxies,
@@ -400,8 +417,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "New or renewed durable bridge leases use cached settings; existing timestamps are not rewritten."
+      notes: "New or renewed durable bridge leases use cached settings; existing timestamps are not rewritten."
     },
     %{
       key: :circuit_thresholds,
@@ -411,8 +427,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "New circuit decisions use updated thresholds without deleting existing circuit rows."
+      notes: "New circuit decisions use updated thresholds without deleting existing circuit rows."
     },
     %{
       key: :bulkheads,
@@ -422,8 +437,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "Known route classes stay typed; updates affect future admission decisions, not in-flight leases."
+      notes: "Known route classes stay typed; updates affect future admission decisions, not in-flight leases."
     },
     %{
       key: :mcp_service_enabled,
@@ -433,8 +447,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "Global metadata-only MCP service gate defaults disabled and flows through cached instance settings/PubSub invalidation."
+      notes: "Global metadata-only MCP service gate defaults disabled and flows through cached instance settings/PubSub invalidation."
     },
     %{
       key: :openai_pricing_url,
@@ -444,8 +457,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "Hourly pricing import jobs resolve this URL from cached instance settings when each job performs."
+      notes: "Hourly pricing import jobs resolve this URL from cached instance settings when each job performs."
     },
     %{
       key: :development_account_reconciliation_pause,
@@ -455,8 +467,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "Development-only guard for local fake accounts; hidden and ignored outside the dev-feature gate."
+      notes: "Development-only guard for local fake accounts; hidden and ignored outside the dev-feature gate."
     },
     %{
       key: :smtp_delivery,
@@ -466,8 +477,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :database,
       reloadability: :cached,
-      notes:
-        "Delivery-time config should reload through cached instance settings; the sender address remains email composition metadata."
+      notes: "Delivery-time config should reload through cached instance settings; the sender address remains email composition metadata."
     },
     %{
       key: :smtp_password,
@@ -477,8 +487,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :encrypted_database_secret,
       reloadability: :cached,
-      notes:
-        "Cleartext is needed only at mail send/test time, so the DB stores ciphertext and metadata, never raw rendered values.",
+      notes: "Cleartext is needed only at mail send/test time, so the DB stores ciphertext and metadata, never raw rendered values.",
       sensitive?: true,
       metadata: ["ciphertext", "key_version"]
     },
@@ -490,8 +499,7 @@ defmodule CodexPooler.InstanceSettings.Classification do
       env_names: [],
       storage: :hmac_database_secret,
       reloadability: :cached,
-      notes:
-        "Only bearer-token comparison is required; persist keyed HMAC digest, safe fingerprint, and key version.",
+      notes: "Only bearer-token comparison is required; persist keyed HMAC digest, safe fingerprint, and key version.",
       sensitive?: true,
       metadata: ["hmac_digest", "fingerprint", "key_version"]
     }

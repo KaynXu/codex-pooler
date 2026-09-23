@@ -37,6 +37,38 @@ defmodule CodexPooler.Catalog.SyncBoundaryTest do
     refute List.keymember?(request.headers, "chatgpt-account-id", 0)
   end
 
+  # Every other upstream call omits `chatgpt-account-id` for a synthetic
+  # `email_`/`local_` account id; catalog discovery is not an exception.
+  test "catalog discovery scopes a real account id and omits a synthetic one" do
+    for {account_id, expected} <- [
+          {"acct-catalog-real", "acct-catalog-real"},
+          {"  acct-catalog-untrimmed  ", "acct-catalog-untrimmed"},
+          {"email_catalog@example.com", nil},
+          {"local_catalog_identity", nil}
+        ] do
+      upstream = upstream([%{"slug" => "sample-scope", "supports_tools" => true}])
+      pool = pool_fixture()
+      source = source(pool, FakeUpstream.url(upstream))
+
+      source.identity
+      |> Ecto.Changeset.change(chatgpt_account_id: account_id)
+      |> Repo.update!()
+
+      assert {:ok, %{models: [_model]}} = Sync.sync_pool_catalog(pool)
+      assert [request] = FakeUpstream.requests(upstream)
+
+      case expected do
+        nil ->
+          refute List.keymember?(request.headers, "chatgpt-account-id", 0),
+                 "expected #{inspect(account_id)} to be omitted"
+
+        scope ->
+          assert {"chatgpt-account-id", ^scope} =
+                   List.keyfind(request.headers, "chatgpt-account-id", 0)
+      end
+    end
+  end
+
   test "invalid base URLs and closed transport produce finalized failed syncs" do
     for url <- ["not-a-url", "http://127.0.0.1:1"] do
       pool = pool_fixture()
@@ -158,8 +190,7 @@ defmodule CodexPooler.Catalog.SyncBoundaryTest do
     assert {:error, run, %{code: :catalog_sync_failed}} =
              Sync.sync_pool_catalog(pool,
                fetcher: fn _ ->
-                 {:ok,
-                  [%{"id" => "sample-new"}, %{"id" => "sample-invalid", "exposed_model_id" => ""}]}
+                 {:ok, [%{"id" => "sample-new"}, %{"id" => "sample-invalid", "exposed_model_id" => ""}]}
                end
              )
 

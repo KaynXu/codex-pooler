@@ -75,6 +75,34 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageProvenanceTest d
     end
   end
 
+  # findings#245. The catalog's own name for the priority tier is `fast`, and
+  # matching the raw value dropped it -- which then priced a priority response
+  # at standard rates, because an absent reported tier falls back to the
+  # request. Canonicalizing before bounding is what keeps it.
+  test "a reported tier is canonicalized before it is bounded, on both transports" do
+    for {reported, expected} <- [
+          {"fast", "priority"},
+          {" PRIORITY ", "priority"},
+          {"Default", "default"},
+          {"priority", "priority"},
+          {"turbocharged", nil},
+          {String.duplicate("x", 70), nil}
+        ] do
+      streamed =
+        ResponseUsage.from_stream_event(%{"service_tier" => reported, "usage" => @usage})
+
+      assert streamed.service_tier == expected,
+             "streamed #{inspect(reported)} became #{inspect(streamed.service_tier)}"
+
+      for parse <- [&ResponseUsage.from_sse/1, &ResponseUsage.from_websocket_body/1] do
+        parsed = parse.(sse(%{"service_tier" => reported, "usage" => @usage}))
+
+        assert parsed.service_tier == expected,
+               "non-streamed #{inspect(reported)} became #{inspect(parsed.service_tier)}"
+      end
+    end
+  end
+
   test "stream tier metadata is bounded and does not retain the decoded frame" do
     for tier <- ["priority", String.duplicate("x", 70), String.duplicate("x", 140_000)] do
       decoded =

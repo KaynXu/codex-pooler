@@ -9,14 +9,14 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Access
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
+  alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Pools.Routing, as: PoolRouting
-
-  @overload_code "server_is_overloaded"
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -100,8 +100,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
         {:ok, params}
 
       _params ->
-        {:error,
-         %{status: 400, code: "invalid_request", message: "request body must be a JSON object"}}
+        {:error, %{status: 400, code: "invalid_request", message: "request body must be a JSON object"}}
     end
   end
 
@@ -192,9 +191,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       |> RequestOptions.for_websocket()
       |> RequestOptions.capture_api_key_runtime_epoch(auth)
       |> maybe_put_websocket_openai_compatibility(opts)
-      |> RequestOptions.put_continuity(
-        accepted_turn_state: websocket_continuity_turn_state(opts, turn_state)
-      )
+      |> RequestOptions.put_continuity(accepted_turn_state: websocket_continuity_turn_state(opts, turn_state))
       |> maybe_mark_websocket_openai_origin(opts)
 
     case maybe_put_websocket_models_etag(conn, auth, request_options) do
@@ -245,7 +242,20 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   def result_headers(_result), do: []
 
   @spec send_gateway_result(conn(), Contracts.gateway_result()) :: conn()
-  def send_gateway_result(conn, %{stream: stream} = result) do
+  def send_gateway_result(conn, result) do
+    response = do_send_gateway_result(conn, result)
+    ExecutionIdentity.complete()
+    response
+  end
+
+  @spec send_error(conn(), Contracts.gateway_error() | map()) :: conn()
+  def send_error(conn, error) do
+    response = do_send_error(conn, error)
+    ExecutionIdentity.complete()
+    response
+  end
+
+  defp do_send_gateway_result(conn, %{stream: stream} = result) do
     conn = put_gateway_headers(conn, result_headers(result))
     conn = send_chunked(conn, result.status)
 
@@ -268,27 +278,26 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   end
 
   # sobelow_skip ["XSS.SendResp"]
-  def send_gateway_result(conn, %{raw_body: body} = result) do
+  defp do_send_gateway_result(conn, %{raw_body: body} = result) do
     conn
     |> put_gateway_headers(result_headers(result))
     |> send_resp(result.status, body)
   end
 
-  def send_gateway_result(conn, %{body: body} = result) do
+  defp do_send_gateway_result(conn, %{body: body} = result) do
     conn
     |> put_gateway_headers(result_headers(result))
     |> put_status(result.status)
     |> json(body)
   end
 
-  @spec send_error(conn(), Contracts.gateway_error() | map()) :: conn()
-  def send_error(conn, %{status: status, code: code, message: message} = error) do
+  defp do_send_error(conn, %{status: status, code: code, message: message} = error) do
     body = %{
       "error" =>
         Map.merge(
           %{
             "message" => message,
-            "type" => client_error_type(code),
+            "type" => ErrorClassification.error_type(code, status),
             "code" => to_string(code),
             "param" => Map.get(error, :param)
           },
@@ -297,21 +306,29 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     }
 
     conn
+    |> put_policy_retry_header(error)
     |> put_gateway_headers(Contracts.recovery_response_headers(error))
     |> put_status(status)
     |> json(body)
   end
 
-  def send_error(conn, %{code: :api_key_policy_limit_exceeded, message: _message} = error) do
+  defp do_send_error(conn, %{code: :api_key_policy_limit_exceeded, message: _message} = error) do
     send_error(conn, Map.put(error, :status, 403))
   end
 
-  def send_error(conn, %{code: code, message: message}) do
+  defp do_send_error(conn, %{code: code, message: message}) do
     send_error(conn, %{status: 401, code: code, message: message})
   end
 
-  defp client_error_type(@overload_code), do: "server_error"
-  defp client_error_type(_code), do: "invalid_request_error"
+  # Minimum backoff advice; it does not promise that a slot will be available.
+  defp put_policy_retry_header(conn, %{
+         pooler_policy: true,
+         status: 429,
+         code: "api_key_concurrency_limit_exceeded"
+       }),
+       do: put_resp_header(conn, "retry-after", "1")
+
+  defp put_policy_retry_header(conn, _error), do: conn
 
   defp forwarded_headers(conn) do
     provider_session_header_names = TransportEnvelope.provider_session_header_names()

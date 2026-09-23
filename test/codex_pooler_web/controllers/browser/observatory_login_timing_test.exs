@@ -77,9 +77,7 @@ defmodule CodexPoolerWeb.Browser.ObservatoryLoginTimingTest do
         %{
           label: label,
           lookups: lookups,
-          public_result:
-            {failed.status, String.contains?(html, @invalid_copy), flash_error(failed),
-             empty_api_key_input?(html)}
+          public_result: {failed.status, String.contains?(html, @invalid_copy), flash_error(failed), empty_api_key_input?(html)}
         }
       end)
 
@@ -107,6 +105,9 @@ defmodule CodexPoolerWeb.Browser.ObservatoryLoginTimingTest do
   defp capture_dashboard_exchange_lookups(fun) do
     parent = self()
     handler_id = "observatory-login-lookups-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

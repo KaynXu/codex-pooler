@@ -33,8 +33,8 @@ defmodule CodexPooler.Upstreams.Schemas.OAuthFlow do
     field :status, :string
     field :state_token_hash, :binary
     field :redirect_uri, :string
-    field :code_verifier_ciphertext, :binary
-    field :device_auth_id_ciphertext, :binary
+    field :code_verifier_ciphertext, :binary, redact: true
+    field :device_auth_id_ciphertext, :binary, redact: true
     field :device_user_code, :string
     field :verification_uri, :string
     field :interval_seconds, :integer

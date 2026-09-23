@@ -3,7 +3,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
 
   @type headers :: %{optional(String.t()) => String.t()}
 
-  @metadata_header_names ~w(openai-request-id x-openai-request-id x-request-id)
+  # The names a provider uses for its request id, in the order the released
+  # Codex client reads them: `x-request-id` first, then `x-oai-request-id`
+  # (the name the Codex backend actually uses), then `openai-request-id`.
+  # This list is the one source of truth for the attempt metadata writer
+  # (`Finalization.Metadata`) and for this frame allowlist, so a frame header
+  # is admitted here exactly when the writer reads it; `x-openai-request-id`
+  # used to be admitted and never read.
+  @upstream_request_id_header_names ~w(x-request-id x-oai-request-id openai-request-id)
   @quota_header_prefixes ~w(x-ratelimit-limit- x-ratelimit-remaining- x-ratelimit-reset-)
   @quota_window_header_suffixes ~w(
     -primary-reset-at
@@ -13,6 +20,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
     -secondary-used-percent
     -secondary-window-minutes
   )
+
+  @spec upstream_request_id_header_names() :: [String.t()]
+  def upstream_request_id_header_names, do: @upstream_request_id_header_names
+
+  # The name allowlist as a predicate, for the accounting sanitizer: a header
+  # admitted here is name-allowlisted at the frame read and value-bounded at
+  # persistence, so the sanitizer may keep its value even when the name
+  # carries a redaction fragment (`x-ratelimit-*-tokens`).
+  @spec allowed_header_name?(term()) :: boolean()
+  def allowed_header_name?(name) when is_binary(name),
+    do: allowed_websocket_error_header?(String.downcase(name))
+
+  def allowed_header_name?(_name), do: false
 
   @spec websocket_error_frame_headers(term()) :: headers()
   def websocket_error_frame_headers(data) when is_binary(data) do
@@ -50,7 +70,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
     if allowed_websocket_error_header?(name), do: scalar_header_value(value), else: :error
   end
 
-  defp allowed_websocket_error_header?(name) when name in @metadata_header_names, do: true
+  defp allowed_websocket_error_header?(name) when name in @upstream_request_id_header_names,
+    do: true
+
   defp allowed_websocket_error_header?("x-codex-rate-limit-reached-type"), do: true
 
   defp allowed_websocket_error_header?(name) do

@@ -36,6 +36,75 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     end
   end
 
+  @doc """
+  Maps an upstream Responses parameter path from a relayed validation
+  rejection back to the Chat Completions field the client sent. Only the
+  renames this adapter performs on the messages path are reversed, and only
+  when the client actually sent the source field; every other path, and every
+  fallback-input request, is returned unchanged.
+  """
+  @spec public_validation_param(String.t(), map()) :: String.t()
+  def public_validation_param(param, %{"messages" => [_message | _rest]} = chat_payload)
+      when is_binary(param),
+      do: chat_validation_param(param, chat_payload)
+
+  def public_validation_param(param, _chat_payload), do: param
+
+  defp chat_validation_param("reasoning.effort", %{"reasoning_effort" => _effort}),
+    do: "reasoning_effort"
+
+  defp chat_validation_param("max_output_tokens", %{"max_completion_tokens" => _value}),
+    do: "max_completion_tokens"
+
+  defp chat_validation_param("max_output_tokens", %{"max_tokens" => _value}),
+    do: "max_tokens"
+
+  defp chat_validation_param("text.verbosity", %{"verbosity" => _verbosity}), do: "verbosity"
+
+  defp chat_validation_param("text.format" <> rest, %{"response_format" => %{} = format}),
+    do: response_format_validation_param(rest, format) || "text.format" <> rest
+
+  defp chat_validation_param("tool_choice.name", %{"tool_choice" => %{"type" => type} = choice})
+       when type in ["function", "custom"] and is_map_key(choice, type),
+       do: "tool_choice." <> type <> ".name"
+
+  defp chat_validation_param("tools[" <> _rest = param, %{"tools" => tools})
+       when is_list(tools),
+       do: tool_validation_param(param, tools)
+
+  defp chat_validation_param(param, _chat_payload), do: param
+
+  defp response_format_validation_param("", %{"type" => type})
+       when type in ["json_object", "json_schema", "text"],
+       do: "response_format"
+
+  defp response_format_validation_param(".type", %{"type" => type})
+       when type in ["json_object", "json_schema", "text"],
+       do: "response_format.type"
+
+  defp response_format_validation_param("." <> _field = rest, %{
+         "type" => "json_schema",
+         "json_schema" => %{}
+       }),
+       do: "response_format.json_schema" <> rest
+
+  defp response_format_validation_param(_rest, _format), do: nil
+
+  defp tool_validation_param(param, tools) do
+    with [_match, index, field, rest] <-
+           Regex.run(~r/\Atools\[(0|[1-9][0-9]{0,3})\]\.([A-Za-z_]+)(.*)\z/, param),
+         %{"type" => type} = tool when type in ["function", "custom"] <-
+           Enum.at(tools, String.to_integer(index)),
+         true <- is_map(Map.get(tool, type)) and field in nested_tool_fields(type) do
+      "tools[" <> index <> "]." <> type <> "." <> field <> rest
+    else
+      _other -> param
+    end
+  end
+
+  defp nested_tool_fields("function"), do: ["name", "description", "parameters", "strict"]
+  defp nested_tool_fields("custom"), do: ["name", "description", "format"]
+
   defp put_surface(opts, surface) when is_list(opts), do: Keyword.put(opts, :surface, surface)
   defp put_surface(opts, surface) when is_map(opts), do: Map.put(opts, :surface, surface)
 
@@ -76,8 +145,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         {:error, Error.invalid_request("legacy functions are not translatable", "functions")}
 
       Map.has_key?(payload, "function_call") ->
-        {:error,
-         Error.invalid_request("legacy function_call is not translatable", "function_call")}
+        {:error, Error.invalid_request("legacy function_call is not translatable", "function_call")}
 
       true ->
         :ok
@@ -193,8 +261,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         :ok
 
       [key | _rest] ->
-        {:error,
-         Error.invalid_request("stream_options field is not supported", "stream_options." <> key)}
+        {:error, Error.invalid_request("stream_options field is not supported", "stream_options." <> key)}
     end
   end
 
@@ -449,9 +516,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp assistant_tool_call_items(tool_calls),
     do: Enum.map(tool_calls, &assistant_tool_call_item/1)
 
-  defp assistant_tool_call_item(
-         %{"function" => %{"name" => name, "arguments" => arguments}} = item
-       ) do
+  defp assistant_tool_call_item(%{"function" => %{"name" => name, "arguments" => arguments}} = item) do
     %{
       "type" => "function_call",
       "call_id" => assistant_tool_call_id(item),
@@ -542,8 +607,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     if content
        |> content_parts()
        |> Enum.any?(&marked_text_content_part?/1) do
-      {:error,
-       Error.invalid_request("assistant prompt_cache_breakpoint is not translatable", "input")}
+      {:error, Error.invalid_request("assistant prompt_cache_breakpoint is not translatable", "input")}
     end
   end
 
@@ -551,8 +615,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     if content
        |> content_parts()
        |> Enum.any?(&marked_input_audio_content_part?/1) do
-      {:error,
-       Error.invalid_request("input_audio prompt_cache_breakpoint is not translatable", "input")}
+      {:error, Error.invalid_request("input_audio prompt_cache_breakpoint is not translatable", "input")}
     end
   end
 
@@ -595,9 +658,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp valid_assistant_tool_calls?(tool_calls),
     do: Enum.all?(tool_calls, &valid_assistant_tool_call?/1)
 
-  defp valid_assistant_tool_call?(
-         %{"function" => %{"name" => name, "arguments" => arguments}} = item
-       )
+  defp valid_assistant_tool_call?(%{"function" => %{"name" => name, "arguments" => arguments}} = item)
        when is_binary(name) and name != "" and is_binary(arguments) do
     assistant_tool_call_id(item) != nil
   end
@@ -836,8 +897,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         {:ok, Map.put(acc, "text", %{"format" => Map.put(schema, "type", "json_schema")})}
 
       %{"type" => "json_schema"} ->
-        {:error,
-         Error.invalid_request("response_format json_schema must be an object", "response_format")}
+        {:error, Error.invalid_request("response_format json_schema must be an object", "response_format")}
 
       %{"type" => "text"} ->
         {:ok, Map.put(acc, "text", %{"format" => %{"type" => "text"}})}

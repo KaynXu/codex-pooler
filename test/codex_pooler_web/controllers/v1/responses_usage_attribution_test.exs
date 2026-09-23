@@ -109,8 +109,7 @@ defmodule CodexPoolerWeb.V1.ResponsesUsageAttributionTest do
                    )
                  )
 
-        assert {settlement.input_tokens, settlement.cached_input_tokens, settlement.output_tokens,
-                settlement.reasoning_tokens, settlement.total_tokens} == {123, 17, 45, 6, 168}
+        assert {settlement.input_tokens, settlement.cached_input_tokens, settlement.output_tokens, settlement.reasoning_tokens, settlement.total_tokens} == {123, 17, 45, 6, 168}
 
         # Standard input 106*10, cached input 17*1, standard output 39*20, reasoning 6*30.
         assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(2_037))

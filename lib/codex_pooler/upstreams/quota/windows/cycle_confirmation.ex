@@ -55,6 +55,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows.CycleConfirmation do
 
   @positive_candidate "__quota_positive_cycle_candidate_v1"
 
+  # Two provider observations of the same reset, at least this far apart on
+  # the provider's own clock, anchor the cycle. One positive reading can be a
+  # value the provider is still settling; a second reading that spans a real
+  # provider-side interval, against the same reset and with non-decreasing
+  # usage, is a cycle that is actually running. This is the same span
+  # `Windows.EvidenceStore` requires of a weekly restart candidate
+  # (`@weekly_restart_confirmation_span_seconds`); keep them together.
+  @positive_candidate_confirmation_seconds 3 * 60
+
   @spec observe_positive(map(), AccountQuotaWindow.t(), Evidence.t(), DateTime.t()) :: map()
   def observe_positive(attrs, existing, evidence, timestamp) do
     if evidence.quota_scope == "account" and evidence.window_minutes == 10_080 and
@@ -76,7 +85,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.CycleConfirmation do
       {:ok, provider_at} = RelativeLiveness.provider_observed_at(evidence)
 
       case positive_candidate_age(candidate, evidence, provider_at, timestamp) do
-        {:ok, age} when age >= 180 ->
+        {:ok, age} when age >= @positive_candidate_confirmation_seconds ->
           attrs
           |> Map.update!(:metadata, &Map.delete(&1, @positive_candidate))
           |> confirm(evidence, timestamp)

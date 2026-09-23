@@ -59,8 +59,7 @@ defmodule CodexPooler.Admin.Stats.Tables do
           pool_upstream_assignment_id: single_assignment_id(accounts),
           upstream_identity_id: upstream_identity_id,
           assignment_label: shared_account_value(accounts, :assignment_label),
-          upstream_label:
-            shared_account_value(accounts, :upstream_label) || canonical_account.upstream_label,
+          upstream_label: shared_account_value(accounts, :upstream_label) || canonical_account.upstream_label,
           status: aggregate_account_value(accounts, :assignment_status),
           health_status: aggregate_account_value(accounts, :health_status),
           quota_state: aggregate_account_value(accounts, :state, :mixed),

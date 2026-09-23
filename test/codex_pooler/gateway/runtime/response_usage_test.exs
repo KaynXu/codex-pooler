@@ -352,6 +352,124 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     end
   end
 
+  describe "served model" do
+    test "JSON responses record the model the provider declared" do
+      body =
+        CodexPooler.JSON.encode!(%{
+          "model" => "gpt-5.6-luna",
+          "usage" => %{"input_tokens" => 10, "output_tokens" => 7, "total_tokens" => 17}
+        })
+
+      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} = ResponseUsage.from_json(body)
+    end
+
+    test "JSON responses without a model record none" do
+      body =
+        CodexPooler.JSON.encode!(%{
+          "usage" => %{"input_tokens" => 10, "output_tokens" => 7, "total_tokens" => 17}
+        })
+
+      refute Map.has_key?(ResponseUsage.from_json(body), :served_model)
+    end
+
+    test "stream events take the model from the response object before the root" do
+      event = %{
+        "type" => "response.completed",
+        "model" => "root-model",
+        "response" => %{
+          "model" => "gpt-5.6-luna",
+          "usage" => %{"input_tokens" => 10, "output_tokens" => 7, "total_tokens" => 17}
+        }
+      }
+
+      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} =
+               ResponseUsage.from_stream_event(event)
+
+      assert %{status: "usage_known", served_model: "root-model"} =
+               ResponseUsage.from_stream_event(Map.delete(event, "response") |> Map.put("usage", event["response"]["usage"]))
+    end
+
+    test "a lifecycle event without usage still records the declared model" do
+      assert %{status: "usage_unknown", source: "usage_missing", served_model: "gpt-5.6-luna"} =
+               ResponseUsage.from_stream_event(%{
+                 "type" => "response.created",
+                 "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna"}
+               })
+
+      assert %{status: "usage_unknown", source: "invalid_usage_tokens", served_model: "gpt-5.6-luna"} =
+               ResponseUsage.from_stream_event(%{
+                 "type" => "response.completed",
+                 "response" => %{"model" => "gpt-5.6-luna", "usage" => %{"input_tokens" => "x"}}
+               })
+    end
+
+    test "SSE and websocket bodies keep the first declared model of the stream" do
+      created = %{
+        "type" => "response.created",
+        "response" => %{"id" => "resp_1", "model" => "gpt-5.6-luna", "status" => "in_progress"}
+      }
+
+      completed = %{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_1",
+          "model" => "gpt-6-astra",
+          "usage" => %{"input_tokens" => 10, "output_tokens" => 7, "total_tokens" => 17}
+        }
+      }
+
+      sse = sse_event("response.created", created) <> sse_event("response.completed", completed)
+
+      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} = ResponseUsage.from_sse(sse)
+
+      websocket =
+        CodexPooler.JSON.encode!(created) <> "\n\n" <> CodexPooler.JSON.encode!(completed)
+
+      assert %{status: "usage_known", served_model: "gpt-5.6-luna"} =
+               ResponseUsage.from_websocket_body(websocket)
+
+      interrupted = sse_event("response.created", created)
+
+      assert %{status: "usage_unknown", source: "sse_usage_missing", served_model: "gpt-5.6-luna"} =
+               ResponseUsage.from_sse(interrupted)
+    end
+
+    test "the declared model is bounded, never erased" do
+      assert ResponseUsage.bounded_served_model("  gpt-5.6-luna  ") == "gpt-5.6-luna"
+      assert ResponseUsage.bounded_served_model("ft:gpt-4o:org/proj_1") == "ft:gpt-4o:org/proj_1"
+      assert ResponseUsage.bounded_served_model("") == nil
+      assert ResponseUsage.bounded_served_model("   ") == nil
+      assert ResponseUsage.bounded_served_model(nil) == nil
+      assert ResponseUsage.bounded_served_model(%{"id" => "gpt"}) == nil
+      assert ResponseUsage.bounded_served_model(42) == nil
+
+      overlong = String.duplicate("a", 81)
+      assert "sha256_" <> digest = ResponseUsage.bounded_served_model(overlong)
+      assert String.length(digest) == 12
+      assert digest =~ ~r/\A[0-9a-f]{12}\z/
+
+      assert "sha256_" <> _ = ResponseUsage.bounded_served_model("gpt 5.6 luna")
+      assert "sha256_" <> _ = ResponseUsage.bounded_served_model("gpt\u00e9")
+      assert "sha256_" <> _ = ResponseUsage.bounded_served_model("-leading-dash")
+
+      assert ResponseUsage.bounded_served_model("gpt 5.6 luna") ==
+               ResponseUsage.bounded_served_model("gpt 5.6 luna")
+
+      refute ResponseUsage.bounded_served_model("gpt 5.6 luna") ==
+               ResponseUsage.bounded_served_model("gpt 5.6 sol")
+    end
+
+    test "a non-string model is not a declaration" do
+      refute Map.has_key?(
+               ResponseUsage.from_stream_event(%{
+                 "type" => "response.created",
+                 "response" => %{"model" => %{"id" => "gpt"}}
+               }),
+               :served_model
+             )
+    end
+  end
+
   describe "from_websocket_body/1" do
     test "preserves absent, zero, and positive terminal websocket cache-write counters" do
       for {reported, expected} <- [{:absent, nil}, {0, 0}, {5, 5}] do

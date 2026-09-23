@@ -55,9 +55,7 @@ defmodule CodexPooler.Admin.Stats do
   end
 
   def build_dashboard(_scope, _filters),
-    do:
-      {:error,
-       Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
+    do: {:error, Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
 
   @spec prepare_dashboard(Scope.t(), map() | keyword()) ::
           {:ok, dashboard_preparation()} | {:error, access_error()}
@@ -74,8 +72,7 @@ defmodule CodexPooler.Admin.Stats do
        }}
     else
       {:error, %{code: code}} when code in [:capability_denied, :invalid_request] ->
-        {:error,
-         Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
+        {:error, Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
 
       {:error, _reason} = error ->
         error
@@ -83,9 +80,7 @@ defmodule CodexPooler.Admin.Stats do
   end
 
   def prepare_dashboard(_scope, _filters),
-    do:
-      {:error,
-       Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
+    do: {:error, Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
 
   @spec build_prepared_dashboard(dashboard_preparation()) :: {:ok, dashboard()}
   def build_prepared_dashboard(%{

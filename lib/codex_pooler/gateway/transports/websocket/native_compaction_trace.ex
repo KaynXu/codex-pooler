@@ -218,9 +218,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
       end
     end
 
-    def restore_process_sensitivity(
-          {:observable, generation, monitor, authorization, restorer, _collector, watchdog}
-        )
+    def restore_process_sensitivity({:observable, generation, monitor, authorization, restorer, _collector, watchdog})
         when is_reference(generation) and is_reference(monitor) do
       Process.flag(:sensitive, true)
       Process.demonitor(monitor, [:flush])
@@ -265,8 +263,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
 
             Process.flag(:sensitive, false)
 
-            {:ok,
-             {:observable, generation, monitor, authorization, restorer, collector, watchdog}}
+            {:ok, {:observable, generation, monitor, authorization, restorer, collector, watchdog}}
 
           {:error, reason} ->
             {:error, reason}

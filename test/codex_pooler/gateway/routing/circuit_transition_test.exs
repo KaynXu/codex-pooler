@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
   import ExUnit.CaptureLog
 
@@ -24,7 +25,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
   @circuit_transition_event [:codex_pooler, :gateway, :routing, :circuit, :transition]
 
   setup do
-    old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    old_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -39,7 +40,6 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
     update_circuit_settings(%{"circuit_open_seconds" => 60, "circuit_half_open_probe_limit" => 1})
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, old_config)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -273,18 +273,17 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
              end)
 
     events = capture_transition_events()
+    install_deadlock_trigger!(:once)
 
     assert {:ok, %RoutingCircuitState{status: "open", failure_count: 3}} =
              in_db_observer(fn ->
-               with_deadlock_trigger(:once, fn ->
-                 CircuitState.record_failure(
-                   auth,
-                   model,
-                   assignment,
-                   "proxy_stream",
-                   :upstream_network_error
-                 )
-               end)
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_stream",
+                 :upstream_network_error
+               )
              end)
 
     assert_transition(events, "closed_to_open", "closed", "open", "upstream_network_error")
@@ -308,20 +307,19 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
              end)
 
     events = capture_transition_events()
+    install_deadlock_trigger!(:always)
 
     log =
       capture_log(fn ->
         assert {:ok, :skipped} =
                  in_db_observer(fn ->
-                   with_deadlock_trigger(:always, fn ->
-                     CircuitState.record_failure(
-                       auth,
-                       model,
-                       assignment,
-                       "proxy_stream",
-                       :upstream_network_error
-                     )
-                   end)
+                   CircuitState.record_failure(
+                     auth,
+                     model,
+                     assignment,
+                     "proxy_stream",
+                     :upstream_network_error
+                   )
                  end)
       end)
 
@@ -457,15 +455,20 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
     assert metadata.route_class in ["proxy_websocket", "proxy_stream"]
   end
 
-  defp with_deadlock_trigger(mode, callback) when mode in [:once, :always] do
-    SQL.query!(
-      Repo,
-      "DROP TRIGGER IF EXISTS routing_circuit_transition_deadlock ON routing_circuit_states",
-      []
-    )
+  # Must be called from the test process, before the linked task that exercises the trigger.
+  # The removal is registered in ExUnit's own teardown, never scoped in a `try/after` around
+  # the callback: `in_db_observer/1` awaits a linked task, so a `Task.await` timeout or an
+  # ExUnit timeout kills that task with an untrappable exit and a scoped `after` inside it
+  # never runs. The trigger name is fixed and the table is shared, so a leaked one raises
+  # `40P01` on every later update of `routing_circuit_states` in any file of the same run.
+  defp install_deadlock_trigger!(mode) when mode in [:once, :always] do
+    register_unboxed_cleanup!(&drop_deadlock_trigger!/0)
+    in_db_observer(fn -> create_deadlock_trigger!(mode) end)
+    :ok
+  end
 
-    SQL.query!(Repo, "DROP FUNCTION IF EXISTS routing_circuit_transition_deadlock()", [])
-    SQL.query!(Repo, "DROP SEQUENCE IF EXISTS routing_circuit_transition_deadlock_seq", [])
+  defp create_deadlock_trigger!(mode) do
+    drop_deadlock_trigger!()
 
     if mode == :once do
       SQL.query!(Repo, "CREATE SEQUENCE routing_circuit_transition_deadlock_seq START 1", [])
@@ -503,19 +506,18 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
       """,
       []
     )
+  end
 
-    try do
-      callback.()
-    after
-      SQL.query!(
-        Repo,
-        "DROP TRIGGER IF EXISTS routing_circuit_transition_deadlock ON routing_circuit_states",
-        []
-      )
+  defp drop_deadlock_trigger! do
+    SQL.query!(
+      Repo,
+      "DROP TRIGGER IF EXISTS routing_circuit_transition_deadlock ON routing_circuit_states",
+      []
+    )
 
-      SQL.query!(Repo, "DROP FUNCTION IF EXISTS routing_circuit_transition_deadlock()", [])
-      SQL.query!(Repo, "DROP SEQUENCE IF EXISTS routing_circuit_transition_deadlock_seq", [])
-    end
+    SQL.query!(Repo, "DROP FUNCTION IF EXISTS routing_circuit_transition_deadlock()", [])
+    SQL.query!(Repo, "DROP SEQUENCE IF EXISTS routing_circuit_transition_deadlock_seq", [])
+    :ok
   end
 
   defp routing_fixture do
@@ -590,8 +592,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
 
   defp cleanup_fixture!(fixture) do
     Sandbox.unboxed_run(Repo, fn ->
-      pool = Repo.get(Pool, fixture.auth.pool.id)
-      if pool, do: Repo.delete!(pool)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.auth.pool.id])
 
       Repo.delete_all(
         from identity in UpstreamIdentity,

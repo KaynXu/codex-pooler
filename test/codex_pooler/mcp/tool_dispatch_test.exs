@@ -141,12 +141,10 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
                handler.(%{"id" => 123}, %{auth: auth})
     end
 
-    assert {:error,
-            %{code: :tool_execution_failed, message: "MCP authenticated actor is unavailable"}} =
+    assert {:error, %{code: :tool_execution_failed, message: "MCP authenticated actor is unavailable"}} =
              PoolMetadata.get_pool(%{"selector" => "missing"}, %{})
 
-    assert {:error,
-            %{code: :tool_execution_failed, message: "MCP authenticated actor is unavailable"}} =
+    assert {:error, %{code: :tool_execution_failed, message: "MCP authenticated actor is unavailable"}} =
              LogMetadata.get_request_log(%{"id" => Ecto.UUID.generate()}, %{})
   end
 
@@ -409,8 +407,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     crashing_tool = %{
       name: "codex_pooler_crashing_status",
       title: "Crashing status",
-      description:
-        "Use when testing. Raises while dispatching. Never returns secrets. Filters/limits: none.",
+      description: "Use when testing. Raises while dispatching. Never returns secrets. Filters/limits: none.",
       input_schema: %{
         "type" => "object",
         "properties" => %{},
@@ -454,8 +451,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     bad_tool = %{
       name: "codex_pooler_bad_status",
       title: "Bad status",
-      description:
-        "Use when testing. Returns invalid output. Never returns secrets. Filters/limits: none.",
+      description: "Use when testing. Returns invalid output. Never returns secrets. Filters/limits: none.",
       input_schema: %{
         "type" => "object",
         "properties" => %{},
@@ -488,8 +484,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     enum_tool = %{
       name: "codex_pooler_enum_status",
       title: "Enum status",
-      description:
-        "Use when testing. Returns an invalid enum value. Never returns secrets. Filters/limits: none.",
+      description: "Use when testing. Returns an invalid enum value. Never returns secrets. Filters/limits: none.",
       input_schema: %{
         "type" => "object",
         "properties" => %{},
@@ -529,8 +524,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     bad_tool = %{
       name: "codex_pooler_bad_nullable_status",
       title: "Bad nullable status",
-      description:
-        "Use when testing. Returns invalid null output. Never returns secrets. Filters/limits: none.",
+      description: "Use when testing. Returns invalid null output. Never returns secrets. Filters/limits: none.",
       input_schema: %{
         "type" => "object",
         "properties" => %{},

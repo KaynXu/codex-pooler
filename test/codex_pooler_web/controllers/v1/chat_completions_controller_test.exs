@@ -121,6 +121,46 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     end
   end
 
+  test "POST /v1/chat/completions rewrites ultra to the highest catalog level and forwards none unchanged",
+       %{conn: conn} do
+    cases = [
+      {"ultra", "xhigh", "ultra_to_xhigh"},
+      {"none", "none", nil}
+    ]
+
+    for {requested_effort, expected_effort, expected_rewrite} <- cases do
+      upstream = start_upstream(completed_chat_upstream())
+
+      setup =
+        gateway_setup(upstream,
+          model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+        )
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/v1/chat/completions",
+          Map.put(chat_payload(setup), "reasoning_effort", requested_effort)
+        )
+
+      assert %{"id" => "resp_reasoning_policy_chat"} = json_response(response, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["reasoning"]["effort"] == expected_effort
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert get_in(attempt.response_metadata, ["reasoning", "requested_effort"]) ==
+               requested_effort
+
+      assert get_in(attempt.response_metadata, ["reasoning", "effective_effort"]) ==
+               expected_effort
+
+      assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == expected_rewrite
+    end
+  end
+
   test "POST /v1/chat/completions non-streaming returns OpenAI chat shape", %{conn: conn} do
     upstream =
       start_upstream(
@@ -217,9 +257,87 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
 
-    refute inspect(
-             {request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)}
-           ) =~ "compute_units"
+    refute inspect({request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)}) =~ "compute_units"
+  end
+
+  test "POST /v1/chat/completions derives the Codex routing hint from the effective model and tier",
+       %{conn: conn} do
+    upstream_model = "provider-chat-routing-hint-model"
+
+    upstream =
+      start_upstream(
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_routing_hint_header (header format; replies invented)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            headers: [
+              required: %{"x-codex-routing-hint" => "model=#{upstream_model};tier=priority"}
+            ],
+            json: [
+              valid: true,
+              equals: %{"model" => upstream_model, "service_tier" => "priority"}
+            ],
+            respond: chat_routing_hint_completed_response("resp_chat_routing_hint_priority")
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            path: "/backend-api/codex/responses",
+            headers: [required: %{"x-codex-routing-hint" => "model=#{upstream_model}"}],
+            json: [valid: true, forbidden: ["service_tier"]],
+            respond: chat_routing_hint_completed_response("resp_chat_routing_hint_default")
+          )
+        ])
+      )
+
+    setup =
+      gateway_setup(upstream,
+        upstream_model_id: upstream_model,
+        model_metadata: chat_priority_tier_metadata()
+      )
+
+    priority =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=forged")
+      |> post("/v1/chat/completions", Map.put(chat_payload(setup), "service_tier", "priority"))
+
+    assert %{"id" => "resp_chat_routing_hint_priority"} = json_response(priority, 200)
+
+    default =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged;tier=priority")
+      |> post("/v1/chat/completions", chat_payload(setup))
+
+    assert %{"id" => "resp_chat_routing_hint_default"} = json_response(default, 200)
+    assert :ok = FakeUpstream.verify!(upstream)
+    refute inspect(FakeUpstream.requests(upstream)) =~ "forged"
+  end
+
+  defp chat_priority_tier_metadata do
+    %{"upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}}
+  end
+
+  defp chat_routing_hint_completed_response(id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => id,
+           "status" => "completed",
+           "output" => [
+             %{
+               "type" => "message",
+               "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
+             }
+           ],
+           "usage" => %{"input_tokens" => 4, "output_tokens" => 6, "total_tokens" => 10}
+         }
+       }}
+    ])
   end
 
   @tag :external_issues_229_231
@@ -354,14 +472,14 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         %{
           "type" => "function",
           "function" => %{
-            "name" => "issue241_chat_tool",
+            "name" => "responses_tool_chat_tool",
             "parameters" => %{"type" => "object", "properties" => %{}}
           }
         }
       ])
       |> Map.put("tool_choice", %{
         "type" => "function",
-        "function" => %{"name" => "issue241_chat_tool"}
+        "function" => %{"name" => "responses_tool_chat_tool"}
       })
 
     response =
@@ -563,10 +681,8 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
              "type" => "response.created",
              "response" => %{"id" => "resp_chat_delta_collect", "status" => "in_progress"}
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "delta"}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => " answer"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "delta"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => " answer"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -709,8 +825,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
                "service_tier" => "fast"
              }
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "streamed answer"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "streamed answer"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -1242,8 +1357,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "partial chat text"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial chat text"}},
           {"response.failed",
            %{
              "type" => "response.failed",
@@ -1805,8 +1919,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
              "type" => "response.created",
              "response" => %{"id" => "resp_fallback_chat_stream", "status" => "in_progress"}
            }},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => "synthetic fallback answer"}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "synthetic fallback answer"}},
           {"response.completed",
            %{
              "type" => "response.completed",
@@ -1986,8 +2099,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
            }
          ]
        }, "invalid_request", "input", "remote MCP tools are not supported"},
-      {%{"input" => "synthetic fallback input", "additional_tools" => []},
-       "unsupported_parameter", "additional_tools", "Unsupported parameter: additional_tools"}
+      {%{"input" => "synthetic fallback input", "additional_tools" => []}, "unsupported_parameter", "additional_tools", "Unsupported parameter: additional_tools"}
     ]
 
     Enum.each(invalid_cases, fn {payload_update, expected_code, expected_param, expected_message} ->
@@ -2159,11 +2271,8 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     setup = gateway_setup(upstream)
 
     invalid_cases = [
-      {input_audio_part("ogg", malformed_data),
-       public_audio_error("input_audio data must be base64"), [malformed_data]},
-      {input_audio_part("flac", flac_data),
-       public_audio_error("message content part is not translatable"),
-       [flac_source, flac_data, "flac"]}
+      {input_audio_part("ogg", malformed_data), public_audio_error("input_audio data must be base64"), [malformed_data]},
+      {input_audio_part("flac", flac_data), public_audio_error("message content part is not translatable"), [flac_source, flac_data, "flac"]}
     ]
 
     Enum.each(invalid_cases, fn {audio_part, expected_error, forbidden_values} ->

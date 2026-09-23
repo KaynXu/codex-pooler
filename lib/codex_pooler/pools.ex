@@ -671,8 +671,7 @@ defmodule CodexPooler.Pools do
   defp ensure_confirmation_slug(%Pool{slug: slug}, slug), do: :ok
 
   defp ensure_confirmation_slug(%Pool{}, _confirmation_slug),
-    do:
-      {:error, access_error(:confirmation_mismatch, "confirmation slug did not match pool slug")}
+    do: {:error, access_error(:confirmation_mismatch, "confirmation slug did not match pool slug")}
 
   defp maybe_put(map, _key, nil), do: map
 

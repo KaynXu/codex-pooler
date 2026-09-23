@@ -1,6 +1,7 @@
 defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
   @moduledoc false
 
+  alias CodexPooler.Accounting.Metadata, as: AccountingMetadata
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Quotas.Evidence.CodexParsers.{RateLimitReachedType, ResetTimes, WindowKinds}
   alias CodexPooler.Quotas.Evidence.Descriptors
@@ -159,11 +160,16 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
 
   defp header_limit_name("codex", _header_map), do: nil
 
+  # A limit name becomes the window's model id, display label and identity
+  # part (`raw_limit_name`), so it takes the model identifier bound: an ASCII
+  # identifier of at most 80 bytes stays cleartext, anything else is
+  # fingerprinted rather than stored verbatim, a blank value is absent
+  # (findings#238).
   defp header_limit_name(limit_id, header_map) do
     limit_id
     |> header_prefix("limit")
     |> String.replace_suffix("-limit", "-limit-name")
-    |> then(&present_string(header_map[&1]))
+    |> then(&AccountingMetadata.bounded_model_identifier(header_map[&1]))
   end
 
   defp normalize_many(attrs_list, observed_at) do
@@ -206,13 +212,6 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
       normalized -> normalized
     end
   end
-
-  defp present_string(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: value
-  end
-
-  defp present_string(_value), do: nil
 
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(value) when is_float(value), do: trunc(value)

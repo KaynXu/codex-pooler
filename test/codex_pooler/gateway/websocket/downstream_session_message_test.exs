@@ -90,8 +90,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionMessageTest do
     end
 
     failed =
-      {:websocket_owner_handoff_failed, "corr-native-task", 3, owner_turn_id, self(), control_ref,
-       :owner_drained}
+      {:websocket_owner_handoff_failed, "corr-native-task", 3, owner_turn_id, self(), control_ref, :owner_drained}
 
     assert DownstreamSession.accept_handoff_message(failed, state) ==
              {:ok, {:failed, :owner_drained}}

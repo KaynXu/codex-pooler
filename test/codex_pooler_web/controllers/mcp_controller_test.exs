@@ -493,8 +493,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
 
       _turn =
         debug_turn_fixture(request, %{
-          session:
-            debug_session_fixture(pool, api_key, assignment, "wire-session-key-example-privacy"),
+          session: debug_session_fixture(pool, api_key, assignment, "wire-session-key-example-privacy"),
           status: "failed",
           error_code: "turn_owner_drained",
           final_attempt_id: attempt.id,
@@ -817,16 +816,11 @@ defmodule CodexPoolerWeb.McpControllerTest do
       raw_token = enabled_mcp_token!(user)
 
       cases = [
-        {"wire-empty-request-logs", "codex_pooler_list_request_logs",
-         %{"limit" => 10, "offset" => 10_000}, "nextOffset"},
-        {"wire-empty-audit-logs", "codex_pooler_list_audit_logs",
-         %{"limit" => 10, "offset" => 10_000}, "nextOffset"},
-        {"wire-missing-operator", "codex_pooler_get_operator",
-         %{"selector" => "missing-operator-selector"}, "item"},
-        {"wire-missing-invite", "codex_pooler_get_invite",
-         %{"selector" => "missing-invite-selector"}, "item"},
-        {"wire-missing-quota", "codex_pooler_get_upstream_quota",
-         %{"selector" => "missing-quota-selector"}, "item"}
+        {"wire-empty-request-logs", "codex_pooler_list_request_logs", %{"limit" => 10, "offset" => 10_000}, "nextOffset"},
+        {"wire-empty-audit-logs", "codex_pooler_list_audit_logs", %{"limit" => 10, "offset" => 10_000}, "nextOffset"},
+        {"wire-missing-operator", "codex_pooler_get_operator", %{"selector" => "missing-operator-selector"}, "item"},
+        {"wire-missing-invite", "codex_pooler_get_invite", %{"selector" => "missing-invite-selector"}, "item"},
+        {"wire-missing-quota", "codex_pooler_get_upstream_quota", %{"selector" => "missing-quota-selector"}, "item"}
       ]
 
       for {id, tool_name, arguments, null_field} <- cases do

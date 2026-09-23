@@ -89,9 +89,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
           %{"full_history_compaction?" => true}
         ] do
       assert {:error, {:invalid_field, :payload}} =
-               WebsocketOwnerRequestV6.new(
-                 Map.put(attrs(), :payload, CodexPooler.JSON.encode!(payload))
-               )
+               WebsocketOwnerRequestV6.new(Map.put(attrs(), :payload, CodexPooler.JSON.encode!(payload)))
     end
   end
 
@@ -105,9 +103,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
       body = Map.put(payload(), "input", [item, %{"type" => "compaction_trigger"}])
 
       assert {:ok, _request} =
-               WebsocketOwnerRequestV6.new(
-                 Map.put(attrs(), :payload, CodexPooler.JSON.encode!(body))
-               )
+               WebsocketOwnerRequestV6.new(Map.put(attrs(), :payload, CodexPooler.JSON.encode!(body)))
     end
   end
 
@@ -161,9 +157,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
         native_codex_turn_metadata: compaction_metadata()
       )
       |> RequestOptions.put_transport(websocket_delivery_mode: :collect_full_history)
-      |> RequestOptions.put_runtime_context(
-        compaction_retry_submit_hold: CompactionRetrySubmitHold.new()
-      )
+      |> RequestOptions.put_runtime_context(compaction_retry_submit_hold: CompactionRetrySubmitHold.new())
       |> RequestOptions.put_model_serving_mode(%{
         configured_mode: "full",
         effective_mode: "full",
@@ -186,8 +180,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
 
     assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
 
-    assert_received {:retry_owner_rpc, :remote_submit_request_v7,
-                     [_session_id, _downstream, %WebsocketOwnerRequestV7{} = envelope]}
+    assert_received {:retry_owner_rpc, :remote_submit_request_v7, [_session_id, _downstream, %WebsocketOwnerRequestV7{} = envelope]}
 
     assert envelope.client_retry_dispatch_authority == authority
     assert envelope.native_compaction_metadata == compaction_metadata()
@@ -243,15 +236,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
     session = assert_full_history_retry_dispatch(setup, successor, attempt, authority)
 
     assert {:error, {:invalid_field, :client_retry_dispatch_authority}} =
-             WebsocketOwnerRequestV7.new(
-               Map.put(input, :client_retry_dispatch_authority, Map.from_struct(authority))
-             )
+             WebsocketOwnerRequestV7.new(Map.put(input, :client_retry_dispatch_authority, Map.from_struct(authority)))
 
     assert {:error, {:invalid_field, :client_retry_dispatch_authority}} =
              WebsocketOwnerRequestV7.new(Map.delete(input, :client_retry_dispatch_authority))
 
-    assert {:error,
-            {:unknown_fields, [:client_retry_dispatch_authority, :compaction_retry_submit_hold]}} =
+    assert {:error, {:unknown_fields, [:client_retry_dispatch_authority, :compaction_retry_submit_hold]}} =
              WebsocketOwnerRequestV6.new(Map.put(input, :version, 6))
 
     downstream = %{pid: self(), epoch: 1, correlation_id: "retry-old-owner"}
@@ -276,8 +266,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
           %{envelope | upstream_identity_id: Ecto.UUID.generate()},
           put_in(envelope.client_retry_dispatch_authority.link_id, Ecto.UUID.generate())
         ] do
-      assert {:error,
-              {:invalid_owner_request, {:invalid_field, :client_retry_dispatch_authority}}} =
+      assert {:error, {:invalid_owner_request, {:invalid_field, :client_retry_dispatch_authority}}} =
                WebsocketRequestCallbacks.materialize(invalid, nil)
     end
 
@@ -472,9 +461,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerFullHistoryContractTest d
           }
         ] do
       assert {:error, {:invalid_field, :native_compaction_metadata}} =
-               WebsocketOwnerRequestV6.new(
-                 Map.put(attrs(), :native_compaction_metadata, metadata)
-               )
+               WebsocketOwnerRequestV6.new(Map.put(attrs(), :native_compaction_metadata, metadata))
     end
   end
 

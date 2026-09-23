@@ -198,9 +198,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
 
     assert Upstreams.get_upstream_identity_by_chatgpt_account(skipped.identity.chatgpt_account_id)
 
-    assert Upstreams.get_upstream_identity_by_chatgpt_account(
-             imported.identity.chatgpt_account_id
-           )
+    assert Upstreams.get_upstream_identity_by_chatgpt_account(imported.identity.chatgpt_account_id)
   end
 
   test "dry runs full validation without writes" do
@@ -212,9 +210,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     assert {:ok, bundle, _receipt} = UpstreamAccountBundle.export_bundle(source_pool, @password)
 
     assert {:ok, %{dry_run: true, valid: 1, imported: 0}} =
-             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password,
-               dry_run: true
-             )
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, dry_run: true)
 
     assert Upstreams.list_active_pool_assignments(target_pool) == []
     refute inspect(bundle) =~ source.identity.account_email
@@ -231,6 +227,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     for dry_run? <- [false, true] do
       handler = {__MODULE__, :empty_bundle_query, dry_run?, System.unique_integer([:positive])}
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler) end)
+
       :ok =
         :telemetry.attach(
           handler,
@@ -243,9 +242,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
 
       try do
         assert {:ok, %{account_count: 0, valid: 0, imported: 0, dry_run: ^dry_run?}} =
-                 UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password,
-                   dry_run: dry_run?
-                 )
+                 UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, dry_run: dry_run?)
 
         refute_received :bundle_repo_query
       after
@@ -272,9 +269,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
       before = persistence_counts()
 
       assert {:error, %{code: :bundle_import_failed} = error} =
-               UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password,
-                 dry_run: dry_run?
-               )
+               UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, dry_run: dry_run?)
 
       assert persistence_counts() == before
       assert Upstreams.list_active_pool_assignments(target_pool) == []
@@ -392,9 +387,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
       before = persistence_counts()
 
       assert {:error, %{code: :bundle_import_failed} = error} =
-               UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password,
-                 dry_run: dry_run?
-               )
+               UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password, dry_run: dry_run?)
 
       assert persistence_counts() == before
       assert Upstreams.list_active_pool_assignments(target_pool) == []
@@ -568,9 +561,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
              UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
 
     assert {:ok, %{imported: 0, dry_run: true}} =
-             UpstreamAccountBundle.import_bundle(bundle, dry_run_pool, scope, @password,
-               dry_run: true
-             )
+             UpstreamAccountBundle.import_bundle(bundle, dry_run_pool, scope, @password, dry_run: true)
 
     assert Repo.aggregate(Oban.Job, :count) == before_jobs
     assert Repo.aggregate(Request, :count) == before_requests
@@ -761,6 +752,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     assert persistence_counts() == before
   end
 
+  @tag slow: "exercises real encryption and storage rejection across credential provenance variants"
   test "encrypted v2 import rejects missing, forged, and malformed credential provenance before writes" do
     source_pool = pool_fixture()
     _source = account_fixture(source_pool)
@@ -794,12 +786,9 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
 
   test "strict CLI parsers reject duplicate and contradictory destructive options" do
     duplicate_cases = [
-      {&UpstreamAccountBundle.parse_export_args/1,
-       ["--pool", "one", "--pool", "two", "--out", "bundle.bin"]},
-      {&UpstreamAccountBundle.parse_export_args/1,
-       ["--pool", "one", "--out", "a.bin", "--out", "b.bin"]},
-      {&UpstreamAccountBundle.parse_import_args/1,
-       ["bundle.bin", "--pool", "one", "--pool", "two"]},
+      {&UpstreamAccountBundle.parse_export_args/1, ["--pool", "one", "--pool", "two", "--out", "bundle.bin"]},
+      {&UpstreamAccountBundle.parse_export_args/1, ["--pool", "one", "--out", "a.bin", "--out", "b.bin"]},
+      {&UpstreamAccountBundle.parse_import_args/1, ["bundle.bin", "--pool", "one", "--pool", "two"]},
       {&UpstreamAccountBundle.parse_import_args/1,
        [
          "bundle.bin",
@@ -810,10 +799,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
          "--owner-email",
          "b@example.com"
        ]},
-      {&UpstreamAccountBundle.parse_import_args/1,
-       ["bundle.bin", "--pool", "one", "--dry-run", "--dry-run"]},
-      {&UpstreamAccountBundle.parse_import_args/1,
-       ["bundle.bin", "--pool", "one", "--dry-run", "--no-dry-run"]}
+      {&UpstreamAccountBundle.parse_import_args/1, ["bundle.bin", "--pool", "one", "--dry-run", "--dry-run"]},
+      {&UpstreamAccountBundle.parse_import_args/1, ["bundle.bin", "--pool", "one", "--dry-run", "--no-dry-run"]}
     ]
 
     for {parser, args} <- duplicate_cases do
@@ -976,9 +963,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     identity =
       fixture.identity
       |> Ecto.Changeset.change()
-      |> UpstreamIdentity.put_credential_provenance(
-        Keyword.get(opts, :credential_provenance, :codex_chatgpt)
-      )
+      |> UpstreamIdentity.put_credential_provenance(Keyword.get(opts, :credential_provenance, :codex_chatgpt))
       |> Repo.update!()
 
     fixture
@@ -1059,9 +1044,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
   defp delete_export_source!(source) do
     Repo.delete!(Repo.reload!(source.assignment))
 
-    Repo.delete_all(
-      from secret in EncryptedSecret, where: secret.upstream_identity_id == ^source.identity.id
-    )
+    Repo.delete_all(from secret in EncryptedSecret, where: secret.upstream_identity_id == ^source.identity.id)
 
     Repo.delete!(Repo.reload!(source.identity))
   end
@@ -1180,8 +1163,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
   defp persistence_counts do
     %{
       identities: Repo.aggregate(UpstreamIdentity, :count),
-      active_secrets:
-        Repo.aggregate(from(secret in EncryptedSecret, where: secret.status == "active"), :count),
+      active_secrets: Repo.aggregate(from(secret in EncryptedSecret, where: secret.status == "active"), :count),
       superseded_secrets:
         Repo.aggregate(
           from(secret in EncryptedSecret, where: secret.status == "superseded"),

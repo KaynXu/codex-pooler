@@ -149,9 +149,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
       pool_id
       |> account_reconciliation_args(assignment_id, opts)
       |> maybe_put_recovery_fence(assignment_or_id)
-      |> AccountReconciliationWorker.new(
-        Options.job_options(opts, unique_keys: [:pool_id, :pool_upstream_assignment_id])
-      )
+      |> AccountReconciliationWorker.new(Options.job_options(opts, unique_keys: [:pool_id, :pool_upstream_assignment_id]))
       |> Oban.insert()
       |> tap_job_status_event(pool_id, "account_reconciliation", "scheduled")
     end
@@ -164,9 +162,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
         "pool_upstream_assignment_id" => assignment_id,
         "trigger_kind" => Keyword.get(opts, :trigger_kind, "admin_manual")
       }
-      |> SavedResetRedemptionWorker.new(
-        Options.job_options(opts, unique_keys: [:pool_upstream_assignment_id])
-      )
+      |> SavedResetRedemptionWorker.new(Options.job_options(opts, unique_keys: [:pool_upstream_assignment_id]))
       |> Oban.insert()
       |> tap_saved_reset_redemption_enqueue(assignment_or_id)
     end

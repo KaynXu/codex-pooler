@@ -283,8 +283,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
                websocket_owner_forwarder_opts: Keyword.put(opts, :timeout, 25)
              })
 
-    assert_receive {:websocket_owner_harness_node_call,
-                    %{function: :remote_attach_downstream, timeout: 25}}
+    assert_receive {:websocket_owner_harness_node_call, %{function: :remote_attach_downstream, timeout: 25}}
 
     assert active_owner_lease(session.id).owner_instance_id == remote_node_string
     assert FakeUpstream.count(upstream) == 0
@@ -507,11 +506,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
                opts
              )
 
-    assert_receive {:websocket_owner_harness_app_node_check,
-                    %{node: ^remote_worker, role: "worker", app_node?: false}}
+    assert_receive {:websocket_owner_harness_app_node_check, %{node: ^remote_worker, role: "worker", app_node?: false}}
 
-    assert_receive {:websocket_owner_harness_app_node_check,
-                    %{node: ^remote_scheduler, role: "scheduler", app_node?: false}}
+    assert_receive {:websocket_owner_harness_app_node_check, %{node: ^remote_scheduler, role: "scheduler", app_node?: false}}
 
     refute_received {:websocket_owner_harness_node_call, %{node: ^remote_worker}}
     refute_received {:websocket_owner_harness_node_call, %{node: ^remote_scheduler}}
@@ -525,7 +522,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    {:ok, state} = owner_socket(auth, "ws-owner-dispatch-takeover", "dispatch-takeover")
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-dispatch-takeover", "dispatch-takeover",
+        forwarded_headers: [
+          {"session-id", "owner-takeover-session"},
+          {"thread-id", "owner-takeover-thread"},
+          {"x-client-request-id", "owner-takeover-thread"}
+        ]
+      )
+
     session = state.codex_session
     old_lease = active_owner_lease(session.id)
 
@@ -555,6 +560,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.TakeoverTe
 
       assert Map.new(request.headers)["x-codex-routing-hint"] ==
                "model=#{setup.model.upstream_model_id}"
+
+      assert %{
+               "session-id" => "owner-takeover-session",
+               "thread-id" => "owner-takeover-thread",
+               "x-client-request-id" => "owner-takeover-thread"
+             } =
+               Map.take(Map.new(request.headers), [
+                 "session-id",
+                 "thread-id",
+                 "x-client-request-id"
+               ])
 
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.status == "succeeded"

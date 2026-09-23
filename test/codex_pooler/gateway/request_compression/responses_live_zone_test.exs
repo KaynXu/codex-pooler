@@ -108,8 +108,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
               "type" => "function_call",
               "call_id" => call_id,
               "name" => "arbitrary_tool_#{index}",
-              "arguments" =>
-                CodexPooler.JSON.encode!(%{command_key => "cat src/example-#{index}.ex"})
+              "arguments" => CodexPooler.JSON.encode!(%{command_key => "cat src/example-#{index}.ex"})
             },
             %{"type" => "function_call_output", "call_id" => call_id, "output" => output}
           ]
@@ -126,18 +125,15 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
     @tag :command_read_protection
     test "protects native reads resolved by call id id or converging aliases" do
       scenarios = [
-        {%{"call_id" => "call_native_only"},
-         %{"type" => "local_shell_call_output", "call_id" => "call_native_only"}},
-        {%{"id" => "shell_native_only"},
-         %{"type" => "local_shell_call_output", "id" => "shell_native_only"}},
+        {%{"call_id" => "call_native_only"}, %{"type" => "local_shell_call_output", "call_id" => "call_native_only"}},
+        {%{"id" => "shell_native_only"}, %{"type" => "local_shell_call_output", "id" => "shell_native_only"}},
         {%{"call_id" => "call_native_both", "id" => "shell_native_both"},
          %{
            "type" => "local_shell_call_output",
            "call_id" => "call_native_both",
            "id" => "shell_native_both"
          }},
-        {%{"call_id" => "call_native_function_output", "id" => "shell_native_function_output"},
-         %{"type" => "function_call_output", "call_id" => "call_native_function_output"}}
+        {%{"call_id" => "call_native_function_output", "id" => "shell_native_function_output"}, %{"type" => "function_call_output", "call_id" => "call_native_function_output"}}
       ]
 
       for {producer_ids, output_fields} <- scenarios do

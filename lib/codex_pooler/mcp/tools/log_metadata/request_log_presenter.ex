@@ -18,6 +18,9 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @rejection_supported_values_states ~w(present none unparseable)
+  @rejection_supported_values_max 12
+  @rejection_supported_value_max_bytes 32
 
   @list_debug_keys ~w(continuity failure attempt)
   @detail_debug_keys ~w(continuity terminal_state turn attempts)
@@ -34,6 +37,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         api_key_display_name: log.api_key_display_name,
         api_key_prefix: log.api_key_prefix,
         requested_model: log.requested_model,
+        upstream_model: log.upstream_model,
+        served_model: log.served_model,
         transport: log.transport,
         status: log.status,
         usage_status: log.usage_status,
@@ -126,6 +131,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       "endpoint",
       "status",
       "requested_model",
+      "served_model",
       "transport",
       "usage_status",
       "latency_ms"
@@ -141,6 +147,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> text_row()
     |> maybe_put_value("response", Map.get(item, "response_status_code"))
     |> Map.put("upstream", upstream_text(item))
+    |> maybe_put_value("upstream_model", Map.get(item, "upstream_model"))
     |> maybe_put_terminal_diagnostics_text(Map.get(item, "debug"))
     |> maybe_put_rejection_metadata_text(Map.get(item, "debug"))
     |> maybe_put_compaction_bridge_text(Map.get(item, "compaction_bridge"))
@@ -157,6 +164,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       {"endpoint", "route"},
       {"status", "status"},
       {"requested_model", "model"},
+      {"served_model", "served_model"},
       {"transport", "transport"},
       {"usage_status", "usage"},
       {"latency_ms", "latency_ms"},
@@ -182,14 +190,17 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       [
         {"response", "response"},
         {"upstream", "upstream", required: true},
+        {"upstream_model", "upstream_model"},
         {"upstream_error_code", "upstream_error_code"},
         {"stream_terminal_type", "stream_terminal_type"},
+        {"compaction_invalid_reason", "compaction_invalid_reason"},
         {"upstream_error_param", "upstream_error_param"},
         {"rejection_error_code", "rejection_error_code"},
         {"rejection_error_type", "rejection_error_type"},
         {"rejection_error_param", "rejection_error_param"},
         {"rejection_message_present", "rejection_message_present"},
         {"rejection_message_bytes", "rejection_message_bytes"},
+        {"rejection_supported_values_state", "rejection_supported_values_state"},
         {"compaction_bridge_applied", "compaction_bridge_applied"},
         {"compaction_result_transport", "compaction_result_transport"},
         {"metadata_summary", "metadata"}
@@ -314,6 +325,10 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
           valid_terminal_identifier(attempt["stream_terminal_type"])
         )
         |> maybe_put_value(
+          "compaction_invalid_reason",
+          valid_terminal_identifier(attempt["compaction_invalid_reason"])
+        )
+        |> maybe_put_value(
           "upstream_error_param",
           valid_upstream_error_param(attempt["upstream_error_param"])
         )
@@ -375,7 +390,38 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       valid_rejection_param(metadata["rejection_error_param"])
     )
     |> maybe_put_valid_rejection_message(metadata)
+    |> maybe_put_valid_supported_values(metadata)
   end
+
+  # `state` and the list stay separate fields so a provider that named no
+  # alternatives, a list this parser refused, and a rejection the field never
+  # applied to remain three readable answers (codex-pooler-findings#177).
+  defp maybe_put_valid_supported_values(
+         metadata,
+         %{"rejection_supported_values_state" => state} = attempt
+       )
+       when state in @rejection_supported_values_states do
+    metadata
+    |> Map.put("rejection_supported_values_state", state)
+    |> maybe_put_value(
+      "rejection_supported_values",
+      valid_supported_values(attempt["rejection_supported_values"])
+    )
+  end
+
+  defp maybe_put_valid_supported_values(metadata, _attempt), do: metadata
+
+  defp valid_supported_values(values) when is_list(values) do
+    valid = Enum.filter(values, &valid_rejection_token/1)
+
+    if valid != [] and length(valid) == length(values) and
+         length(valid) <= @rejection_supported_values_max and
+         Enum.all?(valid, &(byte_size(&1) <= @rejection_supported_value_max_bytes)),
+       do: valid,
+       else: nil
+  end
+
+  defp valid_supported_values(_values), do: nil
 
   defp valid_rejection_token(value) when is_binary(value) do
     if byte_size(value) in 1..@rejection_token_max_bytes and
@@ -551,6 +597,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       rejection_error_param
       rejection_message_present
       rejection_message_bytes
+      rejection_supported_values
+      rejection_supported_values_state
     )
 
     attempt =
@@ -563,6 +611,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       attempt
       |> put_or_delete_terminal_identifier("upstream_error_code")
       |> put_or_delete_terminal_identifier("stream_terminal_type")
+      |> put_or_delete_terminal_identifier("compaction_invalid_reason")
 
     attempt
     |> Map.drop(rejection_keys)

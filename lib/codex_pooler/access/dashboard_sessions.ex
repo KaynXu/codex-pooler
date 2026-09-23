@@ -200,9 +200,7 @@ defmodule CodexPooler.Access.DashboardSessions do
   end
 
   defp lock_active_pool(pool_id) do
-    Repo.one(
-      from pool in Pool, where: pool.id == ^pool_id and pool.status == "active", lock: "FOR SHARE"
-    )
+    Repo.one(from pool in Pool, where: pool.id == ^pool_id and pool.status == "active", lock: "FOR SHARE")
   end
 
   defp ensure_api_key_eligible(%APIKey{status: "active", dashboard_access: true} = api_key, now) do

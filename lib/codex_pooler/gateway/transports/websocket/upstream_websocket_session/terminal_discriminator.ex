@@ -44,8 +44,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
     outcome = StreamProtocol.terminal_outcome(nil, decoded)
     {last_upstream_event_type, last_upstream_event_class} = last_upstream_event(decoded)
 
-    {terminal_candidate?, terminal_candidate_type, terminal_candidate_class,
-     terminal_candidate_rejection} = terminal_candidate(decoded, outcome)
+    {terminal_candidate?, terminal_candidate_type, terminal_candidate_class, terminal_candidate_rejection} = terminal_candidate(decoded, outcome)
 
     %__MODULE__{
       terminal: terminal_type(outcome),

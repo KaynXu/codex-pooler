@@ -50,6 +50,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -62,15 +63,90 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     CodexTurn
   }
 
-  alias CodexPooler.Gateway.Runtime.Service
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Routing.SessionContinuity, as: RoutingContinuity
+  alias CodexPooler.Gateway.Runtime.{Service, SessionLeaseHeartbeat}
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPoolerWeb.GatewayControllerHelpers
   alias Ecto.Adapters.SQL.Sandbox
 
   @detection_budget 15_000
-  @owner_ttl_seconds 1
-  @beyond_initial_ttl_ms 1_400
+  # Renewal tests watch the lease outlive its initial deadline, so the ttl must be
+  # short, and a renewal delayed by N=4 scheduling must still land before the
+  # previous deadline. Renewals run every ttl / 3 (staggered to 80-100 %), so a
+  # 3 s ttl tolerates a 2 s delay where a 1 s ttl tolerated about 0.7 s.
+  @owner_ttl_seconds 3
+  # Tests whose claim is one stop trigger (caller death, downstream cancellation)
+  # or a follow-up after the heartbeat stopped use a ttl whose first renewal
+  # lands after the test and whose lease outlives it, so neither a late renewal
+  # nor a lease expiry can decide the outcome; with a 1 s ttl either could stop
+  # the heartbeat before its monitor or replace the session under the follow-up.
+  @stable_owner_ttl_seconds 30
+  # Observing a live lease after its initial deadline takes real time beyond the
+  # ttl; this is the reason the three renewal tests run for about 3.5 s.
+  @beyond_initial_ttl_ms @owner_ttl_seconds * 1_000 + 400
+  # The database-failure test terminates the blocked renewal's backend. The
+  # synchronous renewal call waits for that failure within a deliberate test
+  # bound, separate from the production lease-derived budget.
+  @blocked_renewal_call_timeout_ms 10_000
+
+  @tag slow: "holds a real PostgreSQL session lock beyond the former one-second caller budget"
+  test "healthy HTTP ownership survives a finite session lock wait beyond the former call budget",
+       %{conn: conn} do
+    upstream =
+      start_upstream(FakeUpstream.json_response(completed_response("resp_healthy_lock_wait")))
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    session_key = unique_session_key("healthy-lock-wait")
+    session = precreate_session!(setup, session_key)
+    observer = database_observer!()
+    barrier_ref = make_ref()
+
+    task =
+      controller_request(conn, setup, session_key, http_payload(setup), self(),
+        ttl_seconds: 30,
+        barrier: {barrier_ref, {:heartbeat, :before}}
+      )
+
+    assert_receive {:runtime_authorization_barrier, ^barrier_ref, :heartbeat, :before, task_pid},
+                   @detection_budget
+
+    blocker = lock_owner_session!(session.id)
+    send(task_pid, {:runtime_authorization_release, barrier_ref})
+    waiter_backend = await_blocked_backend!(observer, blocker.backend_pid)
+    assert waiter_backend != blocker.backend_pid
+    assert_zero_work!(setup)
+    assert FakeUpstream.count(upstream) == 0
+
+    # The observed real row wait must outlast both the old 800 ms lock budget
+    # and 1 s caller budget; match the finite commit pressure seen in production.
+    Process.send_after(self(), {:release_healthy_lock, barrier_ref}, 1_100)
+
+    try do
+      assert_receive {:release_healthy_lock, ^barrier_ref}, @detection_budget
+      assert_zero_work!(setup)
+      assert FakeUpstream.count(upstream) == 0
+    after
+      release_owner_lock!(blocker)
+    end
+
+    assert %{"id" => "resp_healthy_lock_wait"} =
+             json_response(Task.await(task, @detection_budget), 200)
+
+    assert FakeUpstream.count(upstream) == 1
+    assert [request] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
+    assert request.status == "succeeded"
+
+    assert [%{status: "succeeded"}] =
+             Repo.all(from a in Attempt, where: a.request_id == ^request.id)
+
+    assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^request.id), :count) == 1
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == session.owner_lease_token
+    assert_backend_released!(observer, waiter_backend)
+  end
 
   setup do
     Sandbox.mode(Repo, :auto)
@@ -80,6 +156,236 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     end)
 
     :ok
+  end
+
+  @tag slow: "restarts a real BEAM owner incarnation during gated HTTP finalization and verifies takeover through a second HTTP request"
+  test "late successful HTTP finalization cannot extend an absent lease and the next request takes over",
+       %{conn: conn} do
+    release_ref = make_ref()
+
+    peer_name = :"http_lease_owner_#{System.unique_integer([:positive])}"
+    peer = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+    remote = peer.identity
+
+    on_exit(fn ->
+      CodexPooler.UnboxedFixture.run_unboxed(fn ->
+        Repo.delete_all(from(p in InstancePresence.Instance, where: p.instance_id == ^remote.instance_id))
+      end)
+    end)
+
+    upstream =
+      start_upstream(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "POST",
+            respond:
+              FakeUpstream.gated_sse_headers(
+                [{"response.completed", completed_event("resp_absent_late")}, {"done", "[DONE]"}],
+                notify: self(),
+                release_ref: release_ref
+              )
+          ),
+          FakeUpstream.expect_request(
+            method: "POST",
+            respond: FakeUpstream.json_response(completed_response("resp_after_takeover"))
+          )
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    session_key = unique_session_key("absent-late")
+    {:ok, runtime_auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.utc_now())
+
+    {:ok, session} =
+      Gateway.start_codex_session(runtime_auth, %{
+        session_header: session_key,
+        owner_instance_id: remote.node_name,
+        owner_instance_boot_id: remote.boot_id,
+        bridge_owner_lease_ttl_seconds: 45
+      })
+
+    {response, logs} =
+      with_log(fn ->
+        task =
+          controller_request(
+            conn,
+            setup,
+            session_key,
+            Map.put(http_payload(setup), "stream", true),
+            self(),
+            ttl_seconds: 45
+          )
+
+        monitor = Process.monitor(task.pid)
+
+        assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref},
+                       @detection_budget
+
+        on_exit(fn -> send(upstream_pid, {:fake_upstream_release_gate, release_ref}) end)
+        before_lease = active_lease!(session.id)
+
+        {:ok, _} =
+          InstancePresence.record_heartbeat(
+            remote,
+            DateTime.add(DateTime.utc_now(), -10, :minute)
+          )
+
+        CodexPooler.InstancePresencePeer.stop_presence_peer!(peer)
+        _successor = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+
+        send(upstream_pid, {:fake_upstream_release_gate, release_ref})
+        response = Task.await(task, @detection_budget)
+        assert_receive {:DOWN, ^monitor, :process, _, :normal}, @detection_budget
+        assert active_lease!(session.id).expires_at == before_lease.expires_at
+        response
+      end)
+
+    assert response.status == 200
+    assert response.resp_body =~ "response.completed"
+    assert logs =~ "gateway continuity registration failed"
+    assert [completed] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert completed.status == "succeeded"
+
+    response =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("x-session-id", session_key)
+      |> post("/backend-api/codex/responses", http_payload(setup))
+
+    assert %{"id" => "resp_after_takeover"} = json_response(response, 200)
+    replacement = session_for!(setup, session_key)
+    assert replacement.id == session.id
+    refute replacement.owner_lease_token == session.owner_lease_token
+    assert one_active_lease?(session.id)
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  @tag slow: "restarts a real BEAM owner incarnation and proves two PostgreSQL attaches blocked on one session converge on one lease"
+  test "concurrent fresh HTTP attaches converge on one replacement for an absent incarnation" do
+    peer_name = :"http_lease_owner_#{System.unique_integer([:positive])}"
+    peer = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+    remote = peer.identity
+
+    on_exit(fn ->
+      CodexPooler.UnboxedFixture.run_unboxed(fn ->
+        Repo.delete_all(from(p in InstancePresence.Instance, where: p.instance_id == ^remote.instance_id))
+      end)
+    end)
+
+    upstream =
+      start_upstream(FakeUpstream.json_response(completed_response("resp_attach_control")))
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    {:ok, runtime_auth} = Access.authenticate_authorization_header(setup.authorization)
+    session_key = unique_session_key("parallel-absent")
+    {:ok, _} = InstancePresence.record_heartbeat(remote, DateTime.utc_now())
+
+    {:ok, session} =
+      Gateway.start_codex_session(runtime_auth, %{
+        session_header: session_key,
+        owner_instance_id: remote.node_name,
+        owner_instance_boot_id: remote.boot_id
+      })
+
+    {:ok, _} =
+      InstancePresence.record_heartbeat(remote, DateTime.add(DateTime.utc_now(), -10, :minute))
+
+    CodexPooler.InstancePresencePeer.stop_presence_peer!(peer)
+    _successor = CodexPooler.InstancePresencePeer.start_presence_peer!(peer_name)
+
+    blocker = lock_owner_session!(session.id)
+    parent = self()
+    start_ref = make_ref()
+
+    tasks =
+      for replica <- 1..2 do
+        Task.async(fn ->
+          Repo.checkout(fn ->
+            [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:attaching, start_ref, backend})
+
+            opts =
+              RequestOptions.build(
+                %{
+                  session_header: session_key,
+                  owner_instance_id: "sample-replica-#{replica}@remote",
+                  owner_instance_boot_id: "candidate-#{replica}"
+                },
+                "/backend-api/codex/responses",
+                %{}
+              )
+
+            RoutingContinuity.attach_codex_session(
+              runtime_auth,
+              %{},
+              opts
+            )
+          end)
+        end)
+      end
+
+    monitors = Enum.map(tasks, &Process.monitor(&1.pid))
+
+    on_exit(fn ->
+      send(blocker.task.pid, {:release_owner_session, blocker.ref})
+
+      Enum.each(tasks, fn task ->
+        if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill)
+      end)
+    end)
+
+    backends =
+      for _ <- tasks do
+        assert_receive {:attaching, ^start_ref, backend}, @detection_budget
+        backend
+      end
+
+    assert length(Enum.uniq(backends)) == 2
+
+    Enum.each(
+      backends,
+      &await_specific_block!(
+        &1,
+        blocker.backend_pid,
+        System.monotonic_time(:millisecond) + @detection_budget
+      )
+    )
+
+    release_owner_lock!(blocker)
+    results = Enum.map(tasks, &Task.await(&1, @detection_budget))
+
+    Enum.each(monitors, fn monitor ->
+      assert_receive {:DOWN, ^monitor, :process, _, :normal}, @detection_budget
+    end)
+
+    leases = for {:ok, opts} <- results, do: opts.continuity.codex_session.owner_lease_token
+    assert length(leases) == 2
+    assert length(Enum.uniq(leases)) == 1
+    refute hd(leases) == session.owner_lease_token
+    assert one_active_lease?(session.id)
+  end
+
+  defp await_specific_block!(waiter, blocker, deadline) do
+    [[blocked]] =
+      Repo.query!(
+        "WITH RECURSIVE blockers(pid) AS (SELECT unnest(pg_blocking_pids($1)) UNION SELECT unnest(pg_blocking_pids(pid)) FROM blockers) SELECT EXISTS(SELECT 1 FROM blockers WHERE pid=$2)",
+        [waiter, blocker]
+      ).rows
+
+    unless blocked do
+      assert System.monotonic_time(:millisecond) < deadline,
+             "attach did not reach the held session lock"
+
+      receive do
+      after
+        10 -> await_specific_block!(waiter, blocker, deadline)
+      end
+    end
   end
 
   test "controller request options remain unchanged without the test-only owner-liveness seam", %{
@@ -134,8 +440,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              0
   end
 
-  test "backend HTTP renews ownership beyond the initial ttl and the immediate follow-up reuses it",
-       %{conn: conn} do
+  @tag slow: "observes real heartbeat renewal beyond the initial three-second database lease"
+  test "backend HTTP renews ownership beyond the initial ttl", %{conn: conn} do
     release_ref = make_ref()
 
     upstream =
@@ -166,9 +472,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     response = Task.await(task, @detection_budget)
     assert %{"id" => "resp_http_liveness"} = json_response(response, 200)
     assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, @detection_budget
+  end
 
-    first_session = Repo.get!(CodexSession, session.id)
-    first_assignment_id = first_session.pool_upstream_assignment_id
+  test "an immediate backend HTTP follow-up reuses the session its heartbeat renewed", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(completed_response("resp_http_first")))
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+    session_key = unique_session_key("followup")
+
+    # The heartbeat's synchronous renewal sets a 30 s deadline, so the follow-up
+    # lands inside the lease however the test is scheduled; after an expiry the
+    # gateway intentionally replaces the session, which is a different contract.
+    task =
+      controller_request(conn, setup, session_key, http_payload(setup), self(), ttl_seconds: @stable_owner_ttl_seconds)
+
+    assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_budget
+    response = Task.await(task, @detection_budget)
+    assert %{"id" => "resp_http_first"} = json_response(response, 200)
+    assert_receive {:session_lease_heartbeat, :stopped, ^heartbeat}, @detection_budget
+
+    session = session_for!(setup, session_key)
+    first_assignment_id = session.pool_upstream_assignment_id
 
     FakeUpstream.set_mode(
       upstream,
@@ -191,6 +517,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
   end
 
+  @tag slow: "holds real SSE until heartbeat renewal exceeds the initial three-second lease"
   test "backend SSE renews through delayed terminal delivery and settles after release", %{
     conn: conn
   } do
@@ -200,8 +527,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => "resp_sse_liveness"}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_sse_liveness"}}}
           ],
           {"response.completed", completed_event("resp_sse_liveness")},
           notify: self(),
@@ -241,6 +567,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     assert %{status: "succeeded"} = Repo.get_by!(CodexTurn, request_id: request.id)
   end
 
+  @tag slow: "waits for the real three-second lease's periodic heartbeat to detect takeover during SSE"
   test "takeover during backend SSE keeps public completion and accounting but fences old continuity",
        %{conn: conn} do
     release_ref = make_ref()
@@ -250,8 +577,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => response_id}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => response_id}}}
           ],
           {"response.completed", completed_event(response_id)},
           notify: self(),
@@ -310,6 +636,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
   end
 
+  @tag slow: "holds public SSE until heartbeat renewal exceeds the initial three-second lease"
   test "/v1 Responses preserves its public SSE envelope while the owner heartbeat remains live",
        %{conn: conn} do
     release_ref = make_ref()
@@ -318,8 +645,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => "resp_v1_liveness"}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => "resp_v1_liveness"}}}
           ],
           {"response.completed", completed_event("resp_v1_liveness")},
           notify: self(),
@@ -381,7 +707,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     {caller, caller_ref} =
       spawn_monitor(fn ->
-        put_owner_liveness_test_options(parent, @owner_ttl_seconds)
+        put_owner_liveness_test_options(parent, @stable_owner_ttl_seconds)
 
         conn
         |> auth(setup)
@@ -401,6 +727,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     send(upstream_pid, {:fake_upstream_release_gate, release_ref})
   end
 
+  @tag slow: "waits for a real periodic heartbeat, terminates its blocked PostgreSQL backend, and verifies fencing"
   test "renewal database failure stops an in-flight heartbeat and stale completion stays fenced",
        %{conn: conn} do
     release_ref = make_ref()
@@ -410,8 +737,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       start_upstream(
         FakeUpstream.gated_terminal_sse_stream(
           [
-            {"response.created",
-             %{"type" => "response.created", "response" => %{"id" => response_id}}}
+            {"response.created", %{"type" => "response.created", "response" => %{"id" => response_id}}}
           ],
           {"response.completed", completed_event(response_id)},
           notify: self(),
@@ -454,6 +780,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
              Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
   end
 
+  @tag slow: "waits for periodic renewal to block on PostgreSQL before terminating its backend and releasing SSE"
   test "renewal database failure before delayed headers preserves the dispatched response",
        %{conn: conn} do
     release_ref = make_ref()
@@ -519,7 +846,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     task =
       controller_request(conn, setup, session_key, http_payload(setup), parent,
         ttl_seconds: 30,
-        barrier: {barrier_ref, {:heartbeat, :before}}
+        barrier: {barrier_ref, {:heartbeat, :before}},
+        renew_call_timeout_ms: 1_000
       )
 
     assert_receive {:runtime_authorization_barrier, ^barrier_ref, :heartbeat, :before, task_pid},
@@ -536,7 +864,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     try do
       response = Task.await(task, @detection_budget)
 
-      assert %{"error" => %{"code" => "owner_unavailable"}} = json_response(response, 503)
+      # findings#191: the status is only half the answer. An SDK branches on
+      # `type`, so a lifecycle 503 typed as the terminal class tells the client
+      # not to retry the one failure that is worth retrying.
+      assert %{"error" => %{"code" => "owner_unavailable", "type" => "server_error"}} =
+               json_response(response, 503)
+
       refute Process.alive?(heartbeat)
       assert_receive {:DOWN, ^heartbeat_ref, :process, ^heartbeat, _reason}, @detection_budget
       assert_backend_released!(observer, waiter_backend)
@@ -569,7 +902,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     task =
       controller_request(conn, setup, session_key, http_payload(setup), parent,
         ttl_seconds: 30,
-        barrier: {barrier_ref, {:heartbeat, :before}}
+        barrier: {barrier_ref, {:heartbeat, :before}},
+        renew_call_timeout_ms: @blocked_renewal_call_timeout_ms
       )
 
     assert_receive {:runtime_authorization_barrier, ^barrier_ref, :heartbeat, :before, task_pid},
@@ -578,10 +912,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     blocker = lock_owner_session!(session.id)
     send(task_pid, {:runtime_authorization_release, barrier_ref})
 
-    waiter_backend = await_blocked_backend!(observer, blocker.backend_pid)
-    assert terminate_backend!(observer, waiter_backend)
+    # The heartbeat announces itself before its renewal blocks, and terminating
+    # the blocked backend stops it at once, so it is monitored first; a monitor
+    # taken after the termination can see it already gone and get :noproc.
     assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_budget
     heartbeat_ref = Process.monitor(heartbeat)
+    waiter_backend = await_blocked_backend!(observer, blocker.backend_pid)
+    assert terminate_backend!(observer, waiter_backend)
 
     try do
       response = Task.await(task, @detection_budget)
@@ -589,6 +926,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       assert %{
                "error" => %{
                  "code" => "owner_unavailable",
+                 "type" => "server_error",
                  "message" => "session owner lease is unavailable"
                }
              } = json_response(response, 503)
@@ -604,11 +942,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   end
 
   test "downstream stream cancellation stops the heartbeat without killing the controller caller" do
+    release_ref = make_ref()
+
+    # The upstream holds its headers until the heartbeat is monitored: the
+    # cancellation follows the first downstream chunk without a test step in
+    # between, so an unheld stream can stop the heartbeat before the monitor.
     upstream =
       start_upstream(
-        FakeUpstream.sse_stream([
-          {"response.completed", completed_event("resp_downstream_cancel")}
-        ])
+        FakeUpstream.gated_sse_headers(
+          [{"response.completed", completed_event("resp_downstream_cancel")}],
+          notify: self(),
+          release_ref: release_ref
+        )
       )
 
     setup = gateway_setup(upstream)
@@ -618,7 +963,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     task =
       Task.async(fn ->
-        put_owner_liveness_test_options(parent, @owner_ttl_seconds)
+        put_owner_liveness_test_options(parent, @stable_owner_ttl_seconds)
 
         Plug.Test.conn(
           :post,
@@ -631,8 +976,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
         |> CodexPoolerWeb.Endpoint.call(CodexPoolerWeb.Endpoint.init([]))
       end)
 
+    assert_receive {:fake_upstream_gate, :before_headers, upstream_pid, ^release_ref},
+                   @detection_budget
+
     assert_receive {:session_lease_heartbeat, :started, heartbeat}, @detection_budget
     heartbeat_ref = Process.monitor(heartbeat)
+    send(upstream_pid, {:fake_upstream_release_gate, release_ref})
     assert_receive {:downstream_stream_started, caller}, @detection_budget
     assert caller == task.pid
     assert_receive {:downstream_stream_cancelled, ^caller}, @detection_budget
@@ -662,9 +1011,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
     refute_received {:session_lease_heartbeat, :started, _heartbeat}
 
-    port = start_public_endpoint!()
+    {server, port} = start_public_endpoint_with_server!()
     turn_state = unique_session_key("native-websocket")
     {socket_conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    assert {:ok, [socket]} = ThousandIsland.connection_pids(server)
+    socket_monitor = Process.monitor(socket)
+    parent = self()
+    handler = make_ref()
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :telemetry.attach(
+      handler,
+      [:codex_pooler, :gateway, :websocket_control, :cleanup_finished],
+      fn _, _, metadata, _ ->
+        if metadata.caller == socket, do: send(parent, {:socket_cleanup_finished, handler, self()})
+      end,
+      nil
+    )
 
     payload =
       CodexPooler.JSON.encode!(%{
@@ -679,7 +1042,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     {socket_conn, _websocket, frame} = public_websocket_receive_text!(socket_conn, websocket, ref)
     assert %{"id" => "resp_native_ws"} = CodexPooler.JSON.decode!(frame)
     refute_received {:session_lease_heartbeat, :started, _heartbeat}
+    assert_socket_response_tasks_released!(socket)
     Mint.HTTP.close(socket_conn)
+    assert_receive {:socket_cleanup_finished, ^handler, cleanup}, @detection_budget
+    cleanup_monitor = Process.monitor(cleanup)
+    assert_receive {:DOWN, ^cleanup_monitor, :process, ^cleanup, _reason}, @detection_budget
+    assert_receive {:DOWN, ^socket_monitor, :process, ^socket, _reason}, @detection_budget
   end
 
   for phase <- [{:reserve, :before}, {:reservation_lock, :before}] do
@@ -701,8 +1069,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
           barrier: {barrier_ref, unquote(phase)}
         )
 
-      assert_receive {:runtime_authorization_barrier, ^barrier_ref, operation, barrier_phase,
-                      task_pid},
+      assert_receive {:runtime_authorization_barrier, ^barrier_ref, operation, barrier_phase, task_pid},
                      @detection_budget
 
       assert {operation, barrier_phase} == unquote(phase)
@@ -710,7 +1077,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       send(task_pid, {:runtime_authorization_release, barrier_ref})
 
       response = Task.await(task, @detection_budget)
-      assert %{"error" => %{"code" => "stale_owner"}} = json_response(response, 409)
+      # findings#191: a lease that moved is backpressure, not a malformed
+      # request; the same submission succeeds once the new owner is reached.
+      assert %{"error" => %{"code" => "stale_owner", "type" => "server_error"}} =
+               json_response(response, 409)
+
       assert_zero_work!(setup)
       assert FakeUpstream.count(upstream) == 0
 
@@ -743,8 +1114,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
           barrier: {barrier_ref, {:reservation_lock, :before}}
         )
 
-      assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reservation_lock, :before,
-                      task_pid},
+      assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reservation_lock, :before, task_pid},
                      @detection_budget
 
       make_owner_unavailable!(session, unquote(failure))
@@ -752,7 +1122,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
 
       response = Task.await(task, @detection_budget)
 
-      assert %{"error" => %{"code" => "owner_unavailable"}} = json_response(response, 503)
+      assert %{"error" => %{"code" => "owner_unavailable", "type" => "server_error"}} =
+               json_response(response, 503)
+
       assert_zero_work!(setup)
       assert FakeUpstream.count(upstream) == 0
     end
@@ -770,6 +1142,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
       case Keyword.get(opts, :barrier) do
         {ref, phase} ->
           Process.put({Service, :runtime_authorization_barrier}, {parent, ref, phase})
+
+        nil ->
+          :ok
+      end
+
+      case Keyword.get(opts, :renew_call_timeout_ms) do
+        timeout when is_integer(timeout) ->
+          Process.put({SessionLeaseHeartbeat, :renew_call_timeout_ms}, timeout)
 
         nil ->
           :ok
@@ -881,15 +1261,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
     end)
   end
 
+  # The holder ends on the test's release or on the test process going down. A
+  # timer of its own started before a chain of failure-detection waits in the
+  # test body and expired first, replacing the failing assertion with this
+  # linked task's exit.
   defp hold_owner_session_lock!(session_id, parent, ref) do
+    parent_monitor = Process.monitor(parent)
     _session = Repo.one!(from(s in CodexSession, where: s.id == ^session_id, lock: "FOR UPDATE"))
     %{rows: [[backend_pid]]} = Repo.query!("SELECT pg_backend_pid()")
     send(parent, {:owner_session_locked, ref, backend_pid})
 
     receive do
       {:release_owner_session, ^ref} -> :ok
-    after
-      @detection_budget -> raise "owner session lock was not released"
+      {:DOWN, ^parent_monitor, :process, ^parent, _reason} -> :ok
     end
   end
 
@@ -1012,9 +1396,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   defp with_cancelling_adapter(%Plug.Conn{adapter: {adapter, delegate_state}} = conn, notify) do
     %{
       conn
-      | adapter:
-          {CancellingAdapter,
-           %{delegate: adapter, delegate_state: delegate_state, notify: notify}}
+      | adapter: {CancellingAdapter, %{delegate: adapter, delegate_state: delegate_state, notify: notify}}
     }
   end
 
@@ -1040,18 +1422,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexHTTPOwnerLeaseTest do
   end
 
   defp assert_equal_live_deadlines!(session_id) do
-    session = Repo.get!(CodexSession, session_id)
-    lease = active_lease!(session_id)
-    assert session.owner_lease_expires_at == lease.expires_at
-    assert DateTime.compare(session.owner_lease_expires_at, db_now()) == :gt
+    deadlines = live_deadlines!(session_id)
+    assert deadlines.session == deadlines.lease
+    assert DateTime.compare(deadlines.session, deadlines.now) == :gt
   end
 
   defp assert_deadline_advanced!(session_id, initial_deadline) do
-    session = Repo.get!(CodexSession, session_id)
-    lease = active_lease!(session_id)
-    assert DateTime.compare(session.owner_lease_expires_at, initial_deadline) == :gt
-    assert session.owner_lease_expires_at == lease.expires_at
-    assert DateTime.compare(session.owner_lease_expires_at, db_now()) == :gt
+    deadlines = live_deadlines!(session_id)
+    assert DateTime.compare(deadlines.session, initial_deadline) == :gt
+    assert deadlines.session == deadlines.lease
+    assert DateTime.compare(deadlines.session, deadlines.now) == :gt
+  end
+
+  # The heartbeat renews the lease and the session in one transaction every
+  # ttl / 3, so both deadlines and the clock come from one statement; separate
+  # reads can straddle a renewal and see two different committed deadlines.
+  defp live_deadlines!(session_id) do
+    Repo.one!(
+      from(s in CodexSession,
+        join: l in BridgeOwnerLease,
+        on: l.codex_session_id == s.id and l.status == "active",
+        where: s.id == ^session_id,
+        select: %{
+          session: s.owner_lease_expires_at,
+          lease: l.expires_at,
+          now: type(fragment("clock_timestamp()"), :utc_datetime_usec)
+        }
+      )
+    )
   end
 
   defp await_beyond_initial_ttl! do

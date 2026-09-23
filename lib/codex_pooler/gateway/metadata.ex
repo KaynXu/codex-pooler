@@ -37,8 +37,7 @@ defmodule CodexPooler.Gateway.Metadata do
     with {:ok, snapshot} <- codex_catalog_snapshot(auth, endpoint, request_options),
          :ok <-
            record_metadata_request(auth, endpoint, request_options, snapshot) do
-      {:ok,
-       %{status: 200, headers: [{"etag", snapshot.etag} | json_headers()], body: snapshot.body}}
+      {:ok, %{status: 200, headers: [{"etag", snapshot.etag} | json_headers()], body: snapshot.body}}
     end
   end
 
@@ -172,7 +171,6 @@ defmodule CodexPooler.Gateway.Metadata do
       endpoint: endpoint,
       transport: "http_json",
       correlation_id: RequestOptions.server_correlation_id(request_options),
-      idempotency_key: request_metadata.idempotency_key,
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
       response_status_code: 200,

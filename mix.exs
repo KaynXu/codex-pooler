@@ -5,7 +5,7 @@ defmodule CodexPooler.MixProject do
     [
       app: :codex_pooler,
       # x-release-please-start-version
-      version: "0.7.8",
+      version: "0.8.6",
       # x-release-please-end
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -57,30 +57,24 @@ defmodule CodexPooler.MixProject do
   defp deps do
     [
       {:argon2_elixir, "== 4.1.3"},
-      {:phoenix, "== 1.8.13"},
+      {:phoenix, "== 1.8.14"},
       {:phoenix_ecto, "== 4.7.0"},
       {:ecto_sql, "== 3.14.0"},
       {:postgrex, "== 0.22.4"},
       {:phoenix_html, "== 4.3.0"},
       {:phoenix_live_reload, "== 1.7.0", only: :dev},
-      {:phoenix_live_view, "== 1.2.11"},
+      {:phoenix_live_view, "== 1.2.12"},
       {:lazy_html, "== 0.1.12", only: :test},
       {:oban, "== 2.24.1"},
       {:phoenix_live_dashboard, "== 0.9.1", only: :dev},
       {:esbuild, "== 0.10.0", runtime: Mix.env() == :dev},
       {:tailwind, "== 0.5.1", runtime: Mix.env() == :dev},
-      {:heroicons,
-       github: "tailwindlabs/heroicons",
-       tag: "v2.2.0",
-       sparse: "optimized",
-       app: false,
-       compile: false,
-       depth: 1},
-      {:swoosh, "== 1.28.0"},
+      {:heroicons, github: "tailwindlabs/heroicons", tag: "v2.2.0", sparse: "optimized", app: false, compile: false, depth: 1},
+      {:swoosh, "== 1.28.1"},
       {:gen_smtp, "== 1.3.0"},
       {:req, "== 0.7.4"},
       {:finch, "== 0.23.0"},
-      {:mint, "== 1.10.0"},
+      {:mint, "== 1.10.1"},
       {:mint_web_socket, "== 1.0.6"},
       {:telemetry_metrics, "== 1.2.0"},
       {:telemetry_metrics_prometheus_core, "== 1.2.1"},
@@ -126,6 +120,11 @@ defmodule CodexPooler.MixProject do
         "esbuild codex_pooler --minify",
         "phx.digest"
       ],
+      # Checked, never rewritten: a gate must not mutate the tree it judges.
+      # Drone runs this as its own step and a green local `mix quality` used to
+      # say nothing about it, so an unformatted line reached CI and failed the
+      # build after the whole suite had already passed locally.
+      "quality.format": ["format --check-formatted"],
       "quality.xref": [
         "compile --warnings-as-errors",
         "xref graph --format plain --label compile-connected --fail-above 0 --no-compile"
@@ -133,7 +132,13 @@ defmodule CodexPooler.MixProject do
       "quality.credo": ["credo --strict"],
       "quality.dialyzer": ["compile --warnings-as-errors", "dialyzer --no-compile"],
       "quality.security": ["sobelow --exit --threshold medium --skip"],
-      quality: ["quality.xref", "quality.credo", "quality.dialyzer", "quality.security"],
+      quality: [
+        "quality.format",
+        "quality.xref",
+        "quality.credo",
+        "quality.dialyzer",
+        "quality.security"
+      ],
       coverage: ["test --cover"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]

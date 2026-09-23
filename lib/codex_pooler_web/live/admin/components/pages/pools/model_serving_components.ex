@@ -290,8 +290,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
       |> Enum.frequencies_by(& &1.effective_badge.mode)
 
     %{
-      configured:
-        "#{Map.get(configured, "auto", 0)} Auto · #{Map.get(configured, "lite", 0)} Lite · #{Map.get(configured, "full", 0)} Full",
+      configured: "#{Map.get(configured, "auto", 0)} Auto · #{Map.get(configured, "lite", 0)} Lite · #{Map.get(configured, "full", 0)} Full",
       catalog: "#{available} available · #{unavailable} unavailable",
       effective: "#{Map.get(effective, "full", 0)} Full · #{Map.get(effective, "lite", 0)} Lite"
     }

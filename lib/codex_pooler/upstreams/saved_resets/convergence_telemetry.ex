@@ -1,6 +1,7 @@
 defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry do
   @moduledoc false
 
+  alias CodexPooler.Telemetry.RelayEvent
   alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
 
   @event [:codex_pooler, :saved_reset, :convergence]
@@ -54,10 +55,25 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry do
 
   defp put_duration(measurements, key, %DateTime{} = from, %DateTime{} = to, observed_at) do
     if DateTime.compare(from, to) != :gt and DateTime.compare(to, observed_at) != :gt do
-      Map.put(measurements, key, DateTime.diff(to, from, :millisecond))
+      put_storable_duration(measurements, key, DateTime.diff(to, from, :millisecond))
     else
       measurements
     end
+  end
+
+  # One absurd timestamp would otherwise cost the whole convergence. The relay's
+  # capture path refuses a sample whose measurement map the storage layer cannot
+  # hold, so a `consumed_at` of year 1 does not merely lose its duration — it
+  # loses the `count` beside it and is recorded as a refused sample. The
+  # duration is worth less than the convergence it describes, so an unstorable
+  # one is dropped here and the count still relays.
+  #
+  # The bound is the storage layer's own predicate rather than a copy of its
+  # number, so there is no second constant to drift.
+  defp put_storable_duration(measurements, key, milliseconds) do
+    if RelayEvent.storable_measurements?(%{key => milliseconds}),
+      do: Map.put(measurements, key, milliseconds),
+      else: measurements
   end
 
   defp parse_datetime(value) when is_binary(value) do

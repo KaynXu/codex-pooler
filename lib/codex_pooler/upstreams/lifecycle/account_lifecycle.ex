@@ -127,9 +127,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def pause_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
       pause_account(identity, attrs)
-      |> AccountAudit.record_change_strict(scope, "upstream_account.pause",
-        previous_status: identity.status
-      )
+      |> AccountAudit.record_change_strict(scope, "upstream_account.pause", previous_status: identity.status)
       |> enqueue_lifecycle_catalog_sync()
     end
   end
@@ -193,9 +191,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
       lifecycle_result(:active, active_identity)
     else
       nil ->
-        Repo.rollback(
-          lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")
-        )
+        Repo.rollback(lifecycle_error(:upstream_identity_not_found, "upstream identity was not found"))
 
       [] ->
         Repo.rollback(
@@ -222,9 +218,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def reactivate_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
       reactivate_account(identity, attrs)
-      |> AccountAudit.record_change_strict(scope, "upstream_account.reactivate",
-        previous_status: identity.status
-      )
+      |> AccountAudit.record_change_strict(scope, "upstream_account.reactivate", previous_status: identity.status)
       |> enqueue_lifecycle_catalog_sync()
     end
   end
@@ -274,9 +268,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def soft_delete_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
       soft_delete_account(identity, attrs)
-      |> AccountAudit.record_change(scope, "upstream_account.delete",
-        previous_status: identity.status
-      )
+      |> AccountAudit.record_change(scope, "upstream_account.delete", previous_status: identity.status)
     end
   end
 

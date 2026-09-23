@@ -34,9 +34,7 @@ defmodule CodexPoolerWeb.Admin.PoolInviteForm do
     |> Ecto.Changeset.cast(data, Map.keys(data))
     |> Ecto.Changeset.validate_required([:pool_id, :invited_email])
     |> validate_selected_pool(pool)
-    |> Ecto.Changeset.validate_format(:invited_email, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-      message: "must be a valid email"
-    )
+    |> Ecto.Changeset.validate_format(:invited_email, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "must be a valid email")
     |> Map.put(:action, :validate)
   end
 

@@ -347,11 +347,7 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
               authorization_code: "device-authorization-code-resumed",
               code_verifier: "device-code-verifier-resumed"
             )},
-         "/oauth/token" =>
-           {200,
-            FakeOpenAIAuthProvider.token_response(
-              id_token: device_id_token("acct_device_resumed")
-            )}
+         "/oauth/token" => {200, FakeOpenAIAuthProvider.token_response(id_token: device_id_token("acct_device_resumed"))}
        })}
     )
 

@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
   end
 
   setup do
-    old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
+    old_config = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
     Admission.reset_for_test()
 
     Application.put_env(
@@ -33,7 +33,6 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
 
     on_exit(fn ->
       Admission.reset_for_test()
-      Application.put_env(:codex_pooler, OperationalSettings, old_config)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -137,8 +136,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
         Admission.acquire("proxy_stream", %{request_id: "queued-stream"})
       end)
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued],
-                    _measurements, %{route_class: "proxy_stream"}}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{route_class: "proxy_stream"}}
 
     assert {:ok, snapshot} = Admission.saturation()
     assert %{running: 1, queued: 1} = snapshot["proxy_stream"]
@@ -189,14 +187,12 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
         })
       end)
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued],
-                    _measurements, %{route_class: "proxy_stream", request_id: "queued-stream"}}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, %{route_class: "proxy_stream", request_id: "queued-stream"}}
 
     Admission.release(held)
     assert {:ok, queued_lease} = Task.await(task, 1_000)
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :dequeued],
-                    measurements, %{route_class: "proxy_stream", request_id: "queued-stream"}}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :dequeued], measurements, %{route_class: "proxy_stream", request_id: "queued-stream"}}
 
     assert is_integer(measurements.queued_ms)
     Admission.release(queued_lease)
@@ -249,8 +245,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
         })
       end)
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued],
-                    _measurements, metadata}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued], _measurements, metadata}
 
     assert metadata.route_class == "audio_transcription"
     refute inspect(metadata) =~ "private prompt"
@@ -259,8 +254,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
     assert {:error, %{code: "bulkhead_queue_timeout", route_class: "audio_transcription"}} =
              Task.await(task, 1_000)
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :timeout],
-                    measurements, timeout_metadata}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :timeout], measurements, timeout_metadata}
 
     assert timeout_metadata.route_class == "audio_transcription"
     assert timeout_metadata.request_id == "queued-media"
@@ -283,8 +277,7 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
                authorization: "Bearer secret-token"
              })
 
-    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :rejected],
-                    _measurements, metadata}
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :rejected], _measurements, metadata}
 
     assert metadata.route_class == "proxy_http"
     assert metadata.internal_reason == "bulkhead_rejected"

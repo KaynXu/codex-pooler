@@ -343,9 +343,7 @@ defmodule CodexPooler.Access.InviteOnboarding do
 
   defp candidate_identities(prepared, selected_identity) do
     siblings =
-      IdentityLifecycle.list_upstream_identities_by_chatgpt_account(
-        prepared.attrs.chatgpt_account_id
-      )
+      IdentityLifecycle.list_upstream_identities_by_chatgpt_account(prepared.attrs.chatgpt_account_id)
 
     [selected_identity | siblings]
     |> Enum.reject(&is_nil/1)

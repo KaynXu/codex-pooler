@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Runtime.Finalization.ValidationRejection
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
 
   @type success_normalizer :: (map() -> map())
@@ -51,6 +52,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     if status >= 400, do: {:ok, normalize_error_body(status, opts)}, else: :passthrough
   end
 
+  @doc """
+  Renders a relayed upstream parameter-validation rejection as the public
+  OpenAI error object, mapping the upstream param path to the client field.
+  """
+  @spec validation_rejection_error(
+          ValidationRejection.rejection(),
+          ValidationRejection.param_mapper()
+        ) :: map()
+  def validation_rejection_error(rejection, param_mapper \\ &Function.identity/1),
+    do: ValidationRejection.error(rejection, param_mapper)
+
   @spec normalize_error(term(), error_opts()) :: map()
   def normalize_error(error, opts \\ [])
 
@@ -84,10 +96,33 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   def redacted_gateway_error?(%{} = error) do
     not public_recovery_error_token?(field(error, "code")) and
+      not pooler_policy_denial?(error) and
       public_failure_error?(error, error_status(error, []))
   end
 
   def redacted_gateway_error?(_error), do: false
+
+  # An API-key policy denial is authored by Codex Pooler, never relayed from
+  # the upstream: its 401/403/429 status, code and message are the Pooler's own
+  # decision, so `/v1` renders them the way the backend routes do instead of
+  # blaming the upstream with `server_error` / "upstream request failed"
+  # (findings#221). The exemption is keyed on the `pooler_policy` marker that
+  # `Denials.log_policy/1` sets by construction, never on the wire code: an
+  # upstream error that happened to carry one of these codes stays redacted.
+  # The list below is the documented vocabulary of that marker (the reasons
+  # `Access` policy checks return plus the image-generation denial), kept as a
+  # dependency-free literal for the matrix and the docs; the marker, not the
+  # list, decides rendering, so a new marked reason renders before it is
+  # listed here. Every other gateway error, including the quota 503s and every
+  # upstream-derived 401/403/429, keeps the redaction.
+  @unredacted_policy_denial_codes ~w(api_key_missing api_key_disabled api_key_policy_malformed model_not_allowed image_generation_disabled api_key_concurrency_limit_exceeded)
+
+  @doc false
+  @spec unredacted_policy_denial_codes() :: [String.t()]
+  def unredacted_policy_denial_codes, do: @unredacted_policy_denial_codes
+
+  # Atom key only: a decoded provider or client body can never carry it.
+  defp pooler_policy_denial?(error), do: Map.get(error, :pooler_policy) == true
 
   defp input_file_capability_error?(404, opts),
     do: Keyword.get(opts, :input_file_upstream_404?) === true

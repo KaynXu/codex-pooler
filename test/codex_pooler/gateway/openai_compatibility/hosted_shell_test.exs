@@ -113,39 +113,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
       assert_accepted(shell_call(%{"call_id" => identifier}))
       assert_accepted(shell_output(%{"call_id" => identifier}))
 
-      assert_accepted(
-        shell_call(%{"caller" => %{"type" => "program", "caller_id" => identifier}})
-      )
+      assert_accepted(shell_call(%{"caller" => %{"type" => "program", "caller_id" => identifier}}))
     end)
 
     for identifier <- ["", String.duplicate("x", 65), String.duplicate("🙂", 65)] do
       assert_rejected(shell_call(%{"call_id" => identifier}))
       assert_rejected(shell_output(%{"call_id" => identifier}))
 
-      assert_rejected(
-        shell_call(%{"caller" => %{"type" => "program", "caller_id" => identifier}})
-      )
+      assert_rejected(shell_call(%{"caller" => %{"type" => "program", "caller_id" => identifier}}))
     end
   end
 
   test "accepts 200 local skills and rejects 201" do
     skills = Enum.map(1..201, &skill("skill-#{&1}"))
 
-    assert_accepted(
-      shell_call(%{"environment" => %{"type" => "local", "skills" => Enum.take(skills, 200)}})
-    )
+    assert_accepted(shell_call(%{"environment" => %{"type" => "local", "skills" => Enum.take(skills, 200)}}))
 
     assert_rejected(shell_call(%{"environment" => %{"type" => "local", "skills" => skills}}))
   end
 
   @tag timeout: 120_000
+  @tag slow: "validates actual 10 MiB stdout and stderr boundary values and one-byte overflows"
   test "enforces stdout and stderr limits without materializing codepoint lists" do
     maximum = String.duplicate("x", 10_485_760)
     overflow = maximum <> "x"
 
-    assert_accepted(
-      shell_output(%{"output" => [output_chunk(maximum, maximum, exit_outcome(0))]})
-    )
+    assert_accepted(shell_output(%{"output" => [output_chunk(maximum, maximum, exit_outcome(0))]}))
 
     assert_rejected(shell_output(%{"output" => [output_chunk(overflow, "", exit_outcome(0))]}))
     assert_rejected(shell_output(%{"output" => [output_chunk("", overflow, exit_outcome(0))]}))
@@ -154,17 +147,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.HostedShellTest do
   # The bound is code points, not bytes: two-byte text crosses the byte count
   # of the limit at half the code points and must still be counted exactly.
   @tag timeout: 120_000
+  @tag slow: "validates 10 million multibyte codepoints and the one-codepoint overflow without truncation"
   test "enforces the output limit by code point when every code point is multi-byte" do
     multibyte_maximum = String.duplicate("é", 10_485_760)
     multibyte_overflow = multibyte_maximum <> "é"
 
-    assert_accepted(
-      shell_output(%{"output" => [output_chunk(multibyte_maximum, "", exit_outcome(0))]})
-    )
+    assert_accepted(shell_output(%{"output" => [output_chunk(multibyte_maximum, "", exit_outcome(0))]}))
 
-    assert_rejected(
-      shell_output(%{"output" => [output_chunk("", multibyte_overflow, exit_outcome(0))]})
-    )
+    assert_rejected(shell_output(%{"output" => [output_chunk("", multibyte_overflow, exit_outcome(0))]}))
   end
 
   # Findings #119 item 5: a full-size output chunk used to cost ~400 ms of

@@ -25,28 +25,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Format do
 
   @spec status_chip_class(String.t() | nil) :: String.t()
   def status_chip_class("succeeded"),
-    do:
-      "inline-flex items-center rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-xs font-medium leading-none text-success"
+    do: "inline-flex items-center rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-xs font-medium leading-none text-success"
 
   def status_chip_class("failed"),
-    do:
-      "inline-flex items-center rounded-full border border-error/20 bg-error/10 px-2.5 py-1 text-xs font-medium leading-none text-error"
+    do: "inline-flex items-center rounded-full border border-error/20 bg-error/10 px-2.5 py-1 text-xs font-medium leading-none text-error"
 
   def status_chip_class("rejected"),
-    do:
-      "inline-flex items-center rounded-full border border-error/20 bg-error/10 px-2.5 py-1 text-xs font-medium leading-none text-error"
+    do: "inline-flex items-center rounded-full border border-error/20 bg-error/10 px-2.5 py-1 text-xs font-medium leading-none text-error"
 
   def status_chip_class("cancelled"),
-    do:
-      "inline-flex items-center rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-medium leading-none text-warning"
+    do: "inline-flex items-center rounded-full border border-warning/20 bg-warning/10 px-2.5 py-1 text-xs font-medium leading-none text-warning"
 
   def status_chip_class("in_progress"),
-    do:
-      "inline-flex items-center rounded-full border border-info/20 bg-info/10 px-2.5 py-1 text-xs font-medium leading-none text-info"
+    do: "inline-flex items-center rounded-full border border-info/20 bg-info/10 px-2.5 py-1 text-xs font-medium leading-none text-info"
 
   def status_chip_class(_status),
-    do:
-      "inline-flex items-center rounded-full border border-base-300 bg-base-200 px-2.5 py-1 text-xs font-medium leading-none text-base-content/70"
+    do: "inline-flex items-center rounded-full border border-base-300 bg-base-200 px-2.5 py-1 text-xs font-medium leading-none text-base-content/70"
 
   @spec safe_text(term()) :: String.t()
   @spec safe_text(term(), String.t()) :: String.t()

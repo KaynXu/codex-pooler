@@ -304,8 +304,7 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
     assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
              Upstreams.start_browser_oauth(scope, pool)
 
-    assert {:error,
-            %{code: :token_exchange_failed, message: "OAuth token exchange failed"} = error} =
+    assert {:error, %{code: :token_exchange_failed, message: "OAuth token exchange failed"} = error} =
              Upstreams.complete_browser_oauth(
                scope,
                flow.id,

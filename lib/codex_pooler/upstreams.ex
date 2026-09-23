@@ -50,6 +50,11 @@ defmodule CodexPooler.Upstreams do
   @type oauth_flow_completion_result :: OAuth.completion_result()
   @type oauth_flow_summary :: OAuth.safe_flow_summary()
 
+  @doc "Import an API-key upstream that implements the stateless Responses API."
+  defdelegate import_responses_api(scope, pool, attrs),
+    to: CodexPooler.Upstreams.ResponsesAPI,
+    as: :import_account
+
   @spec list_upstream_identities(keyword()) :: [UpstreamIdentity.t()]
   def list_upstream_identities(opts \\ []) do
     status = Keyword.get(opts, :status)
@@ -74,33 +79,41 @@ defmodule CodexPooler.Upstreams do
     end
   end
 
-  @spec list_visible_upstream_identities(Scope.t()) :: [UpstreamIdentity.t()]
-  def list_visible_upstream_identities(%Scope{} = scope) do
-    pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
+  @spec list_visible_upstream_identities(Scope.t(), keyword()) :: [UpstreamIdentity.t()]
+  def list_visible_upstream_identities(scope, opts \\ [])
 
-    case pool_ids do
-      [] ->
-        []
+  def list_visible_upstream_identities(%Scope{} = scope, opts) when is_list(opts) do
+    visible_pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
 
-      _ ->
-        Repo.all(
-          from identity in UpstreamIdentity,
-            join: assignment in PoolUpstreamAssignment,
-            on: assignment.upstream_identity_id == identity.id,
-            where: assignment.pool_id in ^pool_ids,
-            where: assignment.status != ^@assignment_deleted,
-            where: identity.status != ^@deleted,
-            distinct: true,
-            order_by: [
-              asc: identity.account_label,
-              asc: identity.chatgpt_account_id,
-              asc: identity.created_at
-            ]
-        )
-    end
+    selected_pool_ids =
+      case Keyword.get(opts, :pool_ids, visible_pool_ids) do
+        pool_ids when is_list(pool_ids) -> pool_ids
+        _invalid -> []
+      end
+
+    pool_ids = Enum.filter(visible_pool_ids, &(&1 in selected_pool_ids))
+    include_unassigned? = Keyword.get(opts, :include_unassigned, true) and Pools.owner?(scope)
+
+    Repo.all(
+      from identity in UpstreamIdentity,
+        left_join: assignment in PoolUpstreamAssignment,
+        on:
+          assignment.upstream_identity_id == identity.id and
+            assignment.status != ^@assignment_deleted,
+        where:
+          assignment.pool_id in ^pool_ids or
+            (^include_unassigned? and is_nil(assignment.id)),
+        where: identity.status != ^@deleted,
+        distinct: true,
+        order_by: [
+          asc: identity.account_label,
+          asc: identity.chatgpt_account_id,
+          asc: identity.created_at
+        ]
+    )
   end
 
-  def list_visible_upstream_identities(_scope), do: []
+  def list_visible_upstream_identities(_scope, _opts), do: []
 
   @spec get_upstream_identity(term()) :: UpstreamIdentity.t() | nil
   def get_upstream_identity(id) when is_binary(id), do: Repo.get(UpstreamIdentity, id)

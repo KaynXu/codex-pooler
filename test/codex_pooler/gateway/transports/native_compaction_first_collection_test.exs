@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog, only: [capture_log: 2]
 
   @moduletag capture_log: true
   alias CodexPooler.FakeUpstream
@@ -367,9 +368,7 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
         assert {:ok, _} =
                  Forwarded.admission_control(
                    owner,
-                   control(:record_first_compact_collected, downstream,
-                     first_compact_collection: proof
-                   )
+                   control(:record_first_compact_collected, downstream, first_compact_collection: proof)
                  )
 
         confirmation = %Admission.Confirmation{
@@ -412,6 +411,211 @@ defmodule CodexPooler.Gateway.NativeCompactionFirstCollectionTest do
     {:ok, control} = Control.new(Map.merge(attrs, Map.new(extra)))
     control
   end
+
+  test "a rejected first compact result names its stage and sanitized reason" do
+    raw_sentinel = "synthetic-first-compact-private-material"
+
+    request = %{
+      payload: CodexPooler.JSON.encode!(%{"model" => "sample-model"}),
+      request_id: Ecto.UUID.generate(),
+      attempt_id: Ecto.UUID.generate(),
+      websocket_delivery_mode: :collect_full_history,
+      effective_serving_mode: "full",
+      native_compaction_metadata: %NativeCodexTurnMetadata{
+        request_kind: :compaction,
+        semantic_turn_key: digest(),
+        window_id_digest: digest(),
+        context_window_id_digest: digest(),
+        window_number: 1
+      }
+    }
+
+    lifecycle = %{lifecycle_id: Ecto.UUID.generate(), generation: 1}
+
+    collector_invalid =
+      sse_block("response.output_item.done", %{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "   "}
+      })
+
+    provider_failure =
+      sse_block("response.failed", %{
+        "type" => "response.failed",
+        "response" => %{
+          "status" => "failed",
+          "error" => %{"code" => "server_error", "message" => raw_sentinel}
+        }
+      })
+
+    cases = [
+      {collector_invalid, "stage=collector_invalid", "reason_code=invalid_compaction"},
+      {provider_failure, "stage=provider_terminal", "reason_code=server_error"},
+      {sse_block("response.output_item.done", %{
+         "type" => "response.output_item.done",
+         "item" => %{"type" => "compaction", "encrypted_content" => "present-but-unterminated"}
+       }), "stage=collector_invalid", "reason_code=missing_terminal"}
+    ]
+
+    for {body, expected_stage, expected_reason} <- cases do
+      log =
+        capture_log([level: :warning], fn ->
+          assert :error =
+                   Admission.FirstCompactResult.from_collection(
+                     request,
+                     %{body: body},
+                     lifecycle
+                   )
+        end)
+
+      assert log =~ "native compact admission rejected"
+      assert log =~ "source_stage=first_compact_result"
+      assert log =~ expected_stage
+      assert log =~ expected_reason
+      refute log =~ raw_sentinel
+    end
+  end
+
+  # findings#165: every one of these causes was already known where it failed,
+  # and every one of them used to log `reason_code=unclassified`. A test that
+  # asserted that constant is exactly the failure mode being removed, so this
+  # one drives each precondition separately and requires each to name itself.
+  test "each admission precondition names the check that rejected the compaction" do
+    valid_collection =
+      Enum.map_join(
+        [
+          %{
+            "type" => "response.output_item.done",
+            "item" => %{"type" => "compaction", "encrypted_content" => "opaque-compaction"}
+          },
+          %{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_compact_fixture", "status" => "completed"}
+          }
+        ],
+        "",
+        &"data: #{CodexPooler.JSON.encode!(&1)}\n\n"
+      )
+
+    collector_reached =
+      sse_block("response.output_item.done", %{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "   "}
+      })
+
+    cases = [
+      {"request_id", %{request_id: "not-a-uuid"}, collector_reached},
+      {"attempt_id", %{attempt_id: "not-a-uuid"}, collector_reached},
+      {"payload_decode", %{payload: "{not json"}, collector_reached},
+      {"payload_model", %{payload: CodexPooler.JSON.encode!(%{"model" => 7})}, collector_reached},
+      {"serving_mode", %{effective_serving_mode: "turbo"}, valid_collection}
+    ]
+
+    reason_codes =
+      for {expected_reason, override, body} <- cases do
+        request = Map.merge(eligible_compaction_request(), override)
+
+        log =
+          capture_log([level: :warning], fn ->
+            assert :error =
+                     Admission.FirstCompactResult.from_collection(
+                       request,
+                       %{body: body},
+                       %{lifecycle_id: Ecto.UUID.generate(), generation: 1}
+                     )
+          end)
+
+        assert log =~ "native compact admission rejected", expected_reason
+        assert log =~ "stage=admission_precondition", expected_reason
+        assert log =~ "reason_code=#{expected_reason}", expected_reason
+        refute log =~ "reason_code=unclassified", expected_reason
+        expected_reason
+      end
+
+    # Five distinct causes must produce five distinct tokens, not one constant.
+    assert length(Enum.uniq(reason_codes)) == 5
+
+    assert Enum.sort(Admission.FirstCompactResult.precondition_reason_codes()) ==
+             ~w(attempt_id payload_decode payload_model request_id serving_mode)
+  end
+
+  test "an invalid admission binding keeps the bounded reason the admission returned" do
+    request =
+      Map.put(
+        eligible_compaction_request(),
+        :native_compaction_metadata,
+        %NativeCodexTurnMetadata{
+          request_kind: :compaction,
+          semantic_turn_key: "not-a-32-byte-digest",
+          window_id_digest: digest(),
+          context_window_id_digest: digest(),
+          window_number: 1
+        }
+      )
+
+    body =
+      Enum.map_join(
+        [
+          %{
+            "type" => "response.output_item.done",
+            "item" => %{"type" => "compaction", "encrypted_content" => "opaque-compaction"}
+          },
+          %{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_compact_fixture", "status" => "completed"}
+          }
+        ],
+        "",
+        &"data: #{CodexPooler.JSON.encode!(&1)}\n\n"
+      )
+
+    log =
+      capture_log([level: :warning], fn ->
+        assert :error =
+                 Admission.FirstCompactResult.from_collection(
+                   request,
+                   %{body: body},
+                   %{lifecycle_id: Ecto.UUID.generate(), generation: 1}
+                 )
+      end)
+
+    assert log =~ "stage=admission_precondition"
+    assert log =~ "reason_code=invalid_binding"
+    refute log =~ "reason_code=unclassified"
+  end
+
+  defp eligible_compaction_request do
+    %{
+      payload: CodexPooler.JSON.encode!(%{"model" => "sample-model"}),
+      request_id: Ecto.UUID.generate(),
+      attempt_id: Ecto.UUID.generate(),
+      websocket_delivery_mode: :collect_full_history,
+      effective_serving_mode: "full",
+      native_compaction_metadata: %NativeCodexTurnMetadata{
+        request_kind: :compaction,
+        semantic_turn_key: digest(),
+        window_id_digest: digest(),
+        context_window_id_digest: digest(),
+        window_number: 1
+      }
+    }
+  end
+
+  test "an ordinary turn is not an admission rejection and logs nothing" do
+    log =
+      capture_log([level: :warning], fn ->
+        assert :error =
+                 Admission.FirstCompactResult.from_collection(
+                   %{websocket_delivery_mode: :stream, native_compaction_metadata: nil},
+                   %{body: ""},
+                   %{lifecycle_id: Ecto.UUID.generate(), generation: 1}
+                 )
+      end)
+
+    refute log =~ "native compact admission rejected"
+  end
+
+  defp sse_block(event, payload),
+    do: "event: #{event}\ndata: #{CodexPooler.JSON.encode!(payload)}\n\n"
 
   defp collection_request(upstream) do
     metadata = %NativeCodexTurnMetadata{

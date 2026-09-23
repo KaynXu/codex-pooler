@@ -621,9 +621,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
 
     assert [first_acceptance, second_acceptance] =
-             Repo.all(
-               from acceptance in InviteAcceptance, order_by: [asc: acceptance.accepted_at]
-             )
+             Repo.all(from acceptance in InviteAcceptance, order_by: [asc: acceptance.accepted_at])
 
     assert first_acceptance.upstream_identity_id == first_completed.identity.id
     assert second_acceptance.upstream_identity_id == first_completed.identity.id
@@ -690,8 +688,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     refresh_token = "invite-cross-pool-refresh"
 
     configure_codex_auth_client!(%{
-      poll_result:
-        {:ok, token_payload(%{}, access_token: access_token, refresh_token: refresh_token)}
+      poll_result: {:ok, token_payload(%{}, access_token: access_token, refresh_token: refresh_token)}
     })
 
     {first_token, source_pool} = invite_fixture()
@@ -735,9 +732,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     assert Repo.aggregate(PoolUpstreamAssignment, :count) == 2
 
     assert [first_acceptance, second_acceptance] =
-             Repo.all(
-               from acceptance in InviteAcceptance, order_by: [asc: acceptance.accepted_at]
-             )
+             Repo.all(from acceptance in InviteAcceptance, order_by: [asc: acceptance.accepted_at])
 
     assert first_acceptance.pool_upstream_assignment_id == first_completed.assignment.id
     assert second_acceptance.pool_upstream_assignment_id == second_completed.assignment.id
@@ -785,9 +780,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
 
     previous = Application.get_env(:codex_pooler, CodexPooler.Upstreams.Auth.CodexAuth)
 
-    Application.put_env(:codex_pooler, CodexPooler.Upstreams.Auth.CodexAuth,
-      client: __MODULE__.FakeCodexAuthClient
-    )
+    Application.put_env(:codex_pooler, CodexPooler.Upstreams.Auth.CodexAuth, client: __MODULE__.FakeCodexAuthClient)
 
     on_exit(fn ->
       if previous do
@@ -881,8 +874,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
          "device_auth_id" => "dev_123",
          "user_code" => "ABCD-EFGH",
          "verification_url" => "https://auth.openai.com/codex/device",
-         "expires_at" =>
-           DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.to_iso8601(),
+         "expires_at" => DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.to_iso8601(),
          "poll_interval_seconds" => 5
        }}
     end

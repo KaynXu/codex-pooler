@@ -623,8 +623,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
           "prompt_tokens" => prompt_tokens,
           "prompt_tokens_details" => Map.get(usage, "prompt_tokens_details"),
           "completion_tokens" => completion_tokens,
-          "total_tokens" =>
-            Map.get(usage, "total_tokens") || total_tokens(prompt_tokens, completion_tokens)
+          "total_tokens" => Map.get(usage, "total_tokens") || total_tokens(prompt_tokens, completion_tokens)
         }
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()

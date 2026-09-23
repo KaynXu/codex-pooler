@@ -16,12 +16,18 @@ defmodule CodexPooler.Upstreams.Schemas.EncryptedSecret do
   @type t :: %__MODULE__{}
   @type attrs :: map()
 
+  # A failure dump or log that inspects a row or a changeset must never carry
+  # the secret material: `redact: true` covers both (a manual `@derive` would
+  # protect the struct only, while `Ecto.Changeset` inspects `changes` through
+  # the schema's redacted fields). `aad` stays visible: it is bounded,
+  # non-secret authenticated data (algorithm, key name, identity id, kind, key
+  # version) that identifies the row (findings#215, #221).
   schema "encrypted_secrets" do
     field :upstream_identity_id, :binary_id
     field :secret_kind, :string
     field :key_version, :string
-    field :ciphertext, :binary
-    field :nonce, :binary
+    field :ciphertext, :binary, redact: true
+    field :nonce, :binary, redact: true
     field :aad, :map
     field :status, :string
     field :created_at, :utc_datetime_usec

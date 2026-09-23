@@ -21,6 +21,9 @@ defmodule CodexPooler.InstanceSettings.Defaults do
       "upstream_connect_timeout_ms" => settings.upstream_connect_timeout_ms,
       "upstream_pool_timeout_ms" => settings.upstream_pool_timeout_ms,
       "upstream_receive_timeout_ms" => settings.upstream_receive_timeout_ms,
+      "upstream_conn_max_idle_time_ms" => settings.upstream_conn_max_idle_time_ms,
+      "upstream_token_refresh_margin_seconds" => settings.upstream_token_refresh_margin_seconds,
+      "upstream_token_refresh_proactive_enabled" => true,
       "expired_alias_ttl_seconds" => settings.expired_alias_ttl_seconds,
       "bridge_owner_lease_ttl_seconds" => settings.bridge_owner_lease_ttl_seconds,
       "bridge_owner_lease_renewal_seconds" => settings.bridge_owner_lease_renewal_seconds,
@@ -57,8 +60,7 @@ defmodule CodexPooler.InstanceSettings.Defaults do
     %{
       "max_size_bytes" => settings.file_max_size_bytes,
       "upload_ttl_seconds" => settings.upload_ttl_seconds,
-      "abandoned_upload_cleanup_interval_seconds" =>
-        settings.abandoned_upload_cleanup_interval_seconds
+      "abandoned_upload_cleanup_interval_seconds" => settings.abandoned_upload_cleanup_interval_seconds
     }
   end
 
@@ -66,7 +68,8 @@ defmodule CodexPooler.InstanceSettings.Defaults do
   def transcription, do: %{"max_upload_bytes" => @transcription_max_upload_bytes}
 
   @spec operator() :: map()
-  def operator, do: %{"login_base_url" => @operator_login_base_url}
+  def operator,
+    do: %{"login_base_url" => @operator_login_base_url, "openai_status_polling_enabled" => true}
 
   @spec catalog() :: map()
   defdelegate catalog(), to: StaticDefaults

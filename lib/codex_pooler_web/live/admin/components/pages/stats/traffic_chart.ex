@@ -50,10 +50,8 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
     %{
       categories: CodexPooler.JSON.encode!(labels),
       series: CodexPooler.JSON.encode!(series),
-      units:
-        CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["requests"]),
-      value_kinds:
-        CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["integer"]),
+      units: CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["requests"]),
+      value_kinds: CodexPooler.JSON.encode!(List.duplicate("tokens", length(column_series)) ++ ["integer"]),
       yaxis:
         CodexPooler.JSON.encode!([
           %{seriesName: token_axis_series, title: "tokens", valueKind: "tokens"},
@@ -61,8 +59,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
         ]),
       colors: CodexPooler.JSON.encode!(colors),
       points: points,
-      total_label:
-        "#{Format.token_count(token_total)} tokens / #{Format.integer(request_total)} requests"
+      total_label: "#{Format.token_count(token_total)} tokens / #{Format.integer(request_total)} requests"
     }
   end
 
@@ -77,16 +74,14 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficChart do
   defp series_config([], labels, tokens_by_label) do
     token_values = Enum.map(labels, &Map.get(tokens_by_label, &1, 0))
 
-    {[%{name: "Tokens", type: "column", data: token_values}], token_values, "Tokens",
-     ["var(--color-primary)", "var(--admin-chart-requests)"]}
+    {[%{name: "Tokens", type: "column", data: token_values}], token_values, "Tokens", ["var(--color-primary)", "var(--admin-chart-requests)"]}
   end
 
   defp series_config(model_series, _labels, _tokens_by_label) do
     token_values = model_series |> Enum.map(& &1.data) |> Enum.zip_with(&Enum.sum/1)
     model_names = Enum.map(model_series, & &1.name)
 
-    {model_series, token_values, model_names,
-     model_series_colors(model_series) ++ ["var(--admin-chart-requests)"]}
+    {model_series, token_values, model_names, model_series_colors(model_series) ++ ["var(--admin-chart-requests)"]}
   end
 
   defp model_series(model_usage_rows, labels) do

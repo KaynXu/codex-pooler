@@ -148,9 +148,7 @@ defmodule CodexPooler.Gateway.Runtime.SparkHeaderScopeTest do
 
     identity =
       setup.identity
-      |> Ecto.Changeset.change(
-        metadata: Map.put(setup.identity.metadata, "usage_base_url", FakeUpstream.url(upstream))
-      )
+      |> Ecto.Changeset.change(metadata: Map.put(setup.identity.metadata, "usage_base_url", FakeUpstream.url(upstream)))
       |> Repo.update!()
 
     assert {:ok, identity} =
@@ -185,8 +183,7 @@ defmodule CodexPooler.Gateway.Runtime.SparkHeaderScopeTest do
        "/backend-api/codex/usage" => {200, usage},
        "/wham/usage" => {200, usage},
        "/backend-api/wham/usage" => {200, usage},
-       @endpoint_path =>
-         {200, %{"id" => "resp_permission_fixture", "object" => "response", "output" => []}}
+       @endpoint_path => {200, %{"id" => "resp_permission_fixture", "object" => "response", "output" => []}}
      }}
   end
 

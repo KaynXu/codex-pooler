@@ -174,6 +174,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
   end
 
   @tag :public_remote_success
+  @tag slow: "boots a real remote owner and verifies public websocket terminal delivery and accounting"
   test "public responses bridge remote v1 success settles and delivers one terminal", %{
     conn: conn
   } do
@@ -253,6 +254,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
   end
 
+  @tag slow: "boots a real remote owner and verifies upstream admission before proxy delivery acknowledgement"
   test "admitted native proxy starts a real peer upstream before terminal delivery acknowledgement" do
     ensure_test_distribution_started!()
     assert :ok = Sandbox.mode(Repo, :auto)
@@ -288,15 +290,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     {:ok, state} =
       owner_socket(auth, "ws-native-proxy-predispatch", "native-proxy-predispatch",
         session_header: session_header,
-        session_header_source: "x-session-id"
+        session_header_source: "x-session-id",
+        forwarded_headers: [
+          {"session-id", "peer-owner-session"},
+          {"thread-id", "peer-owner-thread"},
+          {"x-client-request-id", "peer-owner-thread"}
+        ]
       )
 
     try do
       payload = websocket_payload(setup, "native proxy predispatch")
       assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid, ^release_ref},
                      5_000
 
       assert MapSet.size(state.tasks) == 1
@@ -304,8 +310,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
       refute_received {:websocket_response_activity, _task_pid, _activity_token}
       send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
-      assert_receive {:websocket_owner_frame, correlation_id, epoch, _owner_turn_id,
-                      {:data, ^terminal}} =
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, _owner_turn_id, {:data, ^terminal}} =
                        terminal_message,
                      5_000
 
@@ -329,8 +334,164 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
       assert FakeUpstream.count(upstream) == 1
       assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
 
+      # The peer owner opened the upstream socket from the proxy-built request.
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      assert %{
+               "session-id" => "peer-owner-session",
+               "thread-id" => "peer-owner-thread",
+               "x-client-request-id" => "peer-owner-thread"
+             } =
+               Map.take(Map.new(captured.headers), [
+                 "session-id",
+                 "thread-id",
+                 "x-client-request-id"
+               ])
+
       assert_receive {:fake_upstream_websocket_barrier, :before_close, close_pid, ^release_ref}
       send(close_pid, {:fake_upstream_release_websocket, release_ref})
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  @tag slow: "boots a real remote owner and verifies quota retarget with shared PostgreSQL session continuity"
+  test "remote owner moves a quota rejected full-history turn and retains the shared session" do
+    ensure_test_distribution_started!()
+    assert :ok = Sandbox.mode(Repo, :auto)
+    on_exit(fn -> assert :ok = Sandbox.mode(Repo, :manual) end)
+
+    terminal = fn id ->
+      FakeUpstream.websocket_text_frames([
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => id,
+            "status" => "completed",
+            "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+          }
+        })
+      ])
+    end
+
+    native = fn respond ->
+      FakeUpstream.expect_request(
+        method: "WEBSOCKET",
+        websocket_connection_ordinal: 1,
+        json: [valid: true, forbidden: ["previous_response_id"]],
+        respond: respond
+      )
+    end
+
+    upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          native.(terminal.("resp_peer_quota_anchor")),
+          native.(
+            FakeUpstream.websocket_text_frames([
+              CodexPooler.JSON.encode!(%{
+                "type" => "response.failed",
+                "response" => %{
+                  "status" => "failed",
+                  "error" => %{"code" => "usage_limit_reached"}
+                }
+              })
+            ])
+          )
+        ])
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.strict_sequence([
+          native.(terminal.("resp_peer_quota_recovered")),
+          native.(terminal.("resp_peer_quota_next"))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    register_unboxed_pool_cleanup!(setup)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-peer-quota", compact?: false)
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+    assert :ok = CodexPooler.Events.subscribe_pool(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = start_bridge_peer!(:current, setup.identity, repo: :real)
+    # The default peer fixture recognizes one identity only. Account failover
+    # must exercise the real shared-database lookup for both assignments.
+    {CodexPooler.Upstreams, upstream_beam, upstream_file} =
+      :code.get_object_code(CodexPooler.Upstreams)
+
+    :erpc.call(remote_node, :code, :purge, [CodexPooler.Upstreams])
+    assert true = :erpc.call(remote_node, :code, :delete, [CodexPooler.Upstreams])
+
+    assert {:module, CodexPooler.Upstreams} =
+             :erpc.call(remote_node, :code, :load_binary, [
+               CodexPooler.Upstreams,
+               upstream_file,
+               upstream_beam
+             ])
+
+    header = "native-peer-quota-#{System.unique_integer([:positive])}"
+    {session, owner_pid} = start_remote_bridge_owner!(auth, header, remote_node, :real)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-peer-quota", "peer-quota",
+        session_header: header,
+        session_header_source: "x-session-id"
+      )
+
+    owner_lease = active_owner_lease(session.id)
+
+    try do
+      state =
+        Enum.reduce(1..3, state, fn turn, state ->
+          if turn == 2,
+            do: put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+
+          payload = websocket_payload(setup, "synthetic peer quota turn #{turn}")
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
+          assert %{"type" => "response.completed"} = CodexPooler.JSON.decode!(frame)
+          assert {:ok, state} = receive_owner_socket_complete(state)
+
+          assert_receive {CodexPooler.Events, %{reason: "request_finalized", payload: %{"status" => "succeeded"}}},
+                         5_000
+
+          state
+        end)
+
+      assert state.codex_session.id == session.id
+      assert active_owner_lease(session.id).lease_token == owner_lease.lease_token
+      assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
+
+      assert Repo.get!(CodexSession, session.id).pool_upstream_assignment_id ==
+               fallback.assignment.id
+
+      assert FakeUpstream.count(upstream) == 2
+      assert FakeUpstream.count(fallback_upstream) == 2
+      assert FakeUpstream.http_request_count(upstream) == 0
+      assert FakeUpstream.http_request_count(fallback_upstream) == 0
+      assert :ok = FakeUpstream.verify!(upstream)
+      assert :ok = FakeUpstream.verify!(fallback_upstream)
+      assert [anchor, recovered, next] = request_logs(setup.pool.id)
+      assert Enum.all?([anchor, recovered, next], &(&1.status == "succeeded"))
+      assert recovered.retry_count == 1
+
+      assert [failed, succeeded] =
+               Repo.all(
+                 from(a in Attempt,
+                   where: a.request_id == ^recovered.id,
+                   order_by: [asc: a.attempt_number]
+                 )
+               )
+
+      assert failed.status == "retryable_failed"
+      assert failed.pool_upstream_assignment_id == setup.assignment.id
+      assert succeeded.pool_upstream_assignment_id == fallback.assignment.id
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -372,8 +533,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
 
       assert_receive {:turn_budget_remote_call, :remote_submit_request_v1, 1_801_000}
 
-      assert_receive {:websocket_owner_frame, correlation_id, epoch, _owner_turn_id,
-                      {:data, ^terminal}} =
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, _owner_turn_id, {:data, ^terminal}} =
                        terminal_message
 
       assert {:push, {:text, ^terminal}, remote_state} =
@@ -403,6 +563,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
   end
 
   @tag :public_protocol_fallback
+  @tag slow: "boots a real previous-protocol peer and verifies incompatibility rejects before upstream dispatch"
   test "public responses bridge protocol incompatibility fails without upstream submission", %{
     conn: conn
   } do
@@ -472,6 +633,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
   end
 
+  @tag slow: "compares real local and remote BEAM owner metadata for the same turn snapshot"
   test "local and remote owners emit identical native metadata bytes for one turn snapshot" do
     upstream =
       start_upstream(
@@ -571,6 +733,133 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
     end
   end
 
+  @tag slow: "compares real local and remote BEAM owner wire metadata and provider frame ordering"
+  test "local and remote owners relay provider metadata after the Pooler event without its ETag" do
+    provider_etag = ~s(W/"provider-models-etag-owner-sentinel")
+
+    provider_metadata =
+      CodexPooler.JSON.encode!(%{
+        "type" => "codex.response.metadata",
+        "headers" => %{
+          "x-models-etag" => provider_etag,
+          "openai-model" => "synthetic-provider-model",
+          "x-reasoning-included" => "true"
+        }
+      })
+
+    upstream =
+      start_upstream(
+        # Strict finite scenario: the local and the remote owner each forward
+        # exactly one native turn whose provider metadata precedes the response.
+        # provenance: synthetic_adversarial (header names from the released Codex client; values invented)
+        FakeUpstream.strict_sequence(
+          for response_id <- ["resp_local_provider_metadata", "resp_remote_provider_metadata"] do
+            FakeUpstream.expect_request(
+              method: "WEBSOCKET",
+              json: [valid: true, equals: %{"type" => "response.create"}],
+              respond:
+                FakeUpstream.websocket_text_frames([
+                  provider_metadata,
+                  CodexPooler.JSON.encode!(%{"id" => response_id, "object" => "response"})
+                ])
+            )
+          end
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, local_state} =
+      owner_socket(auth, "ws-local-provider-metadata", "local-provider-metadata")
+
+    {:ok, remote_state} =
+      owner_socket(auth, "ws-remote-provider-metadata", "remote-provider-metadata")
+
+    remote_node = :"codex_pooler@remote-provider-metadata.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = remote_owner_state(remote_state, remote_node, node_opts)
+    models_conn = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+    assert [models_etag] = get_resp_header(models_conn, "etag")
+
+    try do
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "local provider metadata"),
+                 owner_response_options(local_state, []),
+                 fn _data -> :ok end
+               )
+
+      {local_frames, local_state} = receive_owner_raw_frames(local_state, 3)
+
+      assert_provider_metadata_after_pooler_event!(
+        local_frames,
+        models_etag,
+        "resp_local_provider_metadata"
+      )
+
+      assert {:ok, _local_state} = receive_owner_socket_complete(local_state)
+
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "remote provider metadata"),
+                 owner_response_options(remote_state, node_opts),
+                 fn _data -> :ok end
+               )
+
+      {remote_frames, remote_state} = receive_owner_raw_frames(remote_state, 3)
+
+      assert_provider_metadata_after_pooler_event!(
+        remote_frames,
+        models_etag,
+        "resp_remote_provider_metadata"
+      )
+
+      assert {:ok, _remote_state} = receive_owner_socket_complete(remote_state)
+      assert :ok = FakeUpstream.verify!(upstream)
+    after
+      CodexResponsesSocket.terminate(:closed, local_state)
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  defp receive_owner_raw_frames(state, count) do
+    Enum.map_reduce(1..count, state, fn _index, current ->
+      assert {:push, {:text, frame}, current} = receive_owner_socket_raw_push(current)
+      {frame, current}
+    end)
+  end
+
+  defp assert_provider_metadata_after_pooler_event!(frames, models_etag, response_id) do
+    assert [pooler_frame, provider_frame, response_frame] = frames
+
+    assert %{
+             "type" => "codex.response.metadata",
+             "headers" => %{"x-models-etag" => ^models_etag}
+           } = CodexPooler.JSON.decode!(pooler_frame)
+
+    assert CodexPooler.JSON.decode!(provider_frame) == %{
+             "type" => "codex.response.metadata",
+             "headers" => %{
+               "openai-model" => "synthetic-provider-model",
+               "x-reasoning-included" => "true"
+             }
+           }
+
+    assert owner_response_id(response_frame) == response_id
+
+    for frame <- frames do
+      refute frame =~ "provider-models-etag-owner-sentinel"
+    end
+  end
+
   defp public_stream_payload(setup, input) do
     %{"model" => setup.model.exposed_model_id, "input" => input, "stream" => true}
   end
@@ -586,8 +875,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
   end
 
   defp assert_bridge_v1_submission!(remote_node) do
-    assert_receive {:remote_forwarder_v1_call, remote_pid,
-                    [codex_session_id, downstream, %WebsocketOwnerRequest{version: 1} = request]}
+    assert_receive {:remote_forwarder_v1_call, remote_pid, [codex_session_id, downstream, %WebsocketOwnerRequest{version: 1} = request]}
 
     assert node(remote_pid) == remote_node
     assert is_binary(codex_session_id)
@@ -608,8 +896,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.MultiNodeP
 
     activity_registry = :"predispatch-activity-#{System.unique_integer([:positive])}"
     drain_name = :"predispatch-drain-#{System.unique_integer([:positive])}"
+    stream_registry = :"predispatch-streams-#{System.unique_integer([:positive])}"
     start_supervised!({ActivityRegistry, name: activity_registry})
-    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry})
+
+    # Draining marks a registry drained for good, so this keeps the
+    # deferred-stream registry local instead of flipping the global one for
+    # every later HTTP SSE stream in this VM.
+    start_supervised!({CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry, name: stream_registry})
+
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry, stream_registry: stream_registry})
+
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
     Application.delete_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus)
 

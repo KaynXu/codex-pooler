@@ -83,17 +83,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus do
     {tone, title, summary, reason} =
       cond do
         is_map(lifecycle_warning) ->
-          {:error, Map.fetch!(lifecycle_warning, :title), Map.fetch!(lifecycle_warning, :body),
-           Map.get(lifecycle_warning, :reason) || reconciliation_reason}
+          {:error, Map.fetch!(lifecycle_warning, :title), Map.fetch!(lifecycle_warning, :body), Map.get(lifecycle_warning, :reason) || reconciliation_reason}
 
         reauth_required? ->
-          {:error, "Reauthentication required",
-           "Credentials need recovery before this account can route.", reconciliation_reason}
+          {:error, "Reauthentication required", "Credentials need recovery before this account can route.", reconciliation_reason}
 
         reconciliation_status in ["failed", "partial", "blocked"] ->
-          {:error, "Quota reconciliation needs attention",
-           reconciliation_reason || "The latest reconciliation did not complete successfully.",
-           nil}
+          {:error, "Quota reconciliation needs attention", reconciliation_reason || "The latest reconciliation did not complete successfully.", nil}
 
         true ->
           {:neutral, nil, nil, nil}
