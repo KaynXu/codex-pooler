@@ -11,8 +11,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "5e41f16a55087b8a5aa063dd466f463d0cf9c1ee47063cfcbbbf2cdd9df36109"
-  @target_generated_at "2026-09-08T22:55:14.662729Z"
+  @target_sha256 "9ad1c33a7d68bc689f6e9ca49ea3b9e338f11cfdb65c4d6a954c07bd16106c12"
+  @target_generated_at "2026-09-22T18:00:08.224828Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -36,6 +36,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     "gpt-5.1-codex-max",
     "gpt-5.1-codex-mini",
     "gpt-5.2-codex",
+    "gpt-5.4-cyber",
     "o1-mini",
     "o3-deep-research",
     "o4-mini-deep-research"
@@ -44,6 +45,14 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     "gpt-6-astra" => %{
       "standard" => ["10.0", "1.0", "12.5", "50.0"],
       "fast" => ["20.0", "2.0", "25.0", "100.0"]
+    },
+    "gpt-6-sol" => %{
+      "standard" => ["2.0", "0.2", "2.5", "10.0"],
+      "fast" => ["4.0", "0.4", "5.0", "20.0"]
+    },
+    "gpt-6-luna" => %{
+      "standard" => ["0.1", "0.01", "0.125", "0.5"],
+      "fast" => ["0.2", "0.02", "0.25", "1.0"]
     },
     "gpt-5.6-luna" => %{
       "standard" => ["0.2", "0.02", "0.25", "1.2"],
@@ -60,6 +69,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   }
   @reviewed_fast_long_context_rates %{
     "gpt-6-astra" => ["40.0", "4.0", "50.0", "150.0"],
+    "gpt-6-sol" => ["8.0", "0.8", "10.0", "30.0"],
+    "gpt-6-luna" => ["0.4", "0.04", "0.5", "1.5"],
     "gpt-5.6-luna" => ["0.8", "0.08", "1.0", "3.6"],
     "gpt-5.6-terra" => ["8.0", "0.8", "10.0", "36.0"],
     "gpt-5.6-sol" => ["16.0", "1.6", "20.0", "60.0"]
@@ -199,6 +210,48 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "HTTP imports skip flat default per-minute models without writing their rows" do
+    flat_identifier = "flat-minute-model"
+    token_identifier = "flat-minute-token-model"
+
+    payload =
+      payload_with_models("2026-07-28T00:00:00Z", [token_identifier, flat_identifier])
+      |> put_in(["models", flat_identifier, "category"], "realtime_audio")
+      |> put_in(["models", flat_identifier, "categories"], ["realtime_audio"])
+      |> put_in(["models", flat_identifier, "pricing_type"], "per_minute")
+      |> put_in(["models", flat_identifier, "pricing_types"], ["per_minute"])
+      |> put_in(["models", flat_identifier, "prices"], %{
+        "standard" => %{"default" => %{"price_per_minute" => 1}}
+      })
+
+    # provenance: observed openai-json-pricing flat per-minute shape (2026-09-11); values synthetic
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(payload)
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    url = FakeUpstream.url(upstream) <> "/pricing.json"
+
+    assert {:ok, %{inserted: 1, skipped: 1, total: 2}} = OpenAIPricingImporter.import_url(url)
+
+    assert Repo.exists?(
+             from row in PricingSnapshot, where: row.model_identifier == ^token_identifier
+           )
+
+    refute Repo.exists?(
+             from row in PricingSnapshot, where: row.model_identifier == ^flat_identifier
+           )
+
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "malformed URL strings return bounded errors without writes" do
     before_count = Repo.aggregate(PricingSnapshot, :count)
 
@@ -238,7 +291,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed September 8 target as canonical revision 2 rows" do
+  test "imports the reviewed September 22 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -262,15 +315,15 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
-    assert first.inserted == 181
-    assert first.skipped == 86
+    assert first.inserted == 203
+    assert first.skipped == 87
 
     rows =
       Repo.all(
         from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
       )
 
-    assert length(rows) == 181
+    assert length(rows) == 203
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
     refute Enum.any?(rows, &(&1.model_identifier in @removed_identifiers))
@@ -293,7 +346,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
              end)
     end)
 
-    assert {:ok, %{inserted: 0, skipped: 86}} = OpenAIPricingImporter.import_file(@target)
+    assert {:ok, %{inserted: 0, skipped: 87}} = OpenAIPricingImporter.import_file(@target)
   end
 
   test "target checksum, exact rates, removals, and schema descriptors detect drift" do
