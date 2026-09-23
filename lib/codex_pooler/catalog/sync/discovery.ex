@@ -7,8 +7,8 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.EndpointMetadata
-  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.ResponsesAPI
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
 
   @secret_kind "access_token"
