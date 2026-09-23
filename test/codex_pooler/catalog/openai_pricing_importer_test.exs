@@ -11,8 +11,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "01dc932452a681345966f3224b1e46107a2bf9c0242f280a4707100a02dab0ae"
-  @target_generated_at "2026-09-11T09:35:15.225268Z"
+  @target_sha256 "9ad1c33a7d68bc689f6e9ca49ea3b9e338f11cfdb65c4d6a954c07bd16106c12"
+  @target_generated_at "2026-09-22T18:00:08.224828Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -36,6 +36,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     "gpt-5.1-codex-max",
     "gpt-5.1-codex-mini",
     "gpt-5.2-codex",
+    "gpt-5.4-cyber",
     "o1-mini",
     "o3-deep-research",
     "o4-mini-deep-research"
@@ -44,6 +45,14 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     "gpt-6-astra" => %{
       "standard" => ["10.0", "1.0", "12.5", "50.0"],
       "fast" => ["20.0", "2.0", "25.0", "100.0"]
+    },
+    "gpt-6-sol" => %{
+      "standard" => ["2.0", "0.2", "2.5", "10.0"],
+      "fast" => ["4.0", "0.4", "5.0", "20.0"]
+    },
+    "gpt-6-luna" => %{
+      "standard" => ["0.1", "0.01", "0.125", "0.5"],
+      "fast" => ["0.2", "0.02", "0.25", "1.0"]
     },
     "gpt-5.6-luna" => %{
       "standard" => ["0.2", "0.02", "0.25", "1.2"],
@@ -60,6 +69,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   }
   @reviewed_fast_long_context_rates %{
     "gpt-6-astra" => ["40.0", "4.0", "50.0", "150.0"],
+    "gpt-6-sol" => ["8.0", "0.8", "10.0", "30.0"],
+    "gpt-6-luna" => ["0.4", "0.04", "0.5", "1.5"],
     "gpt-5.6-luna" => ["0.8", "0.08", "1.0", "3.6"],
     "gpt-5.6-terra" => ["8.0", "0.8", "10.0", "36.0"],
     "gpt-5.6-sol" => ["16.0", "1.6", "20.0", "60.0"]
@@ -280,7 +291,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed September 11 target as canonical revision 2 rows" do
+  test "imports the reviewed September 22 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> CodexPooler.JSON.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -304,7 +315,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
-    assert first.inserted == 181
+    assert first.inserted == 203
     assert first.skipped == 87
 
     rows =
@@ -312,7 +323,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
         from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
       )
 
-    assert length(rows) == 181
+    assert length(rows) == 203
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
     refute Enum.any?(rows, &(&1.model_identifier in @removed_identifiers))
