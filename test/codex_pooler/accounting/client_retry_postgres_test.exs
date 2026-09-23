@@ -1,18 +1,70 @@
 defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
   import CodexPooler.AccountingTestSupport
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, ClientRetry, Request, RequestClientRetryLink}
+
+  alias CodexPooler.Accounting.{
+    Attempt,
+    ClientRetry,
+    PreAttemptRelease,
+    Request,
+    RequestClientRetryLink
+  }
+
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
   @detection_budget 15_000
+
+  test "retry successor preserves concurrency denial and admits after committed release" do
+    fixture = Sandbox.unboxed_run(Repo, fn -> committed_fixture() end)
+    register_unboxed_cleanup!(fn -> cleanup_fixture(fixture) end)
+
+    Sandbox.unboxed_run(Repo, fn ->
+      fixture.auth.api_key
+      |> Ecto.Changeset.change(max_active_requests: 1)
+      |> Repo.update!()
+
+      assert {:ok, occupied} =
+               Accounting.reserve(fixture.auth, fixture.model, fixture.payload, %{
+                 correlation_id: Ecto.UUID.generate()
+               })
+
+      assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+               Accounting.claim_client_retry_successor(
+                 fixture.auth,
+                 fixture.model,
+                 fixture.payload,
+                 fixture.opts
+               )
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 0
+
+      assert {:ok, _} =
+               Accounting.finalize_reservation_failure(
+                 occupied.request,
+                 %{last_error_code: "dispatch_unavailable"}
+               )
+
+      assert {:ok, %ClientRetry.SuccessorClaim{}} =
+               Accounting.claim_client_retry_successor(
+                 fixture.auth,
+                 fixture.model,
+                 fixture.payload,
+                 fixture.opts
+               )
+
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+    end)
+  end
 
   test "committed retry cleanup removes its identity and pricing without touching another fixture" do
     Sandbox.unboxed_run(Repo, fn ->
@@ -270,6 +322,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     end
   end
 
+  @tag slow: "runs real retry claims at concurrency 1, 4 and 16 and verifies exact SQL schedules"
   test "fixed client retry workload keeps the same query schedule at concurrency 1 4 and 16" do
     logical_operations = 16
 
@@ -277,36 +330,49 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       for concurrency <- [1, 4, 16] do
         fixtures =
           for _index <- 1..logical_operations do
-            Sandbox.unboxed_run(Repo, fn -> committed_fixture(:attempted) end)
+            # Registered as soon as each fixture exists, never scoped in `try/after`: the claims
+            # run in linked tasks, so a failing one kills the test process before an enclosing
+            # `after` runs. `committed_fixture/1` derives its keys while it commits, so a
+            # fixture that fails partway through is not covered.
+            fixture = Sandbox.unboxed_run(Repo, fn -> committed_fixture(:attempted) end)
+            register_unboxed_cleanup!(fn -> cleanup_fixture(fixture) end)
+            fixture
           end
 
-        try do
-          {results, events} =
-            capture_repo_schedule(fn ->
-              run_claim_workload(fixtures, concurrency)
-            end)
-
-          assert Enum.all?(results, &match?({:ok, %ClientRetry.SuccessorClaim{}}, &1))
-
-          %{
-            concurrency: concurrency,
-            total: length(events),
-            per_operation: div(length(events), logical_operations),
-            operation_sources: Enum.frequencies_by(events, &{&1.operation, &1.source}),
-            query_time_us: Enum.sum(Enum.map(events, & &1.query_time_us)),
-            max_query_time_us: Enum.max(Enum.map(events, & &1.query_time_us)),
-            queue_time_us: Enum.sum(Enum.map(events, & &1.queue_time_us)),
-            max_queue_time_us: Enum.max(Enum.map(events, & &1.queue_time_us))
-          }
-        after
-          Enum.each(fixtures, fn fixture ->
-            Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(fixture) end)
+        {results, events} =
+          capture_repo_schedule(fn ->
+            run_claim_workload(fixtures, concurrency)
           end)
-        end
+
+        assert Enum.all?(results, &match?({:ok, %ClientRetry.SuccessorClaim{}}, &1))
+
+        schedule = %{
+          concurrency: concurrency,
+          total: length(events),
+          enforcement_clock_queries: Enum.count(events, & &1.enforcement_clock?),
+          per_operation: div(length(events), logical_operations),
+          operation_sources: Enum.frequencies_by(events, &{&1.operation, &1.source}),
+          query_time_us: Enum.sum(Enum.map(events, & &1.query_time_us)),
+          max_query_time_us: Enum.max(Enum.map(events, & &1.query_time_us)),
+          queue_time_us: Enum.sum(Enum.map(events, & &1.queue_time_us)),
+          max_queue_time_us: Enum.max(Enum.map(events, & &1.queue_time_us))
+        }
+
+        # Also removed now, so each concurrency level runs against the database it always did;
+        # the registered pass then finds nothing left.
+        Enum.each(fixtures, fn fixture ->
+          Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(fixture) end)
+        end)
+
+        schedule
       end
 
-    assert Enum.map(schedules, & &1.total) == [336, 336, 336]
-    assert Enum.map(schedules, & &1.per_operation) == [21, 21, 21]
+    # Each claim samples the database clock under the key lock before reading
+    # the combined token-window snapshot. Nil active caps add no count query:
+    # 16 claims * 22 statements = 352, including one enforcement clock per claim.
+    assert Enum.map(schedules, & &1.enforcement_clock_queries) == [16, 16, 16]
+    assert Enum.map(schedules, & &1.total) == [352, 352, 352]
+    assert Enum.map(schedules, & &1.per_operation) == [22, 22, 22]
     assert Enum.map(schedules, & &1.operation_sources) |> Enum.uniq() |> length() == 1
   end
 
@@ -417,6 +483,9 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
     table = :ets.new(:client_retry_query_schedule, [:ordered_set, :public])
     handler_id = {__MODULE__, :query_schedule, System.unique_integer([:positive, :monotonic])}
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -430,6 +499,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
               %{
                 source: metadata[:source],
                 operation: query_operation(query),
+                enforcement_clock?: String.contains?(query, "SELECT clock_timestamp() AS as_of"),
                 query_time_us: native_microseconds(measurements[:query_time]),
                 queue_time_us: native_microseconds(measurements[:queue_time])
               }
@@ -471,7 +541,7 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
   end
 
   defp cleanup_fixture(fixture) do
-    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+    CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id])
 
     Repo.delete_all(
       from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
@@ -595,7 +665,8 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       Accounting.finalize_reservation_failure(reserved, %{
         last_error_code: "owner_drained",
         usage_status: "usage_unknown",
-        response_status_code: 499
+        response_status_code: 499,
+        pre_attempt_phase: PreAttemptRelease.turn_interrupted()
       })
 
     Repo.update!(
@@ -607,14 +678,20 @@ defmodule CodexPooler.Accounting.ClientRetryPostgresTest do
       )
     )
 
+    # Stamped input for the predicate, not a claim that anything produces it
+    # here. The real writer is `Interruption.interrupt_direct_request/2` on a
+    # `%DirectCleanup{}` receipt, covered end to end in
+    # `test/codex_pooler_web/controllers/runtime/backend_codex_pre_attempt_drain_resend_test.exs`
+    # (icoretech/codex-pooler-findings#160, #170).
     Repo.update!(
       Ecto.Changeset.change(request,
-        request_metadata:
-          Map.put(request.request_metadata || %{}, "websocket_pre_attempt_drain", true)
+        request_metadata: Map.put(request.request_metadata || %{}, "websocket_pre_attempt_drain", true)
       )
     )
   end
 
+  # Same stamping contract as `:pre_attempt_drain` above: the marker is input to
+  # `verified_claim_only_drain?/1`, and the producer lives in the drain suite.
   defp finalize_predecessor(_setup, predecessor, turn, now, :claim_only_drain) do
     Repo.delete!(turn)
 

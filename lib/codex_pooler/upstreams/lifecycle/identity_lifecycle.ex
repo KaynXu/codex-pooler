@@ -398,8 +398,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
 
   defp sort_account_candidates(candidates) do
     Enum.sort_by(candidates, fn identity ->
-      {if(is_nil(identity.workspace_id), do: 0, else: 1), identity.workspace_id || "",
-       identity.created_at, identity.id}
+      {if(is_nil(identity.workspace_id), do: 0, else: 1), identity.workspace_id || "", identity.created_at, identity.id}
     end)
   end
 

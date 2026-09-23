@@ -51,6 +51,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         mono: true
       ),
       detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-compaction-invalid-reason",
+        "Compaction rejection reason",
+        Map.get(attempt, :compaction_invalid_reason),
+        mono: true
+      ),
+      detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-upstream-error-param",
         "Upstream error parameter",
         Map.get(attempt, :upstream_error_param),
@@ -76,9 +82,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         Map.get(attempt, :model_serving_mode)
       )
 
-    present_rows(
-      rows ++ mode_rows ++ websocket_connection_rows(attempt) ++ downstream_delivery_rows(attempt)
-    )
+    present_rows(rows ++ mode_rows ++ websocket_connection_rows(attempt) ++ downstream_delivery_rows(attempt))
   end
 
   @spec transport_failure_rows(map()) :: [detail_row()]
@@ -88,9 +92,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
 
     [
       detail("#{prefix}-exception", "Exception", Map.get(failure, :exception), mono: true),
-      detail("#{prefix}-reason-class", "Reason class", Map.get(failure, :reason_class),
-        mono: true
-      ),
+      detail("#{prefix}-reason-class", "Reason class", Map.get(failure, :reason_class), mono: true),
       detail("#{prefix}-reason", "Reason", Map.get(failure, :reason), mono: true),
       detail("#{prefix}-phase", "Phase", Map.get(failure, :phase), mono: true),
       detail(
@@ -116,9 +118,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
   def transport_failure_attempts(log) do
     log
     |> debug_attempts()
-    |> Enum.filter(
-      &(is_map(Map.get(&1, :transport_failure)) and map_size(&1.transport_failure) > 0)
-    )
+    |> Enum.filter(&(is_map(Map.get(&1, :transport_failure)) and map_size(&1.transport_failure) > 0))
   end
 
   defp websocket_connection_rows(%{attempt_number: attempt_number} = attempt) do

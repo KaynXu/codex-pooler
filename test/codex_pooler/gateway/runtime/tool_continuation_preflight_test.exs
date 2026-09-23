@@ -169,7 +169,9 @@ defmodule CodexPooler.Gateway.Runtime.ToolContinuationPreflightTest do
         request_claim_key: next.request_options.continuity.request_claim_key
       )
 
-    assert {:error, %{code: "invalid_request"}} =
+    # A forged claim key breaks the frame's own signature, which is a gateway
+    # invariant breach rather than a client request error (findings #168).
+    assert {:error, %{status: 500, code: "server_error"}} =
              Service.prepare_replay_intent(setup.auth, %{first | request_options: forged_options})
 
     assert Repo.aggregate(RequestClientRetryLink, :count) == 0
@@ -198,9 +200,7 @@ defmodule CodexPooler.Gateway.Runtime.ToolContinuationPreflightTest do
         "/backend-api/codex/responses",
         payload
       )
-      |> RequestOptions.put_runtime_context(
-        api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch
-      )
+      |> RequestOptions.put_runtime_context(api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch)
 
     {:ok, prepared} =
       WebsocketCodec.prepare_frame(CodexPooler.JSON.encode!(payload), options, fn _ -> :ok end)

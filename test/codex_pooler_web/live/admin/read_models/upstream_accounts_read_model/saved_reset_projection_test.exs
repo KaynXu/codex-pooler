@@ -65,9 +65,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjectionTes
   @tag :saved_reset_redemption_cause
   test "projects only the five recognized automatic redemption causes" do
     causes = %{
-      {"gateway_auto", "exhausted"} => "Request · weekly exhausted",
+      {"gateway_auto", "exhausted"} => "Request · long-window quota exhausted",
       {"gateway_auto", "threshold"} => "Request · quota threshold",
-      {"scheduled_expiry_rescue", "exhausted"} => "Scheduled · weekly exhausted",
+      {"scheduled_expiry_rescue", "exhausted"} => "Scheduled · long-window quota exhausted",
       {"scheduled_expiry_rescue", "threshold"} => "Scheduled · quota threshold",
       {"scheduled_expiry_rescue", "last_call"} => "Scheduled · last call"
     }

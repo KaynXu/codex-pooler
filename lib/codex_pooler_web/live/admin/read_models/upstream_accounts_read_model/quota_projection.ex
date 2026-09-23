@@ -603,8 +603,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp measurement_pending_presentation(%{measurement_pending?: true}) do
-    {true, "Retained measurement awaits confirmation",
-     "Retained measurement; newer provider measurement awaits confirmation"}
+    {true, "Retained measurement awaits confirmation", "Retained measurement; newer provider measurement awaits confirmation"}
   end
 
   defp measurement_pending_presentation(_observation), do: {false, nil, nil}
@@ -775,8 +774,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp reset_display_presentation(:anchored, _reset_at, _reset_label, _reset_title, :stale) do
-    {:anchored, :unconfirmed, nil, "reset unconfirmed",
-     "last reported reset is unconfirmed because quota evidence is stale"}
+    {:anchored, :unconfirmed, nil, "reset unconfirmed", "last reported reset is unconfirmed because quota evidence is stale"}
   end
 
   defp reset_display_presentation(:anchored, reset_at, reset_label, reset_title, _evidence_state),
@@ -834,8 +832,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
          datetime_preferences,
          snapshot_at
        ) do
-    {:anchored, reset_at, quota_reset_label(reset_at, snapshot_at),
-     quota_reset_title(reset_at, datetime_preferences)}
+    {:anchored, reset_at, quota_reset_label(reset_at, snapshot_at), quota_reset_title(reset_at, datetime_preferences)}
   end
 
   defp anchored_reset_presentation(_reset_at, _datetime_preferences, _snapshot_at),

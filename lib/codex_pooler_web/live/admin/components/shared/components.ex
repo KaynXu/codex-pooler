@@ -339,9 +339,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   # `sticky bottom-0` because `.modal-box` is itself the scroll container: on a
   # bottom sheet the body runs past the fold and an unpinned footer takes the
   # actions with it. The policy-editor shell pins its own footer the same way.
-  attr :class, :any,
-    default:
-      "modal-action sticky bottom-0 mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-5 py-2.5 sm:px-6"
+  attr :class, :any, default: "modal-action sticky bottom-0 mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-5 py-2.5 sm:px-6"
 
   attr :docs_link_role, :string, default: "admin-dialog-docs-link"
   attr :docs_link_id, :string, default: nil
@@ -688,12 +686,10 @@ defmodule CodexPoolerWeb.Admin.Components do
     do: "dropdown dropdown-hover dropdown-right inline-flex"
 
   defp diagnostic_popover_content_class(:end),
-    do:
-      "dropdown-content z-50 mt-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
+    do: "dropdown-content z-50 mt-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
 
   defp diagnostic_popover_content_class(_placement),
-    do:
-      "dropdown-content z-20 ml-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
+    do: "dropdown-content z-20 ml-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
 
   attr :id, :string, required: true
   attr :model_id, :string, required: true
@@ -972,12 +968,10 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp append_catalog_updated_at_fact(facts, _updated_at), do: facts
 
   defp model_info_content_class(:end),
-    do:
-      "dropdown dropdown-end dropdown-bottom w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
+    do: "dropdown dropdown-end dropdown-bottom w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
 
   defp model_info_content_class(_placement),
-    do:
-      "dropdown dropdown-start dropdown-bottom w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
+    do: "dropdown dropdown-start dropdown-bottom w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
 
   attr :id, :string, required: true
   attr :icon, :string, default: "hero-information-circle"
@@ -1129,9 +1123,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :variant, :atom, default: :secondary, values: [:primary, :secondary, :danger, :ghost]
   attr :size, :atom, default: :sm, values: [:sm, :md]
 
-  attr :rest, :global,
-    include:
-      ~w(href navigate patch method disabled form phx-click phx-disable-with phx-value-id phx-value-pool-id phx-value-step)
+  attr :rest, :global, include: ~w(href navigate patch method disabled form phx-click phx-disable-with phx-value-id phx-value-pool-id phx-value-step)
 
   def action_button(assigns) do
     assigns = assign(assigns, :class, action_button_class(assigns.variant, assigns.size))
@@ -1159,9 +1151,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :variant, :atom, default: :secondary, values: [:secondary, :danger, :positive, :warning]
   attr :copy_feedback?, :boolean, default: false
 
-  attr :rest, :global,
-    include:
-      ~w(href navigate patch disabled phx-click phx-hook phx-update phx-value-id phx-value-pool-id title aria-label data-copy-text data-copy-label data-copied-label)
+  attr :rest, :global, include: ~w(href navigate patch disabled phx-click phx-hook phx-update phx-value-id phx-value-pool-id title aria-label data-copy-text data-copy-label data-copied-label)
 
   def dropdown_action_item(assigns) do
     assigns =
@@ -1207,20 +1197,16 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   defp status_badge_class(:ok),
-    do:
-      "inline-flex items-center rounded-box bg-success/15 px-2 py-1 text-xs font-semibold text-success"
+    do: "inline-flex items-center rounded-box bg-success/15 px-2 py-1 text-xs font-semibold text-success"
 
   defp status_badge_class(:warning),
-    do:
-      "inline-flex items-center rounded-box bg-warning/15 px-2 py-1 text-xs font-semibold text-warning"
+    do: "inline-flex items-center rounded-box bg-warning/15 px-2 py-1 text-xs font-semibold text-warning"
 
   defp status_badge_class(:error),
-    do:
-      "inline-flex items-center rounded-box bg-error/15 px-2 py-1 text-xs font-semibold text-error"
+    do: "inline-flex items-center rounded-box bg-error/15 px-2 py-1 text-xs font-semibold text-error"
 
   defp status_badge_class(_status),
-    do:
-      "inline-flex items-center rounded-box bg-base-200 px-2 py-1 text-xs font-semibold text-base-content/70"
+    do: "inline-flex items-center rounded-box bg-base-200 px-2 py-1 text-xs font-semibold text-base-content/70"
 
   defp status_badge_label(:ok), do: "ok"
   defp status_badge_label(:warning), do: "attention needed"

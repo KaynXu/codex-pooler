@@ -56,8 +56,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
     rows =
       Repo.all(
         from state in RoutingCircuitState,
-          where:
-            state.pool_upstream_assignment_id in ^assignment_ids and is_nil(state.api_key_id),
+          where: state.pool_upstream_assignment_id in ^assignment_ids and is_nil(state.api_key_id),
           order_by: [
             asc: state.pool_upstream_assignment_id,
             asc: state.model_identifier,
@@ -158,14 +157,10 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
         summary, acc when is_map(summary) ->
           %{
             acc
-            | blocked_lane_count:
-                acc.blocked_lane_count + non_negative_count(summary, :blocked_lane_count),
-              recovering_lane_count:
-                acc.recovering_lane_count + non_negative_count(summary, :recovering_lane_count),
-              affected_lane_count:
-                acc.affected_lane_count + non_negative_count(summary, :affected_lane_count),
-              blocked_reasons:
-                bounded_reasons(acc.blocked_reasons ++ Map.get(summary, :blocked_reasons, []))
+            | blocked_lane_count: acc.blocked_lane_count + non_negative_count(summary, :blocked_lane_count),
+              recovering_lane_count: acc.recovering_lane_count + non_negative_count(summary, :recovering_lane_count),
+              affected_lane_count: acc.affected_lane_count + non_negative_count(summary, :affected_lane_count),
+              blocked_reasons: bounded_reasons(acc.blocked_reasons ++ Map.get(summary, :blocked_reasons, []))
           }
 
         _summary, acc ->
@@ -239,8 +234,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
       model_identifier: normalize_identifier(latest.model_identifier),
       route_class: normalize_identifier(latest.route_class),
       evidence_at: evidence_at,
-      reason:
-        if(blocked?, do: CircuitHealth.blocked_reason(current, settings, observed_at), else: nil)
+      reason: if(blocked?, do: CircuitHealth.blocked_reason(current, settings, observed_at), else: nil)
     }
   end
 

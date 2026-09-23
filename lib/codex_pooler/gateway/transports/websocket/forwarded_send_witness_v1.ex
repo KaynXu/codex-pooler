@@ -160,8 +160,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1 do
     digest(
       :capability,
       :erlang.term_to_binary(
-        {capability.phase, capability.binding, capability.control_ref, capability.token,
-         capability.expires_at_ms},
+        {capability.phase, capability.binding, capability.control_ref, capability.token, capability.expires_at_ms},
         [:deterministic]
       )
     )
@@ -171,9 +170,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1 do
 
   defp encoded(witness) do
     :erlang.term_to_binary(
-      {witness.version, witness.phase, witness.binding, witness.control_ref,
-       witness.capability_digest, witness.correlation_digest, witness.downstream_epoch,
-       witness.expires_at_ms, witness.nonce},
+      {witness.version, witness.phase, witness.binding, witness.control_ref, witness.capability_digest, witness.correlation_digest, witness.downstream_epoch, witness.expires_at_ms, witness.nonce},
       [:deterministic]
     )
   end

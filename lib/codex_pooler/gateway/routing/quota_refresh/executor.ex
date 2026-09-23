@@ -62,9 +62,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Executor do
   end
 
   defp with_advisory_lock(%PoolUpstreamAssignment{} = assignment, lock_key) do
-    Upstreams.reconcile_pool_account(assignment.pool_id, assignment.id,
-      receive_timeout: @quota_refresh_timeout_ms
-    )
+    Upstreams.reconcile_pool_account(assignment.pool_id, assignment.id, receive_timeout: @quota_refresh_timeout_ms)
   after
     unlock_advisory_lock(assignment, lock_key)
   end

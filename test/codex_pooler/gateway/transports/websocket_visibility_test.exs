@@ -16,7 +16,6 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Gateway.Websocket
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -90,8 +89,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [],
       payload: "{}",
-      timeouts:
-        RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
+      timeouts: RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
       request_id: fixture.request.id,
       attempt_id: fixture.attempt.id,
       frame_observer: observer,
@@ -105,6 +103,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
 
     fixture.attempt |> Ecto.Changeset.change(status: "failed") |> Repo.update!()
     handler = "visibility-failure-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
 
     :ok =
       :telemetry.attach(
@@ -165,6 +166,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     parent = self()
     handler = "websocket-visibility-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
 
     :ok =
       :telemetry.attach(
@@ -261,14 +265,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
           url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
           headers: [],
           payload: "{}",
-          timeouts:
-            RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
+          timeouts: RequestOptions.for_websocket(%{receive_timeout_ms: @detection_timeout_ms}).timeout_config,
           message_mapper: & &1,
           effective_serving_mode: "full",
           request_id: fixture.request.id,
           attempt_id: fixture.attempt.id,
-          frame_observer:
-            WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(fixture))
+          frame_observer: WebsocketRequestCallbacks.frame_observer(fixture.identity, observation(fixture))
         })
 
       {result, owner}
@@ -469,11 +471,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketVisibilityTest do
             where: entitlement.request_id == ^fixture.request.id
         )
 
-        Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
-        Repo.delete_all(
-          from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id
-        )
+        Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
       end)
     end)
 

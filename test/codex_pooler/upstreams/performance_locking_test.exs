@@ -37,8 +37,7 @@ defmodule CodexPooler.Upstreams.PerformanceLockingTest do
 
     assert Repo.aggregate(
              from(secret in EncryptedSecret,
-               where:
-                 secret.upstream_identity_id == ^identity.id and secret.status == "superseded"
+               where: secret.upstream_identity_id == ^identity.id and secret.status == "superseded"
              ),
              :count
            ) == 5
@@ -172,9 +171,7 @@ defmodule CodexPooler.Upstreams.PerformanceLockingTest do
     assert {:ok, ^refresh_pid} = Task.await(refresh, @detection_timeout_ms)
     assert {:ok, ^lifecycle_pid} = Task.await(lifecycle, @detection_timeout_ms)
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN mixed_writers holder=#{holder_pid} refresh=#{refresh_pid} lifecycle=#{lifecycle_pid} refresh_blocking=#{inspect(refresh_blocking)} lifecycle_blocking=#{inspect(lifecycle_blocking)} terminal=ok,ok,ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN mixed_writers holder=#{holder_pid} refresh=#{refresh_pid} lifecycle=#{lifecycle_pid} refresh_blocking=#{inspect(refresh_blocking)} lifecycle_blocking=#{inspect(lifecycle_blocking)} terminal=ok,ok,ok sqlstate_40P01=0")
   end
 
   defp dependent_lock_task(parent, barrier, role, identity_id) do
@@ -262,8 +259,7 @@ defmodule CodexPooler.Upstreams.PerformanceLockingTest do
       token: "synthetic-task8-access-#{unique}",
       refresh_token: "synthetic-task8-refresh-#{unique}",
       credential_provenance: "codex_chatgpt_oauth",
-      access_token_expires_at:
-        DateTime.utc_now() |> DateTime.add(86_400) |> DateTime.to_iso8601(),
+      access_token_expires_at: DateTime.utc_now() |> DateTime.add(86_400) |> DateTime.to_iso8601(),
       import_metadata: %{}
     }
   end
@@ -294,9 +290,7 @@ defmodule CodexPooler.Upstreams.PerformanceLockingTest do
     identity_ids = Enum.map(fixture.identities, & &1.id)
 
     unboxed(fn ->
-      Repo.delete_all(
-        from event in AuditEvent, where: event.actor_user_id == ^fixture.scope.user.id
-      )
+      Repo.delete_all(from event in AuditEvent, where: event.actor_user_id == ^fixture.scope.user.id)
 
       Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^identity_ids)
       Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)

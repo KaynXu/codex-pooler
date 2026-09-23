@@ -56,8 +56,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
       observed_at: timestamp(window.observed_at, preferences),
       reset_at: timestamp(window.reset_at, preferences),
       freshness: Evidence.current_freshness_state(window, as_of),
-      elapsed?:
-        match?(%DateTime{}, window.reset_at) and DateTime.compare(window.reset_at, as_of) != :gt,
+      elapsed?: match?(%DateTime{}, window.reset_at) and DateTime.compare(window.reset_at, as_of) != :gt,
       selected?: true,
       measurement_pending?: not is_nil(pending_measurement),
       pending_measurement: pending_measurement,
@@ -105,8 +104,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
       [
         {"Reset reported", timestamp(window.reset_at, preferences)},
         {"Last synchronized", timestamp(window.last_sync_at, preferences)},
-        {"Source precision",
-         allowed(window.source_precision, ~w(authoritative observed inferred unknown))},
+        {"Source precision", allowed(window.source_precision, ~w(authoritative observed inferred unknown))},
         {"Window", window_duration(window.window_minutes)},
         {"Reported slot", allowed(window.window_kind, ~w(primary secondary))},
         {"Scope", allowed(window.quota_scope, ~w(account model upstream_model feature))},
@@ -168,8 +166,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaObservations do
   defp pending_measurement_details(pending_measurement) do
     [
       {"Retained measurement", Map.get(pending_measurement, :retained_remaining, "Not reported")},
-      {"Measurement status",
-       "Retained measurement; newer provider measurement awaits confirmation"},
+      {"Measurement status", "Retained measurement; newer provider measurement awaits confirmation"},
       {"Pending provider measurement", pending_measurement.remaining <> " remaining"},
       {"Provider observation", pending_measurement.observed_at}
     ]

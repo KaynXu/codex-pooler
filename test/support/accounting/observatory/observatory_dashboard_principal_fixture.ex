@@ -192,9 +192,7 @@ defmodule CodexPooler.Accounting.ObservatoryDashboardPrincipalFixture do
     timestamp = usec(timestamp)
 
     %{pool: pool, api_key: api_key}
-    |> request_fixture(
-      Map.merge(%{model_id: model.id, requested_model: model.exposed_model_id}, attrs)
-    )
+    |> request_fixture(Map.merge(%{model_id: model.id, requested_model: model.exposed_model_id}, attrs))
     |> Ecto.Changeset.change(%{
       admitted_at: timestamp,
       completed_at: Map.get(attrs, :completed_at, timestamp)

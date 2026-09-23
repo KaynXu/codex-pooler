@@ -527,8 +527,7 @@ defmodule CodexPooler.Accounts.Authentication do
   defp session_summary(session, current_token_hash) do
     %{
       id: session.id,
-      current?:
-        is_binary(current_token_hash) and session.session_token_hash == current_token_hash,
+      current?: is_binary(current_token_hash) and session.session_token_hash == current_token_hash,
       created_at: session.created_at,
       last_seen_at: session.last_seen_at,
       expires_at: session.expires_at,

@@ -45,9 +45,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                 :for={{observation, index} <- Enum.with_index(@limit.observations)}
                 data-role="quota-observation"
                 data-selected={to_string(observation.selected?)}
-                data-measurement-pending={
-                  if observation_measurement_pending?(observation), do: "true", else: nil
-                }
+                data-measurement-pending={if observation_measurement_pending?(observation), do: "true", else: nil}
                 class={["py-3 first:pt-0 last:pb-0 text-xs", index >= 5 && "hidden"]}
                 data-extra-evidence={to_string(index >= 5)}
               >
@@ -89,9 +87,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
                         evidence as of {observation.observed_at}
                       </span>
                       <span>
-                        {observation.freshness}<span :if={
-                          observation_measurement_pending?(observation)
-                        }> · retained measurement</span>
+                        {observation.freshness}<span :if={observation_measurement_pending?(observation)}> · retained measurement</span>
                       </span>
                     </div>
                   </summary>
@@ -154,8 +150,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaObservati
   defp observation_tone(%{measurement_pending?: true}), do: "progress-warning"
 
   defp observation_tone(%{selected?: false}),
-    do:
-      "text-base-content/50 bg-base-content/10 [&::-webkit-progress-value]:bg-current [&::-moz-progress-bar]:bg-current"
+    do: "text-base-content/50 bg-base-content/10 [&::-webkit-progress-value]:bg-current [&::-moz-progress-bar]:bg-current"
 
   defp observation_tone(%{remaining_value: value}) when value >= 70, do: "progress-success"
   defp observation_tone(%{remaining_value: value}) when value >= 30, do: "progress-warning"

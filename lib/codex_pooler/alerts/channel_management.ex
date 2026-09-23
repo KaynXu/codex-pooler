@@ -140,8 +140,7 @@ defmodule CodexPooler.Alerts.ChannelManagement do
     |> normalize_attrs(channel_attribute_keys())
     |> Map.merge(%{
       created_by_user_id: scope.user.id,
-      disabled_at:
-        disabled_at_for_state(Map.get(attrs, :state) || Map.get(attrs, "state"), timestamp),
+      disabled_at: disabled_at_for_state(Map.get(attrs, :state) || Map.get(attrs, "state"), timestamp),
       metadata: safe_channel_metadata(attrs),
       webhook_signing_secret_aad:
         Map.get(attrs, :webhook_signing_secret_aad) ||

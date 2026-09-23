@@ -2,6 +2,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
   @moduledoc false
   import Ecto.Query
 
+  alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, Metadata, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -47,7 +48,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
       session =
         Repo.one(from row in CodexSession, where: row.id == ^session_id, lock: "FOR UPDATE")
 
-      key = Repo.one(from row in APIKey, where: row.id == ^key_id, lock: "FOR UPDATE")
+      key = Access.lock_api_key_for_read(key_id)
 
       turn =
         Repo.one(
@@ -126,7 +127,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
       session =
         Repo.one(from row in CodexSession, where: row.id == ^session_id, lock: "FOR UPDATE")
 
-      key = Repo.one(from row in APIKey, where: row.id == ^key_id, lock: "FOR UPDATE")
+      key = Access.lock_api_key_for_read(key_id)
 
       turn =
         Repo.one(
@@ -205,9 +206,7 @@ defmodule CodexPooler.Accounting.WebsocketOwnerBinding do
     with {:ok, attempt} <- update_attempt_transport(attempt, "http_sse"),
          {:ok, request} <-
            request
-           |> Ecto.Changeset.change(
-             request_metadata: Map.delete(request.request_metadata, "websocket_owner_forwarding")
-           )
+           |> Ecto.Changeset.change(request_metadata: Map.delete(request.request_metadata, "websocket_owner_forwarding"))
            |> Repo.update() do
       %{request: request, attempt: attempt}
     else

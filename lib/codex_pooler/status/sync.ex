@@ -5,6 +5,7 @@ defmodule CodexPooler.Status.Sync do
   alias CodexPooler.Repo
   alias CodexPooler.Status.Events
   alias CodexPooler.Status.FeedClient
+  alias CodexPooler.Status.Freshness
   alias CodexPooler.Status.Schemas.{FeedState, Incident}
   @retire_after 3
   @type result ::
@@ -18,14 +19,7 @@ defmodule CodexPooler.Status.Sync do
     fetcher = Keyword.get(opts, :fetcher, &FeedClient.fetch/2)
     state = OpenAIStatus.feed_state() || %FeedState{singleton: true}
 
-    result =
-      try do
-        fetcher.(state_to_map(state), Keyword.put_new(opts, :now, now))
-      rescue
-        _ -> {:error, :sync_failed}
-      catch
-        _, _ -> {:error, :sync_failed}
-      end
+    result = fetcher.(state_to_map(state), Keyword.put_new(opts, :now, now))
 
     case result do
       {:ok, parsed} ->
@@ -67,17 +61,34 @@ defmodule CodexPooler.Status.Sync do
     reject_stale(previous, now)
     existing = Repo.all(Incident)
     by_guid = Map.new(existing, &{&1.guid, &1})
-    seen = MapSet.new(items, & &1.guid)
+    # Incidents we could not parse are still present in the feed, so they count
+    # as seen: omission means the provider stopped publishing them, not that we
+    # failed to read them.
+    seen =
+      items
+      |> MapSet.new(& &1.guid)
+      |> MapSet.union(MapSet.new(Map.get(parsed, :skipped_guids) || []))
+
     changed_count = upsert_items(items, by_guid, now)
-    omission_count = retire_omitted(existing, seen, now)
+
+    omission_count =
+      if Map.get(parsed, :complete?, true), do: retire_omitted(existing, seen, now), else: 0
+
     active = active_count()
-    state = persist_success_state(parsed, previous, active, now)
+
+    changed? =
+      changed_count + omission_count > 0 or
+        Freshness.stale?(previous && previous.last_success_at, now) or
+        previous.last_error_code != nil
+
+    state = persist_success_state(parsed, previous, active, changed?, now)
 
     %{
       changed_count: changed_count + omission_count,
       active_count: active,
       aggregate_revision: state.aggregate_revision,
-      timestamp: now
+      timestamp: now,
+      notify?: changed?
     }
   end
 
@@ -101,7 +112,7 @@ defmodule CodexPooler.Status.Sync do
   defp changed_incident?(incident, previous),
     do: if(incident.revision != previous.revision, do: 1, else: 0)
 
-  defp persist_success_state(parsed, previous, active, now) do
+  defp persist_success_state(parsed, previous, active, changed?, now) do
     {:ok, state} =
       OpenAIStatus.upsert_feed_state_unlocked(%{
         singleton: true,
@@ -112,7 +123,7 @@ defmodule CodexPooler.Status.Sync do
         last_error_code: nil,
         last_error_at: nil,
         active_count: active,
-        aggregate_revision: ((previous && previous.aggregate_revision) || 0) + 1,
+        aggregate_revision: ((previous && previous.aggregate_revision) || 0) + if(changed?, do: 1, else: 0),
         content_hash: Map.get(parsed, :content_hash),
         cap_pressure: OpenAIStatus.enforce_cap_unlocked(),
         updated_at: now
@@ -155,10 +166,8 @@ defmodule CodexPooler.Status.Sync do
     }
   end
 
-  defp metadata_changed?(previous, etag, last_modified, active, now) do
-    previous.etag != etag or previous.last_modified != last_modified or
-      previous.last_success_at != now or previous.last_attempt_at != now or
-      previous.last_error_code != nil or previous.last_error_at != nil or
+  defp metadata_changed?(previous, _etag, _last_modified, active, now) do
+    Freshness.stale?(previous.last_success_at, now) or previous.last_error_code != nil or
       (previous.active_count || 0) != active
   end
 
@@ -224,7 +233,18 @@ defmodule CodexPooler.Status.Sync do
       |> Map.put(:event_version, 1)
       |> Map.put(:emitted_at, result.timestamp)
 
-    if notify?, do: _ = Events.broadcast(event)
+    if notify? do
+      _ = Events.broadcast(event)
+    else
+      _ =
+        Events.broadcast(%{
+          event_version: 1,
+          event_type: :freshness,
+          aggregate_revision: result.aggregate_revision,
+          last_success_at: result.timestamp
+        })
+    end
+
     {tag, result}
   end
 
@@ -261,9 +281,7 @@ defmodule CodexPooler.Status.Sync do
 
   defp retire_omitted(existing, seen, now) do
     existing
-    |> Enum.filter(
-      &(is_nil(&1.retired_at) and is_nil(&1.resolved_at) and not MapSet.member?(seen, &1.guid))
-    )
+    |> Enum.filter(&(is_nil(&1.retired_at) and is_nil(&1.resolved_at) and not MapSet.member?(seen, &1.guid)))
     |> Enum.reduce(0, fn incident, count ->
       omission = min(incident.omission_count + 1, @retire_after)
 
@@ -296,9 +314,7 @@ defmodule CodexPooler.Status.Sync do
     do:
       :crypto.hash(
         :sha256,
-        :erlang.term_to_binary(
-          Map.take(item, [:guid, :title, :status, :summary, :component, :link, :published_at])
-        )
+        :erlang.term_to_binary(Map.take(item, [:guid, :title, :status, :summary, :component, :link, :published_at]))
       )
       |> Base.encode16(case: :lower)
 

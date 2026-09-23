@@ -148,9 +148,7 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
 
   defp routable_assignment_query(pool_id, assignment_id \\ nil) do
     PoolUpstreamAssignment
-    |> join(:inner, [assignment], identity in UpstreamIdentity,
-      on: identity.id == assignment.upstream_identity_id
-    )
+    |> join(:inner, [assignment], identity in UpstreamIdentity, on: identity.id == assignment.upstream_identity_id)
     |> where(
       [assignment, identity],
       assignment.status == ^@assignment_active and

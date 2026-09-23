@@ -59,9 +59,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
       %{"response" => %{} = response} = event -> {:ok, response, event}
       _event -> nil
     end)
-    |> Kernel.||(
-      {:error, Error.reason(502, "upstream_response_missing", "upstream response was incomplete")}
-    )
+    |> Kernel.||({:error, Error.reason(502, "upstream_response_missing", "upstream response was incomplete")})
   end
 
   defp terminal_error(event, response) do

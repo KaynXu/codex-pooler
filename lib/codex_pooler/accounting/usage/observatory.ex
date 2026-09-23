@@ -52,8 +52,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory do
       {:ok, Presentation.build(window, summary, buckets, models, outcomes, model_buckets)}
     else
       {:error, :unauthorized} ->
-        {:error,
-         error(:unauthorized, "Observatory reporting requires an authenticated principal")}
+        {:error, error(:unauthorized, "Observatory reporting requires an authenticated principal")}
 
       {:error, _reason} = error ->
         error

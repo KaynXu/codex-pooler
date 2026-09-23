@@ -46,9 +46,7 @@ defmodule CodexPooler.Access.Invite do
       :created_at,
       :updated_at
     ])
-    |> validate_format(:invited_email, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-      message: "must be a valid email address"
-    )
+    |> validate_format(:invited_email, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "must be a valid email address")
     |> validate_inclusion(:status, ~w(active accepted revoked expired))
     |> check_constraint(:invited_email, name: :invites_invited_email_not_blank_check)
     |> unique_constraint(:token_hash, name: :invites_token_hash_uq)

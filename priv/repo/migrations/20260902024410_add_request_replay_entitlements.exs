@@ -39,9 +39,7 @@ defmodule CodexPooler.Repo.Migrations.AddRequestReplayEntitlements do
         CHECK (semantic_turn_digest IS NULL OR octet_length(semantic_turn_digest) = 32)
     """)
 
-    execute(
-      "CREATE UNIQUE INDEX codex_turns_id_request_id_uq ON public.codex_turns (id, request_id)"
-    )
+    execute("CREATE UNIQUE INDEX codex_turns_id_request_id_uq ON public.codex_turns (id, request_id)")
 
     execute("""
     CREATE UNIQUE INDEX codex_turns_active_semantic_turn_uq
@@ -198,9 +196,7 @@ defmodule CodexPooler.Repo.Migrations.AddRequestReplayEntitlements do
     )
     """)
 
-    execute(
-      "CREATE UNIQUE INDEX request_replay_entitlements_request_id_uq ON public.request_replay_entitlements (request_id)"
-    )
+    execute("CREATE UNIQUE INDEX request_replay_entitlements_request_id_uq ON public.request_replay_entitlements (request_id)")
 
     execute("""
     CREATE INDEX request_replay_entitlements_cleanup_due_idx
@@ -323,17 +319,11 @@ defmodule CodexPooler.Repo.Migrations.AddRequestReplayEntitlements do
   end
 
   def down do
-    execute(
-      "DROP TRIGGER IF EXISTS request_replay_codex_turns_snapshot_guard ON public.codex_turns"
-    )
+    execute("DROP TRIGGER IF EXISTS request_replay_codex_turns_snapshot_guard ON public.codex_turns")
 
-    execute(
-      "DROP TRIGGER IF EXISTS request_replay_entitlements_update_guard ON public.request_replay_entitlements"
-    )
+    execute("DROP TRIGGER IF EXISTS request_replay_entitlements_update_guard ON public.request_replay_entitlements")
 
-    execute(
-      "DROP TRIGGER IF EXISTS request_replay_entitlements_insert_guard ON public.request_replay_entitlements"
-    )
+    execute("DROP TRIGGER IF EXISTS request_replay_entitlements_insert_guard ON public.request_replay_entitlements")
 
     execute("DROP FUNCTION IF EXISTS public.enforce_request_replay_turn_snapshot()")
     execute("DROP FUNCTION IF EXISTS public.enforce_request_replay_entitlement_update()")

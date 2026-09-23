@@ -434,8 +434,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert state.codex_responses_sse_block_state == StreamProtocol.new_sse_block_state()
 
-      assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
-                      %{bytes: bytes, count: 1, max_bytes: 8_388_608},
+      assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized], %{bytes: bytes, count: 1, max_bytes: 8_388_608},
                       %{
                         buffer: "codex_responses_sse",
                         endpoint: "/backend-api/codex/responses",
@@ -1200,8 +1199,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert chat_sse_chunks(failure) == [
                %{
                  "error" => %{
-                   "message" =>
-                     "upstream request failed: stream interrupted before terminal response event",
+                   "message" => "upstream request failed: stream interrupted before terminal response event",
                    "type" => "server_error",
                    "code" => "server_error",
                    "param" => nil

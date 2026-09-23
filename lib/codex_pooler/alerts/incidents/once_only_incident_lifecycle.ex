@@ -126,9 +126,7 @@ defmodule CodexPooler.Alerts.Incidents.OnceOnlyIncidentLifecycle do
   defp unwrap_transaction({:ok, value}), do: {:ok, value}
   defp unwrap_transaction({:error, reason}), do: {:error, reason}
 
-  defp maybe_broadcast_incident_invalidation(
-         {:ok, %{incident: %AlertIncident{} = incident}} = result
-       ) do
+  defp maybe_broadcast_incident_invalidation({:ok, %{incident: %AlertIncident{} = incident}} = result) do
     _ = NotificationEvents.broadcast_incident_invalidation(incident)
     result
   end

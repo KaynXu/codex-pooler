@@ -11,6 +11,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   alias CodexPooler.Accounting.{
     Attempt,
     LedgerEntry,
+    LedgerReads,
     Request,
     RequestLifecycle,
     RequestReplayEntitlement
@@ -23,6 +24,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -718,9 +720,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
         )
 
       {:consumed, error_code} ->
-        finalize_close!({session, turn, request, attempt, entitlement}, nil, error_code, now,
-          preserve_attempt?: false
-        )
+        finalize_close!({session, turn, request, attempt, entitlement}, nil, error_code, now, preserve_attempt?: false)
 
       :noop ->
         :noop
@@ -997,9 +997,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   defp cleanup_close_reason(request_id, :abandoned) do
     case started_owner_witness(request_id) do
       %{session: session, reference: reference} ->
-        case WebsocketOwnerForwarder.touch_replay_liveness(session, reference,
-               timeout: @owner_witness_timeout_ms
-             ) do
+        case WebsocketOwnerForwarder.touch_replay_liveness(session, reference, timeout: @owner_witness_timeout_ms) do
           :ok -> :abandoned
           {:error, _reason} -> :owner_unavailable
         end
@@ -1247,15 +1245,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
 
     request =
       if request.status in ["accepted", "in_progress"] do
-        request
-        |> Ecto.Changeset.change(%{
-          status: "failed",
-          usage_status: "usage_unknown",
-          completed_at: now,
-          response_status_code: 500,
-          last_error_code: @orphaned_turn_closed_code
-        })
-        |> Repo.update!()
+        finalize_orphaned_request!(request, attempt, now)
       else
         request
       end
@@ -1286,6 +1276,42 @@ defmodule CodexPooler.Accounting.RequestReplay do
     end)
 
     :closed
+  end
+
+  # Closing a request with an outstanding reservation must settle the ledger
+  # in the same transaction. Otherwise its terminal status removes it from
+  # stale-reservation recovery while its reserved budget remains held.
+  defp finalize_orphaned_request!(request, attempt, now) do
+    attrs = %{
+      request_status: "failed",
+      usage_status: "usage_unknown",
+      response_status_code: 500,
+      last_error_code: @orphaned_turn_closed_code,
+      now: now
+    }
+
+    if match?(%Attempt{}, attempt) and LedgerReads.reservation_outstanding?(request) do
+      attrs =
+        Map.merge(attrs, %{
+          preserve_replay_attempt: true,
+          usage: %{status: "usage_unknown", source: @orphaned_turn_closed_code}
+        })
+
+      case RequestLifecycle.finalize_request(request, attempt, attrs) do
+        {:ok, %{request: finalized}} -> finalized
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    else
+      request
+      |> Ecto.Changeset.change(%{
+        status: attrs.request_status,
+        usage_status: attrs.usage_status,
+        completed_at: now,
+        response_status_code: attrs.response_status_code,
+        last_error_code: attrs.last_error_code
+      })
+      |> Repo.update!()
+    end
   end
 
   defp latest_attempt(request_id) do
@@ -1734,7 +1760,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
     valid? =
       consume_entitlement_matches?(input, request, turn, entitlement, now) and
         consume_owner_matches?(input, session, turn, owner_lease, now) and
-        consume_key_matches?(input, api_key, pool, entitlement) and
+        consume_key_matches?(input, api_key, pool, entitlement, now) and
         consume_lifecycle_open?(request, turn, attempt, entitlement) and
         no_terminal_ledger?(request.id)
 
@@ -1782,12 +1808,25 @@ defmodule CodexPooler.Accounting.RequestReplay do
       live_lease_matches?(session, owner_lease, input.owner_lease_token, now)
   end
 
-  defp consume_key_matches?(input, api_key, pool, entitlement) do
+  # A replay is a new upstream send, so consume passes the same lifecycle fence
+  # as a claim: the Pool must be active, the key must still be the armed key
+  # with its exact runtime epoch, and its expiry must still be ahead of the
+  # database clock read under the locks. Expiry is a clock crossing rather
+  # than an edit, so status and epoch alone cannot reveal it, and an armed
+  # replay whose key expired between arm and consume must fail closed before
+  # any replay attempt exists (findings#204).
+  defp consume_key_matches?(input, api_key, pool, entitlement, now) do
     pool.status == "active" and api_key.id == input.auth.api_key.id and
       api_key.pool_id == input.auth.pool.id and
       current_replay_authorization?(api_key, entitlement) and
+      key_unexpired?(api_key, now) and
       model_policy_allows?(api_key, entitlement.model_identifier)
   end
+
+  defp key_unexpired?(%APIKey{expires_at: nil}, _now), do: true
+
+  defp key_unexpired?(%APIKey{expires_at: %DateTime{} = expires_at}, now),
+    do: future?(expires_at, now)
 
   defp consume_turn_open?(turn),
     do:
@@ -1795,6 +1834,8 @@ defmodule CodexPooler.Accounting.RequestReplay do
         is_nil(turn.completed_at)
 
   defp insert_replay_attempt!(request, eligible_attempt, _provisional_digest, now) do
+    owner = InstancePresence.local_identity()
+
     %Attempt{
       request_id: request.id,
       attempt_number: eligible_attempt.attempt_number + 1,
@@ -1804,6 +1845,8 @@ defmodule CodexPooler.Accounting.RequestReplay do
       model_id: eligible_attempt.model_id || request.model_id,
       upstream_model_id: eligible_attempt.upstream_model_id,
       transport: eligible_attempt.transport,
+      owner_instance_id: owner.node_name,
+      owner_instance_boot_id: owner.boot_id,
       status: "in_progress",
       started_at: now,
       retryable: false,
@@ -1820,8 +1863,10 @@ defmodule CodexPooler.Accounting.RequestReplay do
   defp lock_session(session_id),
     do: Repo.one(from row in CodexSession, where: row.id == ^session_id, lock: "FOR UPDATE")
 
+  # Reader lock: no replay transaction writes the `api_keys` row, and each one
+  # holds its codex session first; finalization reached from here reads too.
   defp lock_api_key!(api_key_id),
-    do: Repo.one!(from row in APIKey, where: row.id == ^api_key_id, lock: "FOR UPDATE")
+    do: Access.lock_api_key_for_read(api_key_id) || raise(Ecto.NoResultsError, queryable: APIKey)
 
   defp lock_turn!(turn_id),
     do: Repo.one!(from row in CodexTurn, where: row.id == ^turn_id, lock: "FOR UPDATE")
@@ -1859,8 +1904,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
       )
 
   defp lock_ledger!(request_id),
-    do:
-      Repo.all(from row in LedgerEntry, where: row.request_id == ^request_id, lock: "FOR UPDATE")
+    do: Repo.all(from row in LedgerEntry, where: row.request_id == ^request_id, lock: "FOR UPDATE")
 
   defp no_terminal_ledger?(request_id) do
     not Repo.exists?(
@@ -1870,8 +1914,7 @@ defmodule CodexPooler.Accounting.RequestReplay do
   end
 
   defp lock_pool!(pool_id),
-    do:
-      Repo.one!(from row in CodexPooler.Pools.Pool, where: row.id == ^pool_id, lock: "FOR UPDATE")
+    do: Repo.one!(from row in CodexPooler.Pools.Pool, where: row.id == ^pool_id, lock: "FOR UPDATE")
 
   defp lock_api_key_policy_bindings!(api_key_id),
     do:

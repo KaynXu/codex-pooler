@@ -74,10 +74,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     on_exit(fn -> cleanup_owner_session(codex_session_id) end)
 
-    {:ok,
-     codex_session_id: codex_session_id,
-     owner_lease_token: "owner-token-#{System.unique_integer([:positive])}",
-     owner_instance_id: Atom.to_string(node())}
+    {:ok, codex_session_id: codex_session_id, owner_lease_token: "owner-token-#{System.unique_integer([:positive])}", owner_instance_id: Atom.to_string(node())}
   end
 
   test "starts one local registered owner per codex_session_id", context do
@@ -483,9 +480,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert {:ok, collected} =
              WebsocketOwnerSession.admission_control(
                owner,
-               admission_control(:record_first_compact_collected, downstream,
-                 first_compact_collection: provenance
-               )
+               admission_control(:record_first_compact_collected, downstream, first_compact_collection: provenance)
              )
 
     assert NativeCompactionAdmission.phase(collected) == :collected_unconfirmed
@@ -493,9 +488,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert {:error, :invalid_transition} =
              WebsocketOwnerSession.admission_control(
                owner,
-               admission_control(:record_first_compact_collected, downstream,
-                 first_compact_collection: provenance
-               )
+               admission_control(:record_first_compact_collected, downstream, first_compact_collection: provenance)
              )
   end
 
@@ -593,18 +586,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     for {label, mutate} <- [
           {:generation,
            fn binding, downstream ->
-             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation + 1}, :full,
-              downstream}
+             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation + 1}, :full, downstream}
            end},
           {:mode,
            fn binding, downstream ->
-             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation}, :lite,
-              downstream}
+             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation}, :lite, downstream}
            end},
           {:epoch,
            fn binding, downstream ->
-             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation}, :full,
-              %{downstream | epoch: downstream.epoch + 1}}
+             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation}, :full, %{downstream | epoch: downstream.epoch + 1}}
            end}
         ] do
       local_context = unique_owner_context(context, "witness-#{label}")
@@ -740,8 +730,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       send: fn upstream_pid, request, writer ->
         send(
           parent,
-          {:collect_upstream_send, upstream_pid, request.websocket_delivery_mode,
-           request.effective_serving_mode, writer}
+          {:collect_upstream_send, upstream_pid, request.websocket_delivery_mode, request.effective_serving_mode, writer}
         )
 
         {:ok,
@@ -881,8 +870,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert :ok = Task.await(submit_task, 1_000)
 
-    assert_receive {:websocket_owner_frame, "draining-owner", 1,
-                    {:data, "draining-owner-terminal"}}
+    assert_receive {:websocket_owner_frame, "draining-owner", 1, {:data, "draining-owner-terminal"}}
 
     assert_receive {:websocket_owner_frame, "draining-owner", 1, :complete}
     assert Process.alive?(owner)
@@ -1090,14 +1078,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     Process.exit(upstream_pid, :shutdown)
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-pre", 1,
-                    {:error, :owner_crashed, safe_payload}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-pre", 1, {:error, :owner_crashed, safe_payload}}
 
     assert safe_payload.code == "owner_crashed"
     assert_receive {:websocket_owner_frame, "upstream-exit-pre", 1, :complete}
 
-    assert_receive {:owner_exit_submitter_outcome, :pre_visible,
-                    {:return, {:error, :owner_crashed}}}
+    assert_receive {:owner_exit_submitter_outcome, :pre_visible, {:return, {:error, :owner_crashed}}}
 
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :owner_crashed}
     assert_owner_exit_persisted_once(context)
@@ -1126,34 +1112,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     submitter = owner_exit_submitter(self(), owner, stable_downstream, :post_visible, true)
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-post", 1, ^submitter,
-                    {:data, "visible-before-upstream-exit"}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-post", 1, ^submitter, {:data, "visible-before-upstream-exit"}}
 
     assert_receive {:exit_controlled_upstream_send, :post_visible, ^upstream_pid, 1}
     owner_ref = Process.monitor(owner)
 
     Process.exit(upstream_pid, :shutdown)
 
-    assert_receive {:websocket_owner_output_commit_probe, "upstream-exit-post", 1, ^submitter,
-                    active_turn_ref, ^owner, probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, "upstream-exit-post", 1, ^submitter, active_turn_ref, ^owner, probe_ref}
 
     refute_received {:websocket_owner_frame, "upstream-exit-post", 1, ^submitter, :complete}
     refute_received {:owner_exit_release, _session_id, _lease_token, _reason, _cause}
 
     send(
       owner,
-      {:websocket_owner_output_commit_ack, "upstream-exit-post", 1, submitter, active_turn_ref,
-       probe_ref, true}
+      {:websocket_owner_output_commit_ack, "upstream-exit-post", 1, submitter, active_turn_ref, probe_ref, true}
     )
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-post", 1, ^submitter,
-                    {:error, :upstream_stream_error, safe_payload}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-post", 1, ^submitter, {:error, :upstream_stream_error, safe_payload}}
 
     assert safe_payload.code == "server_error"
     assert_receive {:websocket_owner_frame, "upstream-exit-post", 1, ^submitter, :complete}
 
-    assert_receive {:owner_exit_submitter_outcome, :post_visible,
-                    {:return, {:error, %{reason: :owner_crashed}}}}
+    assert_receive {:owner_exit_submitter_outcome, :post_visible, {:return, {:error, %{reason: :owner_crashed}}}}
 
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :owner_crashed}
     assert_owner_exit_persisted_once(context)
@@ -1184,30 +1165,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     submitter =
       owner_exit_submitter(self(), owner, stable_downstream, :probe_detach, true)
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-probe-detach", 1, ^submitter,
-                    {:data, "visible-before-upstream-exit"}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-probe-detach", 1, ^submitter, {:data, "visible-before-upstream-exit"}}
 
     assert_receive {:exit_controlled_upstream_send, :post_visible, ^upstream_pid, 1}
     owner_ref = Process.monitor(owner)
 
     Process.exit(upstream_pid, :shutdown)
 
-    assert_receive {:websocket_owner_output_commit_probe, "upstream-exit-probe-detach", 1,
-                    ^submitter, _active_turn_ref, ^owner, _probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, "upstream-exit-probe-detach", 1, ^submitter, _active_turn_ref, ^owner, _probe_ref}
 
     refute_received {:owner_exit_release, _session_id, _lease_token, _reason, _cause}
     assert :ok = WebsocketOwnerSession.detach_downstream(owner, stable_downstream)
 
-    assert_receive {:owner_exit_submitter_outcome, :probe_detach,
-                    {:return, {:error, :client_disconnected}}}
+    assert_receive {:owner_exit_submitter_outcome, :probe_detach, {:return, {:error, :client_disconnected}}}
 
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :owner_crashed}
     assert_owner_exit_persisted_once(context)
     assert_receive {:exit_controlled_upstream_closed, :post_visible, ^upstream_pid}
     assert WebsocketOwnerSession.lookup(context.codex_session_id) == {:error, :owner_unavailable}
 
-    refute_received {:websocket_owner_frame, "upstream-exit-probe-detach", 1, ^submitter,
-                     :complete}
+    refute_received {:websocket_owner_frame, "upstream-exit-probe-detach", 1, ^submitter, :complete}
   end
 
   @tag :owner_exit_settlement_fix
@@ -1230,29 +1207,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     submitter =
       owner_exit_submitter(self(), owner, stable_downstream, :submitter_death, true)
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-submitter-death", 1, ^submitter,
-                    {:data, "visible-before-upstream-exit"}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-submitter-death", 1, ^submitter, {:data, "visible-before-upstream-exit"}}
 
     assert_receive {:exit_controlled_upstream_send, :post_visible, ^upstream_pid, 1}
     owner_ref = Process.monitor(owner)
 
     Process.exit(upstream_pid, :shutdown)
 
-    assert_receive {:websocket_owner_output_commit_probe, "upstream-exit-submitter-death", 1,
-                    ^submitter, _active_turn_ref, ^owner, _probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, "upstream-exit-submitter-death", 1, ^submitter, _active_turn_ref, ^owner, _probe_ref}
 
     refute_received {:owner_exit_release, _session_id, _lease_token, _reason, _cause}
     submitter_ref = Process.monitor(submitter)
     Process.exit(submitter, :shutdown)
     assert_receive {:DOWN, ^submitter_ref, :process, ^submitter, :shutdown}
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-submitter-death", 1, ^submitter,
-                    {:error, :client_disconnected, safe_payload}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-submitter-death", 1, ^submitter, {:error, :client_disconnected, safe_payload}}
 
     assert safe_payload.code == "client_disconnected"
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-submitter-death", 1, ^submitter,
-                    :complete}
+    assert_receive {:websocket_owner_frame, "upstream-exit-submitter-death", 1, ^submitter, :complete}
 
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :owner_crashed}
     assert_owner_exit_persisted_once(context)
@@ -1296,8 +1269,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     submitter =
       owner_exit_submitter(self(), owner, stable_downstream, :probe_failure, true)
 
-    assert_receive {:websocket_owner_frame, "upstream-exit-probe-failure", 1, ^submitter,
-                    {:data, "visible-before-upstream-exit"}}
+    assert_receive {:websocket_owner_frame, "upstream-exit-probe-failure", 1, ^submitter, {:data, "visible-before-upstream-exit"}}
 
     assert_receive {:exit_controlled_upstream_send, :post_visible, ^upstream_pid, 1}
     owner_ref = Process.monitor(owner)
@@ -1306,16 +1278,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert_receive :owner_exit_probe_delivery_failed
 
-    assert_receive {:owner_exit_submitter_outcome, :probe_failure,
-                    {:return, {:error, %{reason: :owner_crashed}}}}
+    assert_receive {:owner_exit_submitter_outcome, :probe_failure, {:return, {:error, %{reason: :owner_crashed}}}}
 
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :owner_crashed}
     assert_owner_exit_persisted_once(context)
     assert_receive {:exit_controlled_upstream_closed, :post_visible, ^upstream_pid}
     assert WebsocketOwnerSession.lookup(context.codex_session_id) == {:error, :owner_unavailable}
 
-    refute_received {:websocket_owner_frame, "upstream-exit-probe-failure", 1, ^submitter,
-                     :complete}
+    refute_received {:websocket_owner_frame, "upstream-exit-probe-failure", 1, ^submitter, :complete}
   end
 
   test "reject_if_busy attach refuses to steal an attached downstream", context do
@@ -1725,8 +1695,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_frame(owner, per_call_downstream, "public-request")
       end)
 
-    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id,
-                    {:data, "public-delta-a"}}
+    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id, {:data, "public-delta-a"}}
 
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
 
@@ -1751,8 +1720,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
     assert :ok = Task.await(submit_task, 1_000)
 
-    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id,
-                    {:data, "public-delta-b"}}
+    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id, {:data, "public-delta-b"}}
 
     assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id, :complete}
     refute_received {:websocket_owner_frame, "public-owner-turn", 1, _legacy_payload}
@@ -1821,8 +1789,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         end
     }
 
-    assert {:websocket_owner_submission_accepted,
-            {:ok, %{terminal: "response.completed", status: 200}}} =
+    assert {:websocket_owner_submission_accepted, {:ok, %{terminal: "response.completed", status: 200}}} =
              WebsocketOwnerSession.submit_request(owner, downstream, request)
 
     refute_received {:owner_submission_observer_ran, _observer_pid}
@@ -1949,8 +1916,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert Task.await(submit_task, 1_000) == {:ok, expected_result}
 
-    assert_receive {:websocket_owner_frame, "local-response-identity", 1,
-                    {:data, ^terminal_frame}}
+    assert_receive {:websocket_owner_frame, "local-response-identity", 1, {:data, ^terminal_frame}}
 
     assert_receive {:websocket_owner_frame, "local-response-identity", 1, :complete}
     assert %{active_turn: nil} = :sys.get_state(owner)
@@ -2044,9 +2010,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     controls = WebsocketOwnerNodeHarness.two_sender_controls()
 
     upstream =
-      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
-        task_result: {:ok, %{status: 200, terminal: nil}}
-      )
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls, task_result: {:ok, %{status: 200, terminal: nil}})
 
     {:ok, owner} = start_owner(context, upstream: upstream)
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
@@ -2093,28 +2057,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
           WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
         end)
 
-      assert_receive {:websocket_owner_frame, correlation_id, epoch, ^owner_turn_id,
-                      {:data, ^visible_frame}}
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, ^owner_turn_id, {:data, ^visible_frame}}
 
-      assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, ^epoch,
-                      ^owner_turn_id, active_turn_ref, ^owner, probe_ref}
+      assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, ^epoch, ^owner_turn_id, active_turn_ref, ^owner, probe_ref}
 
       assert Task.yield(submit_task, 0) == nil
 
       send(
         owner,
-        {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id,
-         active_turn_ref, probe_ref, committed?}
+        {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref, probe_ref, committed?}
       )
 
       if committed? do
-        assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id,
-                        {:error, :upstream_stream_error, safe_payload}}
+        assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, {:error, :upstream_stream_error, safe_payload}}
 
         assert safe_payload.code == "server_error"
       else
-        refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id,
-                         {:error, :upstream_stream_error, _payload}}
+        refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, {:error, :upstream_stream_error, _payload}}
       end
 
       assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, :complete}
@@ -2181,38 +2140,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       websocket_owner_downstream: stable_downstream
     }
 
-    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
-                    {:data, ^visible_frame}}
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, {:data, ^visible_frame}}
 
     assert {:push, {:text, visible_payload}, socket_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "socket-overflow", 1, owner_turn_id,
-                {:data, visible_frame}},
+               {:websocket_owner_frame, "socket-overflow", 1, owner_turn_id, {:data, visible_frame}},
                socket_state
              )
 
     assert CodexPooler.JSON.decode!(visible_payload)["type"] == "response.output_text.delta"
 
-    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
-                    {:data, ^overflow_frame}}
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, {:data, ^overflow_frame}}
 
     assert {:push, {:text, overflow_payload}, socket_state} =
              CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "socket-overflow", 1, owner_turn_id,
-                {:data, overflow_frame}},
+               {:websocket_owner_frame, "socket-overflow", 1, owner_turn_id, {:data, overflow_frame}},
                socket_state
              )
 
     assert CodexPooler.JSON.decode!(overflow_payload)["error"]["code"] ==
              "websocket_sequence_exhausted"
 
-    assert_receive {:websocket_owner_output_commit_probe, "socket-overflow", 1, ^owner_turn_id,
-                    active_turn_ref, ^owner, probe_ref} = probe
+    assert_receive {:websocket_owner_output_commit_probe, "socket-overflow", 1, ^owner_turn_id, active_turn_ref, ^owner, probe_ref} = probe
 
     assert {:ok, ^socket_state} = CodexResponsesSocket.handle_info(probe, socket_state)
 
-    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
-                    {:error, :upstream_stream_error, safe_payload}} = owner_error
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, {:error, :upstream_stream_error, safe_payload}} = owner_error
 
     {{:ok, socket_state}, logs} =
       with_log([level: :warning], fn ->
@@ -2234,16 +2187,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert {:ok, final_state} =
              CodexResponsesSocket.handle_info(
-               {:codex_response_done, owner_turn_id,
-                {:response_task_result, interrupted_result(), true}},
+               {:codex_response_done, owner_turn_id, {:response_task_result, interrupted_result(), true}},
                completed_state
              )
 
     assert final_state.public_response_task_pid == nil
     refute final_state.public_turn_output_committed?
 
-    refute_received {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
-                     {:error, :owner_forward_timeout, _payload}}
+    refute_received {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, {:error, :owner_forward_timeout, _payload}}
 
     refute_received {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, _payload}
 
@@ -2266,16 +2217,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:websocket_owner_frame, correlation_id, epoch, ^owner_turn_id,
-                    {:data, "visible-timeout"}}
+    assert_receive {:websocket_owner_frame, correlation_id, epoch, ^owner_turn_id, {:data, "visible-timeout"}}
 
-    assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, ^epoch, ^owner_turn_id,
-                    active_turn_ref, ^owner, probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, ^epoch, ^owner_turn_id, active_turn_ref, ^owner, probe_ref}
 
     send(
       owner,
-      {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref,
-       make_ref(), true}
+      {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref, make_ref(), true}
     )
 
     assert Task.yield(submit_task, 0) == nil
@@ -2284,8 +2232,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     Process.cancel_timer(probe_state.timer_ref)
     send(owner, {:websocket_owner_output_commit_timeout, active_turn_ref, probe_ref})
 
-    assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id,
-                    {:error, :owner_forward_timeout, timeout_payload}}
+    assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, {:error, :owner_forward_timeout, timeout_payload}}
 
     assert timeout_payload.code == "owner_forward_timeout"
     assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, :complete}
@@ -2293,8 +2240,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(
       owner,
-      {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref,
-       probe_ref, true}
+      {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref, probe_ref, true}
     )
 
     refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, _payload}
@@ -2327,13 +2273,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:probe_downstream_message,
-                    {:websocket_owner_frame, "commit-downstream-down", epoch, ^owner_turn_id,
-                     {:data, "visible-downstream-down"}}}
+    assert_receive {:probe_downstream_message, {:websocket_owner_frame, "commit-downstream-down", epoch, ^owner_turn_id, {:data, "visible-downstream-down"}}}
 
-    assert_receive {:probe_downstream_message,
-                    {:websocket_owner_output_commit_probe, "commit-downstream-down", ^epoch,
-                     ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}}
+    assert_receive {:probe_downstream_message, {:websocket_owner_output_commit_probe, "commit-downstream-down", ^epoch, ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}}
 
     assert Task.yield(submit_task, 0) == nil
 
@@ -2348,9 +2290,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert elapsed_ms < WebsocketOwnerContract.default_forward_timeout_ms()
     assert %{active_turn: nil} = :sys.get_state(owner)
 
-    refute_received {:probe_downstream_message,
-                     {:websocket_owner_frame, "commit-downstream-down", ^epoch, ^owner_turn_id,
-                      {:error, :owner_forward_timeout, _payload}}}
+    refute_received {:probe_downstream_message, {:websocket_owner_frame, "commit-downstream-down", ^epoch, ^owner_turn_id, {:error, :owner_forward_timeout, _payload}}}
   end
 
   test "output-commit probe keeps the configured budget for a live downstream that never acks",
@@ -2374,16 +2314,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:websocket_owner_frame, "commit-silent", epoch, ^owner_turn_id,
-                    {:data, "visible-silent"}}
+    assert_receive {:websocket_owner_frame, "commit-silent", epoch, ^owner_turn_id, {:data, "visible-silent"}}
 
-    assert_receive {:websocket_owner_output_commit_probe, "commit-silent", ^epoch, ^owner_turn_id,
-                    _active_turn_ref, ^owner, _probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, "commit-silent", ^epoch, ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}
 
     # The downstream stays alive and attached but deliberately never acks, so
     # the only exit is the (shortened) budget timer.
-    assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id,
-                    {:error, :owner_forward_timeout, timeout_payload}},
+    assert_receive {:websocket_owner_frame, "commit-silent", ^epoch, ^owner_turn_id, {:error, :owner_forward_timeout, timeout_payload}},
                    @pending_terminal_observation_timeout_ms
 
     assert timeout_payload.code == "owner_forward_timeout"
@@ -2409,6 +2346,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       )
 
     assert %{output_commit_probe_timeout_ms: ^default_ms} = :sys.get_state(invalid_owner)
+
+    # This owner carries a UUID session id with no persisted lease, so stopping
+    # it runs lifecycle recovery. Stop it here, where the warnings are captured
+    # and asserted, rather than from on_exit, where they would print.
+    log = capture_log(fn -> cleanup_owner_session(invalid_context.codex_session_id) end)
+
+    assert log =~
+             "websocket owner exit persistence failed codex_session_id=#{invalid_context.codex_session_id} operation=release_owner_lease"
+
+    assert log =~
+             "websocket owner lifecycle recovery failed codex_session_id=#{invalid_context.codex_session_id} recovery_reason=owner_drained failure_reason=stale_owner_cleanup"
   end
 
   test "native owner interruption probe is acknowledged by the sole socket task", context do
@@ -2426,11 +2374,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:websocket_owner_frame, "native-probe-ack", epoch, ^owner_turn_id,
-                    {:data, "visible-native-ack"}}
+    assert_receive {:websocket_owner_frame, "native-probe-ack", epoch, ^owner_turn_id, {:data, "visible-native-ack"}}
 
-    assert_receive {:websocket_owner_output_commit_probe, "native-probe-ack", ^epoch,
-                    ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref} = probe
+    assert_receive {:websocket_owner_output_commit_probe, "native-probe-ack", ^epoch, ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref} = probe
 
     socket_state = %{
       opts: RequestOptions.for_websocket(%{}),
@@ -2446,8 +2392,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id, :complete}
     assert Task.await(submit_task, 1_000) == interrupted_result()
 
-    refute_received {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id,
-                     {:error, :owner_forward_timeout, _payload}}
+    refute_received {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id, {:error, :owner_forward_timeout, _payload}}
   end
 
   test "reconnect while probing settles the old turn without downstream delivery", context do
@@ -2464,11 +2409,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:websocket_owner_frame, "commit-reconnect-old", 1, _owner_turn_id,
-                    {:data, "visible-reconnect"}}
+    assert_receive {:websocket_owner_frame, "commit-reconnect-old", 1, _owner_turn_id, {:data, "visible-reconnect"}}
 
-    assert_receive {:websocket_owner_output_commit_probe, "commit-reconnect-old", 1,
-                    _owner_turn_id, _active_turn_ref, ^owner, _probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, "commit-reconnect-old", 1, _owner_turn_id, _active_turn_ref, ^owner, _probe_ref}
 
     assert {:ok, second} =
              WebsocketOwnerSession.attach_downstream(
@@ -2497,8 +2440,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(
       probe.owner,
-      {:websocket_owner_output_commit_ack, probe.correlation_id, probe.epoch, probe.owner_turn_id,
-       probe.active_turn_ref, probe.probe_ref, false}
+      {:websocket_owner_output_commit_ack, probe.correlation_id, probe.epoch, probe.owner_turn_id, probe.active_turn_ref, probe.probe_ref, false}
     )
 
     assert_receive {:websocket_owner_frame, "probe-busy", 1, _owner_turn_id, :complete}
@@ -2517,8 +2459,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(
       probe.owner,
-      {:websocket_owner_output_commit_ack, probe.correlation_id, probe.epoch, probe.owner_turn_id,
-       probe.active_turn_ref, probe.probe_ref, true}
+      {:websocket_owner_output_commit_ack, probe.correlation_id, probe.epoch, probe.owner_turn_id, probe.active_turn_ref, probe.probe_ref, true}
     )
 
     refute_received {:websocket_owner_frame, "probe-detach", 1, _owner_turn_id, _payload}
@@ -2549,13 +2490,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:probe_downstream_message,
-                    {:websocket_owner_frame, "probe-downstream-death", 1, ^owner_turn_id,
-                     {:data, "visible-downstream-death"}}}
+    assert_receive {:probe_downstream_message, {:websocket_owner_frame, "probe-downstream-death", 1, ^owner_turn_id, {:data, "visible-downstream-death"}}}
 
-    assert_receive {:probe_downstream_message,
-                    {:websocket_owner_output_commit_probe, "probe-downstream-death", 1,
-                     ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}}
+    assert_receive {:probe_downstream_message, {:websocket_owner_output_commit_probe, "probe-downstream-death", 1, ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}}
 
     downstream_ref = Process.monitor(downstream_pid)
     Process.exit(downstream_pid, :shutdown)
@@ -2620,8 +2557,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert timeout_result.transport_failure["terminal_seen"] == true
     assert timeout_result.transport_failure["terminal_forwarded"] == false
 
-    assert_receive {:websocket_owner_frame, "terminal-timeout", 1,
-                    {:error, :upstream_websocket_terminal_delivery_timeout, safe_payload}}
+    assert_receive {:websocket_owner_frame, "terminal-timeout", 1, {:error, :upstream_websocket_terminal_delivery_timeout, safe_payload}}
 
     assert safe_payload.code == "upstream_stream_error"
     assert safe_payload.metadata.reason == "upstream_websocket_terminal_delivery_timeout"
@@ -2677,8 +2613,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert Task.await(submit_task, 1_000) == {:error, :upstream_websocket_not_connected}
 
-    assert_receive {:websocket_owner_frame, "invalidation-failure", 1,
-                    {:error, :owner_crashed, safe_payload}}
+    assert_receive {:websocket_owner_frame, "invalidation-failure", 1, {:error, :owner_crashed, safe_payload}}
 
     assert safe_payload.code == "owner_crashed"
     assert_receive {:websocket_owner_frame, "invalidation-failure", 1, :complete}
@@ -2723,8 +2658,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert Task.await(submit_task, 1_000) == {:error, :owner_unavailable}
 
-    assert_receive {:websocket_owner_frame, "send-failure", 1,
-                    {:error, :owner_unavailable, safe_payload}}
+    assert_receive {:websocket_owner_frame, "send-failure", 1, {:error, :owner_unavailable, safe_payload}}
 
     assert safe_payload.code == "owner_unavailable"
     assert_receive {:websocket_owner_frame, "send-failure", 1, :complete}
@@ -2808,8 +2742,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert_receive {:websocket_owner_frame, "reconnect-after-terminal", 2, :complete}
 
-    refute_received {:websocket_owner_frame, "reconnect-after-terminal", 2,
-                     {:error, :upstream_websocket_terminal_delivery_timeout, _payload}}
+    refute_received {:websocket_owner_frame, "reconnect-after-terminal", 2, {:error, :upstream_websocket_terminal_delivery_timeout, _payload}}
 
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
@@ -2928,16 +2861,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(harness.deadline, wait_ms)
 
-    assert_receive {:websocket_owner_frame, "pending-drain", 1,
-                    {:error, :owner_drained, safe_payload}}
+    assert_receive {:websocket_owner_frame, "pending-drain", 1, {:error, :owner_drained, safe_payload}}
 
     assert safe_payload.code == "owner_drained"
     assert safe_payload.message == "websocket owner is draining"
     assert safe_payload.metadata.reason == "owner_drained"
     assert_receive {:websocket_owner_frame, "pending-drain", 1, :complete}
 
-    assert_receive {:pending_submitter_outcome, "pending-drain",
-                    {:return, {:error, :owner_drained}}}
+    assert_receive {:pending_submitter_outcome, "pending-drain", {:return, {:error, :owner_drained}}}
 
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
     assert Process.read_timer(pending.active_turn.terminal_delivery_timer_ref) == false
@@ -2975,8 +2906,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     spawn(fn ->
       outcome =
         try do
-          {:return,
-           WebsocketOwnerSession.submit_frame(owner, downstream, "characterization-request")}
+          {:return, WebsocketOwnerSession.submit_frame(owner, downstream, "characterization-request")}
         catch
           :exit, reason -> {:exit, reason}
         end
@@ -2984,16 +2914,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       send(parent, {:direct_drain_characterization_outcome, outcome})
     end)
 
-    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1,
-                    {:data, "characterization-delta"}}
+    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1, {:data, "characterization-delta"}}
 
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
     owner_ref = Process.monitor(owner)
 
     assert :ok = WebsocketOwnerSession.drain_owner(owner)
 
-    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1,
-                    {:error, :owner_drained, safe_payload}}
+    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1, {:error, :owner_drained, safe_payload}}
 
     assert safe_payload.code == "owner_drained"
     assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1, :complete}
@@ -3002,8 +2930,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
 
-    refute_received {:websocket_owner_frame, "direct-drain-characterization", 1,
-                     {:data, "unreachable-after-drain"}}
+    refute_received {:websocket_owner_frame, "direct-drain-characterization", 1, {:data, "unreachable-after-drain"}}
   end
 
   @tag :owner_exit_reason_label_baseline
@@ -3655,8 +3582,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                native_websocket_request("failure-fresh-reset")
              )
 
-    assert_receive {:websocket_owner_frame, "failure-fresh-reset", 1,
-                    {:error, :owner_crashed, _safe_payload}}
+    assert_receive {:websocket_owner_frame, "failure-fresh-reset", 1, {:error, :owner_crashed, _safe_payload}}
 
     assert_receive {:websocket_owner_frame, "failure-fresh-reset", 1, :complete}
 
@@ -4583,15 +4509,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert :ok = WebsocketOwnerSession.push_downstream(owner, {:error, :owner_busy, safe_payload})
     assert :ok = WebsocketOwnerSession.push_downstream(owner, :complete)
 
-    assert_receive {:collected_owner_frame, :active,
-                    {:websocket_owner_frame, "corr-active", 2, {:data, "encoded-response"}}}
+    assert_receive {:collected_owner_frame, :active, {:websocket_owner_frame, "corr-active", 2, {:data, "encoded-response"}}}
 
-    assert_receive {:collected_owner_frame, :active,
-                    {:websocket_owner_frame, "corr-active", 2,
-                     {:error, :owner_busy, ^safe_payload}}}
+    assert_receive {:collected_owner_frame, :active, {:websocket_owner_frame, "corr-active", 2, {:error, :owner_busy, ^safe_payload}}}
 
-    assert_receive {:collected_owner_frame, :active,
-                    {:websocket_owner_frame, "corr-active", 2, :complete}}
+    assert_receive {:collected_owner_frame, :active, {:websocket_owner_frame, "corr-active", 2, :complete}}
 
     refute_receive {:collected_owner_frame, :stale, _message}
     assert stale_downstream.epoch == 1
@@ -4623,8 +4545,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     submit_task =
       Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, first_downstream, @sentinel) end)
 
-    assert_receive {:collected_owner_frame, :first,
-                    {:websocket_owner_frame, "corr-first", 1, {:data, "delta-a"}}}
+    assert_receive {:collected_owner_frame, :first, {:websocket_owner_frame, "corr-first", 1, {:data, "delta-a"}}}
 
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
 
@@ -4659,14 +4580,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
     assert :ok = Task.await(submit_task, 1_000)
 
-    assert_receive {:collected_owner_frame, :second,
-                    {:websocket_owner_frame, "corr-second", 2, {:data, "delta-b"}}}
+    assert_receive {:collected_owner_frame, :second, {:websocket_owner_frame, "corr-second", 2, {:data, "delta-b"}}}
 
-    assert_receive {:collected_owner_frame, :second,
-                    {:websocket_owner_frame, "corr-second", 2, :complete}}
+    assert_receive {:collected_owner_frame, :second, {:websocket_owner_frame, "corr-second", 2, :complete}}
 
-    refute_receive {:collected_owner_frame, :first,
-                    {:websocket_owner_frame, "corr-first", 1, {:data, "delta-b"}}}
+    refute_receive {:collected_owner_frame, :first, {:websocket_owner_frame, "corr-first", 1, {:data, "delta-b"}}}
 
     owner_state = :sys.get_state(owner)
     refute inspect(owner_state) =~ @sentinel
@@ -4865,8 +4783,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:DOWN, ^first_task_ref, :process, ^first_task_pid, :killed}
     assert_receive {:timeout_old_result, {:error, :client_disconnected}}
 
-    assert_receive {:websocket_owner_handoff_failed, "timeout-b", 2, _, _, ^ref,
-                    :owner_forward_timeout}
+    assert_receive {:websocket_owner_handoff_failed, "timeout-b", 2, _, _, ^ref, :owner_forward_timeout}
 
     assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :normal}
     refute_received {:reconnect_handoff_replacement_send, _count}
@@ -4882,8 +4799,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert :ok = WebsocketOwnerSession.detach_downstream(waiting.owner, waiting.replacement)
     assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
 
-    assert_receive {:handoff_fixture_old_result, "socket-close-before",
-                    {:error, :client_disconnected}}
+    assert_receive {:handoff_fixture_old_result, "socket-close-before", {:error, :client_disconnected}}
 
     send(
       waiting.owner,
@@ -4909,8 +4825,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(
       ready.owner,
-      {:websocket_owner_handoff_absolute_timeout, ready_pending.control_ref,
-       ready_pending.absolute_token}
+      {:websocket_owner_handoff_absolute_timeout, ready_pending.control_ref, ready_pending.absolute_token}
     )
 
     assert %{pending_handoff: nil, active_turn: nil} = :sys.get_state(ready.owner)
@@ -4954,8 +4869,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     assert :ok = WebsocketOwnerSession.begin_drain(waiting.owner)
 
-    assert_receive {:websocket_owner_handoff_failed, "rollout-drain-b", 2, _, _, ^control_ref,
-                    :owner_drained}
+    assert_receive {:websocket_owner_handoff_failed, "rollout-drain-b", 2, _, _, ^control_ref, :owner_drained}
 
     send(
       waiting.owner,
@@ -4999,8 +4913,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(
       ready.owner,
-      {:websocket_owner_output_commit_ack, "stale-artifacts-a", 1, self(), predecessor.ref,
-       probe_ref, true}
+      {:websocket_owner_output_commit_ack, "stale-artifacts-a", 1, self(), predecessor.ref, probe_ref, true}
     )
 
     send(
@@ -5078,8 +4991,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       {:websocket_owner_handoff_absolute_timeout, pending.control_ref, pending.absolute_token}
     )
 
-    assert_receive {:websocket_owner_handoff_failed, "submission-expiry-b", 2, _, _, ^control_ref,
-                    :owner_forward_timeout}
+    assert_receive {:websocket_owner_handoff_failed, "submission-expiry-b", 2, _, _, ^control_ref, :owner_forward_timeout}
 
     assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :normal}
     refute_received {:reconnect_handoff_replacement_send, _count}
@@ -5108,8 +5020,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         send(parent, {:websocket_owner_submitter_result, result})
       end)
 
-    assert_receive {:websocket_owner_frame, "submitter-exit", 1,
-                    {:data, "delta-before-submitter-exit"}}
+    assert_receive {:websocket_owner_frame, "submitter-exit", 1, {:data, "delta-before-submitter-exit"}}
 
     assert_receive {:websocket_owner_harness_barrier, upstream_worker_pid, ^block_ref}
 
@@ -5120,16 +5031,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:DOWN, ^submitter_ref, :process, ^submitter, :shutdown}
     assert_receive {:DOWN, ^upstream_worker_ref, :process, ^upstream_worker_pid, :shutdown}
 
-    assert_receive {:websocket_owner_frame, "submitter-exit", 1,
-                    {:error, :client_disconnected, safe_payload}}
+    assert_receive {:websocket_owner_frame, "submitter-exit", 1, {:error, :client_disconnected, safe_payload}}
 
     assert safe_payload.code == "client_disconnected"
     assert_receive {:websocket_owner_frame, "submitter-exit", 1, :complete}
     assert %{active_turn: nil} = await_active_turn_cleared(owner)
     refute_received {:websocket_owner_submitter_result, _result}
 
-    refute_receive {:websocket_owner_frame, "submitter-exit", 1,
-                    {:data, "delta-after-submitter-exit"}}
+    refute_receive {:websocket_owner_frame, "submitter-exit", 1, {:data, "delta-after-submitter-exit"}}
   end
 
   test "local bridge submitter exit cancels the default upstream websocket request", context do
@@ -5223,9 +5132,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     submit_task =
       Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, downstream, @sentinel) end)
 
-    assert_receive {:collected_owner_frame, :downstream_exit,
-                    {:websocket_owner_frame, "corr-downstream-exit", 1,
-                     {:data, "delta-before-exit"}}}
+    assert_receive {:collected_owner_frame, :downstream_exit, {:websocket_owner_frame, "corr-downstream-exit", 1, {:data, "delta-before-exit"}}}
 
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
 
@@ -5624,8 +5531,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   defp await_controlled_barrier(stage, controls) do
     release_ref = Map.fetch!(controls, stage)
 
-    assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
-                    ^release_ref},
+    assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid, ^release_ref},
                    1_000
 
     barrier_pid
@@ -5668,10 +5574,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     end
   end
 
-  defp terminal_downstream_message?(
-         {:websocket_owner_frame, _correlation_id, _epoch, {:data, payload}}
-       ),
-       do: terminal_payload?(payload)
+  defp terminal_downstream_message?({:websocket_owner_frame, _correlation_id, _epoch, {:data, payload}}),
+    do: terminal_payload?(payload)
 
   defp terminal_downstream_message?(_message), do: false
 
@@ -5733,6 +5637,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   # level, so info-level lines would otherwise never fire.
   defp capture_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
 
     try do
       Logger.configure(level: :info)
@@ -5792,8 +5698,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       spawn(fn ->
         outcome =
           try do
-            {:return,
-             WebsocketOwnerSession.submit_frame(owner, downstream, "rollout-cut-request")}
+            {:return, WebsocketOwnerSession.submit_frame(owner, downstream, "rollout-cut-request")}
           catch
             :exit, reason -> {:exit, reason}
           end
@@ -5803,8 +5708,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     submitter_ref = Process.monitor(submitter)
 
-    assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
-                    {:data, "rollout-cut-before-deadline"}}
+    assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, {:data, "rollout-cut-before-deadline"}}
 
     assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
 
@@ -5824,14 +5728,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
         assert_receive {:rollout_drain_deadline_wait, ^deadline, 10}
 
-        refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
-                         {:error, :owner_drained, _safe_payload}}
+        refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, {:error, :owner_drained, _safe_payload}}
 
         assert Process.alive?(owner)
         assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
 
-        assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
-                        {:error, :owner_drained, _safe_payload}}
+        assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, {:error, :owner_drained, _safe_payload}}
 
         assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, :complete}
         assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
@@ -5857,8 +5759,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
 
-    refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
-                     {:data, "unreachable-after-rollout-cut"}}
+    refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, {:data, "unreachable-after-rollout-cut"}}
 
     await_owner_absent(context.codex_session_id)
     owner_exit_observation(logs, context.codex_session_id)
@@ -5914,9 +5815,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   defp put_owner_idle_timeout(timeout) do
     settings = OperationalSettings.current()
 
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %{settings | websocket_owner_idle_timeout_ms: timeout}
-    )
+    Application.put_env(:codex_pooler, OperationalSettings, settings: %{settings | websocket_owner_idle_timeout_ms: timeout})
   end
 
   defp restore_operational_settings(nil),
@@ -6677,8 +6576,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     send(waiting.submitter, :release_handoff_fixture_submitter)
 
-    assert_receive {:websocket_owner_handoff_ready, correlation_id, epoch, _owner_turn_id,
-                    _downstream_pid, control_ref}
+    assert_receive {:websocket_owner_handoff_ready, correlation_id, epoch, _owner_turn_id, _downstream_pid, control_ref}
 
     assert correlation_id == waiting.replacement.correlation_id
     assert epoch == waiting.replacement.epoch
@@ -6841,11 +6739,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
         WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
       end)
 
-    assert_receive {:websocket_owner_frame, ^label, epoch, ^owner_turn_id,
-                    {:data, "visible-" <> ^label}}
+    assert_receive {:websocket_owner_frame, ^label, epoch, ^owner_turn_id, {:data, "visible-" <> ^label}}
 
-    assert_receive {:websocket_owner_output_commit_probe, ^label, ^epoch, ^owner_turn_id,
-                    active_turn_ref, ^owner, probe_ref}
+    assert_receive {:websocket_owner_output_commit_probe, ^label, ^epoch, ^owner_turn_id, active_turn_ref, ^owner, probe_ref}
 
     %{
       owner: owner,

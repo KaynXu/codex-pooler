@@ -27,8 +27,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Plan do
 
   @type filter_after_refresh_result ::
           {:ok, [CandidateEligibility.candidate()], CandidateEligibility.quota_decision()}
-          | {:ok, [CandidateEligibility.candidate()], CandidateEligibility.quota_decision(),
-             RouteState.t()}
+          | {:ok, [CandidateEligibility.candidate()], CandidateEligibility.quota_decision(), RouteState.t()}
           | {:error, CandidateEligibility.gateway_error()}
 
   @spec refresh_candidates(CandidateEligibility.quota_refresh_plan()) ::

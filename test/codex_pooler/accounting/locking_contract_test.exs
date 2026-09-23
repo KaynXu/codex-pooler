@@ -5,7 +5,6 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Catalog.PricingSnapshot
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL
@@ -644,6 +643,9 @@ defmodule CodexPooler.Accounting.LockingContractTest do
     parent = self()
     handler_id = "accounting-lock-contract-#{System.unique_integer([:positive])}"
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -851,8 +853,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   defp cleanup_committed_membership_fixture!(fixture) do
     result =
       run_unboxed(fn ->
-        {pool_count, _} =
-          Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+        pool_count = CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
         identity_ids = [fixture.identity.id, fixture.alternate_identity.id]
 
@@ -874,8 +875,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
         result: "exact_fixture_cleanup",
         deleted: result,
         pool_id_sha256: sha256(fixture.pool.id),
-        identity_id_sha256:
-          Enum.map([fixture.identity.id, fixture.alternate_identity.id], &sha256/1),
+        identity_id_sha256: Enum.map([fixture.identity.id, fixture.alternate_identity.id], &sha256/1),
         pricing_snapshot_id_sha256: sha256(fixture.pricing.id)
       })
     end

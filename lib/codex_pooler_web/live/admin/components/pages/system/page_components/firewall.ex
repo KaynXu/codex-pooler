@@ -156,8 +156,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Firewall do
         id: "instance-settings-forwarded-proxy-depth",
         field: :forwarded_proxy_depth,
         label: "Forwarded proxy depth",
-        hint:
-          "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
+        hint: "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
       },
       %{
         type: :number,

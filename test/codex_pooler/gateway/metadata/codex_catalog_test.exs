@@ -102,9 +102,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert CodexCatalog.etag(atom_body) == CodexCatalog.etag(string_body)
 
     refute CodexCatalog.etag(string_body) ==
-             CodexCatalog.etag(
-               put_in(string_body, ["models", Access.at(0), "values"], [1.0, 1, nil])
-             )
+             CodexCatalog.etag(put_in(string_body, ["models", Access.at(0), "values"], [1.0, 1, nil]))
   end
 
   test "rejects unsupported values and ambiguous equivalent object keys" do
@@ -465,6 +463,346 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
       assert partition.assignment_ids ==
                Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
+    end
+
+    test "admits reasoning variants and projects the routable family union", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      max_source =
+        base_source
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.put("description", "alternate reasoning rollout")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => base_source,
+          context.sibling_id => base_source,
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{
+                     model.id =>
+                       MapSet.new([
+                         context.anchor_id,
+                         context.sibling_id,
+                         context.alternate_id
+                       ])
+                   }
+                 end
+               )
+
+      assert partition.assignment_ids ==
+               Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
+
+      refute partition.routable_selection?
+      assert partition.source["default_reasoning_level"] == base_source["default_reasoning_level"]
+      assert partition.source["description"] == base_source["description"]
+
+      assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
+               ~w(low high max)
+    end
+
+    test "excludes an unroutable variant from the advertised union without removing its allowance",
+         context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      max_source =
+        base_source
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.delete("supported_reasoning_levels")
+        |> Map.put("reasoning_efforts", ["low", "max"])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => base_source,
+          context.sibling_id => base_source,
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{model.id => MapSet.new([context.anchor_id, context.sibling_id])}
+                 end
+               )
+
+      assert partition.assignment_ids ==
+               Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
+
+      assert partition.source["default_reasoning_level"] == base_source["default_reasoning_level"]
+      refute Map.has_key?(partition.source, "reasoning_efforts")
+      refute "max" in Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"])
+    end
+
+    test "does not admit a reasoning variant from a different capability family", context do
+      max_source =
+        context.model.metadata["source_assignment_models"][context.alternate_id]
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => context.model.metadata["source_assignment_models"][context.anchor_id],
+          context.sibling_id => context.model.metadata["source_assignment_models"][context.sibling_id],
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{
+                     model.id =>
+                       MapSet.new([
+                         context.anchor_id,
+                         context.sibling_id,
+                         context.alternate_id
+                       ])
+                   }
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      assert partition.source["context_window"] != max_source["context_window"]
+      refute "max" in Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"])
+    end
+
+    test "ranks aggregate capability-family capacity across reasoning variants", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      max_source =
+        Map.put(base_source, "supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      older_singleton = Map.put(base_source, "context_window", 111_111)
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => older_singleton,
+          context.sibling_id => base_source,
+          context.alternate_id => max_source
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{
+                     model.id =>
+                       MapSet.new([
+                         context.anchor_id,
+                         context.sibling_id,
+                         context.alternate_id
+                       ])
+                   }
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.sibling_id, context.alternate_id])
+      assert partition.partition_count == 2
+      assert partition.source["context_window"] != older_singleton["context_window"]
+
+      assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
+               ~w(low high max)
+    end
+
+    test "does not leak reasoning metadata from an unroutable family anchor", context do
+      anchor_source =
+        context.model.metadata["source_assignment_models"][context.anchor_id]
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      routable_source =
+        context.model.metadata["source_assignment_models"][context.sibling_id]
+        |> Map.delete("default_reasoning_level")
+        |> Map.delete("supported_reasoning_levels")
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => anchor_source,
+          context.sibling_id => routable_source,
+          context.alternate_id => Map.put(anchor_source, "context_window", 111_111)
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{model.id => MapSet.new([context.sibling_id])}
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      refute Map.has_key?(partition.source, "default_reasoning_level")
+      refute Map.has_key?(partition.source, "supported_reasoning_levels")
+      refute Map.has_key?(partition.source, "reasoning_efforts")
+    end
+
+    test "derives the default only from routable reasoning metadata", context do
+      anchor_source =
+        context.model.metadata["source_assignment_models"][context.anchor_id]
+        |> Map.put("default_reasoning_level", "max")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "max", "description" => "max"}
+        ])
+
+      routable_source =
+        context.model.metadata["source_assignment_models"][context.sibling_id]
+        |> Map.delete("default_reasoning_level")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "max", "description" => "max"},
+          %{"effort" => "low", "description" => "low"}
+        ])
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => anchor_source,
+          context.sibling_id => routable_source,
+          context.alternate_id => Map.put(anchor_source, "context_window", 111_111)
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{model.id => MapSet.new([context.sibling_id])}
+                 end
+               )
+
+      assert partition.source["default_reasoning_level"] == "low"
+
+      assert Enum.map(partition.source["supported_reasoning_levels"], & &1["effort"]) ==
+               ~w(low max)
+    end
+
+    test "canonicalizes equivalent reasoning-level order for stable ETags", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      first =
+        base_source
+        |> Map.put("default_reasoning_level", "high")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "high", "description" => "high"},
+          %{"effort" => "low", "description" => "low"}
+        ])
+
+      second =
+        base_source
+        |> Map.put("default_reasoning_level", "high")
+        |> Map.put("supported_reasoning_levels", [
+          %{"effort" => "low", "description" => "low"},
+          %{"effort" => "high", "description" => "high"}
+        ])
+
+      first_model =
+        put_source_models(context.model, %{
+          context.anchor_id => first,
+          context.sibling_id => second,
+          context.alternate_id => Map.put(first, "context_window", 111_111)
+        })
+
+      second_model =
+        put_source_models(context.model, %{
+          context.anchor_id => first,
+          context.sibling_id => second,
+          context.alternate_id => Map.put(first, "context_window", 111_111)
+        })
+
+      first_partition =
+        CodexCatalog.select_canonical_sources([first_model], context.candidates,
+          routable_assignment_ids_by_model_id: fn ->
+            %{first_model.id => MapSet.new([context.anchor_id])}
+          end
+        )
+
+      second_partition =
+        CodexCatalog.select_canonical_sources([second_model], context.candidates,
+          routable_assignment_ids_by_model_id: fn ->
+            %{second_model.id => MapSet.new([context.sibling_id])}
+          end
+        )
+
+      assert [first_selected] = first_partition
+      assert [second_selected] = second_partition
+      assert first_selected.source == second_selected.source
+
+      assert {:ok, first_catalog} =
+               CodexCatalog.build_selected_partitions(
+                 first_partition,
+                 unrestricted_policy(),
+                 %{},
+                 %{},
+                 %{}
+               )
+
+      assert {:ok, second_catalog} =
+               CodexCatalog.build_selected_partitions(
+                 second_partition,
+                 unrestricted_policy(),
+                 %{},
+                 %{},
+                 %{}
+               )
+
+      assert first_catalog.body == second_catalog.body
+      assert first_catalog.etag == second_catalog.etag
+    end
+
+    test "resolves routability when only the reasoning default differs", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      exhausted_anchor = Map.put(base_source, "default_reasoning_level", "high")
+      routable_sibling = Map.put(base_source, "default_reasoning_level", "low")
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => exhausted_anchor,
+          context.sibling_id => routable_sibling,
+          context.alternate_id => Map.put(base_source, "context_window", 111_111)
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   send(self(), :resolved_default_routability)
+                   %{model.id => MapSet.new([context.sibling_id])}
+                 end
+               )
+
+      assert_received :resolved_default_routability
+      assert partition.source["default_reasoning_level"] == "low"
+    end
+
+    test "does not resolve routability for blank versus absent reasoning defaults", context do
+      base_source = context.model.metadata["source_assignment_models"][context.anchor_id]
+
+      model =
+        put_source_models(context.model, %{
+          context.anchor_id => Map.put(base_source, "default_reasoning_level", "   "),
+          context.sibling_id => Map.delete(base_source, "default_reasoning_level"),
+          context.alternate_id =>
+            base_source
+            |> Map.delete("default_reasoning_level")
+            |> Map.delete("context_window")
+        })
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([model], context.candidates,
+                 routable_assignment_ids_by_model_id: fn ->
+                   flunk("blank and absent defaults must not trigger a quota read")
+                 end
+               )
+
+      assert partition.partition_count == 1
     end
   end
 
@@ -888,8 +1226,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
   defp reasoning_projection(result) do
     [model] = result.body["models"]
 
-    {Enum.map(model["supported_reasoning_levels"], & &1["effort"]),
-     model["default_reasoning_level"]}
+    {Enum.map(model["supported_reasoning_levels"], & &1["effort"]), model["default_reasoning_level"]}
   end
 
   defp context_model do

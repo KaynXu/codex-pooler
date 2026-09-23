@@ -235,8 +235,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
   end
 
   defp scan_entry_from_right(
-         {_value, _index, _content_start, _content_end, _content_bytes, _pending_ows,
-          @max_entry_scan_bytes},
+         {_value, _index, _content_start, _content_end, _content_bytes, _pending_ows, @max_entry_scan_bytes},
          _rest,
          _split_on_comma?
        ) do
@@ -266,8 +265,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
     cond do
       ows?(byte) ->
         scan_entry_from_right(
-          {value, index - 1, content_start, content_end, content_bytes,
-           if(is_nil(content_start), do: 0, else: pending_ows + 1), scanned_bytes + 1},
+          {value, index - 1, content_start, content_end, content_bytes, if(is_nil(content_start), do: 0, else: pending_ows + 1), scanned_bytes + 1},
           rest,
           split_on_comma?
         )
@@ -277,8 +275,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
 
       true ->
         scan_entry_from_right(
-          {value, index - 1, index, content_end || index, content_bytes + pending_ows + 1, 0,
-           scanned_bytes + 1},
+          {value, index - 1, index, content_end || index, content_bytes + pending_ows + 1, 0, scanned_bytes + 1},
           rest,
           split_on_comma?
         )

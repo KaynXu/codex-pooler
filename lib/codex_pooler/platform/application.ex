@@ -4,22 +4,33 @@ defmodule CodexPooler.Application do
   use Application
 
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+  alias CodexPooler.Platform.InstancePresence.Identity
+  alias CodexPooler.Telemetry.RelayRuntime
 
   @impl true
   def start(_type, _args) do
+    # One VM, one incarnation, minted before any child can record ownership or
+    # publish presence: a container that restarts in place reuses its node name,
+    # so the incarnation is what makes the previous VM's presence row go stale
+    # on schedule instead of being refreshed by its successor.
+    _boot_id = Identity.mint_boot_id!()
+
     children = [
+      CodexPooler.Platform.ExecutionRegistry,
+      CodexPooler.Platform.Readiness,
       CodexPoolerWeb.Telemetry,
       CodexPooler.Repo,
+      CodexPooler.Platform.ExecutionProofPublisher,
+      CodexPooler.Telemetry.RelayRuntime,
+      CodexPooler.Platform.InstanceHeartbeat,
       CodexPooler.Jobs.UpstreamEnqueue.GatewayReconciliationGate,
       CodexPooler.Access.APIKeys.TouchDebounce,
       CodexPooler.Upstreams.CloudflareCookies,
       CodexPooler.Gateway.Transports.Admission,
-      {Registry,
-       keys: :unique,
-       name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
-      {Task.Supervisor,
-       name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
+      {Registry, keys: :unique, name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
+      {Task.Supervisor, name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
       ActivityRegistry,
+      CodexPooler.Gateway.Transports.Streaming.DeferredStreamRegistry,
       CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
       {Task.Supervisor, name: CodexPooler.RateLimitEventSupervisor},
       {Phoenix.PubSub, name: CodexPooler.PubSub},
@@ -27,9 +38,7 @@ defmodule CodexPooler.Application do
       CodexPooler.Events.PostgresBridge,
       CodexPooler.InstanceSettings.Cache,
       {Oban, Application.fetch_env!(:codex_pooler, Oban)},
-      {DNSCluster,
-       query: Application.get_env(:codex_pooler, :dns_cluster_query) || :ignore,
-       resolver: CodexPooler.Platform.DNSClusterResolver},
+      {DNSCluster, query: Application.get_env(:codex_pooler, :dns_cluster_query) || :ignore, resolver: CodexPooler.Platform.DNSClusterResolver},
       CodexPoolerWeb.Endpoint
     ]
 
@@ -39,6 +48,7 @@ defmodule CodexPooler.Application do
 
   @impl true
   def prep_stop(state) do
+    :ok = RelayRuntime.quiesce()
     _summary = RolloutDrain.drain_for_shutdown()
     state
   end

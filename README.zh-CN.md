@@ -3,7 +3,8 @@
 <p align="center">
   <strong>面向团队、Agent 和个人的完整自托管 Codex 网关。支持：</strong><br>
   <br>
-  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode"><img src=".github/assets/opencode-favicon.png" alt="OpenCode" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode-v2/" title="OpenCode v2"><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2" width="24" height="24"></a>
+  <a href="https://docs.codex-pooler.com/clients/opencode/" title="OpenCode v1"><img src=".github/assets/opencode-favicon.png" alt="OpenCode v1" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/codex-cli-desktop/" title="Codex CLI and Codex Desktop"><img src=".github/assets/codex-cli-favicon.png" alt="Codex CLI and Codex Desktop" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/openclaw/" title="OpenClaw"><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw" width="24" height="24"></a>
   <a href="https://docs.codex-pooler.com/clients/hermes/" title="Hermes Agent"><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent" width="24" height="24"></a>
@@ -37,6 +38,10 @@
   <a href="#configuration">配置</a>
   ·
   <a href="#deployment">部署</a>
+  ·
+  <a href="https://x.com/icoretech_inc">X</a>
+  ·
+  <a href="https://reddit.com/r/CodexPooler">Reddit</a>
 </p>
 
 <p align="center">
@@ -143,7 +148,69 @@ Optional operator MCP URL:   http://localhost:4000/mcp
 `https://codex-pooler.example.com`。
 
 <details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/opencode-v2-favicon.png" alt="OpenCode v2 logo" width="16" height="16"> OpenCode v2 <code>~/.config/opencode/opencode.jsonc</code></summary>
+
+OpenCode v2 可通过原生 Responses provider 连接 Codex Pooler，支持本地工具执行
+和同一会话恢复。在 OpenCode 服务进程的环境中设置
+`CODEX_POOLER_API_KEY`，然后合并以下配置：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "codex-pooler/gpt-5.6-terra",
+  "agents": { "title": { "model": "codex-pooler/gpt-5.6-luna" } },
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "buffer": 41420
+  },
+  "providers": {
+    "codex-pooler": {
+      "package": "@opencode/ai/providers/openai/responses",
+      "settings": {
+        "baseURL": "http://localhost:4000/v1",
+        "apiKey": "{env:CODEX_POOLER_API_KEY}",
+        "transport": "http",
+        "compaction": { "type": "summary" }
+      },
+      "models": {
+        "gpt-5.6-luna": {
+          "modelID": "gpt-5.6-luna",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "low", "reasoningSummary": "auto" }
+        },
+        "gpt-5.6-terra": {
+          "modelID": "gpt-5.6-terra",
+          "capabilities": { "tools": true, "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 828400, "input": 828400, "output": 32000 },
+          "settings": { "reasoningEffort": "high", "reasoningSummary": "auto" }
+        }
+      }
+    }
+  }
+}
+```
+
+使用你的部署 `/v1` 地址，并只配置 Pool 可用的模型。以上上下文数值是长上下文
+profile 的示例：将每个模型实际的 `/v1/models.context_length` 填入
+`limit.context` 和 `limit.input`。[v2 指南](https://docs.codex-pooler.com/clients/opencode-v2/)
+包含 Sol/Astra、上下文计算、压缩方式、协议和图片限制。
+
+此配置使用 HTTP SSE 和本地摘要 checkpoint。可通过 provider settings 选择
+Websocket 传输和原生 provider checkpoint；两种压缩模式的配置见 v2 指南。本地工具及图片输入不代表
+已启用图片生成工具。使用
+`opencode run --standalone --model codex-pooler/gpt-5.6-terra` 启动独立客户端
+会话；普通启动会使用共享后台服务。
+
+V2 使用 `providers`、`modelID`、`settings` 和 `capabilities`；旧版模型的
+`reasoning`/`attachment` 布尔字段以及压缩的 `prune`/`tail_turns` 会被忽略并
+产生警告。V1 插件（包括 v1 OMO 集成）需要单独迁移。V1 安装请继续使用下方配置。
+
+</details>
+
+<details>
+<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode v1 <code>~/.config/opencode/opencode.jsonc</code></summary>
 
 ![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
 
@@ -649,6 +716,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -689,6 +758,10 @@ provider account 可能暂时报告不同目录上限，请把这个 per-model e
 压缩使用自己的辅助请求超时。保持 `auxiliary.compression.timeout: 900`，这样较大的
 保留上下文可以完成，而不会反复触发旧的 120 秒压缩预算。这与可选 MCP server
 `timeout` 和应用输出上限无关。
+
+Hermes 会用单独的辅助调用生成会话标题，该调用不发送 reasoning effort，因此使用模型的默认 effort。设置 `auxiliary.title_generation.reasoning_effort: low`，让这些短调用固定使用较低成本的 effort。
+
+Hermes 的 fast 模式（`agent.service_tier: fast`、`/fast`）只有在 provider 为 `api.openai.com` 上的 `openai` 或 `chatgpt.com` 上的 `openai-codex` 时才发送 `service_tier: priority`。从 Hermes 0.21 版本开始，指向 Codex Pooler 的 `openai-api` provider 永远不会发送它，即使 `/fast` 及其提示仍显示 fast 模式已开启。只要客户端发送 `service_tier: priority`（或别名 `fast`），Codex Pooler 就会接受，因此这是 Hermes 的路由规则，而不是 Pooler 的限制。
 
 远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
 `hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
@@ -731,6 +804,8 @@ compression:
 auxiliary:
   compression:
     timeout: 900
+  title_generation:
+    reasoning_effort: low
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
@@ -769,6 +844,8 @@ mcp_servers:
 
 <details>
 <summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
+
+![Codex Pooler Pi integration](.github/assets/codex-pooler-pi.png)
 
 Pi 通过一个使用 Codex Pooler 窄 OpenAI 兼容 `/v1` Responses 接口的自定义
 provider 工作得最好。把自定义 providers 和 models 放在
@@ -897,6 +974,8 @@ Pi 不带内置 MCP 支持。Codex Pooler 模型使用不需要 MCP；如果需�
 
 <details>
 <summary><img src=".github/assets/omp-favicon.png" alt="OMP logo" width="16" height="16"> OMP <code>~/.omp/agent/models.yml</code> and <code>config.yml</code></summary>
+
+![Codex Pooler OMP integration](.github/assets/codex-pooler-omp.png)
 
 Oh My Pi (OMP) 是 Pi fork，但应作为独立的 Codex Pooler 客户端处理：它有自己
 的 package、`omp` 二进制文件、YAML 配置和模型角色默认值。通过 Bun 安装
@@ -1064,6 +1143,8 @@ Pooler 可选的运营者 MCP 端点，请把 `/mcp` 运营者令牌与用于 `/
 <details>
 <summary><img src=".github/assets/cursor-favicon.png" alt="Cursor logo" width="16" height="16"> Cursor <code>Settings → Models → API Keys</code></summary>
 
+![Codex Pooler Cursor integration](.github/assets/codex-pooler-cursor.png)
+
 在 Cursor 中启用 **OpenAI API Key** 和 **Override OpenAI Base URL** 两个开关。
 使用 Pool API key、公开可访问的 HTTPS base URL（例如
 `https://codex-pooler.example.com/v1`），并在新聊天中明确选择
@@ -1079,6 +1160,8 @@ Cursor BYOK 需要有效的 **Pro 或更高订阅**。请求会经过 Cursor 的
 
 <details>
 <summary><img src=".github/assets/kilo-favicon.png" alt="Kilo Code logo" width="16" height="16"> Kilo Code <code>~/.config/kilo/kilo.jsonc</code></summary>
+
+![Codex Pooler Kilo Code integration](.github/assets/codex-pooler-kilo.png)
 
 Kilo Code 应使用一个具名 OpenAI 兼容 provider，其 base URL 结束于 Codex Pooler
 的 `/v1` 接口。Kilo Code 会自己追加 `/chat/completions`，所以不要在
@@ -1288,6 +1371,8 @@ Mode 隐藏；在 Custom Models 下选择 Codex Pooler 模型。
 <details>
 <summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
 
+![Codex Pooler Aider integration](.github/assets/codex-pooler-aider.png)
+
 Aider 使用带 `openai/` 模型前缀的 OpenAI 兼容路由。把稳定路由设置放在
 `.aider.conf.yml`；Aider 会从你的 home directory、git repo root、
 当前目录依次加载该文件，后加载的文件优先。
@@ -1383,6 +1468,8 @@ Aider 能通过配置好的模型路径进行编辑。
 
 <details>
 <summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+
+![Codex Pooler Continue integration](.github/assets/codex-pooler-continue.png)
 
 Continue 可以通过设置 `provider: openai`、把 `apiBase` 指向 `/v1`、并把 Pool
 API 密钥作为 Continue secret，来把 Codex Pooler 用作 OpenAI 兼容 provider。
@@ -1506,6 +1593,8 @@ Pool API 密钥用于认证模型请求。MCP 令牌只认证运营者元数据�
 <details>
 <summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
 
+![Codex Pooler Cline integration](.github/assets/codex-pooler-cline.png)
+
 Cline CLI 接受 `openai` 作为 OpenAI 兼容 provider 的简写，并把它保存为
 `openai-compatible`。用 Pool API 密钥、Codex Pooler `/v1` base URL，以及你分配到
 的 Pool 能服务的模型 id 配置它。
@@ -1565,6 +1654,8 @@ Cline MCP Servers 面板打开自己的 MCP 设置 JSON；在那里使用同样�
 
 <details>
 <summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+
+![Codex Pooler Goose integration](.github/assets/codex-pooler-goose.png)
 
 为 Codex Pooler 的 OpenAI 兼容 chat-completions 路径配置 Goose 的 OpenAI
 provider。把 Pool API 密钥放在 `OPENAI_API_KEY` 或 Goose 的密钥存储中。
@@ -1636,6 +1727,8 @@ API 密钥复用给 MCP。
 <details>
 <summary><img src=".github/assets/windmill-favicon.png" alt="Windmill logo" width="16" height="16"> Windmill AI <code>customai</code> workspace provider</summary>
 
+![Codex Pooler Windmill AI integration](.github/assets/codex-pooler-windmill.png)
+
 Windmill AI 可以通过 Windmill 的 `customai` provider 使用 Codex Pooler。把
 resource 指向 Codex Pooler 的 OpenAI 兼容 `/v1` 接口，把 Pool API 密钥保存为
 Windmill 密钥变量，并让工作区 AI 设置使用该 resource 进行 chat 和元数据生成。
@@ -1697,6 +1790,8 @@ script/flow/app 生成、修复、摘要、元数据生成，以及使用 chat c
 
 <details>
 <summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
+
+![Codex Pooler OpenHands integration](.github/assets/codex-pooler-openhands.png)
 
 OpenHands CLI 可以通过窄 OpenAI 兼容 `/v1` 接口使用 Codex Pooler。把 Pool API
 密钥放在环境变量中，把 OpenHands base URL 设为 `/v1`，并使用 OpenHands 期望的

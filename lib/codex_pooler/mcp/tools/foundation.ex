@@ -31,13 +31,10 @@ defmodule CodexPooler.MCP.Tools.Foundation do
       title: "Get MCP service status",
       description:
         ToolRegistry.metadata_description(
-          use_when:
-            "an MCP client needs to verify the Codex Pooler MCP service gates, authenticated actor, protocol version, and catalog size before calling metadata tools",
-          returns:
-            "global gate state, account gate state, a masked actor summary, supported protocol version, and supported tool count",
+          use_when: "an MCP client needs to verify the Codex Pooler MCP service gates, authenticated actor, protocol version, and catalog size before calling metadata tools",
+          returns: "global gate state, account gate state, a masked actor summary, supported protocol version, and supported tool count",
           never_returns: "MCP token prefixes, token hashes, or Pool API keys",
-          filters_limits:
-            "no arguments are accepted; the response is a single bounded metadata status object"
+          filters_limits: "no arguments are accepted; the response is a single bounded metadata status object"
         ),
       input_schema: @empty_input_schema,
       output_schema: ServiceStatus.output_schema(),

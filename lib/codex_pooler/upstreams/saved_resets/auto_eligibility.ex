@@ -17,7 +17,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @max_weekly_reset_seconds 7 * 24 * 60 * 60 + 60 * 60
   @last_call_seconds 90 * 60
   @assignment_active AssignmentStatus.active_status()
   @identity_active IdentityStatus.active_status()
@@ -93,6 +92,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
          state = gateway_auto_state(identity, context, timestamp),
          :ok <- policy_and_latch_result(state.policy, state.latch),
          :ok <- bank_result(state.snapshot, state.policy, stage),
+         true <- target_windows_resettable?(identity, Map.get(context, :quota_scope), timestamp),
          true <-
            trigger_current?(
              trigger,
@@ -111,6 +111,44 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     end
   end
 
+  @doc "Checks the target's request-scoped windows without collapsing them into account availability."
+  @spec target_windows_resettable?(UpstreamIdentity.t(), map() | nil, DateTime.t()) :: boolean()
+  def target_windows_resettable?(
+        %UpstreamIdentity{} = identity,
+        quota_scope,
+        %DateTime{} = timestamp
+      ) do
+    opts = Keyword.put(Map.to_list(quota_scope || %{}), :at, timestamp)
+
+    raw =
+      [identity.id]
+      |> Windows.list_evidence_by_identity_ids()
+      |> Map.get(identity.id, [])
+      |> Windows.reject_superseded_primary_windows(timestamp)
+      |> WindowSelector.logical_windows(timestamp)
+
+    windows =
+      raw
+      |> Windows.quota_window_selection_data_from_windows(opts)
+      |> Map.fetch!(:routing_windows)
+
+    reset_windows = Enum.filter(raw, &WindowClassifier.saved_reset_window?/1)
+
+    length(reset_windows) == 1 and independent_primary_usable?(raw, reset_windows, timestamp) and
+      Enum.all?(windows, fn window ->
+        window in reset_windows or Windows.usable_window?(window, timestamp)
+      end)
+  end
+
+  defp independent_primary_usable?(windows, reset_windows, timestamp) do
+    Enum.all?(windows, fn window ->
+      window in reset_windows or
+        not (WindowClassifier.primary_5h?(window) or
+               WindowClassifier.monthly_primary?(window)) or
+        Windows.usable_window?(window, timestamp)
+    end)
+  end
+
   defp gateway_auto_state(identity, context, timestamp) do
     snapshot = SavedResets.snapshot(identity, timestamp)
     latch = identity_consume_latch(identity, timestamp)
@@ -124,8 +162,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       policy: SavedResets.auto_policy(identity),
       snapshot: snapshot,
       latch: latch,
-      latched_identity_ids:
-        latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp),
+      latched_identity_ids: latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp),
       windows_by_identity_id: windows_by_identity_id,
       identity_windows: Map.get(windows_by_identity_id, identity.id, [])
     }
@@ -152,8 +189,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp bank_result(snapshot, policy, :reservation) do
     if scheduled_saved_reset_state(snapshot, policy) == :available,
       do: :ok,
-      else:
-        unavailable_snapshot_result(%{snapshot | in_progress?: false, redemption_stale?: false})
+      else: unavailable_snapshot_result(%{snapshot | in_progress?: false, redemption_stale?: false})
   end
 
   @doc """
@@ -181,7 +217,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   Sorted references to the confirmed pressure windows that currently authorize
   `trigger` for `identity`, or `[]` when the closed proof set is not ready.
 
-  Blocked exhaustion references the target's confirmed exhausted weekly
+  Blocked exhaustion references the target's confirmed exhausted long account
   account windows. Threshold pressure references every current pressure window
   of every non-latched candidate; one unconfirmed member leaves the set empty.
 
@@ -259,7 +295,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       Enum.map(active_candidate_ids, fn identity_id ->
         windows_by_identity_id
         |> Map.get(identity_id, [])
-        |> Enum.filter(&weekly_pressure_window?(&1, policy, timestamp))
+        |> Enum.filter(&long_window_pressure?(&1, policy, timestamp))
       end)
 
     confirmed? =
@@ -291,8 +327,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   end
 
   defp confirmed_blocked_window?(window, identity, policy, timestamp, bind_identity?) do
-    weekly_exhausted_window?(window, timestamp) and
-      natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp) and
+    long_window_exhausted?(window, timestamp) and
+      natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp) and
       AutomaticConfirmation.confirmed?(
         window.metadata,
         timestamp,
@@ -610,6 +646,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     RedemptionLifecycle.gateway_auto_latch(record, timestamp) != :clear
   end
 
+  @doc "Legacy API name: supports weekly secondary and monthly primary account windows."
   @spec blocked_weekly_exhaustion?(
           [AccountQuotaWindow.t()],
           SavedResets.auto_policy_projection(),
@@ -618,13 +655,13 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   def blocked_weekly_exhaustion?(windows, policy, %DateTime{} = timestamp)
       when is_list(windows) do
     Enum.any?(windows, fn window ->
-      weekly_exhausted_window?(window, timestamp) and
-        natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
+      long_window_exhausted?(window, timestamp) and
+        natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp)
     end)
   end
 
   @doc """
-  Blocked weekly exhaustion corroborated by two distinct provider receipts on
+  Blocked long-window exhaustion corroborated by two distinct provider receipts on
   the exact exhausted window, bound to the identity's current credential epoch.
   """
   @spec corroborated_blocked_exhaustion?(
@@ -710,7 +747,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       Enum.all?(active_candidate_ids, fn identity_id ->
         windows_by_identity_id
         |> Map.get(identity_id, [])
-        |> Enum.any?(&weekly_pressure_window?(&1, policy, timestamp))
+        |> Enum.any?(&long_window_pressure?(&1, policy, timestamp))
       end)
   end
 
@@ -765,10 +802,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
   defp unavailable_snapshot_result(_snapshot), do: {:noop, "gateway_auto_keep_credits"}
 
-  defp weekly_pressure_window?(window, policy, timestamp) do
-    weekly_usable_window?(window, timestamp) and
+  defp long_window_pressure?(window, policy, timestamp) do
+    usable_long_window?(window, timestamp) and
       used_percent_at_or_above?(window.used_percent, policy.quota_threshold_percent) and
-      natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
+      natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp)
   end
 
   defp scheduled_saved_reset_state(snapshot, policy) do
@@ -870,7 +907,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
   defp fresh_claim?(_redemption, _timestamp, _receive_timeout), do: false
 
-  @doc false
+  @doc "Legacy API name: selects supported weekly or monthly account reset evidence."
   @spec scheduled_weekly_eligibility(
           [AccountQuotaWindow.t()],
           SavedResets.snapshot_projection(),
@@ -878,13 +915,34 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
         ) :: {:eligible, [AccountQuotaWindow.t()]} | :unavailable
   def scheduled_weekly_eligibility(windows, snapshot, %DateTime{} = timestamp)
       when is_list(windows) do
-    usable_windows =
+    compatible =
       windows
       |> Windows.reject_superseded_primary_windows(timestamp)
       |> compatible_source_windows(snapshot)
-      |> Enum.filter(&scheduled_usable_weekly_window?(&1, timestamp))
 
-    if usable_windows == [], do: :unavailable, else: {:eligible, usable_windows}
+    safety_windows =
+      windows
+      |> Windows.reject_superseded_primary_windows(timestamp)
+      |> WindowSelector.logical_windows(timestamp)
+
+    selected =
+      safety_windows
+      |> Windows.quota_window_selection_data_from_windows(at: timestamp)
+      |> Map.fetch!(:routing_windows)
+
+    reset_windows = Enum.filter(safety_windows, &WindowClassifier.saved_reset_window?/1)
+    descriptors = Enum.uniq_by(reset_windows, &WindowClassifier.classify/1)
+    usable_windows = Enum.filter(compatible, &scheduled_usable_long_window?(&1, timestamp))
+
+    if length(descriptors) == 1 and usable_windows != [] and
+         independent_primary_usable?(safety_windows, reset_windows, timestamp) and
+         Enum.all?(
+           selected,
+           &(&1 in reset_windows or Windows.usable_window?(&1, timestamp) or
+               (&1.quota_scope == "account" and &1.quota_key != "account"))
+         ),
+       do: {:eligible, usable_windows},
+       else: :unavailable
   end
 
   @spec scheduled_burn_condition(
@@ -919,8 +977,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           future_expiration? and not provider_available?,
           comparison_timestamp
         ),
-      threshold:
-        threshold_burn_windows(windows, policy, future_expiration?, comparison_timestamp),
+      threshold: threshold_burn_windows(windows, policy, future_expiration?, comparison_timestamp),
       last_call:
         last_call_burn_windows(
           windows,
@@ -957,7 +1014,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
        ) do
     Enum.filter(windows, fn window ->
       used_percent_exhausted?(window.used_percent) and
-        (natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp) or
+        (natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp) or
            expiration_before_reset?(credit_expires_at, window.reset_at, expiration_fresh?))
     end)
   end
@@ -980,7 +1037,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
        ) do
     Enum.filter(windows, fn window ->
       used_percent_at_or_above?(window.used_percent, policy.quota_threshold_percent) and
-        natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
+        natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp)
     end)
   end
 
@@ -1066,7 +1123,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp possible_exhausted_bypass?(windows, policy, {:ok, credit_expires_at}, timestamp) do
     Enum.any?(windows, fn window ->
       used_percent_exhausted?(window.used_percent) and
-        not natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp) and
+        not natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp) and
         expiration_before_reset?(credit_expires_at, window.reset_at)
     end)
   end
@@ -1090,7 +1147,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     Enum.any?(windows, fn window ->
       (used_percent_exhausted?(window.used_percent) or
          threshold_candidate?(window, policy)) and
-        not natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
+        not natural_reset_far_enough?(window, policy.min_blocked_minutes, timestamp)
     end)
   end
 
@@ -1200,26 +1257,29 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp burn_ready?({:burn, _context}), do: true
   defp burn_ready?({:not_ready, _reason}), do: false
 
-  defp weekly_usable_window?(window, timestamp) do
-    WindowClassifier.weekly_secondary?(window) and
+  defp usable_long_window?(window, timestamp) do
+    WindowClassifier.saved_reset_window?(window) and
       window.source_precision in ["observed", "authoritative"] and
       Windows.fresh_window?(window, timestamp) and match?(%DateTime{}, window.reset_at)
   end
 
-  defp scheduled_usable_weekly_window?(window, timestamp) do
-    weekly_usable_window?(window, timestamp) and used_percent_above_zero?(window.used_percent) and
-      future_reset_within_weekly_horizon?(window.reset_at, timestamp)
+  defp scheduled_usable_long_window?(window, timestamp) do
+    usable_long_window?(window, timestamp) and used_percent_above_zero?(window.used_percent) and
+      future_reset_within_window_horizon?(window, timestamp)
   end
 
-  defp future_reset_within_weekly_horizon?(%DateTime{} = reset_at, timestamp) do
+  defp future_reset_within_window_horizon?(
+         %{reset_at: %DateTime{} = reset_at} = window,
+         timestamp
+       ) do
     seconds_until_reset = whole_second_diff(reset_at, timestamp)
-    seconds_until_reset > 0 and seconds_until_reset <= @max_weekly_reset_seconds
+    seconds_until_reset > 0 and seconds_until_reset <= window.window_minutes * 60 + 3600
   end
 
-  defp future_reset_within_weekly_horizon?(_reset_at, _timestamp), do: false
+  defp future_reset_within_window_horizon?(_reset_at, _timestamp), do: false
 
-  defp weekly_exhausted_window?(window, timestamp) do
-    WindowClassifier.weekly_secondary?(window) and match?(%DateTime{}, window.reset_at) and
+  defp long_window_exhausted?(window, timestamp) do
+    WindowClassifier.saved_reset_window?(window) and match?(%DateTime{}, window.reset_at) and
       used_percent_exhausted?(window.used_percent) and
       "exhausted" in Windows.routing_window_reason_codes(window, timestamp)
   end
@@ -1245,11 +1305,16 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp used_percent_exhausted?(value) when is_number(value), do: value >= 100
   defp used_percent_exhausted?(_value), do: false
 
-  defp natural_reset_far_enough?(%DateTime{} = reset_at, min_blocked_minutes, timestamp) do
+  defp natural_reset_far_enough?(
+         %{reset_at: %DateTime{} = reset_at} = window,
+         min_blocked_minutes,
+         timestamp
+       ) do
     seconds_until_reset = whole_second_diff(reset_at, timestamp)
 
     seconds_until_reset >= min_blocked_minutes * 60 and
-      seconds_until_reset <= @max_weekly_reset_seconds
+      WindowClassifier.saved_reset_window?(window) and
+      seconds_until_reset <= window.window_minutes * 60 + 3600
   end
 
   defp natural_reset_far_enough?(_reset_at, _min_blocked_minutes, _timestamp), do: false

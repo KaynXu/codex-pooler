@@ -5,7 +5,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting
+  require Logger
+
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Persistence.{
@@ -18,6 +19,7 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
 
   @owner_lease_active OwnerLeaseStatus.active_status()
@@ -40,26 +42,85 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   end
 
   @spec active_runtime_request?(request_ref(), DateTime.t()) :: boolean()
-  def active_runtime_request?(%{id: request_id}, %DateTime{} = now) do
-    active_runtime_request?(request_id, now)
+  def active_runtime_request?(request_ref, %DateTime{} = now),
+    do: active_runtime_request?(request_ref, now, [])
+
+  @doc """
+  Whether this request still has an in-progress turn held by a live owner.
+
+  An unexpired lease protects its work unless a fresh observer can establish
+  that the exact owner incarnation ended. Stale presence alone cannot do so:
+  a live VM can lose database access while still streaming. Local live owners,
+  owners with no later incarnation proof, and legacy owners with no incarnation
+  retain the lease guard. A later database heartbeat from a different
+  incarnation under the same non-anonymous node name proves the predecessor is
+  gone even when the cleanup role cannot reach either VM over BEAM distribution.
+  """
+  @spec active_runtime_request?(request_ref(), DateTime.t(), keyword()) :: boolean()
+  def active_runtime_request?(%{id: request_id}, %DateTime{} = now, opts) do
+    active_runtime_request?(request_id, now, opts)
   end
 
-  def active_runtime_request?(request_id, %DateTime{} = now) when is_binary(request_id) do
-    Repo.exists?(
+  # Ownership is evidenced two ways and either one is enough, so they are asked
+  # separately and the cheap `or` stops at the first that holds.
+  def active_runtime_request?(request_id, %DateTime{} = now, opts) when is_binary(request_id) do
+    held_by_live_session_owner?(request_id, now, opts) or
+      held_by_live_lease_owner?(request_id, now, opts)
+  end
+
+  def active_runtime_request?(_request_ref, %DateTime{}, _opts), do: false
+
+  # The session's own owner stamp is still in the future and the VM it names is
+  # not provably absent.
+  defp held_by_live_session_owner?(request_id, now, opts) do
+    Repo.all(
       from turn in CodexTurn,
         join: session in CodexSession,
         on: session.id == turn.codex_session_id,
-        left_join: lease in BridgeOwnerLease,
-        on:
-          lease.codex_session_id == session.id and
-            lease.status == ^@owner_lease_active and lease.expires_at > ^now,
         where:
           turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status() and
-            (session.owner_lease_expires_at > ^now or not is_nil(lease.id))
+            session.owner_lease_expires_at > ^now,
+        select: {session.owner_instance_id, session.owner_instance_boot_id}
     )
+    |> Enum.any?(&owner_may_be_alive?(&1, opts))
   end
 
-  def active_runtime_request?(_request_ref, %DateTime{}), do: false
+  # An active owner lease has not expired and the VM holding it is not provably
+  # absent.
+  defp held_by_live_lease_owner?(request_id, now, opts) do
+    Repo.all(
+      from turn in CodexTurn,
+        join: lease in BridgeOwnerLease,
+        on:
+          lease.codex_session_id == turn.codex_session_id and
+            lease.status == ^@owner_lease_active and lease.expires_at > ^now,
+        where: turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status(),
+        select: {lease.owner_instance_id, lease.owner_instance_boot_id}
+    )
+    |> Enum.any?(&owner_may_be_alive?(&1, opts))
+  end
+
+  # Database freshness selects a candidate. Exact reachable VM identity is the
+  # normal authority; when it is unreachable, a later incarnation publishing
+  # under the same node name is the same exact death proof absent-instance
+  # recovery accepts. A live owner vetoes both, and anonymous/non-incarnation
+  # identities remain unknown.
+  defp owner_may_be_alive?({node_name, boot_id}, opts) do
+    identity = InstancePresence.Identity.owner(node_name, boot_id)
+    presence_now = InstancePresence.database_now()
+
+    not (InstancePresence.observer_fresh?(presence_now, opts) and
+           InstancePresence.absent?(identity, presence_now, opts) and
+           owner_proven_gone?(identity))
+  end
+
+  defp owner_proven_gone?(identity) do
+    case InstancePresence.status(identity) do
+      :dead -> true
+      :alive -> false
+      :unknown -> InstancePresence.superseded?(identity)
+    end
+  end
 
   @spec recover_stale_request_turn(request_ref(), attempt_ref(), keyword()) :: :ok
   def recover_stale_request_turn(request_ref, attempt_ref, opts) when is_list(opts) do
@@ -161,44 +222,65 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     defp maybe_wait_after_expired_owner_candidates(_candidates), do: :ok
   end
 
+  # Every committed outcome of this transaction goes through the same emission,
+  # which is what makes the producer side of the after-commit property hold the
+  # way the emitter side does. `Interruption.emit_outcomes_after_commit/1`
+  # guarantees that nothing emits a marker inside a transaction; it cannot
+  # guarantee that a marker a recovery produced ever reaches it, and the
+  # `:stale_owner` arm used to skip the call rather than carry an empty list. A
+  # second arm written the same way would drop a recovery's outcomes with no
+  # gate, no log and no test — the shape findings#195 row 195-05's third site
+  # had. There is now one `{:ok, _}` shape and it always carries the markers.
   defp recover_expired_owner_session(candidate, {:ok, recovered_count}) do
-    case Repo.transaction(fn -> recover_expired_owner_session_locked(candidate) end) do
-      {:ok, :stale_owner} -> {:cont, {:ok, recovered_count}}
-      {:ok, :recovered} -> {:cont, {:ok, recovered_count + 1}}
-      {:error, reason} -> {:halt, {:error, reason}}
+    candidate
+    |> then(&Repo.transaction(fn -> recover_expired_owner_session_locked(&1) end))
+    |> complete_expired_owner_recovery(recovered_count)
+  end
+
+  @doc false
+  @spec complete_expired_owner_recovery(
+          {:ok, {non_neg_integer(), map()}} | {:error, term()},
+          non_neg_integer()
+        ) :: {:cont, {:ok, non_neg_integer()}} | {:halt, {:error, term()}}
+  def complete_expired_owner_recovery({:ok, {recovered, result}}, recovered_count)
+      when is_integer(recovered) and recovered >= 0 do
+    emit_recovery_outcomes(result)
+    {:cont, {:ok, recovered_count + recovered}}
+  end
+
+  def complete_expired_owner_recovery({:error, reason}, _recovered_count),
+    do: {:halt, {:error, reason}}
+
+  # The after-commit property of these outcomes rests on this step running bare,
+  # which `RuntimeStateCleanup.run/1` guarantees today. If a future caller wraps
+  # it, the markers are not this function's to emit and it has nowhere to put
+  # them; saying so beats losing a recovery's outcomes silently. Only the count
+  # crosses into the log.
+  defp emit_recovery_outcomes(result) do
+    case Interruption.emit_committed_recovery_outcomes(result) do
+      :ok ->
+        :ok
+
+      {:deferred, markers} ->
+        Logger.warning(
+          "expired-owner recovery outcomes dropped inside a caller transaction " <>
+            "outcomes=#{length(markers)}"
+        )
+
+        :ok
     end
   end
 
   defp recover_expired_owner_session_locked(candidate) do
-    owner_snapshot =
-      Map.take(candidate, [:owner_instance_id, :owner_lease_token, :owner_lease_expires_at])
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_transport(websocket_owner_lease_token: candidate.owner_lease_token)
 
-    case Accounting.close_request_replays_for_session(
-           candidate.session_id,
-           owner_snapshot,
-           :owner_shutdown
-         ) do
-      {:ok, :stale_owner} ->
-        :stale_owner
-
-      {:ok, _summary} ->
-        opts =
-          %{}
-          |> RequestOptions.for_websocket()
-          |> RequestOptions.put_transport(
-            websocket_owner_lease_token: candidate.owner_lease_token
-          )
-
-        case Interruption.recover_expired_owner_lifecycle(
-               candidate,
-               opts
-             ) do
-          {:ok, _result} -> :recovered
-          {:error, reason} -> Repo.rollback(reason)
-        end
-
-      {:error, reason} ->
-        Repo.rollback(reason)
+    case Interruption.recover_expired_owner_lifecycle(candidate, opts) do
+      {:ok, :stale_owner} -> {0, %{interrupted_outcomes: []}}
+      {:ok, result} -> {1, result}
+      {:error, reason} -> Repo.rollback(reason)
     end
   end
 

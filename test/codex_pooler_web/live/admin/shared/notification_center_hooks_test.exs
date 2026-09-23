@@ -133,9 +133,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
         "password_change_required" => "false"
       })
 
-    operator_pool_assignment_fixture(admin, assigned_pool,
-      created_by_user_id: owner_scope.user.id
-    )
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner_scope.user.id)
 
     assert {:ok, %{token: token}} =
              Accounts.login_user(%{"email" => admin.email, "password" => valid_user_password()})

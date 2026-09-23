@@ -171,7 +171,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     end
   end
 
-  for denial <- [:denied, :spend_control, :conflicting_flags, :malformed_flags] do
+  for denial <- [:denied, :conflicting_flags, :malformed_flags] do
     test "#{denial} usage never permits exhausted account dispatch", %{conn: conn} do
       payload = denied_payload(unquote(denial))
       {upstream, setup} = reconciled_setup(payload)
@@ -180,6 +180,21 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
       assert generation_count(upstream) == 0
       assert Repo.aggregate(Attempt, :count) == 0
     end
+  end
+
+  test "reached spend control does not block affirmative included quota", %{conn: conn} do
+    payload = spend_control_limited_payload()
+    {upstream, setup} = reconciled_setup(payload)
+
+    assert {:ok, %{state: :available}} =
+             setup.identity
+             |> Repo.reload!()
+             |> Map.fetch!(:metadata)
+             |> AccountAvailabilityStore.load()
+
+    assert dispatch(conn, setup).status == 200
+    assert generation_count(upstream) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
   end
 
   test "affirmative account permission does not bypass an exhausted model meter", %{conn: conn} do
@@ -313,9 +328,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     }
 
     setup.identity
-    |> Ecto.Changeset.change(
-      metadata: Map.put(setup.identity.metadata, "saved_reset_redemption", redemption)
-    )
+    |> Ecto.Changeset.change(metadata: Map.put(setup.identity.metadata, "saved_reset_redemption", redemption))
     |> Repo.update!()
 
     assert dispatch(conn, setup).status == 503
@@ -408,9 +421,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
 
     identity =
       setup.identity
-      |> Ecto.Changeset.change(
-        metadata: Map.put(setup.identity.metadata, "usage_base_url", FakeUpstream.url(upstream))
-      )
+      |> Ecto.Changeset.change(metadata: Map.put(setup.identity.metadata, "usage_base_url", FakeUpstream.url(upstream)))
       |> Repo.update!()
 
     assert {:ok, identity} =
@@ -445,8 +456,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
        "/backend-api/codex/usage" => {200, usage},
        "/wham/usage" => {200, usage},
        "/backend-api/wham/usage" => {200, usage},
-       @endpoint_path =>
-         {200, %{"id" => "resp_permission_fixture", "object" => "response", "output" => []}}
+       @endpoint_path => {200, %{"id" => "resp_permission_fixture", "object" => "response", "output" => []}}
      }}
   end
 
@@ -471,14 +481,14 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionDispatchTest do
     |> put_in(["rate_limit", "limit_reached"], true)
   end
 
-  defp denied_payload(:spend_control),
-    do: Map.put(usage_payload(:weekly_primary), "spend_control", %{"reached" => true})
-
   defp denied_payload(:conflicting_flags),
     do: put_in(usage_payload(:weekly_primary), ["rate_limit", "limit_reached"], true)
 
   defp denied_payload(:malformed_flags),
     do: put_in(usage_payload(:weekly_primary), ["rate_limit", "allowed"], "true")
+
+  defp spend_control_limited_payload,
+    do: Map.put(usage_payload(:weekly_primary), "spend_control", %{"reached" => true})
 
   defp window(seconds) do
     %{

@@ -705,9 +705,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
   @doc false
   @spec run_websocket_response_for_socket(auth(), binary(), opts(), (binary() -> any())) ::
-          {:socket_response_result,
-           CodexPooler.Gateway.Runtime.Service.socket_completion_source(),
-           :ok | {:error, Contracts.gateway_error()}}
+          {:socket_response_result, CodexPooler.Gateway.Runtime.Service.socket_completion_source(), :ok | {:error, Contracts.gateway_error()}}
   def run_websocket_response_for_socket(auth, payload, opts, push_frame)
       when is_binary(payload) and is_function(push_frame, 1) do
     opts = websocket_request_options(opts)
@@ -727,9 +725,7 @@ defmodule CodexPooler.Gateway.Websocket do
           PreparedWebsocketFrame.t(),
           (binary() -> any())
         ) ::
-          {:socket_response_result,
-           CodexPooler.Gateway.Runtime.Service.socket_completion_source(),
-           :ok | {:error, Contracts.gateway_error()}}
+          {:socket_response_result, CodexPooler.Gateway.Runtime.Service.socket_completion_source(), :ok | {:error, Contracts.gateway_error()}}
   def run_prepared_websocket_response_for_socket(
         auth,
         %PreparedWebsocketFrame{} = prepared,

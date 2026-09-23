@@ -230,8 +230,7 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
 
       parts =
         for {key, value} <- fields,
-            do:
-              "--edit-options\r\nContent-Disposition: form-data; name=\"#{key}\"\r\n\r\n#{value}\r\n"
+            do: "--edit-options\r\nContent-Disposition: form-data; name=\"#{key}\"\r\n\r\n#{value}\r\n"
 
       uploads =
         if @options in [:mask, :both],
@@ -444,8 +443,7 @@ defmodule CodexPoolerWeb.V1.ImagesServingModeTest do
     do: <<byte_size(data)::32, type::binary, data::binary, :erlang.crc32(type <> data)::32>>
 
   defp assert_png(<<137, 80, 78, 71, 13, 10, 26, 10, chunks::binary>>) do
-    <<13::32, "IHDR", header::binary-size(13), header_crc::32, size::32, "IDAT",
-      data::binary-size(size), data_crc::32, 0::32, "IEND", end_crc::32>> = chunks
+    <<13::32, "IHDR", header::binary-size(13), header_crc::32, size::32, "IDAT", data::binary-size(size), data_crc::32, 0::32, "IEND", end_crc::32>> = chunks
 
     assert header == <<1::32, 1::32, 8, 2, 0, 0, 0>>
     assert header_crc == :erlang.crc32("IHDR" <> header)

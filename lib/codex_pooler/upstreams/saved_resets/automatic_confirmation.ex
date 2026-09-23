@@ -293,8 +293,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
             {:confirmed, :span}
 
           true ->
-            {:span_pending,
-             Keyword.get(opts, :min_blocked_seconds, 0) - blocked_span_seconds(parsed)}
+            {:span_pending, Keyword.get(opts, :min_blocked_seconds, 0) - blocked_span_seconds(parsed)}
         end
     end
   end
@@ -549,9 +548,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutomaticConfirmation do
       observation.available_count == binding.bank_count
   end
 
-  defp qualifying?(
-         %{binding: %{trigger: :threshold, threshold_percent: threshold} = binding} = observation
-       )
+  defp qualifying?(%{binding: %{trigger: :threshold, threshold_percent: threshold} = binding} = observation)
        when is_number(threshold) do
     observation.used_percent >= threshold and observation.rate_limit_allowed == true and
       observation.rate_limit_reached == false and

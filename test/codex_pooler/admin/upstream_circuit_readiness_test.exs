@@ -199,19 +199,13 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
     %{assignment: future} = upstream_assignment_fixture(pool)
     %{assignment: latest_source} = upstream_assignment_fixture(pool)
 
-    insert_state!(pool, lower, "gpt-lower", "proxy_http",
-      opened_at: DateTime.add(@observed_at, -600, :second)
-    )
+    insert_state!(pool, lower, "gpt-lower", "proxy_http", opened_at: DateTime.add(@observed_at, -600, :second))
 
     insert_state!(pool, upper, "gpt-upper", "proxy_http", last_failure_at: @observed_at)
 
-    insert_state!(pool, stale, "gpt-stale", "proxy_http",
-      opened_at: DateTime.add(@observed_at, -601, :second)
-    )
+    insert_state!(pool, stale, "gpt-stale", "proxy_http", opened_at: DateTime.add(@observed_at, -601, :second))
 
-    insert_state!(pool, future, "gpt-future", "proxy_http",
-      last_failure_at: DateTime.add(@observed_at, 1, :second)
-    )
+    insert_state!(pool, future, "gpt-future", "proxy_http", last_failure_at: DateTime.add(@observed_at, 1, :second))
 
     insert_state!(pool, latest_source, "gpt-latest", "proxy_http",
       opened_at: DateTime.add(@observed_at, -400, :second),
@@ -239,13 +233,9 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
     %{assignment: lower_clamp} = upstream_assignment_fixture(pool)
     %{assignment: upper_clamp} = upstream_assignment_fixture(pool)
 
-    insert_state!(pool, lower_clamp, "gpt-lower-clamp", "proxy_http",
-      opened_at: DateTime.add(@observed_at, -300, :second)
-    )
+    insert_state!(pool, lower_clamp, "gpt-lower-clamp", "proxy_http", opened_at: DateTime.add(@observed_at, -300, :second))
 
-    insert_state!(pool, upper_clamp, "gpt-upper-clamp", "proxy_http",
-      opened_at: DateTime.add(@observed_at, -3_600, :second)
-    )
+    insert_state!(pool, upper_clamp, "gpt-upper-clamp", "proxy_http", opened_at: DateTime.add(@observed_at, -3_600, :second))
 
     lower =
       UpstreamCircuitReadiness.by_assignment_id(
@@ -618,6 +608,9 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
   defp count_repo_commands(fun) do
     parent = self()
     handler_id = "upstream-circuit-readiness-test-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

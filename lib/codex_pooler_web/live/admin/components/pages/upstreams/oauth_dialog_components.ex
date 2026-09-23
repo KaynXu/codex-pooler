@@ -124,6 +124,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
       |> assign(:callback_form_id, "#{assigns.id_prefix}-callback-form")
       |> assign(:callback_url_id, "#{assigns.id_prefix}-callback-url")
       |> assign(:callback_help_id, "#{assigns.id_prefix}-callback-help")
+      |> assign(:callback_demo_id, "#{assigns.id_prefix}-callback-demo")
       |> assign(:submit_id, "#{assigns.id_prefix}-submit-callback")
 
     ~H"""
@@ -197,9 +198,94 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           <p id={@callback_help_id} class="text-xs leading-4 text-base-content/55">
             After OpenAI redirects, copy the full URL from the browser address bar and paste it here.
           </p>
+          <.callback_paste_demo id={@callback_demo_id} />
         </div>
       </.form>
     </section>
+    """
+  end
+
+  attr :id, :string, required: true
+
+  @doc """
+  The copy-then-paste move, drawn once so the step does not have to be read.
+
+  The callback URL lands on a page that cannot load, which reads as a failure
+  right when the operator has to do the one thing that finishes the link: take
+  the URL out of the address bar and bring it back here. Prose says that in two
+  sentences; this says it in one glance, and the dead page is drawn as part of
+  the expected picture rather than left to look like the error it resembles.
+
+  Inline SVG rather than a raster loop: it inherits the theme's own tokens in
+  both themes, stays sharp at any density, and costs no request. The motion is
+  instructional, not ambient — every moving part is a step of the instruction —
+  and under `prefers-reduced-motion` the same drawing holds its finished frame,
+  where the selection, the pasted value, and both key pills are already visible.
+  """
+  def callback_paste_demo(assigns) do
+    ~H"""
+    <figure
+      id={@id}
+      data-role="oauth-callback-paste-demo"
+      class="oauth-paste-demo rounded-box border border-base-300 bg-base-200/30 p-2"
+    >
+      <svg
+        viewBox="0 0 352 126"
+        role="img"
+        aria-label="Select the callback URL in the browser address bar, copy it, then paste it into the callback URL field and press Complete link."
+        focusable="false"
+        class="block w-full"
+      >
+        <g class="opd-frame">
+          <rect x="1" y="1" width="350" height="54" rx="8" class="opd-panel" />
+          <circle cx="13" cy="15" r="2.2" class="opd-dot" />
+          <circle cx="21" cy="15" r="2.2" class="opd-dot" />
+          <circle cx="29" cy="15" r="2.2" class="opd-dot" />
+          <rect x="38" y="8" width="306" height="14" rx="7" class="opd-omnibox" />
+          <line x1="1" y1="29" x2="351" y2="29" class="opd-rule" />
+          <text x="13" y="44" class="opd-body-text">This page will not load — that is expected.</text>
+
+          <path d="M176 58 L176 65 M172.6 62 L176 66 L179.4 62" class="opd-arrow" />
+
+          <rect x="1" y="70" width="350" height="55" rx="8" class="opd-panel opd-panel--dialog" />
+          <text x="13" y="83" class="opd-field-label">CALLBACK URL</text>
+          <rect x="12" y="89" width="250" height="17" rx="4" class="opd-input" />
+          <rect x="270" y="89" width="70" height="17" rx="4" class="opd-submit" />
+          <text x="305" y="100.5" class="opd-submit-label">Complete link</text>
+        </g>
+
+        <g class="opd-play">
+          <rect x="43.5" y="9" width="212" height="12" rx="2" class="opd-selection" />
+          <text x="45" y="18.6" class="opd-url">localhost:1455/auth/callback?code=ac_…</text>
+          <text x="19" y="100.6" class="opd-placeholder">https://…</text>
+          <text x="19" y="100.6" class="opd-pasted">http://localhost:1455/auth/callback?code=ac_…</text>
+
+          <g class="opd-chip">
+            <rect x="43.5" y="9" width="212" height="12" rx="3" class="opd-chip-body" />
+            <text x="45" y="18.6" class="opd-chip-text">localhost:1455/auth/callback?code=ac_…</text>
+          </g>
+
+          <g class="opd-pill opd-pill--copy">
+            <rect x="0" y="0" width="47" height="14" rx="7" class="opd-pill-body" />
+            <rect x="7" y="4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
+            <rect x="9.6" y="3.4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
+            <text x="19" y="9.9" class="opd-pill-text">Copy</text>
+          </g>
+
+          <g class="opd-pill opd-pill--paste">
+            <rect x="0" y="0" width="50" height="14" rx="7" class="opd-pill-body" />
+            <rect x="7" y="3.4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
+            <rect x="9.6" y="4" width="5.4" height="6.4" rx="1.4" class="opd-pill-glyph" />
+            <text x="19" y="9.9" class="opd-pill-text">Paste</text>
+          </g>
+
+          <path
+            d="M0 0 L0 11.4 L2.7 8.9 L4.5 12.4 L6.3 11.5 L4.6 8.1 L8 8.1 Z"
+            class="opd-cursor"
+          />
+        </g>
+      </svg>
+    </figure>
     """
   end
 

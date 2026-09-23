@@ -81,8 +81,7 @@ defmodule CodexPooler.Accounting.UsageResponsesTest do
             if(quota_key == "other_feature", do: "60", else: "25")
           )
         ),
-      reset_at:
-        if(quota_key == "other_feature", do: nil, else: DateTime.add(@as_of, 300, :second)),
+      reset_at: if(quota_key == "other_feature", do: nil, else: DateTime.add(@as_of, 300, :second)),
       display_label: if(quota_key == "codex_spark", do: "Codex Spark", else: "Other feature"),
       limit_name: if(quota_key == "codex_spark", do: "Codex Spark", else: "Other feature"),
       metered_feature:

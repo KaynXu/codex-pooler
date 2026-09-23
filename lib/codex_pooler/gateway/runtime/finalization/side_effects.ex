@@ -143,11 +143,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
     RateLimitObserver.record_websocket_frame_headers(
       identity,
       Map.get(response, :websocket_frame_headers, %{}),
-      context.model.upstream_model_id
+      context.model.upstream_model_id,
+      websocket_denial_code(response)
     )
 
     :ok
   end
+
+  defp websocket_denial_code(%{terminal: terminal, upstream_error_code: code})
+       when terminal in ["response.failed", "response.incomplete", "error"],
+       do: code
+
+  defp websocket_denial_code(%{reason: {:quota_exhausted_first_event, %{code: code}}}), do: code
+  defp websocket_denial_code(_response), do: nil
 
   defp websocket_upgrade_headers(%{reason: {:websocket_upgrade_failed, status, headers}})
        when is_integer(status) and is_list(headers),

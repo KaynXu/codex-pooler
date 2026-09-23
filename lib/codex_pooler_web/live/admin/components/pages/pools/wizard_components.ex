@@ -27,8 +27,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     create: %{
       id: "pool-create-dialog",
       title: "Create Pool",
-      description:
-        "Create the operational boundary used by API keys, upstream assignments, routing policy, and audit filters.",
+      description: "Create the operational boundary used by API keys, upstream assignments, routing policy, and audit filters.",
       form_id: "pool-create-form",
       form_submit: "create_pool",
       cancel_event: "cancel_create",
@@ -47,8 +46,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     edit: %{
       id: "pool-edit-dialog",
       title: "Edit Pool",
-      description:
-        "Update lifecycle details, routing, upstream assignments, and related API key context.",
+      description: "Update lifecycle details, routing, upstream assignments, and related API key context.",
       form_id: "pool-edit-form",
       form_submit: "save_pool",
       cancel_event: "cancel_edit",
@@ -67,8 +65,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     models: %{
       id: "pool-model-serving-dialog",
       title: "Model serving modes",
-      description:
-        "Choose serving modes for this assigned Pool. Other Pool settings remain instance-owner only.",
+      description: "Choose serving modes for this assigned Pool. Other Pool settings remain instance-owner only.",
       form_id: "pool-model-serving-edit-form",
       form_submit: "save_pool_model_serving",
       cancel_event: "cancel_edit",
@@ -105,8 +102,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     },
     "models" => %{
       title: "Model serving modes",
-      description:
-        "Choose the Responses serving path for each model currently known to this Pool."
+      description: "Choose the Responses serving path for each model currently known to this Pool."
     }
   }
 

@@ -79,6 +79,10 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentitySlotLock do
       |> Enum.uniq()
       |> Enum.sort()
 
+    Enum.each(identity_ids, fn identity_id ->
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [identity_id])
+    end)
+
     identities =
       Repo.all(
         from identity in UpstreamIdentity,

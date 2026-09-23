@@ -18,16 +18,10 @@ defmodule CodexPooler.Repo.Migrations.CodexBackendFileUpstreamBridgeMetadata do
       add :finalize_status, :text, null: false, default: "pending"
     end
 
-    create index(:codex_files, [:pool_upstream_assignment_id],
-             name: :codex_files_pool_upstream_assignment_id_idx
-           )
+    create index(:codex_files, [:pool_upstream_assignment_id], name: :codex_files_pool_upstream_assignment_id_idx)
 
-    create index(:codex_files, [:upstream_identity_id],
-             name: :codex_files_upstream_identity_id_idx
-           )
+    create index(:codex_files, [:upstream_identity_id], name: :codex_files_upstream_identity_id_idx)
 
-    create constraint(:codex_files, :codex_files_finalize_status_check,
-             check: "finalize_status IN ('pending', 'succeeded', 'failed')"
-           )
+    create constraint(:codex_files, :codex_files_finalize_status_check, check: "finalize_status IN ('pending', 'succeeded', 'failed')")
   end
 end

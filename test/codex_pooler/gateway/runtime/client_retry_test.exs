@@ -486,8 +486,7 @@ defmodule CodexPooler.Gateway.Runtime.ClientRetryTest do
         version: 5,
         url: "https://upstream.example.com/backend-api/codex/responses",
         headers: [{"authorization", "synthetic-value"}],
-        payload:
-          CodexPooler.JSON.encode!(%{"model" => setup.model.exposed_model_id, "input" => []}),
+        payload: CodexPooler.JSON.encode!(%{"model" => setup.model.exposed_model_id, "input" => []}),
         timeouts: %TimeoutConfig{
           connect_timeout_ms: 1_000,
           pool_timeout_ms: 1_000,

@@ -21,11 +21,26 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
 
   @spec lock_and_validate!(identity_id(), assignment_id()) :: locked_references() | no_return()
   def lock_and_validate!(upstream_identity_id, pool_upstream_assignment_id) do
+    case lock_and_validate(upstream_identity_id, pool_upstream_assignment_id) do
+      {:ok, locked} -> locked
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  @doc """
+  `lock_and_validate!/2` without the rollback: a missing or mismatched pair is
+  returned as `{:error, accounting_error}` so a caller running inside another
+  transaction can degrade under its own savepoint instead of rolling back the
+  enclosing work.
+  """
+  @spec lock_and_validate(identity_id(), assignment_id()) ::
+          {:ok, locked_references()} | {:error, Metadata.accounting_error()}
+  def lock_and_validate(upstream_identity_id, pool_upstream_assignment_id) do
     unless Repo.in_transaction?() do
       raise ArgumentError, "upstream reference locks require an active transaction"
     end
 
-    lock_pair!(upstream_identity_id, pool_upstream_assignment_id)
+    lock_pair(upstream_identity_id, pool_upstream_assignment_id)
   end
 
   @doc false
@@ -46,33 +61,45 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
     end)
   end
 
-  defp lock_pair!(nil, nil), do: %{identity: nil, assignment: nil}
+  defp lock_pair(nil, nil), do: {:ok, %{identity: nil, assignment: nil}}
 
-  defp lock_pair!(nil, _pool_upstream_assignment_id) do
-    rollback!(:upstream_identity_not_found, "upstream identity was not found")
-  end
+  defp lock_pair(nil, _pool_upstream_assignment_id),
+    do: {:error, error(:upstream_identity_not_found, "upstream identity was not found")}
 
-  defp lock_pair!(_upstream_identity_id, nil) do
-    rollback!(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")
-  end
+  defp lock_pair(_upstream_identity_id, nil),
+    do: {:error, error(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")}
 
-  defp lock_pair!(upstream_identity_id, pool_upstream_assignment_id) do
+  defp lock_pair(upstream_identity_id, pool_upstream_assignment_id) do
     identity =
       Repo.one(
         from identity in UpstreamIdentity,
           where: identity.id == ^upstream_identity_id,
           lock: "FOR KEY SHARE"
-      ) || rollback!(:upstream_identity_not_found, "upstream identity was not found")
-
-    assignment = lock_assignment!(pool_upstream_assignment_id)
-
-    if assignment.upstream_identity_id == identity.id do
-      %{identity: identity, assignment: assignment}
-    else
-      rollback!(
-        :upstream_reference_mismatch,
-        "pool upstream assignment does not belong to upstream identity"
       )
+
+    assignment =
+      Repo.one(
+        from assignment in PoolUpstreamAssignment,
+          where: assignment.id == ^pool_upstream_assignment_id,
+          lock: "FOR SHARE"
+      )
+
+    cond do
+      is_nil(identity) ->
+        {:error, error(:upstream_identity_not_found, "upstream identity was not found")}
+
+      is_nil(assignment) ->
+        {:error, error(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")}
+
+      assignment.upstream_identity_id != identity.id ->
+        {:error,
+         error(
+           :upstream_reference_mismatch,
+           "pool upstream assignment does not belong to upstream identity"
+         )}
+
+      true ->
+        {:ok, %{identity: identity, assignment: assignment}}
     end
   end
 
@@ -87,5 +114,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
     ) || rollback!(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")
   end
 
-  defp rollback!(code, message), do: Repo.rollback(Metadata.accounting_error(code, message))
+  defp rollback!(code, message), do: Repo.rollback(error(code, message))
+  defp error(code, message), do: Metadata.accounting_error(code, message)
 end

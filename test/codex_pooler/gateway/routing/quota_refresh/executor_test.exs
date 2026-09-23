@@ -226,9 +226,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.ExecutorTest do
         candidates: [candidate],
         circuit_snapshots: %{setup.assignment.id => true}
       })
-      |> RouteState.put_quota_snapshots(
-        QuotaWindows.load_routing_quota_snapshots([identity.id], now)
-      )
+      |> RouteState.put_quota_snapshots(QuotaWindows.load_routing_quota_snapshots([identity.id], now))
 
     assert {:refreshable_quota, refresh_plan} =
              CandidateEligibility.filter_quota_eligible_candidates(filter_input, route_state)
@@ -254,8 +252,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.ExecutorTest do
 
     snapshots =
       Map.new(windows_by_identity_id, fn {identity_id, windows} ->
-        {identity_id,
-         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+        {identity_id, RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
       end)
 
     RouteState.put_quota_snapshots(route_state, snapshots)

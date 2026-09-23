@@ -189,7 +189,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
              context.payload,
              context.model,
              context.endpoint,
-             ws_options
+             ws_options,
+             assignment_id: context.assignment.id
            ) do
       {ws_payload, ws_options} =
         RequestCompression.maybe_compress(ws_payload, context, ws_options)

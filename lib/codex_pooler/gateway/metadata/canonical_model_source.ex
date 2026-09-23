@@ -39,13 +39,22 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
                           visibility
                         ]
 
+  @reasoning_partition_keys ~w[
+                              reasoning_efforts
+                              supported_reasoning_levels
+                            ]
+
   @shell_command_types ~w(default local shell_command unified_exec)
 
   @type pricing_buckets :: ModelMetadata.pricing_buckets()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
   @type effective_model_serving_mode :: ModelMetadata.effective_model_serving_mode()
   @type result :: {:ok, map()} | {:error, :invalid_model_metadata}
-  @type canonical_source :: %{required(:digest) => String.t(), required(:source) => map()}
+  @type canonical_source :: %{
+          required(:digest) => String.t(),
+          required(:reasoning_agnostic_digest) => String.t(),
+          required(:source) => map()
+        }
 
   @spec canonical_source(term()) :: {:ok, canonical_source()} | {:error, :invalid_model_metadata}
   def canonical_source(source) when is_map(source) do
@@ -58,7 +67,18 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
         |> normalize_digest_shell_type()
         |> canonical_digest()
 
-      {:ok, %{digest: digest, source: source}}
+      reasoning_agnostic_digest =
+        source
+        |> Map.drop(@digest_excluded_keys ++ @reasoning_partition_keys)
+        |> normalize_digest_shell_type()
+        |> canonical_digest()
+
+      {:ok,
+       %{
+         digest: digest,
+         reasoning_agnostic_digest: reasoning_agnostic_digest,
+         source: source
+       }}
     end
   end
 

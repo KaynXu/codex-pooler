@@ -1,5 +1,6 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
 
@@ -12,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DirectCleanup
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -66,7 +68,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete!(fixture.pool)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
         Repo.delete!(fixture.identity)
         Repo.delete!(fixture.pricing)
         refute Repo.get(CodexSession, session.id)
@@ -142,6 +144,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
     }
   end
 
+  @tag slow: "boots a remote BEAM owner and verifies real committed admission cancellation before lease release"
   test "remote drain cancels proxy admission and finalizes a committed reservation before releasing its lease",
        context do
     {task, cleanup} = start_admission(context)
@@ -198,6 +201,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
     assert_remote_log_clean(context)
   end
 
+  @tag slow: "boots a remote BEAM owner and verifies stale admission cannot mutate PostgreSQL"
   test "stale owner binding rejects a real remote registration with no persistent mutations",
        context do
     stale = %{context.session | owner_lease_token: Ecto.UUID.generate()}
@@ -337,9 +341,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   end
 
   defp lease_status(session_id) do
-    Repo.one!(
-      from(l in BridgeOwnerLease, where: l.codex_session_id == ^session_id, select: l.status)
-    )
+    Repo.one!(from(l in BridgeOwnerLease, where: l.codex_session_id == ^session_id, select: l.status))
   end
 
   defp lock_session(session_id) do
@@ -409,6 +411,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRemoteAdmissionTest do
   defp start_distribution! do
     if node() == :nonode@nohost do
       {_output, 0} = System.cmd("epmd", ["-daemon"])
+      PeerRegistry.assert_epmd_ready!()
       previous = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
       Application.put_env(:kernel, :prevent_overlapping_partitions, false)
       name = String.to_atom("pending_proxy_#{System.unique_integer([:positive])}")

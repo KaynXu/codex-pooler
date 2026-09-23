@@ -50,8 +50,7 @@ defmodule CodexPooler.Dev.PermanentFullModeEgressObserverTest do
       transport: :websocket,
       client_request_id: "smoke-ws-correlator",
       header_names: ["authorization"],
-      websocket_client_metadata:
-        {:keys, ["ws_request_header_x_openai_internal_codex_responses_lite"]}
+      websocket_client_metadata: {:keys, ["ws_request_header_x_openai_internal_codex_responses_lite"]}
     })
 
     entry = PermanentFullModeEgressObserver.captures()["smoke-ws-correlator"]

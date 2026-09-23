@@ -36,6 +36,9 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
           optional(:replay_generation) => non_neg_integer(),
           optional(:cancel_reason) => String.t()
         }
+  @type deferred_success :: {:ok, %{required(:after_commit_markers) => [map()]}}
+  @type interrupt_result :: :ok | deferred_success() | {:error, term()}
+  @type cleanup_result :: interrupt_result() | :none
 
   @spec begin(RequestOptions.t()) ::
           :ok | {:error, :cancelled | :owner_unavailable | :stale_owner}
@@ -72,9 +75,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
   defp register_owner_admission(%{owner_binding: nil}, _options), do: :ok
 
   @spec finish(RequestOptions.t()) :: :ok
-  def finish(
-        %RequestOptions{runtime: %{direct_cleanup: %{owner_binding: binding} = context}} = options
-      )
+  def finish(%RequestOptions{runtime: %{direct_cleanup: %{owner_binding: binding} = context}} = options)
       when is_map(binding) do
     WebsocketOwnerForwarder.finish_pre_attempt_admission(
       options.continuity.codex_session,
@@ -146,7 +147,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
     ActivityRegistry.ready_direct_cleanup(context)
   end
 
-  @spec cancel(t(), String.t()) :: :ok | :none | {:error, term()}
+  @spec cancel(t(), String.t()) :: cleanup_result()
   def cancel(context, reason) do
     case ActivityRegistry.await_direct_cleanup(context) do
       {:ok, receipt} -> interrupt(receipt, Map.get(receipt, :cancel_reason, reason))
@@ -154,7 +155,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
     end
   end
 
-  @spec cancel_pending(t(), String.t()) :: :ok | :none | {:error, term()}
+  @spec cancel_pending(t(), String.t()) :: cleanup_result()
   def cancel_pending(context, reason) do
     :ok = ActivityRegistry.mark_direct_cleanup_reason(context, reason)
 
@@ -168,7 +169,7 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
     end
   end
 
-  @spec terminate_admission(t(), String.t()) :: :ok | :none | {:error, term()}
+  @spec terminate_admission(t(), String.t()) :: cleanup_result()
   def terminate_admission(context, reason) do
     :ok = ActivityRegistry.mark_direct_cleanup_reason(context, reason)
     Process.exit(context.task, cancellation_exit_reason(reason))
@@ -178,14 +179,14 @@ defmodule CodexPooler.Gateway.Websocket.DirectCleanup do
   defp cancellation_exit_reason("owner_drained"), do: {:shutdown, :owner_drained}
   defp cancellation_exit_reason(_reason), do: {:shutdown, :client_disconnected}
 
-  @spec interrupt(receipt(), String.t()) :: :ok | {:error, term()}
+  @spec interrupt(receipt(), String.t()) :: interrupt_result()
   defdelegate interrupt(receipt, reason), to: Interruption, as: :interrupt_direct_request
 
   # Called by the response task itself after it rescued an exception. The
   # task settles its own pending admission first (idempotent) so the receipt
   # lookup cannot wait on a readiness call only this process could make, then
   # fails the request, attempt, and turn it bound.
-  @spec fail_task_exception(t(), String.t()) :: :ok | :none | {:error, term()}
+  @spec fail_task_exception(t(), String.t()) :: cleanup_result()
   def fail_task_exception(%__MODULE__{} = context, reason) do
     case task_receipt(context) || registry_receipt(context) do
       {:ok, receipt} -> Interruption.finalize_task_exception_request(receipt, reason)

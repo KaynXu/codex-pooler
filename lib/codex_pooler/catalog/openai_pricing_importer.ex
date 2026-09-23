@@ -4,6 +4,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   import Ecto.Query
 
   alias CodexPooler.Catalog.{OpenAIPricingFormat, PricingSnapshot}
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
 
   @source "openai-json-pricing"
@@ -59,7 +60,12 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   end
 
   defp fetch(url) do
-    case Req.get(url, decode_body: false, receive_timeout: :timer.seconds(30), retry: false) do
+    case OutboundHTTP.get(url,
+           decode_body: false,
+           receive_timeout: :timer.seconds(30),
+           retry: false,
+           finch: OutboundHTTP.pool_options_for_url(url)
+         ) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->
         {:ok, body}
 
@@ -322,9 +328,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   defp decimal_equal?(_left, _right), do: false
 
   defp rollback_conflict do
-    Repo.rollback(
-      error(:concurrent_pricing_conflict, error_message(:concurrent_pricing_conflict))
-    )
+    Repo.rollback(error(:concurrent_pricing_conflict, error_message(:concurrent_pricing_conflict)))
   end
 
   defp file_error(reason) do

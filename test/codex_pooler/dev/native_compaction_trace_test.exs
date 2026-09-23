@@ -132,9 +132,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
             binding = admission_binding()
 
             {:ok, admission} =
-              CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.ordinary_success(
-                binding
-              )
+              CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.ordinary_success(binding)
 
             {:ok, admission} =
               CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.arm_compact(
@@ -481,8 +479,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     binding = admission_binding()
     send(worker, {:trace_representatives, self(), binding})
 
-    assert_receive {:representative_result, child, %RequestAdmission{}, %RuntimeAdmissionProof{},
-                    _},
+    assert_receive {:representative_result, child, %RequestAdmission{}, %RuntimeAdmissionProof{}, _},
                    15_000
 
     assert_receive {:child_result, ^child, {:ok, %NativeAdmission{}}}, 15_000
@@ -992,8 +989,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     assert {:error, :unauthorized} =
              GenServer.call(
                upstream_pid,
-               {:native_compaction_trace_sensitivity, :observe, generation, authorization,
-                wrong_restorer}
+               {:native_compaction_trace_sensitivity, :observe, generation, authorization, wrong_restorer}
              )
 
     assert Map.get(
@@ -1074,8 +1070,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
 
     assert :ok =
              TraceEvent.emit_full(:upstream_websocket_frame_sent, %{
-               raw_frame_text:
-                 "Authorization: Bearer header-secret Cookie=session-cookie api_key=header-api visible=keep"
+               raw_frame_text: "Authorization: Bearer header-secret Cookie=session-cookie api_key=header-api visible=keep"
              })
 
     assert :ok = NativeCompactionTrace.flush()
@@ -1552,8 +1547,7 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
       context_digest: :crypto.hash(:sha256, "context"),
       window_number: 1,
       serving_mode: :full,
-      topology:
-        %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Direct{},
+      topology: %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Direct{},
       lifecycle_id: Ecto.UUID.generate(),
       generation: 1
     }

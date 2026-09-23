@@ -445,9 +445,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
 
       assert normalized
              |> normalized_sse_payloads()
-             |> Enum.flat_map(
-               &(get_in(&1, ["choices", Access.at(0), "delta", "tool_calls"]) || [])
-             ) ==
+             |> Enum.flat_map(&(get_in(&1, ["choices", Access.at(0), "delta", "tool_calls"]) || [])) ==
                [
                  %{
                    "index" => 0,

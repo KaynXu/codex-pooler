@@ -16,8 +16,6 @@ defmodule CodexPooler.Repo.Migrations.CreateOperatorMcpKeys do
     create unique_index(:operator_mcp_keys, [:key_hash], name: :operator_mcp_keys_hash_uq)
     create index(:operator_mcp_keys, [:operator_id], name: :operator_mcp_keys_operator_id_idx)
 
-    create constraint(:operator_mcp_keys, :operator_mcp_keys_label_not_blank,
-             check: "length(btrim(label)) > 0"
-           )
+    create constraint(:operator_mcp_keys, :operator_mcp_keys_label_not_blank, check: "length(btrim(label)) > 0")
   end
 end

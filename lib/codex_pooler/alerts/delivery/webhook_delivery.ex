@@ -11,6 +11,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
 
   alias CodexPooler.Alerts.Delivery.{AttemptLifecycle, WebhookPayload, WebhookSigning}
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.TransportFailureReason
 
@@ -174,12 +175,13 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
   end
 
   defp post_webhook(url, body, headers) do
-    Req.post(url,
+    OutboundHTTP.post(url,
       body: body,
       headers: headers,
       decode_body: false,
       receive_timeout: @receive_timeout_ms,
-      retry: false
+      retry: false,
+      finch: OutboundHTTP.pool_options_for_url(url)
     )
   rescue
     exception in [
@@ -341,18 +343,15 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
         {:ok, secret}
 
       {:ok, _empty} ->
-        {:failure, "alert_webhook_signing_secret_missing",
-         "webhook signing secret is unavailable"}
+        {:failure, "alert_webhook_signing_secret_missing", "webhook signing secret is unavailable"}
 
       {:error, _reason} ->
-        {:failure, "alert_webhook_signing_secret_invalid",
-         "webhook signing secret is unavailable"}
+        {:failure, "alert_webhook_signing_secret_invalid", "webhook signing secret is unavailable"}
     end
   end
 
   defp recover_signing_secret(%AlertChannel{}),
-    do:
-      {:failure, "alert_webhook_signing_secret_missing", "webhook signing secret is unavailable"}
+    do: {:failure, "alert_webhook_signing_secret_missing", "webhook signing secret is unavailable"}
 
   defp success_metadata(incident, channel, event_id, body_bytes, status) do
     incident

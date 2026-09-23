@@ -7,10 +7,7 @@ defmodule CodexPooler.Repo.Migrations.AddDatetimeDisplayPreferencesToUsers do
       add :timezone, :string, null: false, default: "Etc/UTC"
     end
 
-    create constraint(:users, :users_datetime_format_check,
-             check:
-               "datetime_format = ANY (ARRAY['default'::text, 'short'::text, 'long'::text, 'iso8601'::text])"
-           )
+    create constraint(:users, :users_datetime_format_check, check: "datetime_format = ANY (ARRAY['default'::text, 'short'::text, 'long'::text, 'iso8601'::text])")
   end
 
   def down do

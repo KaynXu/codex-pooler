@@ -14,8 +14,7 @@ defmodule CodexPooler.Repo.Migrations.CreatePoolModelServingOverrides do
     create constraint(
              :pool_model_serving_overrides,
              :pool_model_serving_overrides_exposed_model_id_check,
-             check:
-               "char_length(exposed_model_id) BETWEEN 1 AND 255 AND exposed_model_id = lower(exposed_model_id) AND exposed_model_id !~ '^[[:space:]]|[[:space:]]$'"
+             check: "char_length(exposed_model_id) BETWEEN 1 AND 255 AND exposed_model_id = lower(exposed_model_id) AND exposed_model_id !~ '^[[:space:]]|[[:space:]]$'"
            )
 
     create constraint(
@@ -24,8 +23,6 @@ defmodule CodexPooler.Repo.Migrations.CreatePoolModelServingOverrides do
              check: "mode = ANY (ARRAY['lite'::text, 'full'::text])"
            )
 
-    create unique_index(:pool_model_serving_overrides, [:pool_id, :exposed_model_id],
-             name: :pool_model_serving_overrides_pool_model_uq
-           )
+    create unique_index(:pool_model_serving_overrides, [:pool_id, :exposed_model_id], name: :pool_model_serving_overrides_pool_model_uq)
   end
 end

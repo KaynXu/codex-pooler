@@ -49,7 +49,15 @@ defmodule CodexPooler.Accounting.FailureResponse do
     do: reason |> Atom.to_string() |> safe_reason_token()
 
   def safe_failure_reason(reason) when is_binary(reason), do: safe_reason_token(reason)
-  def safe_failure_reason(_reason), do: "unknown"
+  # findings#165: a sanitizer bounds a value, it never erases it. A term this
+  # module cannot name is still a term that was there, and answering it with
+  # the same `"unknown"` that means "there was no reason" makes the two
+  # indistinguishable in the one log line an operator reads after a
+  # finalization failure. A fingerprint discloses nothing -- the term is
+  # hashed, never rendered -- while keeping two different unnameable reasons
+  # two different tokens.
+  def safe_failure_reason(reason),
+    do: "unnamed_" <> fingerprint(:erlang.term_to_binary(reason, [:deterministic]))
 
   defp record_id(%{id: id}) when is_binary(id), do: id
   defp record_id(_record), do: nil
@@ -61,9 +69,24 @@ defmodule CodexPooler.Accounting.FailureResponse do
     |> String.trim("_")
     |> truncate_reason_token()
     |> case do
-      "" -> "unknown"
+      "" -> "unnamed_" <> fingerprint(reason)
       token -> token
     end
+  end
+
+  @fingerprint_length 12
+
+  # The term is hashed, never its rendering. `inspect/2` with a `:limit` is not
+  # a usable input here: it elides past the limit, so two genuinely different
+  # reasons collapse to the same string and therefore the same token, which is
+  # the one property this fingerprint exists to provide.
+  # `String.slice/3` rather than `binary_part/3` matches the fingerprint helpers
+  # elsewhere in this application and cannot raise on a short input.
+  defp fingerprint(value) do
+    :sha256
+    |> :crypto.hash(value)
+    |> Base.encode16(case: :lower)
+    |> String.slice(0, @fingerprint_length)
   end
 
   defp scrub_sensitive_reason_text(reason) do

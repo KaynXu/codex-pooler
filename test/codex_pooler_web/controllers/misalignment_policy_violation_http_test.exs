@@ -178,6 +178,38 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
     refute public_persisted =~ private_marker
   end
 
+  test "direct native streaming rejection without an upstream content-type is served as JSON",
+       %{conn: conn} do
+    # The relayed policy error is rebuilt as a JSON body whatever the
+    # request's transport, so a streaming request whose upstream 400 carried
+    # no content-type must not inherit `text/event-stream` (findings#219).
+    payload = %{
+      "error" => %{
+        "code" => @code,
+        "message" => "Synthetic policy wording",
+        "misalignment" => %{"error_type" => "synthetic_error_type"}
+      }
+    }
+
+    upstream =
+      start_upstream(FakeUpstream.raw_response(CodexPooler.JSON.encode!(payload), status: 400, headers: []))
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("synthetic native detail request"),
+        "stream" => true
+      })
+
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "application/json"
+    assert %{"error" => %{"code" => @code}} = json_response(response, 400)
+  end
+
   test "direct native HTTP omits all details when any known detail field is invalid" do
     for misalignment <- [
           %{},
@@ -294,17 +326,11 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
 
   test "eligible response aliases and chat routes preserve their safe error shapes", %{conn: conn} do
     cases = [
-      {"/backend-api/codex/v1/responses", false,
-       %{"input" => native_text_input("synthetic alias request")}, :backend},
-      {"/backend-api/codex/responses/compact", true,
-       %{"input" => native_text_input("synthetic compact request")}, :backend},
-      {"/backend-api/codex/v1/responses/compact", true,
-       %{"input" => native_text_input("synthetic compact alias request")}, :backend},
-      {"/v1/chat/completions", false,
-       %{"messages" => [%{"role" => "user", "content" => "synthetic chat request"}]}, :public},
-      {"/backend-api/codex/v1/chat/completions", false,
-       %{"messages" => [%{"role" => "user", "content" => "synthetic backend chat request"}]},
-       :public}
+      {"/backend-api/codex/v1/responses", false, %{"input" => native_text_input("synthetic alias request")}, :backend},
+      {"/backend-api/codex/responses/compact", true, %{"input" => native_text_input("synthetic compact request")}, :backend},
+      {"/backend-api/codex/v1/responses/compact", true, %{"input" => native_text_input("synthetic compact alias request")}, :backend},
+      {"/v1/chat/completions", false, %{"messages" => [%{"role" => "user", "content" => "synthetic chat request"}]}, :public},
+      {"/backend-api/codex/v1/chat/completions", false, %{"messages" => [%{"role" => "user", "content" => "synthetic backend chat request"}]}, :public}
     ]
 
     for {path, compact?, payload, projection} <- cases do

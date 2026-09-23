@@ -519,9 +519,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
     turn_state = "stable-ws-owner-queued-chain"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-owner-queue-first", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-queue-first", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     try do
       first_payload =
@@ -765,9 +763,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
       end
 
     {:ok, origin_state} =
-      owner_socket(auth, "ws-owner-queue-alias-active", "queue-alias-origin",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-queue-alias-active", "queue-alias-origin", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     origin_session = origin_state.codex_session
     origin_lease_token = origin_state.websocket_owner_lease_token
@@ -884,9 +880,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
     turn_state = "stable-ws-owner-processed-close"
 
     {:ok, first_state} =
-      owner_socket(auth, "ws-owner-processed-close-first", turn_state,
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-processed-close-first", turn_state, websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     try do
       first_payload =
@@ -1014,14 +1008,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
       {:websocket_owner_frame, "owner-helper-control", 40, task_pid, :complete},
       {:websocket_owner_frame, "owner-helper-control", 41, wrong_task_pid, :complete},
       {:websocket_owner_frame, "owner-helper-control", 41, task_pid, {:invalid, "ignored"}},
-      {:websocket_owner_frame, "owner-helper-control", 41, task_pid,
-       {:data, CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta"})}},
-      {:websocket_owner_output_commit_probe, "owner-helper-control", 41, task_pid,
-       active_turn_ref, self(), probe_ref},
+      {:websocket_owner_frame, "owner-helper-control", 41, task_pid, {:data, CodexPooler.JSON.encode!(%{"type" => "response.output_text.delta"})}},
+      {:websocket_owner_output_commit_probe, "owner-helper-control", 41, task_pid, active_turn_ref, self(), probe_ref},
       {:websocket_response_activity, task_pid, token},
       {:codex_response_done, task_pid, :ok},
-      {:websocket_owner_frame, "owner-helper-control", 41, task_pid,
-       {:data, CodexPooler.JSON.encode!(%{"type" => "response.completed"})}},
+      {:websocket_owner_frame, "owner-helper-control", 41, task_pid, {:data, CodexPooler.JSON.encode!(%{"type" => "response.completed"})}},
       {:websocket_response_delivery_complete, task_pid, token},
       {:websocket_owner_frame, "owner-helper-control", 41, task_pid, :complete}
     ]
@@ -1358,8 +1349,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,
-                 where:
-                   entry.request_id == ^guarded_request.id and entry.entry_kind == "settlement"
+                 where: entry.request_id == ^guarded_request.id and entry.entry_kind == "settlement"
                ),
                :count
              ) == 1
@@ -1447,8 +1437,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.Continuati
           )
         end)
 
-      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
-                      ^release_ref},
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
                      @handoff_detection_timeout_ms
 
       assert FakeUpstream.websocket_connection_alive?(upstream, 1)

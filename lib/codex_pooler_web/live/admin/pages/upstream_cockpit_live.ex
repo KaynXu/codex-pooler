@@ -312,7 +312,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       {:noreply,
        socket
        |> assign(cockpit_metrics_loaded?: true, cockpit_metrics_loading?: false)
-       |> merge_cockpit_metrics(metrics)
+       |> merge_cockpit_deferred_data(metrics)
        |> maybe_restart_cockpit_metrics()}
     else
       {:noreply, start_cockpit_metrics_task(socket, socket.assigns.cockpit_metrics_generation)}
@@ -383,9 +383,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   # Same scope-checked loader the request logs page uses for its drawer; the
   # admin surface includes the debug projection.
   defp load_request_log(socket, request_id) do
-    Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id,
-      surface: :admin
-    )
+    Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id, surface: :admin)
   end
 
   defp default_relink_pool(socket) do
@@ -449,7 +447,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       cockpit_metrics_rerun?: false
     )
     |> start_async({:cockpit_metrics, generation}, fn ->
-      UpstreamCockpitReadModel.request_metrics(scope, cockpit)
+      UpstreamCockpitReadModel.deferred_request_data(scope, cockpit)
     end)
   end
 
@@ -461,21 +459,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     end
   end
 
-  defp merge_cockpit_metrics(socket, metrics) do
+  defp merge_cockpit_deferred_data(socket, data) do
     assign(
       socket,
       :cockpit,
-      UpstreamCockpitReadModel.merge_request_metrics(socket.assigns.cockpit, metrics)
+      UpstreamCockpitReadModel.merge_deferred_request_data(socket.assigns.cockpit, data)
     )
   end
 
   defp preserve_request_metrics(socket, cockpit) do
-    current = socket.assigns.cockpit.charts
-
-    UpstreamCockpitReadModel.merge_request_metrics(cockpit, %{
-      request_health: current.request_health,
-      pool_contribution: current.pool_contribution
-    })
+    UpstreamCockpitReadModel.preserve_request_data(cockpit, socket.assigns.cockpit)
   end
 
   # Event-driven cockpit reloads must not clobber policy edits in progress:

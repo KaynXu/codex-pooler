@@ -6,9 +6,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsUserAgentsTest do
   describe "classify/1" do
     test "recognizes observed production and local request user agents" do
       assert %{kind: "codex_desktop", label: "Codex Desktop"} =
-               UserAgents.classify(
-                 "Codex Desktop/0.133.0-alpha.1 (Mac OS 26.5.0; arm64) unknown (Codex Desktop; 26.519.41501)"
-               )
+               UserAgents.classify("Codex Desktop/0.133.0-alpha.1 (Mac OS 26.5.0; arm64) unknown (Codex Desktop; 26.519.41501)")
 
       assert %{kind: "codex", label: "Codex", icon_class: ["size-3.5 shrink-0", "text-info"]} =
                UserAgents.classify("codex-tui/0.133.0 (Mac OS 26.5.0; arm64)")
@@ -29,9 +27,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsUserAgentsTest do
                UserAgents.classify("ai/6.0.191 ai-sdk/provider-utils/4.0.27 runtime/node.js/26")
 
       assert %{kind: "vercel_ai_sdk", label: "Vercel AI SDK"} =
-               UserAgents.classify(
-                 "ai/7.0.0-beta.12 @ai-sdk/openai/4.0.0-beta.12 runtime/node.js/24"
-               )
+               UserAgents.classify("ai/7.0.0-beta.12 @ai-sdk/openai/4.0.0-beta.12 runtime/node.js/24")
 
       assert %{kind: "python", label: "Python"} = UserAgents.classify("python-requests/2.33.0")
       assert %{kind: "python", label: "Python"} = UserAgents.classify("Python-urllib/3.14")
@@ -61,8 +57,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsUserAgentsTest do
              text: "Codex Desktop 0.133.0-alpha.1"
            } =
              UserAgents.display(%{
-               user_agent:
-                 "Codex Desktop/0.133.0-alpha.1 (Mac OS 26.5.0; arm64) unknown (Codex Desktop; 26.519.41501)"
+               user_agent: "Codex Desktop/0.133.0-alpha.1 (Mac OS 26.5.0; arm64) unknown (Codex Desktop; 26.519.41501)"
              })
   end
 end

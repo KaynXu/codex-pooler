@@ -96,10 +96,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.TerminalDiscriminatorTest do
        response.audio.transcript.delta
        response.audio.transcript.done
      )},
-    {"response.function_call",
-     ~w(response.function_call_arguments.delta response.function_call_arguments.done)},
-    {"response.custom_tool_call",
-     ~w(response.custom_tool_call_input.delta response.custom_tool_call_input.done)},
+    {"response.function_call", ~w(response.function_call_arguments.delta response.function_call_arguments.done)},
+    {"response.custom_tool_call", ~w(response.custom_tool_call_input.delta response.custom_tool_call_input.done)},
     {"response.code_interpreter", ~w(
        response.code_interpreter_call.in_progress
        response.code_interpreter_call.interpreting

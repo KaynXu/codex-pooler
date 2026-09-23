@@ -147,8 +147,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
   end
 
   def handle_event("cancel_delete_mcp_key", _params, socket) do
-    {:noreply,
-     socket |> assign(:mcp_delete_key, nil) |> assign(:mcp_delete_form, mcp_delete_form(nil))}
+    {:noreply, socket |> assign(:mcp_delete_key, nil) |> assign(:mcp_delete_form, mcp_delete_form(nil))}
   end
 
   def handle_event("confirm_delete_mcp_key", %{"mcp_key_delete" => %{"id" => key_id}}, socket) do
@@ -198,8 +197,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
              socket.assigns.current_user_token
            ) do
       UserAuth.disconnect_user_sessions(user.id,
-        except_live_socket_id:
-          UserAuth.live_socket_id_for_token(socket.assigns.current_user_token)
+        except_live_socket_id: UserAuth.live_socket_id_for_token(socket.assigns.current_user_token)
       )
 
       {:noreply,

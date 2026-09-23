@@ -7,13 +7,9 @@ defmodule CodexPooler.Repo.Migrations.AddPoolUsageRollupCoverage do
       add :rounded_settled_cost_micros, :decimal, precision: 30, scale: 0, null: false, default: 0
     end
 
-    create constraint(:daily_rollups, :daily_rollups_admitted_request_count_check,
-             check: "admitted_request_count >= 0"
-           )
+    create constraint(:daily_rollups, :daily_rollups_admitted_request_count_check, check: "admitted_request_count >= 0")
 
-    create constraint(:daily_rollups, :daily_rollups_rounded_settled_cost_micros_check,
-             check: "rounded_settled_cost_micros >= 0"
-           )
+    create constraint(:daily_rollups, :daily_rollups_rounded_settled_cost_micros_check, check: "rounded_settled_cost_micros >= 0")
 
     create table(:daily_rollup_coverages, primary_key: false) do
       add :rollup_date, :date, primary_key: true, null: false
@@ -22,8 +18,6 @@ defmodule CodexPooler.Repo.Migrations.AddPoolUsageRollupCoverage do
       timestamps(inserted_at: :created_at, type: :utc_datetime_usec)
     end
 
-    create constraint(:daily_rollup_coverages, :daily_rollup_coverages_contract_version_check,
-             check: "contract_version > 0"
-           )
+    create constraint(:daily_rollup_coverages, :daily_rollup_coverages_contract_version_check, check: "contract_version > 0")
   end
 end

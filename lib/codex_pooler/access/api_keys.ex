@@ -67,6 +67,21 @@ defmodule CodexPooler.Access.APIKeys do
     to: RuntimeAuthorization,
     as: :authorize_turn
 
+  @spec authorize_runtime_turn_for_read(
+          APIKey.t() | Ecto.UUID.t(),
+          RuntimeAuthorization.epoch()
+        ) ::
+          {:ok, RuntimeAuthorization.authorization()}
+          | {:error, RuntimeAuthorization.disposition()}
+  defdelegate authorize_runtime_turn_for_read(api_key_or_id, captured_epoch),
+    to: RuntimeAuthorization,
+    as: :authorize_turn_for_read
+
+  @spec lock_runtime_api_key_for_read(Ecto.UUID.t() | nil) :: APIKey.t() | nil
+  defdelegate lock_runtime_api_key_for_read(api_key_id),
+    to: RuntimeAuthorization,
+    as: :lock_for_read
+
   @spec runtime_epoch_for_status_change(APIKey.t(), String.t()) ::
           RuntimeAuthorization.epoch()
   defdelegate runtime_epoch_for_status_change(api_key, target_status),
@@ -255,6 +270,8 @@ defmodule CodexPooler.Access.APIKeys do
              RuntimeAuthorization.prepare_status_transition(api_key, target_status),
            previous_api_key = transition.api_key,
            {:ok, target_pool_id} <- authorize_api_key_update(scope, previous_api_key, attrs),
+           transition =
+             RuntimeAuthorization.advance_epoch_for_pool_move(transition, target_pool_id),
            update_attrs = api_key_update_attrs(attrs, target_pool_id),
            {:ok, updated_api_key} <-
              update_api_key_record(previous_api_key, update_attrs, transition) do
@@ -263,7 +280,7 @@ defmodule CodexPooler.Access.APIKeys do
            updated_api_key,
            previous_api_key,
            dashboard_session_invalidation_required?(previous_api_key, update_attrs),
-           api_key_update_notification(attrs, transition)
+           api_key_update_notification(attrs, transition, previous_api_key, updated_api_key)
          }}
       end
     end)
@@ -364,8 +381,14 @@ defmodule CodexPooler.Access.APIKeys do
       {key_prefix, raw_key, key_hash} = Material.generate()
 
       mutation = fn ->
-        api_key
+        locked = Repo.one!(from key in APIKey, where: key.id == ^api_key.id, lock: "FOR UPDATE")
+
+        locked
         |> APIKey.changeset(%{key_prefix: key_prefix, key_hash: key_hash})
+        |> Ecto.Changeset.put_change(
+          :runtime_revocation_epoch,
+          locked.runtime_revocation_epoch + 1
+        )
         |> Repo.update()
       end
 
@@ -814,6 +837,7 @@ defmodule CodexPooler.Access.APIKeys do
       :display_name,
       :status,
       :dashboard_access,
+      :max_active_requests,
       :expires_at,
       :allowed_model_identifiers,
       :metadata
@@ -856,11 +880,12 @@ defmodule CodexPooler.Access.APIKeys do
 
   defp maybe_broadcast_dashboard_invalidation(_api_key, _cause, false), do: :ok
 
-  defp notify_api_key_update(result, _previous_api_key, :effective_disabling_transition) do
+  defp notify_api_key_update(result, previous_api_key, :effective_disabling_transition) do
     Notifications.notify_api_key_runtime_transition(
       result,
       "api_key_updated",
-      api_key_from_result(result).pool_id
+      api_key_from_result(result).pool_id,
+      previous_api_key.pool_id
     )
   end
 
@@ -870,11 +895,22 @@ defmodule CodexPooler.Access.APIKeys do
     Notifications.notify_api_key_change(result, "api_key_updated", previous_api_key.pool_id)
   end
 
-  defp api_key_update_notification(attrs, transition) do
+  defp api_key_update_notification(attrs, transition, previous_api_key, updated_api_key) do
     cond do
-      transition.effective_disabling_transition? -> :effective_disabling_transition
-      status_submitted?(attrs) -> :status_without_disable
-      true -> :ordinary_update
+      transition.effective_disabling_transition? ->
+        :effective_disabling_transition
+
+      previous_api_key.max_active_requests != updated_api_key.max_active_requests ->
+        :ordinary_update
+
+      RuntimeAuthorization.reread_required?(previous_api_key, updated_api_key) ->
+        :ordinary_update
+
+      status_submitted?(attrs) ->
+        :status_without_disable
+
+      true ->
+        :ordinary_update
     end
   end
 

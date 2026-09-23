@@ -460,8 +460,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       </div>
 
       <p class="text-sm leading-6 text-base-content/70">
-        <span class="font-semibold text-base-content">{@receipt.operator_email}</span>
-        must use it on next sign in.
+        <span class="font-semibold text-base-content">{@receipt.operator_email}</span> must use it on next sign in.
       </p>
 
       <AdminComponents.one_time_secret

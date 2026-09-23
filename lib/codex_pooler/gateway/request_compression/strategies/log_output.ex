@@ -52,8 +52,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
             kept_line_count: line_count - omitted_line_count,
             omitted_line_count: omitted_line_count,
             important_line_count: length(important_indexes),
-            kept_important_line_count:
-              kept_important_line_count(important_indexes, selected_indexes)
+            kept_important_line_count: kept_important_line_count(important_indexes, selected_indexes)
           },
           opts
         )
@@ -95,8 +94,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
     {summary_counts, summary_indexes, detail_indexes} =
       lines
       |> Enum.with_index()
-      |> Enum.reduce({%{}, [], []}, fn {line, index},
-                                       {summary_counts, summary_indexes, detail_indexes} ->
+      |> Enum.reduce({%{}, [], []}, fn {line, index}, {summary_counts, summary_indexes, detail_indexes} ->
         line_summary_counts = failure_summary_counts_for_line(line)
         summary? = map_size(line_summary_counts) > 0
 

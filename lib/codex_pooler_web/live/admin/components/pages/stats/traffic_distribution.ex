@@ -113,8 +113,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.TrafficDistribution do
   end
 
   defp description(scope_label, window_label),
-    do:
-      "Share of accounted requests across #{scope_label} in the #{String.downcase(window_label)}."
+    do: "Share of accounted requests across #{scope_label} in the #{String.downcase(window_label)}."
 
   defp upstream_label(row), do: UpstreamNaming.account_name(%{account_label: row.upstream_label})
 

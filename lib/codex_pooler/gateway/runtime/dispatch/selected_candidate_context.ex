@@ -58,8 +58,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
           attempt: Attempt.t() | nil,
           started: integer() | nil,
           auth_refresh_retry_attempted?: boolean() | nil,
-          client_retry_dispatch_authority:
-            CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil
+          client_retry_dispatch_authority: CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil
         }
 
   @spec from_dispatch_context(Context.t() | t(), RoutingSelection.t(), boolean()) :: t()

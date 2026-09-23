@@ -238,9 +238,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       for type <- ["response.created", "response.failed"] do
         assert StreamProtocol.downstream_visible_event?(%{"type" => type})
 
-        assert StreamProtocol.downstream_visible_event?(
-                 CodexPooler.JSON.encode!(%{"type" => type})
-               )
+        assert StreamProtocol.downstream_visible_event?(CodexPooler.JSON.encode!(%{"type" => type}))
 
         assert StreamProtocol.stream_data_visible?(sse_event(type, %{"type" => type}))
       end
@@ -263,8 +261,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   @tag :websocket_owner_pin
   test "PIN-P04 backend POST SSE preserves decoded done and legacy JSON bytes across LF and CRLF" do
     fixtures = [
-      {"response.done",
-       ~s({"type":"response.done","response":{"id":"resp_pin_backend_post_done"}})},
+      {"response.done", ~s({"type":"response.done","response":{"id":"resp_pin_backend_post_done"}})},
       {nil, ~s({ "id" : "resp_pin_backend_post_legacy" })}
     ]
 
@@ -755,8 +752,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert data["error"] == %{
                "type" => "server_error",
                "code" => "server_error",
-               "message" =>
-                 "upstream request failed: stream interrupted before terminal response event",
+               "message" => "upstream request failed: stream interrupted before terminal response event",
                "param" => nil
              }
 
@@ -1059,15 +1055,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
     test "extracts the first present validated upstream error param by exact precedence" do
       fixtures = [
-        {"response.error.param",
-         %{"response" => %{"error" => %{"param" => " input[0].content "}}}, "input[0].content"},
+        {"response.error.param", %{"response" => %{"error" => %{"param" => " input[0].content "}}}, "input[0].content"},
         {"error.param", %{"error" => %{"param" => "tools[12].name"}}, "tools[12].name"},
-        {"response.status_details.error.param",
-         %{"response" => %{"status_details" => %{"error" => %{"param" => "items[9999]"}}}},
-         "items[9999]"},
-        {"status_details.error.param",
-         %{"status_details" => %{"error" => %{"param" => "reasoning.effort"}}},
-         "reasoning.effort"},
+        {"response.status_details.error.param", %{"response" => %{"status_details" => %{"error" => %{"param" => "items[9999]"}}}}, "items[9999]"},
+        {"status_details.error.param", %{"status_details" => %{"error" => %{"param" => "reasoning.effort"}}}, "reasoning.effort"},
         {"top-level error param", %{"type" => "error", "param" => "model"}, "model"}
       ]
 
@@ -1511,6 +1502,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
           }
         })
 
+      # `X-OpenAI-Request-ID` stays in the input as a negative control: the
+      # allowlist admits only the request id names the metadata writer reads,
+      # and that name was never one of them.
       assert websocket_error_frame_headers(frame) == %{
                "openai-request-id" => "openai-req",
                "x-codex-primary-reset-at" => "2026-05-25T12:00:00Z",
@@ -1520,7 +1514,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "x-codex-secondary-reset-at" => "2026-05-25T12:30:00Z",
                "x-codex-secondary-used-percent" => "true",
                "x-codex-secondary-window-minutes" => "false",
-               "x-openai-request-id" => "x-openai-req",
                "x-ratelimit-limit-requests" => "1200",
                "x-ratelimit-remaining-requests" => "0",
                "x-ratelimit-reset-requests" => "1717171717",

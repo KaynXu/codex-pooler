@@ -156,8 +156,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
         receipt = if cleanup.receipt, do: Map.put_new(cleanup.receipt, :cancel_reason, reason)
         cleanup = Map.put_new(cleanup, :cancel_reason, reason)
 
-        {:reply, :ok,
-         put_in(state.activities[token].direct_cleanup, %{cleanup | receipt: receipt})}
+        {:reply, :ok, put_in(state.activities[token].direct_cleanup, %{cleanup | receipt: receipt})}
 
       _ ->
         {:reply, :ok, state}
@@ -167,8 +166,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handle_call({:direct_cancel_pending, context}, _from, state) do
     case direct_entry(state, context.task) do
       {token, %{direct_cleanup: %{context: ^context, pending?: true}} = entry} ->
-        {:reply, :pending,
-         put_in(state.activities[token], Map.put(entry, :direct_cancelled?, true))}
+        {:reply, :pending, put_in(state.activities[token], Map.put(entry, :direct_cancelled?, true))}
 
       _ ->
         {:reply, :not_pending, state}
@@ -199,8 +197,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
 
         send(context.parent, {:direct_request_cleanup, context.task, context.ref, receipt})
 
-        {:reply, :ok,
-         put_in(state.activities[token].direct_cleanup, %{cleanup | receipt: receipt})}
+        {:reply, :ok, put_in(state.activities[token].direct_cleanup, %{cleanup | receipt: receipt})}
 
       _ ->
         {:reply, :ok, state}
@@ -219,8 +216,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
              do: {:error, :cancelled},
              else: :ok
 
-        {:reply, result,
-         put_in(state.activities[token].direct_cleanup, %{cleanup | pending?: false, waiters: []})}
+        {:reply, result, put_in(state.activities[token].direct_cleanup, %{cleanup | pending?: false, waiters: []})}
 
       _ ->
         {:reply, {:error, :cancelled}, state}
@@ -237,8 +233,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
          })}
 
       {token, %{direct_cleanup: %{context: ^context} = cleanup}} ->
-        {:reply, direct_receipt(cleanup),
-         put_in(state.activities[token].direct_cleanup, Map.put(cleanup, :consumed?, true))}
+        {:reply, direct_receipt(cleanup), put_in(state.activities[token].direct_cleanup, Map.put(cleanup, :consumed?, true))}
 
       {token, %{direct_ref: ref, direct_parent: parent} = entry}
       when entry.pid == context.task and ref == context.ref and parent == context.parent ->
@@ -249,8 +244,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
           %{context: ^context} = completed ->
             Process.demonitor(completed.monitor, [:flush])
 
-            {:reply, {:ok, completed.receipt},
-             %{state | finished_direct: Map.delete(state.finished_direct, context.ref)}}
+            {:reply, {:ok, completed.receipt}, %{state | finished_direct: Map.delete(state.finished_direct, context.ref)}}
 
           _ ->
             {:reply, :none, state}

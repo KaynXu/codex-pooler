@@ -4,6 +4,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.UpstreamConnPoolTelemetry
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -92,8 +93,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     source_url = "https://user:secret@example.com/pricing.json"
 
-    assert {:error,
-            %{code: :http_transport_failed, message: "pricing catalog transport failed"} = error} =
+    assert {:error, %{code: :http_transport_failed, message: "pricing catalog transport failed"} = error} =
              OpenAIPricingImporter.import_url(source_url)
 
     rendered_error = inspect(error)
@@ -163,12 +163,43 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert snapshot.source_url == url
     assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_url(url)
 
-    assert Repo.one!(
-             from row in PricingSnapshot, where: row.model_identifier == "http-alias-model"
-           ) == snapshot
+    assert Repo.one!(from row in PricingSnapshot, where: row.model_identifier == "http-alias-model") == snapshot
 
     assert Repo.aggregate(CodexPooler.Catalog.Model, :count) == models_before
     assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "HTTP imports carry the outbound connection idle bound from settings" do
+    payload = valid_payload("http-idle-bound-model")
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial (two scheduled fetches reusing one origin)
+        FakeUpstream.strict_sequence([
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(payload)
+          ),
+          FakeUpstream.expect_request(
+            method: "GET",
+            path: "/pricing.json",
+            respond: FakeUpstream.json_response(payload)
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    url = FakeUpstream.url(upstream) <> "/pricing.json"
+
+    UpstreamConnPoolTelemetry.put_idle_bound!(0)
+    UpstreamConnPoolTelemetry.attach!(url)
+
+    assert {:ok, %{inserted: 1}} = OpenAIPricingImporter.import_url(url)
+    assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_url(url)
+
+    assert :ok = FakeUpstream.verify!(upstream)
+    assert UpstreamConnPoolTelemetry.drain_events() == [:conn_max_idle_time_exceeded]
   end
 
   test "HTTP status, invalid JSON and incompatible catalogs fail without writes" do
@@ -241,13 +272,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, %{inserted: 1, skipped: 1, total: 2}} = OpenAIPricingImporter.import_url(url)
 
-    assert Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^token_identifier
-           )
+    assert Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^token_identifier)
 
-    refute Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^flat_identifier
-           )
+    refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^flat_identifier)
 
     assert :ok = FakeUpstream.verify!(upstream)
   end
@@ -282,9 +309,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert second.skipped == 90
 
     rows =
-      Repo.all(
-        from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
-      )
+      Repo.all(from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version)
 
     assert length(rows) == 208
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
@@ -319,9 +344,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert first.skipped == 87
 
     rows =
-      Repo.all(
-        from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
-      )
+      Repo.all(from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version)
 
     assert length(rows) == 203
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
@@ -353,6 +376,12 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     raw = File.read!(@target)
     payload = CodexPooler.JSON.decode!(raw)
     expected_rates = @reviewed_fast_long_context_rates["gpt-5.6-luna"] |> Enum.map(&Decimal.new/1)
+
+    # The positive half. Without it the pin can go stale and the refute below
+    # still passes -- a mutated file differs from a stale pin exactly as it
+    # differs from a current one, so the test would claim to detect drift while
+    # being unable to.
+    assert file_sha256(@target) == @target_sha256
 
     one_byte_path = write_raw!(raw <> " ")
     refute file_sha256(one_byte_path) == @target_sha256
@@ -565,13 +594,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:ok, %{inserted: 1, skipped: 1, total: 2}} =
              OpenAIPricingImporter.import_file(write_json!(payload))
 
-    assert Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^token_identifier
-           )
+    assert Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^token_identifier)
 
-    refute Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == ^live_identifier
-           )
+    refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^live_identifier)
   end
 
   test "duplicate raw JSON keys and normalized model collisions fail without writes" do
@@ -597,9 +622,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:error, %{code: :incompatible_pricing_catalog}} =
              OpenAIPricingImporter.import_file(write_json!(collision))
 
-    refute Repo.exists?(
-             from row in PricingSnapshot, where: row.model_identifier == "sample-model"
-           )
+    refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == "sample-model")
   end
 
   test "revision 2 canonical import preserves revision 1 fast rows and attempt references" do
@@ -682,8 +705,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     refute Repo.exists?(
              from row in PricingSnapshot,
-               where:
-                 row.model_identifier == "removed-model" and row.price_version == ^child_version
+               where: row.model_identifier == "removed-model" and row.price_version == ^child_version
            )
 
     assert Map.take(Repo.get!(PricingSnapshot, removed.id), Map.keys(frozen)) == frozen
@@ -706,6 +728,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     handler_id = "pricing-import-idempotence-#{unique}"
     insert_count = :counters.new(1, [])
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -1084,6 +1109,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     parent = self()
     barrier = make_ref()
     handler_id = "pricing-import-race-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

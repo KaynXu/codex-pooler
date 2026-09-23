@@ -23,7 +23,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
-    old_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,
@@ -35,10 +35,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
       finalize_retry_interval_ms: 0
     )
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, Files, old_config)
-      Application.put_env(:codex_pooler, FileBridge, old_bridge_config)
-    end)
+    on_exit(fn -> Application.put_env(:codex_pooler, Files, old_config) end)
 
     :ok
   end
@@ -107,6 +104,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
       |> put_req_header("x-openai-client", "codex-cli")
       |> put_req_header("x-openai-extra-file-bridge", "broad-openai-file-bridge")
       |> put_req_header("x-openai-subagent", "file-bridge-subagent")
+      |> put_req_header("x-openai-memgen-request", "true")
+      |> put_req_header("x-codex-guardian", "classifier")
+      |> put_req_header("x-codex-inference-call-id", "file-bridge-inference-call")
       |> put_req_header("x-codex-turn-state", "safe-turn-state")
       |> put_req_header("x-codex-turn-metadata", lineage_metadata)
       |> put_req_header("x-codex-parent-thread-id", "file-bridge-parent-thread")
@@ -120,8 +120,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert %{
              "file_id" => "file_upstream_bridge",
-             "upload_url" =>
-               "https://fake-upload.invalid/upload/file_upstream_bridge?sig=fake-upload"
+             "upload_url" => "https://fake-upload.invalid/upload/file_upstream_bridge?sig=fake-upload"
            } = json_response(create_conn, 200)
 
     file = Repo.get_by!(FileRecord, file_id: "file_upstream_bridge")
@@ -142,8 +141,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert %{
              "status" => "success",
-             "download_url" =>
-               "https://fake-download.invalid/download/file_upstream_bridge?sig=fake-download",
+             "download_url" => "https://fake-download.invalid/download/file_upstream_bridge?sig=fake-download",
              "file_name" => "bridge-fixture.txt",
              "mime_type" => "text/plain"
            } = json_response(finalize_conn, 200)
@@ -182,22 +180,24 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert header!(create_request.headers, "originator") == CodexClientIdentity.originator()
     assert header!(create_request.headers, "version") == CodexClientIdentity.version()
-    assert header!(create_request.headers, "x-openai-client") == "codex-cli"
-
-    assert header!(create_request.headers, "x-openai-extra-file-bridge") ==
-             "broad-openai-file-bridge"
-
     assert header!(create_request.headers, "x-openai-subagent") == "file-bridge-subagent"
+    assert header!(create_request.headers, "x-openai-memgen-request") == "true"
+    assert header!(create_request.headers, "x-codex-guardian") == "classifier"
+    assert header!(create_request.headers, "x-codex-inference-call-id") == "file-bridge-inference-call"
     assert header!(create_request.headers, "x-codex-turn-state") == "safe-turn-state"
     assert header!(create_request.headers, "x-codex-turn-metadata") == lineage_metadata
 
     assert header!(create_request.headers, "x-codex-parent-thread-id") ==
              "file-bridge-parent-thread"
 
-    assert header!(create_request.headers, "x-codex-extra-file-bridge") ==
-             "broad-codex-file-bridge"
+    # The files bridge takes the native Responses allowlist (findings#240):
+    # a prefix alone no longer forwards a header.
+    for name <- ["x-openai-client", "x-openai-extra-file-bridge", "x-codex-extra-file-bridge", "x-ignore-this"] do
+      refute Enum.any?(create_request.headers, fn {header_name, _value} -> header_name == name end)
+    end
 
-    refute Enum.any?(create_request.headers, fn {name, _value} -> name == "x-ignore-this" end)
+    refute inspect(create_request.headers) =~ "broad-openai-file-bridge"
+    refute inspect(create_request.headers) =~ "broad-codex-file-bridge"
 
     persistence_text =
       inspect(%{
@@ -210,6 +210,81 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     refute persistence_text =~ "file-bridge-parent-thread"
     refute persistence_text =~ "broad-openai-file-bridge"
     refute persistence_text =~ "broad-codex-file-bridge"
+  end
+
+  # findings#240: the files bridge shares the native Responses metadata
+  # allowlist and value bounds, so a client routing hint, beta feature key,
+  # out-of-vocabulary guardian value, overlong inference call id, non-true
+  # memgen flag or the header form of the installation id never reaches the
+  # upstream files endpoint, while the allowlisted names and the bounded
+  # provider session headers still do.
+  @tag :upstream_file_create_bridge
+  test "file bridge create bounds client metadata headers to the shared native allowlist", %{conn: conn} do
+    setup = active_api_key_fixture()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.file_protocol_success(
+          file_id: "file_upstream_bounded_headers",
+          file_name: "bounded-headers.txt",
+          mime_type: "text/plain"
+        )
+      )
+
+    active_upstream_assignment_fixture(setup.pool, %{
+      chatgpt_account_id: "acct_file_bounded_headers_#{System.unique_integer([:positive])}",
+      metadata: %{"base_url" => FakeUpstream.url(upstream)},
+      access_token: "file-bounded-headers-token"
+    })
+
+    overlong_call_id = String.duplicate("f", 129)
+
+    create_conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-routing-hint", "model=forged-file-bridge")
+      |> put_req_header("x-codex-beta-features", "file-bridge-beta-key")
+      |> put_req_header("x-codex-guardian", "auditor")
+      |> put_req_header("x-codex-inference-call-id", overlong_call_id)
+      |> put_req_header("x-openai-memgen-request", "false")
+      |> put_req_header("x-codex-installation-id", "file-bridge-installation")
+      |> put_req_header("x-client-request-id", "spaced request id")
+      |> put_req_header("x-codex-window-id", "file-bridge-window")
+      |> put_req_header("session-id", "file-bridge-session")
+      |> put_req_header("thread-id", "file-bridge-thread")
+      |> put_req_header("content-type", "application/json")
+      |> post(~p"/backend-api/files", %{
+        "file_name" => "bounded-headers.txt",
+        "file_size" => 21
+      })
+
+    assert %{"file_id" => "file_upstream_bounded_headers"} = json_response(create_conn, 200)
+
+    assert [create_request] = FakeUpstream.requests(upstream)
+    assert create_request.path == "/backend-api/files"
+
+    for name <- [
+          "x-codex-routing-hint",
+          "x-codex-beta-features",
+          "x-codex-guardian",
+          "x-codex-inference-call-id",
+          "x-openai-memgen-request",
+          "x-codex-installation-id",
+          "x-client-request-id"
+        ] do
+      refute Enum.any?(create_request.headers, fn {header_name, _value} -> header_name == name end)
+    end
+
+    refute inspect(create_request.headers) =~ "forged-file-bridge"
+    refute inspect(create_request.headers) =~ "file-bridge-beta-key"
+    refute inspect(create_request.headers) =~ "auditor"
+    refute inspect(create_request.headers) =~ overlong_call_id
+    refute inspect(create_request.headers) =~ "file-bridge-installation"
+
+    assert header!(create_request.headers, "x-codex-window-id") == "file-bridge-window"
+    assert header!(create_request.headers, "session-id") == "file-bridge-session"
+    assert header!(create_request.headers, "thread-id") == "file-bridge-thread"
+    assert header!(create_request.headers, "authorization") == "Bearer file-bounded-headers-token"
   end
 
   test "file bridge routing excludes refreshing identities", %{conn: conn} do
@@ -481,8 +556,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
         assignment =
           active_upstream_assignment_fixture(setup.pool, %{
-            chatgpt_account_id:
-              "acct_file_batched_quota_#{index}_#{System.unique_integer([:positive])}",
+            chatgpt_account_id: "acct_file_batched_quota_#{index}_#{System.unique_integer([:positive])}",
             metadata: %{"base_url" => FakeUpstream.url(upstream)},
             access_token: "file-batched-quota-token-#{index}"
           })
@@ -666,8 +740,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     %{assignment: assignment} =
       active_upstream_assignment_fixture(setup.pool, %{
-        chatgpt_account_id:
-          "acct_file_bridge_create_failure_#{System.unique_integer([:positive])}",
+        chatgpt_account_id: "acct_file_bridge_create_failure_#{System.unique_integer([:positive])}",
         metadata: %{"base_url" => FakeUpstream.url(upstream)},
         access_token: "file-create-failure-token"
       })
@@ -887,6 +960,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
   defp count_repo_commands(fun) do
     parent = self()
     handler_id = "backend-file-routing-test-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

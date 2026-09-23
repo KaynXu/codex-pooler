@@ -78,14 +78,16 @@ disable_oban="${RELIABILITY_QA_DISABLE_OBAN:-0}"
 
 [[ "$mix_build_path" = /* ]] && [ -d "$mix_build_path" ] && [ ! -L "$mix_build_path" ] ||
   fail "RELIABILITY_QA_MIX_BUILD_PATH must be an existing absolute owned directory"
-[[ "$timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] && ((10#$timeout_seconds <= 1200)) ||
+if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]{0,3}$ ]] || ((10#$timeout_seconds > 1200)); then
   fail "RELIABILITY_QA_TIMEOUT_SECONDS must be between 1 and 1200"
+fi
 
 if [ -z "$postgres_port" ]; then
   postgres_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 fi
-[[ "$postgres_port" =~ ^[1-9][0-9]{0,4}$ ]] && ((10#$postgres_port <= 65535)) ||
+if ! [[ "$postgres_port" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#$postgres_port > 65535)); then
   fail "invalid PostgreSQL port"
+fi
 
 [ ! -e "$runtime_root" ] || fail "runtime root already exists"
 [ -z "$(lsof -nP -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)" ] ||
@@ -100,6 +102,30 @@ fi
 first_failure=0
 cleanup_started=0
 watchdog_pid=""
+phase_pid=""
+phase_launching=0
+pending_signal=""
+run_phase() {
+  # A foreground command delays Bash traps until it returns. Waiting on an
+  # owned background session lets the watchdog interrupt preparation now.
+  phase_launching=1
+  "$root/dev_support/bin/qa-phase" "$@" &
+  phase_pid=$!
+  phase_launching=0
+  if [ -n "$pending_signal" ]; then on_signal "$pending_signal"; fi
+  local phase_rc=0
+  wait "$phase_pid" || phase_rc=$?
+  phase_pid=""
+  return "$phase_rc"
+}
+stop_phase() {
+  [ -n "$phase_pid" ] || return 0
+  # The owned supervisor pins its session identity until it has stopped the
+  # whole group, even if a descendant ignores TERM or the command exits first.
+  kill -TERM "$phase_pid" >/dev/null 2>&1 || true
+  wait "$phase_pid" 2>/dev/null || true
+  phase_pid=""
+}
 record_failure() {
   local code="$1"
   if [ "$first_failure" -eq 0 ] && [ "$code" -ne 0 ]; then first_failure="$code"; fi
@@ -110,6 +136,8 @@ cleanup() {
   [ "$cleanup_started" -eq 0 ] || return "$first_failure"
   cleanup_started=1
   if [ -n "$watchdog_pid" ]; then kill -TERM "$watchdog_pid" >/dev/null 2>&1 || true; fi
+  if [ -n "$watchdog_pid" ]; then wait "$watchdog_pid" 2>/dev/null || true; fi
+  stop_phase
   set +e
   DEV_SERVER_PORT="$port" DEV_SERVER_STATE_DIR="$state_dir" DEV_SERVER_LOG="$log_path" \
     DEV_SERVER_LEGACY_PID="$runtime_root/dev-server.pid" DEV_SERVER_CWD="$root" \
@@ -140,6 +168,7 @@ cleanup() {
 
 on_signal() {
   local code="$1"
+  if [ "$phase_launching" -eq 1 ]; then pending_signal="$code"; return; fi
   if [ -e "$runtime_root/watchdog-timeout" ]; then code=124; fi
   record_failure "$code"
   cleanup "$code" || true
@@ -147,7 +176,7 @@ on_signal() {
 }
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
-trap 'rc=$?; code=$rc; if [ "$first_failure" -ne 0 ]; then code=$first_failure; fi; if [ "$cleanup_started" -eq 0 ]; then cleanup "$code" || true; fi' EXIT
+trap 'cleanup "$?" || true' EXIT
 
 umask 077
 mkdir -p "$runtime_root"
@@ -180,40 +209,24 @@ export CODEX_POOLER_DEV_POSTGRES_DB="$database"
 export DATABASE_URL="postgresql://${postgres_user}:${postgres_password}@127.0.0.1:${postgres_port}/${database}?sslmode=disable"
 export MIX_BUILD_PATH="$mix_build_path"
 
-stat_args=(-f '%Lp:%z')
-if stat -c '%a:%s' "$root/mix.exs" >/dev/null 2>&1; then
-  stat_args=(-c '%a:%s')
-fi
+manifest_helper="$root/dev_support/bin/qa-manifest"
+[ -x "$manifest_helper" ] || fail "QA manifest helper is absent"
 
 source_manifest() {
-  local destination="$1" metadata digest target
+  local destination="$1"
   (
     cd "$root"
     git ls-files -z --cached --others --exclude-standard -- \
       mix.exs mix.lock mise.toml config lib dev_support priv assets |
-      while IFS= read -r -d '' path; do
-        [ -e "$path" ] || [ -L "$path" ] || { printf 'absent\t%s\n' "$path"; continue; }
-        if [ -L "$path" ]; then
-          target="$(readlink "$path")" || fail "source symlink inspection failed"
-          printf 'symlink\t%s\t%s\n' "$target" "$path"
-        elif [ -f "$path" ]; then
-          metadata="$(stat "${stat_args[@]}" "$path")" || fail "source file inspection failed"
-          [[ "$metadata" =~ ^[0-7]{1,4}:[0-9]+$ ]] || fail "invalid source file metadata"
-          digest="$(shasum -a 256 "$path" | awk '{print $1}')" || fail "source hashing failed"
-          printf 'file\t%s\t%s\t%s\n' "$metadata" "$digest" "$path"
-        fi
-      done
-  ) | LC_ALL=C sort > "$destination"
+      "$manifest_helper" source "$root"
+  ) | LC_ALL=C sort > "$destination" || fail "source manifest failed"
 }
 
 beam_manifest() {
-  local destination="$1" ebin="$mix_build_path/lib/codex_pooler/ebin" digest
+  local destination="$1" ebin="$mix_build_path/lib/codex_pooler/ebin"
   [ -d "$ebin" ] || fail "compiled Pooler BEAM directory is absent"
   find "$ebin" -type f -name '*.beam' -print0 |
-    while IFS= read -r -d '' path; do
-      digest="$(shasum -a 256 "$path" | awk '{print $1}')" || fail "compiled Pooler BEAM hashing failed"
-      printf '%s\t%s\n' "$digest" "${path#"$mix_build_path/"}"
-    done | LC_ALL=C sort > "$destination"
+    "$manifest_helper" beams "$mix_build_path" | LC_ALL=C sort > "$destination" || fail "compiled Pooler BEAM hashing failed"
   [ -s "$destination" ] || fail "compiled Pooler BEAM manifest is empty"
 }
 
@@ -225,25 +238,19 @@ make_args=(--no-print-directory "PORT=$port" "POSTGRES_PORT=$postgres_port" \
   "DEV_SERVER_STATE_DIR=$state_dir" "DEV_LOG=$log_path" "DEV_SECRET_ENV=" \
   "DEV_COMPOSE=COMPOSE_PROJECT_NAME=$project POSTGRES_PORT=$postgres_port docker compose -f $root/docker-compose.dev.yml -f $compose_file")
 
-(cd "$root" && mise x -- make "${make_args[@]}" dev-prepare > "$prepare_log" 2>&1)
-(cd "$root" && mise x -- mix dev.seed full > "$seed_log" 2>&1)
+cd "$root"
+run_phase mise x -- make "${make_args[@]}" dev-prepare > "$prepare_log" 2>&1
+run_phase mise x -- mix dev.seed full > "$seed_log" 2>&1
 
 server_command="PORT=$port mix phx.server"
 if [ "$disable_oban" = 1 ]; then
   preboot="$runtime_root/preboot.exs"
   cat > "$preboot" <<'ELIXIR'
-config =
-  Application.fetch_env!(:codex_pooler, Oban)
-  |> Keyword.drop([:cron, :lifeline, :pruner])
-  |> Keyword.merge(queues: false, plugins: false, stager: false)
-
-Application.put_env(:codex_pooler, Oban, config)
+:ok = CodexPooler.Dev.QaBackgroundWorkers.disable_before_boot!()
 endpoint = Application.fetch_env!(:codex_pooler, CodexPoolerWeb.Endpoint)
 Application.put_env(:codex_pooler, CodexPoolerWeb.Endpoint, Keyword.put(endpoint, :server, true))
 {:ok, _} = Application.ensure_all_started(:codex_pooler)
-actual = Oban.config()
-unless actual.queues == [] and actual.plugins == [] and actual.stager == false,
-  do: raise("owned QA background workers remain enabled")
+:ok = CodexPooler.Dev.QaBackgroundWorkers.verify_disabled!()
 IO.puts("QA_OBAN_DISABLED queues=0 plugins=0 stager=false")
 Process.sleep(:infinity)
 ELIXIR
@@ -273,14 +280,11 @@ receipt="$state_dir/$active_run.receipt"
 pid="$(awk -F '\t' '$1 == "pid" {print $2}' "$receipt")"
 start_signature="$(awk -F '\t' '$1 == "start_signature" {print $2}' "$receipt")"
 source_sha="$(cd "$root" && git rev-parse HEAD)"
-source_manifest_sha="$(shasum -a 256 "$runtime_root/source-after-start.tsv" | awk '{print $1}')"
-beam_manifest_sha="$(shasum -a 256 "$runtime_root/beam-after-start.tsv" | awk '{print $1}')"
-wrapper_sha="$(shasum -a 256 "$root/dev_support/bin/reliability-qa-lifecycle" | awk '{print $1}')"
-lifecycle_sha="$(shasum -a 256 "$root/dev_support/bin/dev-server-lifecycle" | awk '{print $1}')"
-config_sha="$(shasum -a 256 "$root/config/dev.exs" | awk '{print $1}')"
-makefile_sha="$(shasum -a 256 "$root/Makefile" | awk '{print $1}')"
 seed_source="dev_support/codex_pooler/dev/seeds/full.ex"
-seed_source_sha="$(shasum -a 256 "$root/$seed_source" | awk '{print $1}')"
+hashes="$("$manifest_helper" hashes "$runtime_root/source-after-start.tsv" "$runtime_root/beam-after-start.tsv" \
+  "$root/dev_support/bin/reliability-qa-lifecycle" "$root/dev_support/bin/dev-server-lifecycle" \
+  "$root/config/dev.exs" "$root/Makefile" "$root/$seed_source")" || fail "startup provenance hashing failed"
+read -r source_manifest_sha beam_manifest_sha wrapper_sha lifecycle_sha config_sha makefile_sha seed_source_sha <<< "$hashes"
 printf '{"run_id":"%s","origin":"%s","port":%d,"postgres_port":%d,"database":"%s","compose_project":"%s","volume":"%s","pid":%d,"start_signature":"%s","cwd":"%s","source_sha":"%s","source_manifest_sha256":"%s","beam_manifest_sha256":"%s","mix_build_path":"%s","wrapper_sha256":"%s","lifecycle_sha256":"%s","config_sha256":"%s","makefile_sha256":"%s","seed_profile":"full","seed_source":"%s","seed_source_sha256":"%s","catalog_count":%d,"evidence_dsn_sslmode":"disable"}\n' \
   "$run_id" "$origin" "$port" "$postgres_port" "$database" "$project" "$volume" "$pid" \
   "$start_signature" "$root" "$source_sha" "$source_manifest_sha" "$beam_manifest_sha" "$mix_build_path" \

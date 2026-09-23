@@ -96,8 +96,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProviderPermissionTest do
     |> Ecto.Changeset.change(
       metadata: %{
         "credential_epoch" => 1,
-        "quota_account_availability" =>
-          AccountAvailabilityStore.encode!(state, observed_at, epoch)
+        "quota_account_availability" => AccountAvailabilityStore.encode!(state, observed_at, epoch)
       }
     )
     |> Repo.update!()

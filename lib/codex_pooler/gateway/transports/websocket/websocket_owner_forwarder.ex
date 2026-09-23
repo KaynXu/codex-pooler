@@ -510,9 +510,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   @doc false
   @spec remote_reconnect_control_v2(RemoteReconnectControlV2.t()) :: term()
-  def remote_reconnect_control_v2(
-        %RemoteReconnectControlV2{codex_session_id: session_id} = control
-      ) do
+  def remote_reconnect_control_v2(%RemoteReconnectControlV2{codex_session_id: session_id} = control) do
     with :ok <- RemoteReconnectControlV2.validate(control),
          {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
       case WebsocketOwnerSession.reconnect_control_v2(owner_pid, control) do
@@ -2107,9 +2105,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp normalize_reconnect_control_result({:ok, :same_turn_reattach, downstream} = result)
        when is_map(downstream), do: result
 
-  defp normalize_reconnect_control_result(
-         {:ok, :provisional, token, 1, generation, downstream} = result
-       )
+  defp normalize_reconnect_control_result({:ok, :provisional, token, 1, generation, downstream} = result)
        when is_binary(token) and byte_size(token) == 32 and is_integer(generation) and
               generation > 0 and is_map(downstream),
        do: result
@@ -2325,8 +2321,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   defp missing_remote_submit_v1?(
-         {:exception, :undef,
-          [{module, :remote_submit_request_v1, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_submit_request_v1, remote_args, _location} | _stack]},
          module,
          :remote_submit_request_v1,
          args
@@ -2344,8 +2339,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   defp missing_remote_submit_v6?(
-         {:exception, :undef,
-          [{module, :remote_submit_request_v6, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_submit_request_v6, remote_args, _location} | _stack]},
          module,
          :remote_submit_request_v6,
          args
@@ -2355,8 +2349,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp missing_remote_submit_v6?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_submit_v7?(
-         {:exception, :undef,
-          [{module, :remote_submit_request_v7, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_submit_request_v7, remote_args, _location} | _stack]},
          module,
          :remote_submit_request_v7,
          args
@@ -2366,8 +2359,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp missing_remote_submit_v7?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_submit_v2?(
-         {:exception, :undef,
-          [{module, :remote_submit_request_v2, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_submit_request_v2, remote_args, _location} | _stack]},
          module,
          :remote_submit_request_v2,
          args
@@ -2377,8 +2369,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp missing_remote_submit_v2?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_submit_v3?(
-         {:exception, :undef,
-          [{module, :remote_submit_request_v3, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_submit_request_v3, remote_args, _location} | _stack]},
          module,
          :remote_submit_request_v3,
          args
@@ -2388,8 +2379,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp missing_remote_submit_v3?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_submit_v5?(
-         {:exception, :undef,
-          [{module, :remote_submit_request_v5, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_submit_request_v5, remote_args, _location} | _stack]},
          module,
          :remote_submit_request_v5,
          args
@@ -2399,8 +2389,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp missing_remote_submit_v5?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_cancel_v1?(
-         {:exception, :undef,
-          [{module, :remote_cancel_downstream_v1, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_cancel_downstream_v1, remote_args, _location} | _stack]},
          module,
          :remote_cancel_downstream_v1,
          args
@@ -2410,8 +2399,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp missing_remote_cancel_v1?(_reason, _module, _function, _args), do: false
 
   defp missing_remote_reconnect_control_v1?(
-         {:exception, :undef,
-          [{module, :remote_reconnect_control_v1, remote_args, _location} | _stack]},
+         {:exception, :undef, [{module, :remote_reconnect_control_v1, remote_args, _location} | _stack]},
          module,
          :remote_reconnect_control_v1,
          args

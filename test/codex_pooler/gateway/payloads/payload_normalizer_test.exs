@@ -281,10 +281,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       cases = [
-        {"regular", "/backend-api/codex/responses",
-         RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
-        {"compact", "/backend-api/codex/responses/compact",
-         RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+        {"regular", "/backend-api/codex/responses", RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+        {"compact", "/backend-api/codex/responses/compact", RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
         {"websocket", "/backend-api/codex/responses",
          %{}
          |> RequestOptions.build("/backend-api/codex/responses", payload)
@@ -613,10 +611,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for {endpoint, request_options} <- [
-            {"/backend-api/codex/responses",
-             RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
-            {"/backend-api/codex/responses/compact",
-             RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+            {"/backend-api/codex/responses", RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+            {"/backend-api/codex/responses/compact", RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
             {"/backend-api/codex/responses",
              %{}
              |> RequestOptions.build("/backend-api/codex/responses", payload)
@@ -1091,8 +1087,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "content" => [
               %{
                 "type" => "input_text",
-                "text" =>
-                  "Message Type: NEW_TASK\nTask name: /root/../worker\nSender: /root\nPayload:\n"
+                "text" => "Message Type: NEW_TASK\nTask name: /root/../worker\nSender: /root\nPayload:\n"
               },
               %{"type" => "encrypted_content", "encrypted_content" => "invalid-agent-path"}
             ]
@@ -1104,8 +1099,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "content" => [
               %{
                 "type" => "input_text",
-                "text" =>
-                  "Message Type: NEW_TASK\nTask name: /root/other\nSender: /root\nPayload:\n"
+                "text" => "Message Type: NEW_TASK\nTask name: /root/other\nSender: /root\nPayload:\n"
               },
               %{"type" => "encrypted_content", "encrypted_content" => "mismatched-binding"}
             ]
@@ -1200,10 +1194,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for {endpoint, request_options} <- [
-            {"/backend-api/codex/responses",
-             RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
-            {"/backend-api/codex/responses/compact",
-             RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+            {"/backend-api/codex/responses", RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+            {"/backend-api/codex/responses/compact", RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
             {"/backend-api/codex/responses",
              %{}
              |> RequestOptions.build("/backend-api/codex/responses", payload)
@@ -1360,8 +1352,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         {:non_binary_websocket, 42, :websocket, ordinary_input(), true, false},
         {:stripped_http, "response-fixture", :http, ordinary_input(), false, false},
         {:retained_semantic_http, "response-fixture", :http, tool_result_input(), true, true},
-        {:retained_standalone_http, "response-fixture", :http, standalone_tool_result_input(),
-         true, true}
+        {:retained_standalone_http, "response-fixture", :http, standalone_tool_result_input(), true, true}
       ]
 
       for {label, previous_response_id, transport, input, final_id_present?, expected_marker} <-
@@ -1438,9 +1429,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "carries gateway debug metadata on request options instead of process state" do
       previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
-      Application.put_env(:codex_pooler, OperationalSettings,
-        settings: %OperationalSettings{gateway_debug?: true}
-      )
+      Application.put_env(:codex_pooler, OperationalSettings, settings: %OperationalSettings{gateway_debug?: true})
 
       on_exit(fn ->
         if previous_env,
@@ -1503,12 +1492,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-text-model"}
 
       for {endpoint, options} <- [
-            {"/backend-api/codex/responses",
-             %{native_image_request?: true, effective_model: "gpt-image-2"}},
+            {"/backend-api/codex/responses", %{native_image_request?: true, effective_model: "gpt-image-2"}},
             {"/backend-api/codex/images/generations", %{effective_model: "gpt-image-2"}},
             {"/backend-api/codex/images/generations", %{native_image_request?: true}},
-            {"/backend-api/codex/images/edits",
-             %{native_image_request?: true, effective_model: ""}}
+            {"/backend-api/codex/images/edits", %{native_image_request?: true, effective_model: ""}}
           ] do
         payload = %{"model" => "client-controlled-model", "input" => native_text_input("hello")}
         request_options = RequestOptions.build(options, endpoint, payload)
@@ -1593,8 +1580,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  request_options
                )
 
-      assert {:file,
-              {%File.Stream{}, [filename: "audio.wav", content_type: "audio/wav", size: 15]}} =
+      assert {:file, {%File.Stream{}, [filename: "audio.wav", content_type: "audio/wav", size: 15]}} =
                file_part
 
       assert fields == [
@@ -1787,6 +1773,160 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                  )
 
         assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+      end
+    end
+
+    test "maps client-facing ultra to the highest catalog level when the selected model lacks max" do
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "ultra"}
+      }
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      compact_options = RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      cases = [
+        {%{"supported_reasoning_levels" => ~w(low medium high xhigh)}, "xhigh"},
+        {%{
+           "upstream_model" => %{
+             "supported_reasoning_levels" => [%{"effort" => "low"}, %{"effort" => "high"}]
+           }
+         }, "high"},
+        {%{"supported_reasoning_levels" => ~w(low medium high xhigh max ultra)}, "max"},
+        {%{}, "max"}
+      ]
+
+      for {metadata, expected} <- cases,
+          request_options <- [http_options, compact_options, websocket_options] do
+        model = %Model{upstream_model_id: "provider-model", metadata: metadata}
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   request_options.transport.upstream_endpoint,
+                   request_options
+                 )
+
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => expected}
+      end
+    end
+
+    test "maps ultra to the selected assignment's highest level, not the Pool-wide union" do
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "ultra"}
+      }
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+      selected = Ecto.UUID.generate()
+      other = Ecto.UUID.generate()
+      unsynced = Ecto.UUID.generate()
+
+      # The union (written by catalog sync under `upstream_model`) tops out at
+      # `xhigh`, contributed by the other assignment; the selected assignment's
+      # model advertises only up to `high`. A preserved source whose sync failed
+      # is stored as `%{}` and must fall back to the union, not to the
+      # unknown-levels `max` (findings#221).
+      model = %Model{
+        upstream_model_id: "provider-model",
+        metadata: %{
+          "upstream_model" => %{"supported_reasoning_levels" => ~w(low medium high xhigh)},
+          "source_assignment_models" => %{
+            selected => %{"supported_reasoning_levels" => ~w(low medium high)},
+            other => %{"supported_reasoning_levels" => ~w(low medium high xhigh)},
+            unsynced => %{}
+          }
+        }
+      }
+
+      for request_options <- [http_options, websocket_options] do
+        endpoint = request_options.transport.upstream_endpoint
+
+        for {opts, expected} <- [
+              {[assignment_id: selected], "high"},
+              {[assignment_id: other], "xhigh"},
+              {[assignment_id: unsynced], "xhigh"},
+              {[assignment_id: Ecto.UUID.generate()], "xhigh"},
+              {[], "xhigh"}
+            ] do
+          assert {:ok, encoded} =
+                   PayloadNormalizer.upstream_payload(
+                     payload,
+                     model,
+                     endpoint,
+                     request_options,
+                     opts
+                   )
+
+          assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{"effort" => expected},
+                 "#{inspect(opts)} on #{endpoint}"
+        end
+      end
+    end
+
+    test "labels catalog-gated ultra rewrites and keeps explicit efforts outside the catalog" do
+      model = %Model{
+        upstream_model_id: "provider-model",
+        metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+      }
+
+      cases = [
+        {%{"reasoning" => %{"effort" => "ultra"}}, %{},
+         %{
+           "requested_effort" => "ultra",
+           "applied_effort" => "ultra",
+           "effective_effort" => "xhigh",
+           "source" => "client",
+           "rewrite" => "ultra_to_xhigh"
+         }},
+        {%{"reasoning" => %{"effort" => "low"}}, %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
+         %{
+           "requested_effort" => "low",
+           "applied_effort" => "ultra",
+           "effective_effort" => "xhigh",
+           "source" => "api_key_policy",
+           "rewrite" => "ultra_to_xhigh"
+         }},
+        {%{"reasoning" => %{"effort" => "max"}}, %{},
+         %{
+           "requested_effort" => "max",
+           "applied_effort" => "max",
+           "effective_effort" => "max",
+           "source" => "client"
+         }},
+        {%{"reasoning" => %{"effort" => "none"}}, %{},
+         %{
+           "requested_effort" => "none",
+           "applied_effort" => "none",
+           "effective_effort" => "none",
+           "source" => "client"
+         }}
+      ]
+
+      for {reasoning, opts, expected_snapshot} <- cases do
+        payload =
+          Map.merge(%{"model" => "gpt-4.1", "input" => native_text_input("hello")}, reasoning)
+
+        request_options = RequestOptions.build(opts, "/backend-api/codex/responses", payload)
+
+        assert {:ok, encoded, updated_options} =
+                 PayloadNormalizer.prepare_upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert CodexPooler.JSON.decode!(encoded)["reasoning"] == %{
+                 "effort" => expected_snapshot["effective_effort"]
+               }
+
+        assert updated_options.runtime.reasoning_effort_snapshot == expected_snapshot
       end
     end
 
@@ -2042,8 +2182,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       include_cases = [
         {"missing include", %{}, ["reasoning.encrypted_content"]},
         {"non-list include", %{"include" => "unsupported"}, ["reasoning.encrypted_content"]},
-        {"absent encrypted include", %{"include" => ["output_text.logprobs"]},
-         ["output_text.logprobs", "reasoning.encrypted_content"]},
+        {"absent encrypted include", %{"include" => ["output_text.logprobs"]}, ["output_text.logprobs", "reasoning.encrypted_content"]},
         {"duplicate encrypted include",
          %{
            "include" => [
@@ -2250,12 +2389,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       }
 
       cases = [
-        {"absent tools reuses canonical prefix", %{"input" => [existing_prefix, user_message]}, 2,
-         existing_prefix["tools"]},
-        {"absent tools creates empty prefix",
-         %{"instructions" => "  ", "input" => [user_message]}, 2, []},
-        {"empty tools creates prefix before existing prefix",
-         %{"tools" => [], "input" => [existing_prefix, request_item, user_message]}, 4, []},
+        {"absent tools reuses canonical prefix", %{"input" => [existing_prefix, user_message]}, 2, existing_prefix["tools"]},
+        {"absent tools creates empty prefix", %{"instructions" => "  ", "input" => [user_message]}, 2, []},
+        {"empty tools creates prefix before existing prefix", %{"tools" => [], "input" => [existing_prefix, request_item, user_message]}, 4, []},
         {"populated tools creates lowered prefix before existing prefix",
          %{
            "tools" => [populated_tool],
@@ -2625,11 +2761,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       trigger = %{"type" => "compaction_trigger"}
 
       for {name, input, expected_input} <- [
-            {"function output", [function_output, trigger],
-             [strip_image_detail(function_output), trigger]},
+            {"function output", [function_output, trigger], [strip_image_detail(function_output), trigger]},
             {"trigger only", [trigger], [trigger]},
-            {"future custom output", [custom_output, trigger],
-             [strip_image_detail(custom_output), trigger]}
+            {"future custom output", [custom_output, trigger], [strip_image_detail(custom_output), trigger]}
           ] do
         source_payload = %{
           "model" => "gpt-5.6-terra",
@@ -2702,6 +2836,227 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert first["previous_response_id"] == source_payload["previous_response_id"]
       refute Map.has_key?(first, "tools")
       refute Map.has_key?(first, "instructions")
+    end
+
+    test "does not add a second Lite tools prefix on full-history compaction" do
+      # Lite carries the developer tool manifest as a leading `additional_tools`
+      # input item rather than top-level `tools`. On a full-history compaction the
+      # client resends its whole history, so a Lite-aware client already carries
+      # that manifest in `input`. Pooler must forward the client's own item and
+      # inject nothing: a second manifest misrepresents the request the client
+      # made. An `id` is optional on the item (the request validator accepts it,
+      # compatibility matrix `additional_tools_input_item.optional`), so an
+      # id-bearing manifest is just as canonical as an id-less one.
+      manifest_tools = [%{"type" => "custom", "name" => "client_manifest_fixture"}]
+
+      canonical_manifest = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => manifest_tools
+      }
+
+      id_bearing_manifest = Map.put(canonical_manifest, "id", "atl_client_manifest_fixture")
+
+      user_message = %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "full history turn"}]
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+
+      variants = [
+        {"canonical id-less manifest sent first", [canonical_manifest, user_message, trigger]},
+        {"manifest carrying an id", [id_bearing_manifest, user_message, trigger]},
+        {"manifest present but not first", [user_message, canonical_manifest, trigger]}
+      ]
+
+      # One combined assertion so a regression reports every variant's upstream
+      # manifest count at once instead of stopping at the first failing shape.
+      upstream_manifests =
+        for {name, input} <- variants do
+          source_payload = %{"model" => "gpt-5.6-terra", "stream" => true, "input" => input}
+
+          {first, second, request_options} = prepare_full_history_lite_compact(source_payload)
+
+          assert request_options.payload_context.compaction_input_mode == :full_history, name
+          assert second == first, name
+          refute Map.has_key?(first, "tools"), name
+
+          {name, Enum.filter(first["input"], &(&1["type"] == "additional_tools")), first["input"]}
+        end
+
+      client_manifests =
+        for {name, input} <- variants do
+          {name, Enum.filter(input, &(&1["type"] == "additional_tools")), input}
+        end
+
+      manifest_counts = fn entries ->
+        Enum.map(entries, fn {name, manifests, _input} -> {name, length(manifests)} end)
+      end
+
+      assert manifest_counts.(upstream_manifests) == manifest_counts.(client_manifests)
+      assert upstream_manifests == client_manifests
+    end
+
+    test "keeps the full-history Lite tools prefix a pure function of the client's tools" do
+      # The two contracts that bound the regression above. A client that sent no
+      # manifest at all still gets the intended injection, and a client that sent
+      # top-level `tools` gets exactly the projection of those tools: request-shaped
+      # `additional_tools` input items are non-executable and are never merged into
+      # the projected manifest (compatibility matrix
+      # `additional_tools_input_item.merges_into_tools`), so they cannot stand in
+      # for it. Keeping the projection a pure function of `tools` is also what lets
+      # consecutive full-history turns share a stable upstream prefix.
+      top_level_tools = [%{"type" => "custom", "name" => "top_level_fixture"}]
+
+      client_manifest = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [%{"type" => "custom", "name" => "client_manifest_fixture"}]
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+
+      {trigger_only, _second, options} =
+        prepare_full_history_lite_compact(%{
+          "model" => "gpt-5.6-terra",
+          "stream" => true,
+          "input" => [trigger]
+        })
+
+      assert options.payload_context.compaction_input_mode == :full_history
+
+      assert trigger_only["input"] == [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => []},
+               trigger
+             ]
+
+      {projected, _second, _options} =
+        prepare_full_history_lite_compact(%{
+          "model" => "gpt-5.6-terra",
+          "stream" => true,
+          "tools" => top_level_tools,
+          "input" => [client_manifest, trigger]
+        })
+
+      assert projected["input"] == [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => top_level_tools},
+               client_manifest,
+               trigger
+             ]
+
+      refute Map.has_key?(projected, "tools")
+    end
+
+    test "does not add a second Lite tools prefix on ordinary non-compact turns" do
+      # The same projection runs outside compaction, so a client-supplied manifest
+      # must survive an ordinary Lite turn without a second injection too.
+      canonical_manifest = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [%{"type" => "custom", "name" => "ordinary_manifest_fixture"}]
+      }
+
+      id_bearing_manifest = Map.put(canonical_manifest, "id", "atl_ordinary_manifest_fixture")
+
+      user_message = %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "ordinary turn"}]
+      }
+
+      variants = [
+        {"canonical id-less manifest sent first", [canonical_manifest, user_message]},
+        {"manifest carrying an id", [id_bearing_manifest, user_message]},
+        {"manifest present but not first", [user_message, canonical_manifest]}
+      ]
+
+      upstream_manifests =
+        for {name, input} <- variants do
+          first = prepare_lite_payload(%{"model" => "gpt-5.6-terra", "input" => input})
+          second = prepare_lite_payload(first)
+
+          assert second == first, name
+          refute Map.has_key?(first, "tools"), name
+
+          {name, Enum.filter(first["input"], &(&1["type"] == "additional_tools")), first["input"]}
+        end
+
+      client_manifests =
+        for {name, input} <- variants do
+          {name, Enum.filter(input, &(&1["type"] == "additional_tools")), input}
+        end
+
+      assert upstream_manifests == client_manifests
+
+      # A client that also sent `instructions` still gets exactly one developer
+      # message and no injected second manifest, with its own manifest in place.
+      with_instructions =
+        prepare_lite_payload(%{
+          "model" => "gpt-5.6-terra",
+          "instructions" => "ordinary instructions",
+          "input" => [user_message, canonical_manifest]
+        })
+
+      assert with_instructions["input"] == [
+               %{
+                 "type" => "message",
+                 "role" => "developer",
+                 "content" => [%{"type" => "input_text", "text" => "ordinary instructions"}]
+               },
+               user_message,
+               canonical_manifest
+             ]
+    end
+
+    @tag :encrypted_reasoning_continuity
+    test "drops non-canonical encrypted reasoning on ordinary routes but not through compaction" do
+      # `backend_codex_invalid_encrypted_reasoning?` is a fail-closed whitelist:
+      # only the canonical continuity shape (`content: null` plus a nonblank
+      # `encrypted_content`) replays upstream, and an item that omits `content`
+      # altogether is dropped rather than kept -- pinned for both transports by
+      # "strips malformed encrypted reasoning shapes from HTTP and websocket
+      # upstream JSON". The compact projection runs neither reject pass, so it
+      # forwards the client's history as sent; pin that asymmetry so a change to
+      # either side has to be deliberate.
+      canonical = %{
+        "type" => "reasoning",
+        "content" => nil,
+        "encrypted_content" => "synthetic-canonical-reasoning"
+      }
+
+      omitted_content = %{
+        "type" => "reasoning",
+        "encrypted_content" => "synthetic-omitted-content-reasoning"
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+      model = %Model{upstream_model_id: "provider-model"}
+      endpoint = "/backend-api/codex/responses"
+      payload = %{"model" => "gpt-5.5", "input" => [canonical, omitted_content]}
+      http_options = RequestOptions.build(%{}, endpoint, payload)
+
+      for request_options <- [http_options, RequestOptions.for_websocket(http_options, payload)] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        assert CodexPooler.JSON.decode!(encoded)["input"] == [canonical]
+      end
+
+      {compact, _second, _options} =
+        prepare_full_history_lite_compact(%{
+          "model" => "gpt-5.6-terra",
+          "stream" => true,
+          "input" => [canonical, omitted_content, trigger]
+        })
+
+      assert compact["input"] == [
+               %{"type" => "additional_tools", "role" => "developer", "tools" => []},
+               canonical,
+               omitted_content,
+               trigger
+             ]
     end
 
     test "uses the pre-dispatch applied effort for compact payloads without re-deciding policy" do
@@ -3601,6 +3956,38 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   end
 
   defp prepare_incremental_lite_compact(source_payload) do
+    compact_payload = CompactionTrigger.project_responses_payload(source_payload, :sse)
+
+    request_options =
+      "lite"
+      |> serving_mode_opts()
+      |> Map.merge(%{compaction_trigger_bridge?: true, compaction_result_transport: :sse})
+      |> RequestOptions.build("/backend-api/codex/responses/compact", source_payload)
+
+    model = %Model{upstream_model_id: "provider-model"}
+
+    assert {:ok, first_encoded} =
+             PayloadNormalizer.upstream_payload(
+               compact_payload,
+               model,
+               "/backend-api/codex/responses/compact",
+               request_options
+             )
+
+    first = CodexPooler.JSON.decode!(first_encoded)
+
+    assert {:ok, second_encoded} =
+             PayloadNormalizer.upstream_payload(
+               first,
+               model,
+               "/backend-api/codex/responses/compact",
+               request_options
+             )
+
+    {first, CodexPooler.JSON.decode!(second_encoded), request_options}
+  end
+
+  defp prepare_full_history_lite_compact(source_payload) do
     compact_payload = CompactionTrigger.project_responses_payload(source_payload, :sse)
 
     request_options =

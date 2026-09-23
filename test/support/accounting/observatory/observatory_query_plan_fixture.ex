@@ -31,7 +31,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
     Repo.query!("SET LOCAL enable_incremental_sort = off")
 
     # Keep the scoped-request bitmap exact. With a lossy (page-level) bitmap the
-    # heap recheck rereads whole pages of the 7k-row fixture and removes the
+    # heap recheck rereads whole pages of the fixture and removes the
     # non-matching rows, which is non-deterministic and inflates the bounded
     # relation-work assertion; ample work_mem keeps the bitmap tuple-exact.
     Repo.query!("SET LOCAL work_mem = '256MB'")
@@ -78,7 +78,6 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
           model_id: model_id,
           admitted_at: timestamp,
           completed_at: timestamp,
-          idempotency_key: nil,
           correlation_id: "observatory-plan-#{fixture_ref}-#{index}"
         })
 
@@ -112,15 +111,15 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
         timestamp = DateTime.add(upper_bound, -(rem(index * 13, 3_500) + 1), :second)
         build_pair.(index, pool.id, api_key.id, model.id, timestamp)
       end ++
-        for index <- 1..2_000 do
+        for index <- 1..480 do
           timestamp = DateTime.add(upper_bound, -(7_200 + index), :second)
           build_pair.(10_000 + index, pool.id, api_key.id, model.id, timestamp)
         end ++
-        for index <- 1..5_000 do
+        for index <- 1..480 do
           timestamp = DateTime.add(upper_bound, -(rem(index * 17, 3_500) + 1), :second)
           build_pair.(20_000 + index, pool.id, other_api_key.id, model.id, timestamp)
         end ++
-        for index <- 1..5_000 do
+        for index <- 1..480 do
           timestamp = DateTime.add(upper_bound, -(rem(index * 19, 3_500) + 1), :second)
           build_pair.(30_000 + index, wrong_pool.id, api_key.id, wrong_model.id, timestamp)
         end

@@ -44,14 +44,14 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
     field :endpoint_host, :string
     field :endpoint_path_prefix, :string
     field :endpoint_fingerprint, :string
-    field :endpoint_url_ciphertext, :binary
-    field :endpoint_url_nonce, :binary
+    field :endpoint_url_ciphertext, :binary, redact: true
+    field :endpoint_url_nonce, :binary, redact: true
     field :endpoint_url_aad, :map, default: %{}
     field :endpoint_url_key_version, :string
     field :webhook_signing_secret, :string, virtual: true, redact: true
     field :webhook_signing_secret_action, :string, virtual: true
-    field :webhook_signing_secret_ciphertext, :binary
-    field :webhook_signing_secret_nonce, :binary
+    field :webhook_signing_secret_ciphertext, :binary, redact: true
+    field :webhook_signing_secret_nonce, :binary, redact: true
     field :webhook_signing_secret_aad, :map, default: %{}
     field :webhook_signing_secret_key_version, :string
     field :created_by_user_id, :binary_id
@@ -243,9 +243,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
   defp validate_email_channel(changeset) do
     changeset
     |> validate_required([:email_to])
-    |> validate_format(:email_to, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-      message: "must be a valid email address"
-    )
+    |> validate_format(:email_to, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "must be a valid email address")
     |> validate_absent([
       :endpoint_scheme,
       :endpoint_host,

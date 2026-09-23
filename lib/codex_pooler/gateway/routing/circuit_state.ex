@@ -783,9 +783,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
   defp emit_committed_transition({:ok, {value, nil}}), do: {:ok, value}
 
-  defp emit_committed_transition(
-         {:ok, {value, {from_status, to_status, %RoutingCircuitState{} = state, opts}}}
-       ) do
+  defp emit_committed_transition({:ok, {value, {from_status, to_status, %RoutingCircuitState{} = state, opts}}}) do
     CircuitTelemetry.emit_transition(from_status, to_status, state, opts)
     {:ok, value}
   end

@@ -147,13 +147,9 @@ defmodule CodexPooler.Admin.AlertIncidentRelationshipsTest do
 
     alert_incident_target_fixture(incident, visible_rule, assigned_pool)
 
-    alert_incident_target_fixture(incident, hidden_rule, hidden_pool,
-      metadata: %{"token" => raw_hidden}
-    )
+    alert_incident_target_fixture(incident, hidden_rule, hidden_pool, metadata: %{"token" => raw_hidden})
 
-    delivery_attempt_fixture(incident, visible_channel,
-      status: AlertDeliveryAttempt.sent_status()
-    )
+    delivery_attempt_fixture(incident, visible_channel, status: AlertDeliveryAttempt.sent_status())
 
     delivery_attempt_fixture(incident, hidden_channel,
       status: AlertDeliveryAttempt.failed_status(),

@@ -77,8 +77,7 @@ defmodule CodexPooler.Quotas.AdditionalMeterIdentity do
   defp quota_group_sort_key({{quota_key, meter_token}, windows}) do
     first_window = Enum.min_by(windows, &window_sort_key/1)
 
-    {quota_key, meter_token || "", fetch(first_window, :window_kind),
-     fetch(first_window, :window_minutes)}
+    {quota_key, meter_token || "", fetch(first_window, :window_kind), fetch(first_window, :window_minutes)}
   end
 
   defp window_sort_key(window), do: {fetch(window, :window_kind), fetch(window, :window_minutes)}

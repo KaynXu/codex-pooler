@@ -30,6 +30,37 @@ defmodule CodexPooler.Status.EventsTest do
                     }}
   end
 
+  test "freshness has its own strict canonical decoder and transactional delivery" do
+    :ok = Events.subscribe()
+
+    event = %{
+      event_version: 1,
+      event_type: :freshness,
+      aggregate_revision: 3,
+      last_success_at: ~U[2026-09-11 10:00:00Z]
+    }
+
+    assert {:ok, ^event} = Events.decode_freshness(event)
+    assert :ignore = Events.decode(event)
+    assert :ignore = Events.decode_freshness(Map.put(event, :unexpected, true))
+    assert :ignore = Events.decode_freshness(Map.put(event, :last_success_at, "invalid"))
+    assert :ignore = Events.decode_freshness(Map.put(event, :aggregate_revision, -1))
+    assert :ignore = Events.decode_freshness(Map.put(event, :event_type, :other))
+
+    assert {:error, :rolled_back} =
+             Sandbox.unboxed_run(Repo, fn ->
+               Repo.transaction(fn ->
+                 assert :ok = Events.broadcast(event)
+                 Repo.rollback(:rolled_back)
+               end)
+             end)
+
+    refute_receive {:openai_status_freshness, _}
+    assert :ok = Sandbox.unboxed_run(Repo, fn -> Events.broadcast(event) end)
+    assert_receive {:openai_status_freshness, ^event}
+    refute_received {:openai_status_updated, _}
+  end
+
   test "ignores stale, malformed, and raw payloads" do
     refute match?(
              {:ok, _},

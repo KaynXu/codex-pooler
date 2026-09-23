@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.PeerRegistry
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -44,7 +45,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   @blocking_owner_receive_timeout_ms 5_000
   @response_task_stop_timeout_ms 15_000
   @handoff_detection_timeout_ms 15_000
-  @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
   @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
   @model_serving_metadata_keys ~w(
@@ -256,7 +256,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
     on_exit(fn ->
       if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
-      await_peer_down!(peer_name, peer_node)
+
+      PeerRegistry.assert_peer_absent!(peer_name,
+        peer_node: peer_node,
+        budget_ms: @handoff_detection_timeout_ms
+      )
     end)
 
     assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
@@ -382,10 +386,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     fact = Repo.get(RequestLogFact, request_id)
 
     case {request, request_attempts, turns, settlements, fact} do
-      {%Request{status: ^status, completed_at: %DateTime{}} = request,
-       [%Attempt{status: ^status, completed_at: %DateTime{}} = attempt],
-       [%CodexTurn{status: ^status, completed_at: %DateTime{}} = turn],
-       [%LedgerEntry{} = settlement], %RequestLogFact{} = fact}
+      {%Request{status: ^status, completed_at: %DateTime{}} = request, [%Attempt{status: ^status, completed_at: %DateTime{}} = attempt], [%CodexTurn{status: ^status, completed_at: %DateTime{}} = turn], [%LedgerEntry{} = settlement], %RequestLogFact{} = fact}
       when settlement.attempt_id == attempt.id and turn.final_attempt_id == attempt.id and
              fact.latest_attempt_id == attempt.id and
              fact.latest_settlement_entry_id == settlement.id ->
@@ -417,10 +418,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
       request_rows: rows,
       ledger_entries: Repo.all(from(e in LedgerEntry, where: e.request_id == ^request.id)),
       sessions: Repo.all(from(s in CodexSession, where: s.id in ^session_ids)),
-      owner_leases:
-        Repo.all(from(l in BridgeOwnerLease, where: l.codex_session_id in ^session_ids)),
-      session_aliases:
-        Repo.all(from(a in BridgeSessionAlias, where: a.codex_session_id in ^session_ids)),
+      owner_leases: Repo.all(from(l in BridgeOwnerLease, where: l.codex_session_id in ^session_ids)),
+      session_aliases: Repo.all(from(a in BridgeSessionAlias, where: a.codex_session_id in ^session_ids)),
       demotions: Repo.all(from(d in BridgeDemotion, where: d.pool_id == ^pool_id)),
       circuits: Repo.all(from(c in RoutingCircuitState, where: c.pool_id == ^pool_id)),
       request_log: Accounting.list_request_logs(pool_id, filters: %{request_id: request.id})
@@ -437,24 +436,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
       {:error, _reason} ->
         assert {_output, 0} = System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
-        await_epmd!(System.monotonic_time(:millisecond) + @epmd_ready_timeout_ms)
-    end
-  end
 
-  defp await_epmd!(deadline) do
-    case :erl_epmd.names() do
-      {:ok, _names} ->
+        PeerRegistry.assert_epmd_ready!(poll_ms: @epmd_ready_poll_ms)
+
         :ok
-
-      {:error, _reason} = error ->
-        if System.monotonic_time(:millisecond) < deadline do
-          receive do
-          after
-            @epmd_ready_poll_ms -> await_epmd!(deadline)
-          end
-        else
-          flunk("EPMD did not become ready: #{inspect(error)}")
-        end
     end
   end
 
@@ -505,31 +490,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   end
 
   defp remote_node_connected?(peer_node), do: peer_node in Node.list(:connected)
-
-  defp await_peer_down!(peer_name, peer_node),
-    do:
-      await_peer_down!(
-        peer_name,
-        peer_node,
-        System.monotonic_time(:millisecond) + @handoff_detection_timeout_ms
-      )
-
-  defp await_peer_down!(peer_name, peer_node, deadline) do
-    {:ok, names} = :erl_epmd.names()
-
-    if peer_node not in Node.list(:connected) and
-         not Enum.any?(names, fn {name, _port} -> name == Atom.to_charlist(peer_name) end) do
-      :ok
-    else
-      remaining = deadline - System.monotonic_time(:millisecond)
-      assert remaining > 0, "peer did not stop"
-
-      receive do
-      after
-        min(@epmd_ready_poll_ms, remaining) -> await_peer_down!(peer_name, peer_node, deadline)
-      end
-    end
-  end
 
   def receive_receiver_delivery_gap_result(task_pid, state) do
     receive do
@@ -632,8 +592,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
     if mode, do: assert(call.mode == mode)
 
-    assert_receive {:websocket_owner_harness_request,
-                    %WebsocketOwnerRequest{version: 1} = owner_request},
+    assert_receive {:websocket_owner_harness_request, %WebsocketOwnerRequest{version: 1} = owner_request},
                    timeout
 
     assert :ok = WebsocketOwnerRequest.validate(owner_request)
@@ -748,6 +707,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
 
   def capture_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do
@@ -763,6 +724,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   @dialyzer {:no_return, capture_websocket_lifecycle_log: 1}
   def capture_websocket_lifecycle_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do
@@ -1449,7 +1412,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
   def with_proxy_websocket_bulkhead(queue_limit, queue_timeout_ms, fun)
       when is_integer(queue_limit) and queue_limit >= 0 and is_integer(queue_timeout_ms) and
              queue_timeout_ms > 0 and is_function(fun, 0) do
-    previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
+    previous_settings = Application.fetch_env(:codex_pooler, OperationalSettings)
+
+    restore = fn ->
+      Admission.reset_for_test()
+
+      case previous_settings do
+        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
+        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %OperationalSettings{
@@ -1470,12 +1445,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingSupport do
     try do
       fun.()
     after
-      Admission.reset_for_test()
-
-      case previous_settings do
-        nil -> Application.delete_env(:codex_pooler, OperationalSettings)
-        value -> Application.put_env(:codex_pooler, OperationalSettings, value)
-      end
+      restore.()
     end
   end
 

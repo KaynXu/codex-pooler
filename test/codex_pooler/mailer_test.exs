@@ -97,8 +97,7 @@ defmodule CodexPooler.MailerTest do
       from: {"Codex Pooler", "instance-sender@example.com"},
       to: "recipient@example.com",
       subject: "Codex Pooler SMTP test email",
-      text_body:
-        "This test email confirms Codex Pooler can send email with the current SMTP settings."
+      text_body: "This test email confirms Codex Pooler can send email with the current SMTP settings."
     )
   end
 

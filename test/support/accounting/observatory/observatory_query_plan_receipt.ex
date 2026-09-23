@@ -74,12 +74,10 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanReceipt do
   defp relation_summary(root, relation, candidates) do
     %{
       "filter_fields" => Support.condition_fields(root, relation, "Filter", candidates),
-      "index_condition_fields" =>
-        Support.condition_fields(root, relation, "Index Cond", candidates),
+      "index_condition_fields" => Support.condition_fields(root, relation, "Index Cond", candidates),
       "indexed_access" => Support.indexed_access?(root, relation),
       "maximum_actual_rows_per_loop" => Support.maximum_actual_rows(root, relation),
-      "recheck_condition_fields" =>
-        Support.condition_fields(root, relation, "Recheck Cond", candidates),
+      "recheck_condition_fields" => Support.condition_fields(root, relation, "Recheck Cond", candidates),
       "relation_work" => Support.relation_work(root, relation),
       "scope_predicates_present" => Support.predicates_present?(root, relation, candidates)
     }

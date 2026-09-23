@@ -6,6 +6,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   `Evidence` module remains the normalized value, validation, and freshness API.
   """
 
+  alias CodexPooler.Accounting.Metadata, as: AccountingMetadata
   alias CodexPooler.Quotas.{AccountAvailability, Evidence}
 
   alias CodexPooler.Quotas.Evidence.CodexParsers.{
@@ -85,16 +86,17 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   end
 
   defp unusable_usage_payload do
-    {:error,
-     %{code: :upstream_quota_unusable, message: "upstream quota payload had no usable windows"}}
+    {:error, %{code: :upstream_quota_unusable, message: "upstream quota payload had no usable windows"}}
   end
 
   defp account_availability(payload, account_windows) do
+    rate_limit_signal = rate_limit_signal(payload)
+
     signals =
       [
-        rate_limit_signal(payload),
+        rate_limit_signal,
         credits_signal(payload),
-        spend_control_signal(payload),
+        account_spend_control_signal(payload, rate_limit_signal),
         reached_type_signal(payload),
         window_signal(account_windows),
         additional_integrity_signal(payload)
@@ -109,6 +111,16 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       basis
       |> basis_state()
       |> AccountAvailability.new!(basis, account_windows)
+    end
+  end
+
+  # Spend control governs additional credits, not quota included with the
+  # subscription. Only a valid reached signal yields to explicit included
+  # quota permission; malformed spend-control input remains fail-closed.
+  defp account_spend_control_signal(payload, rate_limit_signal) do
+    case {rate_limit_signal, spend_control_signal(payload)} do
+      {:affirmative, :blocker} -> nil
+      {_rate_limit_signal, spend_signal} -> spend_signal
     end
   end
 
@@ -344,11 +356,12 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   # Reason: parser accepts several upstream rate-limit error dialects.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   def parse_rate_limit_error(%{} = payload, observed_at) do
+    limit_name = Descriptors.bounded_limit_label(payload["limit_name"])
+
     family =
-      present_string(payload["limit_id"] || payload["limit_name"] || payload["metered_feature"]) ||
+      present_string(payload["limit_id"] || limit_name || payload["metered_feature"]) ||
         "codex"
 
-    limit_name = present_string(payload["limit_name"])
     descriptor = Descriptors.limit_descriptor(family, limit_name, %{})
     reset_at = ResetTimes.reset_at_from(payload, observed_at)
 
@@ -449,20 +462,34 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
        ) do
     raw_metered_feature = present_string(limit["metered_feature"])
     raw_limit_id = present_string(limit["limit_id"]) || raw_metered_feature
+    bounded_label = Descriptors.bounded_limit_label(limit["limit_name"])
 
-    descriptor_id =
-      raw_metered_feature || raw_limit_id ||
-        present_string(limit["limit_name"]) || present_string(limit["model"]) ||
-        present_string(limit["model_id"]) || present_string(limit["model_identifier"]) ||
-        "additional"
+    # The model fallbacks are provider-controlled strings that become the
+    # meter's persisted identity when no label is present, so they take the
+    # model-identifier bound (findings#240): an ASCII identifier stays
+    # cleartext, anything else is fingerprinted, and a blank one is absent.
+    bounded_model =
+      AccountingMetadata.bounded_model_identifier(limit["model"]) ||
+        AccountingMetadata.bounded_model_identifier(limit["model_id"]) ||
+        AccountingMetadata.bounded_model_identifier(limit["model_identifier"])
 
-    limit_name =
-      present_string(limit["limit_name"]) || present_string(limit["model"]) ||
-        present_string(limit["model_id"]) || present_string(limit["model_identifier"])
+    descriptor_id = raw_metered_feature || raw_limit_id || bounded_label || bounded_model || "additional"
+    limit_name = bounded_label || bounded_model
+
+    # The display label derives from the same fields, so it reads the bounded
+    # values: the first present model key, already bounded, replaces the raw
+    # three with the same precedence.
+    display_label_limit =
+      Map.merge(limit, %{
+        "limit_name" => bounded_label,
+        "model" => bounded_model,
+        "model_id" => nil,
+        "model_identifier" => nil
+      })
 
     descriptor =
       Descriptors.limit_descriptor(descriptor_id, limit_name, %{
-        display_label: Descriptors.additional_display_label(limit, descriptor_id),
+        display_label: Descriptors.additional_display_label(display_label_limit, descriptor_id),
         metered_feature: raw_metered_feature || raw_limit_id,
         raw_limit_id: raw_limit_id,
         raw_metered_feature: raw_metered_feature

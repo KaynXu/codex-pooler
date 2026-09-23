@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Accounting.{Attempt, RequestReplay}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.{NativeCodexTurnMetadata, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{NativeCodexTurnMetadata, RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
@@ -26,6 +26,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.InstanceSettings
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.CodexClientIdentity
@@ -95,8 +96,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
        ), direct_mapper_output(:codex, completed)},
       {:public,
        websocket_request_options()
-       |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true),
-       direct_mapper_output(:public, completed)}
+       |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true), direct_mapper_output(:public, completed)}
     ]
 
     for {case_name, request_options, expected_output} <- cases do
@@ -377,8 +377,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
     assert_received :proxy_local_submission_observed
 
-    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v1,
-                     [session_id, downstream, %WebsocketOwnerRequest{} = envelope], _timeout}
+    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v1, [session_id, downstream, %WebsocketOwnerRequest{} = envelope], _timeout}
 
     assert session_id == session.id
     assert downstream.correlation_id == "corr-data-only-owner"
@@ -464,8 +463,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
 
-    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v2,
-                     [session_id, _downstream, %WebsocketOwnerRequestV2{} = envelope], _timeout}
+    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v2, [session_id, _downstream, %WebsocketOwnerRequestV2{} = envelope], _timeout}
 
     assert session_id == session.id
     assert envelope.version == 2
@@ -515,9 +513,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         },
         payload
       )
-      |> RequestOptions.put_payload_context(
-        native_codex_turn_metadata: native_turn_metadata(:turn)
-      )
+      |> RequestOptions.put_payload_context(native_codex_turn_metadata: native_turn_metadata(:turn))
       |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
       |> RequestOptions.put_model_serving_mode(%{
         configured_mode: "full",
@@ -560,8 +556,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
 
-    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v3,
-                     [session_id, _downstream, %WebsocketOwnerRequestV3{} = envelope], _timeout}
+    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v3, [session_id, _downstream, %WebsocketOwnerRequestV3{} = envelope], _timeout}
 
     assert session_id == session.id
     assert envelope.version == 3
@@ -788,9 +783,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "http request does not reuse Cloudflare cookies for non-ChatGPT upstream origins" do
     {:ok, upstream} =
-      FakeUpstream.start_link(
-        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}})
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 
@@ -835,6 +828,102 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
+  end
+
+  describe "upstream connection pool idle bound" do
+    setup do
+      {:ok, upstream} =
+        FakeUpstream.start_link({:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}})
+
+      handler_id = {__MODULE__, :finch_pool_event, make_ref()}
+
+      :ok =
+        :telemetry.attach_many(
+          handler_id,
+          [[:finch, :reused_connection], [:finch, :conn_max_idle_time_exceeded]],
+          &__MODULE__.handle_finch_pool_event/4,
+          %{parent: self(), port: URI.parse(FakeUpstream.url(upstream)).port}
+        )
+
+      on_exit(fn ->
+        :telemetry.detach(handler_id)
+        FakeUpstream.stop(upstream)
+      end)
+
+      {:ok, upstream: upstream}
+    end
+
+    test "http dispatch discards a pooled connection idle past the configured bound", %{
+      upstream: upstream
+    } do
+      # A zero bound makes every checked-in connection stale at its next
+      # checkout, so the second dispatch must open a new connection instead of
+      # reusing the first one. The instance setting refuses values below one
+      # second and waiting that out is not a property of this test, so the
+      # zero bound goes in through the operational settings snapshot the
+      # dispatch reads, which the module setup restores. Both events are
+      # emitted before the request returns, so no wait is needed.
+      settings = OperationalSettings.current()
+
+      Application.put_env(:codex_pooler, OperationalSettings, settings: %{settings | upstream_conn_max_idle_time_ms: 0})
+
+      request = idle_bound_dispatch_request(upstream)
+
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+
+      assert_received {:finch_pool_event, [:finch, :conn_max_idle_time_exceeded], _meta}
+      refute_received {:finch_pool_event, [:finch, :reused_connection], _meta}
+      assert FakeUpstream.count(upstream) == 2
+    end
+
+    test "http dispatch reuses a pooled connection inside the saved instance-settings bound from a dedicated pool",
+         %{upstream: upstream} do
+      Application.put_env(:codex_pooler, OperationalSettings, use_instance_settings?: true)
+
+      assert {:ok, _settings} =
+               InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+                 "gateway" => %{"upstream_conn_max_idle_time_ms" => :timer.minutes(10)}
+               })
+
+      assert OperationalSettings.current().upstream_conn_max_idle_time_ms == :timer.minutes(10)
+      request = idle_bound_dispatch_request(upstream)
+
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+
+      assert_received {:finch_pool_event, [:finch, :reused_connection], %{name: finch_name}}
+      refute_received {:finch_pool_event, [:finch, :conn_max_idle_time_exceeded], _meta}
+      refute finch_name == Req.Finch
+      assert FakeUpstream.count(upstream) == 2
+    end
+  end
+
+  def handle_finch_pool_event(event, _measurements, %{port: port} = meta, %{
+        parent: parent,
+        port: port
+      }) do
+    send(parent, {:finch_pool_event, event, Map.take(meta, [:name, :host, :port])})
+  end
+
+  def handle_finch_pool_event(_event, _measurements, _meta, _config), do: :ok
+
+  defp idle_bound_dispatch_request(upstream) do
+    payload = %{"model" => "example-model"}
+
+    %UpstreamDispatch.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: CodexPooler.JSON.encode!(payload),
+      original_payload: payload,
+      identity: upstream_identity(),
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 15_000},
+          "/backend-api/codex/responses",
+          payload
+        )
+    }
   end
 
   test "native Responses HTTP and compact dispatch derive routing hints from normalized upstream payloads" do
@@ -884,9 +973,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "native Responses dispatch omits malformed effective routing tiers" do
     {:ok, upstream} =
-      FakeUpstream.start_link(
-        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}})
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 
@@ -916,9 +1003,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "flag-gated egress observation emits sanitized dispatch metadata and stays silent by default" do
     {:ok, http_upstream} =
-      FakeUpstream.start_link(
-        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}})
 
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
@@ -1146,11 +1231,298 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert :ok = FakeUpstream.verify!(upstream)
   end
 
+  test "native websocket dispatch forwards bounded provider session headers on the handshake" do
+    session_header_names = ["session-id", "thread-id", "x-client-request-id"]
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (session-id, thread-id and x-client-request-id on the handshake; replies invented)
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("session-headers-valid"),
+            headers: [
+              required: %{
+                "session-id" => "ws-session-fixture",
+                "thread-id" => "ws-thread-fixture",
+                "x-client-request-id" => "ws-thread-fixture"
+              }
+            ]
+          ),
+          strict_websocket_turn(websocket_success("session-headers-bounded"),
+            headers: [
+              required: %{"session-id" => "ws-session-fixture"},
+              forbidden: ["thread-id", "x-client-request-id"]
+            ]
+          ),
+          strict_websocket_turn(websocket_success("session-headers-absent"),
+            headers: [forbidden: session_header_names]
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    for forwarded_headers <- [
+          [
+            {"session-id", "ws-session-fixture"},
+            {"thread-id", "ws-thread-fixture"},
+            {"x-client-request-id", "ws-thread-fixture"},
+            {"x-session-id", "local-continuity-fixture"}
+          ],
+          [
+            {"session-id", "invalid session value"},
+            {"Session-Id", "ws-session-fixture"},
+            {"session-id", "ws-second-session-fixture"},
+            {"thread-id", String.duplicate("t", 129)},
+            {"x-client-request-id", ""}
+          ],
+          [{"x-session-affinity", "local-affinity-fixture"}]
+        ] do
+      request_options =
+        RequestOptions.for_websocket(
+          %{receive_timeout_ms: 1_000, forwarded_headers: forwarded_headers},
+          %{"model" => "example-model"}
+        )
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload:
+            CodexPooler.JSON.encode!(%{
+              "type" => "response.create",
+              "model" => "upstream-routing-model",
+              "input" => []
+            })
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    assert [valid, bounded, absent] = FakeUpstream.requests(upstream)
+
+    assert Enum.count(bounded.headers, fn {name, _value} -> name == "session-id" end) == 1
+
+    for captured <- [valid, bounded, absent] do
+      refute Enum.any?(captured.headers, fn {name, _value} ->
+               name in ["x-session-id", "x-session-affinity"]
+             end)
+    end
+
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "translated and public OpenAI origins never forward caller provider session headers on websocket dispatch" do
+    session_header_names = ["session-id", "thread-id", "x-client-request-id"]
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial
+        FakeUpstream.strict_sequence(
+          for id <- [
+                "v1-responses-session-headers",
+                "v1-chat-session-headers",
+                "v1-public-stream-session-headers"
+              ] do
+            strict_websocket_turn(websocket_success(id),
+              headers: [forbidden: session_header_names]
+            )
+          end
+        )
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    caller_headers = [
+      {"session-id", "caller-session-fixture"},
+      {"thread-id", "caller-thread-fixture"},
+      {"x-client-request-id", "caller-thread-fixture"}
+    ]
+
+    chat_payload = %{"model" => "public-model", "messages" => []}
+
+    for opts <- [
+          %{openai_source_endpoint: "/v1/responses"},
+          %{openai_source_endpoint: "/v1/chat/completions", openai_chat_payload: chat_payload},
+          %{openai_source_endpoint: "/v1/responses", public_openai_responses_stream: true}
+        ] do
+      request_options =
+        opts
+        |> Map.merge(%{receive_timeout_ms: 1_000, forwarded_headers: caller_headers})
+        |> RequestOptions.for_websocket(%{"model" => "example-model"})
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload:
+            CodexPooler.JSON.encode!(%{
+              "type" => "response.create",
+              "model" => "upstream-routing-model",
+              "input" => []
+            })
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    assert [_responses, _chat, _public_stream] = FakeUpstream.requests(upstream)
+    refute inspect(FakeUpstream.requests(upstream)) =~ "caller-"
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "public /v1 websocket handshakes carry the tenant-derived session-id, never a caller value" do
+    cache_key = "fixture-v1-websocket-cache-key"
+    other_cache_key = "fixture-v1-websocket-other-cache-key"
+
+    tenant = %{pool: %{id: Ecto.UUID.generate()}, api_key: %{id: Ecto.UUID.generate()}}
+    other_api_key = %{pool: tenant.pool, api_key: %{id: Ecto.UUID.generate()}}
+    other_pool = %{pool: %{id: Ecto.UUID.generate()}, api_key: %{id: Ecto.UUID.generate()}}
+
+    expected = derived_session_id(tenant, cache_key)
+    other_conversation = derived_session_id(tenant, other_cache_key)
+    other_api_key_session = derived_session_id(other_api_key, cache_key)
+    other_pool_session = derived_session_id(other_pool, cache_key)
+
+    sessions = [expected, other_conversation, other_api_key_session, other_pool_session]
+    assert Enum.all?(sessions, &is_binary/1)
+    assert Enum.uniq(sessions) == sessions
+
+    caller_headers = [
+      {"session-id", "caller-session-fixture"},
+      {"thread-id", "caller-thread-fixture"},
+      {"x-client-request-id", "caller-thread-fixture"},
+      {"x-session-id", "caller-local-continuity-fixture"}
+    ]
+
+    caller_header_names = ["thread-id", "x-client-request-id", "x-session-id"]
+
+    derived_turn = fn session_id, id ->
+      strict_websocket_turn(websocket_success(id),
+        headers: [required: %{"session-id" => session_id}, forbidden: caller_header_names]
+      )
+    end
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # provenance: synthetic_adversarial (invented completed replies; the derived handshake session-id is the claim)
+        FakeUpstream.strict_sequence([
+          derived_turn.(expected, "v1-ws-session-first"),
+          derived_turn.(expected, "v1-ws-session-second"),
+          derived_turn.(other_conversation, "v1-ws-session-other-conversation"),
+          derived_turn.(other_api_key_session, "v1-ws-session-other-api-key"),
+          derived_turn.(other_pool_session, "v1-ws-session-other-pool"),
+          strict_websocket_turn(websocket_success("v1-ws-session-keyless"),
+            headers: [forbidden: ["session-id" | caller_header_names]]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-session-unscoped"),
+            headers: [forbidden: ["session-id" | caller_header_names]]
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    # Two turns of one conversation, then another conversation, another API key
+    # of the same Pool, another Pool, a turn that drops the key, and a turn
+    # without a trusted tenant scope.
+    turns = [
+      {tenant, cache_key},
+      {tenant, cache_key},
+      {tenant, other_cache_key},
+      {other_api_key, cache_key},
+      {other_pool, cache_key},
+      {tenant, nil},
+      {nil, cache_key}
+    ]
+
+    for {auth, key} <- turns do
+      request_options =
+        %{
+          receive_timeout_ms: 1_000,
+          forwarded_headers: caller_headers,
+          openai_source_endpoint: "/v1/responses"
+        }
+        |> RequestOptions.for_websocket(%{"model" => "example-model"})
+        |> RequestOptions.capture_tenant_scope(auth || %{})
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload: v1_websocket_payload(key)
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    refute inspect(FakeUpstream.requests(upstream)) =~ "caller-"
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
+  test "a changed or dropped prompt_cache_key opens its own upstream websocket connection" do
+    cache_key = "fixture-v1-reuse-cache-key"
+    other_cache_key = "fixture-v1-reuse-other-cache-key"
+    tenant = %{pool: %{id: Ecto.UUID.generate()}, api_key: %{id: Ecto.UUID.generate()}}
+
+    first = derived_session_id(tenant, cache_key)
+    second = derived_session_id(tenant, other_cache_key)
+    assert is_binary(first) and is_binary(second) and first != second
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        # The derived id is an ordinary handshake header, so it scopes the
+        # connection the way the native client session headers do.
+        # provenance: synthetic_adversarial (invented completed replies; handshake-scoped connection reuse is the claim)
+        FakeUpstream.strict_sequence([
+          strict_websocket_turn(websocket_success("v1-ws-reuse-first"),
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"session-id" => first}]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-reuse-second"),
+            websocket_connection_ordinal: 1,
+            headers: [required: %{"session-id" => first}]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-reuse-other-key"),
+            websocket_connection_ordinal: 2,
+            headers: [required: %{"session-id" => second}]
+          ),
+          strict_websocket_turn(websocket_success("v1-ws-reuse-keyless"),
+            websocket_connection_ordinal: 3,
+            headers: [forbidden: ["session-id"]]
+          )
+        ])
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    dispatch = fn key ->
+      request_options =
+        %{
+          receive_timeout_ms: 1_000,
+          openai_source_endpoint: "/v1/responses",
+          upstream_websocket_session: session
+        }
+        |> RequestOptions.for_websocket(%{"model" => "example-model"})
+        |> RequestOptions.capture_tenant_scope(tenant)
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload: v1_websocket_payload(key)
+      }
+
+      assert {:ok, result} = UpstreamDispatch.websocket_request(request)
+      result.upstream_websocket_connection
+    end
+
+    refute dispatch.(cache_key).reused
+    assert dispatch.(cache_key).reused
+    refute dispatch.(other_cache_key).reused
+    refute dispatch.(nil).reused
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 3
+    assert :ok = FakeUpstream.verify!(upstream)
+  end
+
   test "native-shaped provider-specific and API-key paths omit routing hints on HTTP and websocket dispatch" do
     {:ok, http_upstream} =
-      FakeUpstream.start_link(
-        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}})
 
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
@@ -1211,9 +1583,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   test "custom non-prefixed credentials omit routing hints on HTTP and websocket dispatch" do
     {:ok, http_upstream} =
-      FakeUpstream.start_link(
-        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
-      )
+      FakeUpstream.start_link({:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}})
 
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
@@ -1270,7 +1640,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert :ok = FakeUpstream.verify!(websocket_upstream)
   end
 
-  test "public and translated Responses dispatch never forwards caller routing hints" do
+  test "translated Responses dispatch derives routing hints and public OpenAI dispatch sends none" do
     {:ok, upstream} =
       FakeUpstream.start_link(
         {:path_json,
@@ -1282,12 +1652,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
 
-    upstream_payload = %{"model" => "upstream-routing-model", "input" => []}
+    upstream_payload = %{
+      "model" => "upstream-routing-model",
+      "service_tier" => "priority",
+      "input" => []
+    }
+
+    chat_payload = %{"model" => "public-model", "messages" => []}
 
     for {endpoint, path, opts} <- [
           {"/v1/responses", "/v1/responses", %{}},
-          {"/backend-api/codex/responses", "/backend-api/codex/responses",
-           %{openai_source_endpoint: "/v1/responses"}}
+          {"/backend-api/codex/responses", "/backend-api/codex/responses", %{openai_source_endpoint: "/v1/responses"}},
+          {"/backend-api/codex/responses", "/backend-api/codex/responses", %{openai_source_endpoint: "/v1/chat/completions", openai_chat_payload: chat_payload}}
         ] do
       request_options =
         RequestOptions.build(
@@ -1309,9 +1685,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
     end
 
-    for captured <- FakeUpstream.requests(upstream) do
-      refute Map.has_key?(Map.new(captured.headers), "x-codex-routing-hint")
-    end
+    captured = FakeUpstream.requests(upstream)
+
+    assert [nil] =
+             for(
+               request <- captured,
+               request.path == "/v1/responses",
+               do: Map.new(request.headers)["x-codex-routing-hint"]
+             )
+
+    assert [
+             "model=upstream-routing-model;tier=priority",
+             "model=upstream-routing-model;tier=priority"
+           ] =
+             for(
+               request <- captured,
+               request.path == "/backend-api/codex/responses",
+               do: Map.new(request.headers)["x-codex-routing-hint"]
+             )
   end
 
   test "streaming non-429 4xx drains the complete rejection body into response private" do
@@ -1888,9 +2279,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     request_options =
       websocket_request_options()
-      |> RequestOptions.put_transport(
-        websocket_writer: fn frame -> send(parent, {:frame, frame}) end
-      )
+      |> RequestOptions.put_transport(websocket_writer: fn frame -> send(parent, {:frame, frame}) end)
 
     dispatch_request = %{
       websocket_dispatch_request(upstream, request_options)
@@ -1991,8 +2380,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              )
            ) == alias_ids_before
 
-    assert_receive {:websocket_owner_harness_node_call,
-                    %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
+    assert_receive {:websocket_owner_harness_node_call, %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
   end
 
   test "accepted remote owner errors notify the socket before returning the error", %{auth: auth} do
@@ -2004,8 +2392,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     forwarder_opts =
       WebsocketOwnerNodeHarness.node_client_opts([remote_node],
         calls: %{
-          remote_node =>
-            {:return, {:websocket_owner_submission_accepted, {:error, :owner_drained}}}
+          remote_node => {:return, {:websocket_owner_submission_accepted, {:error, :owner_drained}}}
         }
       )
 
@@ -2062,8 +2449,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert result == {:error, %{body: "", reason: :owner_drained, headers: [], started: false}}
     assert_receive {:accepted_owner_error_sequence, ^result}
 
-    assert_receive {:websocket_owner_harness_node_call,
-                    %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
+    assert_receive {:websocket_owner_harness_node_call, %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
   end
 
   test "malformed owner replies settle as owner_crashed and register no alias", %{auth: auth} do
@@ -2083,21 +2469,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     malformed_replies = [
       {{:ok, :banana}, "not_a_map", "missing", "not_a_map"},
-      {{:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}},
-       "map_missing_fields", "missing", "terminal"},
-      {{:ok, %{terminal: "response.completed", status: 200, headers: []}}, "map_missing_fields",
-       "missing", "body"},
-      {{:ok, %{terminal: "response.completed", body: ""}}, "map_missing_fields", "missing",
-       "status,headers"},
+      {{:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}}, "map_missing_fields", "missing", "terminal"},
+      {{:ok, %{terminal: "response.completed", status: 200, headers: []}}, "map_missing_fields", "missing", "body"},
+      {{:ok, %{terminal: "response.completed", body: ""}}, "map_missing_fields", "missing", "status,headers"},
       {{:ok, %{}}, "map_missing_fields", "missing", "body,terminal,status,headers"},
-      {{:ok, %{body: %{}, terminal: "response.completed", status: 200, headers: []}},
-       "map_invalid_fields", "invalid", "body"},
-      {{:ok, %{body: "", terminal: nil, status: 200, headers: []}}, "map_invalid_fields",
-       "invalid", "terminal"},
-      {{:ok, %{body: "", terminal: "response.failed", status: 502, headers: []}},
-       "map_invalid_fields", "invalid", "status"},
-      {{:ok, %{body: "", terminal: "response.failed", status: 200, headers: %{}}},
-       "map_invalid_fields", "invalid", "headers"},
+      {{:ok, %{body: %{}, terminal: "response.completed", status: 200, headers: []}}, "map_invalid_fields", "invalid", "body"},
+      {{:ok, %{body: "", terminal: nil, status: 200, headers: []}}, "map_invalid_fields", "invalid", "terminal"},
+      {{:ok, %{body: "", terminal: "response.failed", status: 502, headers: []}}, "map_invalid_fields", "invalid", "status"},
+      {{:ok, %{body: "", terminal: "response.failed", status: 200, headers: %{}}}, "map_invalid_fields", "invalid", "headers"},
       {{:ok,
         %{
           body: "",
@@ -2146,8 +2525,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       refute logs =~ "banana"
       refute logs =~ "resp_owner_no_terminal"
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
+      assert_receive {:websocket_owner_harness_node_call, %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
     end
 
     assert Repo.all(
@@ -2202,12 +2580,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       compaction_item_digest: :crypto.strong_rand_bytes(32),
       previous_response_digest: nil,
       serving_mode: :full,
-      topology:
-        %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Forwarded{
-          owner_instance_digest: :crypto.hash(:sha256, session.owner_instance_id),
-          downstream_epoch: downstream.epoch,
-          owner_lease_digest: :crypto.hash(:sha256, lease_token)
-        },
+      topology: %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Forwarded{
+        owner_instance_digest: :crypto.hash(:sha256, session.owner_instance_id),
+        downstream_epoch: downstream.epoch,
+        owner_lease_digest: :crypto.hash(:sha256, lease_token)
+      },
       lifecycle_id: Ecto.UUID.generate(),
       generation: 1
     }
@@ -2295,6 +2672,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assignment_advertised?: false,
       request_options: request_options
     }
+  end
+
+  defp derived_session_id(%{pool: %{id: pool_id}, api_key: %{id: api_key_id}}, cache_key) do
+    TransportEnvelope.prompt_cache_session_id(
+      %{pool_id: pool_id, api_key_id: api_key_id},
+      cache_key
+    )
+  end
+
+  defp v1_websocket_payload(prompt_cache_key) do
+    payload = %{"type" => "response.create", "model" => "upstream-routing-model", "input" => []}
+
+    payload =
+      if is_binary(prompt_cache_key),
+        do: Map.put(payload, "prompt_cache_key", prompt_cache_key),
+        else: payload
+
+    CodexPooler.JSON.encode!(payload)
   end
 
   defp websocket_success(id) do

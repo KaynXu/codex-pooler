@@ -220,8 +220,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
 
   test "rejects transient circuit exclusions that mismatch the request context" do
     mismatch_exclusions = [
-      {transient_exclusion(%{upstream_identity_id: Ecto.UUID.generate()}),
-       [@identity_id, @sibling_id]},
+      {transient_exclusion(%{upstream_identity_id: Ecto.UUID.generate()}), [@identity_id, @sibling_id]},
       {transient_exclusion(%{upstream_identity_id: @identity_id}), [@identity_id, @sibling_id]},
       {transient_exclusion(%{model_identifier: "other-model"}), [@identity_id, @sibling_id]},
       {transient_exclusion(%{route_class: "proxy_websocket"}), [@identity_id, @sibling_id]}

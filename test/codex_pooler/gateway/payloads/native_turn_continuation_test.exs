@@ -1,0 +1,374 @@
+defmodule CodexPooler.Gateway.Payloads.NativeTurnContinuationTest do
+  # The duplicate-turn fence's premise is that both transports ask the same
+  # questions of a native Codex request (findings#212, rows 212-49/212-51/212-53).
+  # These are those questions, pinned directly against the shared module so a
+  # change to any of them is visible whichever transport motivated it. The
+  # end-to-end consequences live in
+  # `test/codex_pooler_web/controllers/runtime/backend_codex_http_duplicate_turn_test.exs`.
+  use ExUnit.Case, async: true
+
+  alias CodexPooler.Gateway.Payloads.NativeTurnContinuation
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+
+  @metadata_key "x-codex-turn-metadata"
+  @responses "/backend-api/codex/responses"
+  @compact "/backend-api/codex/responses/compact"
+
+  describe "canonical_document/2" do
+    test "reads the body document, the header copy, and prefers the body" do
+      body = document(%{"request_kind" => "turn", "turn_id" => "t-body"})
+      header = document(%{"request_kind" => "turn", "turn_id" => "t-header"})
+
+      assert NativeTurnContinuation.canonical_document(
+               %{"client_metadata" => %{@metadata_key => body}},
+               options()
+             ) == body
+
+      assert NativeTurnContinuation.canonical_document(
+               %{},
+               options(headers: [{@metadata_key, header}])
+             ) ==
+               header
+
+      assert NativeTurnContinuation.canonical_document(
+               %{"client_metadata" => %{@metadata_key => body}},
+               options(headers: [{@metadata_key, header}])
+             ) == body
+    end
+
+    # A native Codex client sends the header once. Two different values mean an
+    # intermediary put them there and nothing says which turn is meant, so the
+    # document is absent rather than "whichever arrived first" (212-34).
+    test "a repeated header is used only when every copy agrees" do
+      one = document(%{"request_kind" => "turn", "turn_id" => "t-one"})
+      two = document(%{"request_kind" => "turn", "turn_id" => "t-two"})
+
+      assert NativeTurnContinuation.canonical_document(
+               %{},
+               options(headers: [{@metadata_key, one}, {@metadata_key, one}])
+             ) == one
+
+      assert NativeTurnContinuation.canonical_document(
+               %{},
+               options(headers: [{@metadata_key, one}, {@metadata_key, two}])
+             ) == nil
+    end
+
+    test "is absent for a payload and options that carry neither" do
+      assert NativeTurnContinuation.canonical_document(%{"input" => []}, options()) == nil
+      assert NativeTurnContinuation.canonical_document(%{}, options(headers: [])) == nil
+      assert NativeTurnContinuation.canonical_document(%{}, options(headers: :none)) == nil
+    end
+  end
+
+  describe "request_kind/2" do
+    # A client that sends only the bounded header copy must resolve its kind
+    # exactly as one that sends the body document, or it is classified
+    # differently from itself on a second request (212-49).
+    test "resolves identically from either carrier" do
+      for carrier <- [:body, :header] do
+        assert NativeTurnContinuation.request_kind(
+                 payload_for(carrier, %{"request_kind" => "turn"}),
+                 options_for(carrier, %{"request_kind" => "turn"})
+               ) == "turn"
+      end
+    end
+
+    # The whole fence has to survive an intermediary that normalises the
+    # document; an exact byte comparison was a one-string off switch (212-53).
+    test "is trimmed and case folded, and blank or oversized values are absent" do
+      for raw <- ["turn", "TURN", "Turn", " turn ", "\tturn\n"] do
+        assert NativeTurnContinuation.request_kind(
+                 payload_for(:body, %{"request_kind" => raw}),
+                 options()
+               ) == "turn"
+      end
+
+      for raw <- ["", "   ", String.duplicate("t", 129)] do
+        assert NativeTurnContinuation.request_kind(
+                 payload_for(:body, %{"request_kind" => raw}),
+                 options()
+               ) == nil
+      end
+    end
+
+    test "a malformed document, a non-string kind and an absent field are all absent" do
+      assert NativeTurnContinuation.request_kind(
+               %{"client_metadata" => %{@metadata_key => "not-json"}},
+               options()
+             ) == nil
+
+      assert NativeTurnContinuation.request_kind(
+               payload_for(:body, %{"request_kind" => 7}),
+               options()
+             ) == nil
+
+      assert NativeTurnContinuation.request_kind(
+               payload_for(:body, %{"turn_id" => "t"}),
+               options()
+             ) ==
+               nil
+    end
+  end
+
+  describe "compaction_request?/2" do
+    # The released client has no /compact URL: remote compaction V2 declares the
+    # kind on the ordinary Responses route. The endpoint covers the Pooler's own
+    # bridge-rewritten upstream endpoint. Either signal is enough.
+    test "either the declared kind or the compact endpoint is enough" do
+      assert NativeTurnContinuation.compaction_request?(
+               payload_for(:body, %{"request_kind" => "compaction"}),
+               options()
+             )
+
+      assert NativeTurnContinuation.compaction_request?(
+               payload_for(:body, %{"request_kind" => "turn"}),
+               options(endpoint: @compact)
+             )
+
+      assert NativeTurnContinuation.compaction_request?(
+               %{"input" => []},
+               options(endpoint: @compact)
+             )
+    end
+
+    test "an ordinary turn on the ordinary route is not a compaction" do
+      refute NativeTurnContinuation.compaction_request?(
+               payload_for(:body, %{"request_kind" => "turn"}),
+               options()
+             )
+
+      refute NativeTurnContinuation.compaction_request?(%{"input" => []}, options())
+    end
+
+    # Everything unexpected must fail open rather than raise: this predicate is
+    # reached before the caller can know the shape is well formed (212-53).
+    test "a non-map payload and a non-options term fail open rather than raising" do
+      refute NativeTurnContinuation.compaction_request?("not a payload", options())
+      refute NativeTurnContinuation.compaction_request?(%{}, :not_request_options)
+    end
+  end
+
+  describe "turn_role/1" do
+    test "plain input with neither a tool result nor a compaction item opens a turn" do
+      assert NativeTurnContinuation.turn_role(%{"input" => [user_message("hello")]}) == :opening
+    end
+
+    test "a tool result means a previous request of this turn produced the call" do
+      assert NativeTurnContinuation.turn_role(%{
+               "input" => [
+                 %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"}
+               ]
+             }) == :tool_continuation
+    end
+
+    # The compaction output item is the pivot, and what follows it decides.
+    for item_type <- ["compaction", "compaction_summary", "context_compaction"] do
+      test "a #{item_type} with nothing after it is a resume" do
+        assert {:post_compaction_resume, anchor} =
+                 NativeTurnContinuation.turn_role(%{
+                   "input" => [user_message("before"), %{"type" => unquote(item_type)}]
+                 })
+
+        assert byte_size(anchor) == 32
+      end
+
+      test "a #{item_type} followed by a user message opens a turn" do
+        assert NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   user_message("retained"),
+                   %{"type" => unquote(item_type)},
+                   user_message("the next thing")
+                 ]
+               }) == :opening
+      end
+    end
+
+    # A retry of a resume appends what it already delivered; none of that is a
+    # user message, so the role and the anchor both hold (findings#212, 212-48).
+    test "a resume keeps one anchor across everything a retry can append" do
+      base = [user_message("retained"), %{"type" => "compaction"}]
+
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => base})
+
+      for appended <- [
+            [assistant_message("delivered")],
+            [assistant_message("one"), assistant_message("two")],
+            [%{"type" => "reasoning", "summary" => []}]
+          ] do
+        assert {:post_compaction_resume, ^anchor} =
+                 NativeTurnContinuation.turn_role(%{"input" => base ++ appended})
+      end
+    end
+
+    # And the anchor ignores everything else in the input, which is what makes
+    # the resume claim payload-independent rather than prefix-independent.
+    test "the anchor ignores every item that is not a compaction output" do
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [user_message("a"), user_message("b"), %{"type" => "compaction"}]
+               })
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [user_message("b"), %{"type" => "compaction"}]
+               })
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [%{"type" => "compaction"}]})
+    end
+
+    test "a different compaction is a different anchor" do
+      assert {:post_compaction_resume, one} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [%{"type" => "compaction", "encrypted_content" => "first"}]
+               })
+
+      assert {:post_compaction_resume, two} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [%{"type" => "compaction", "encrypted_content" => "second"}]
+               })
+
+      refute one == two
+    end
+
+    test "only the last compaction pivot anchors a resume" do
+      latest = %{"type" => "compaction", "encrypted_content" => "latest"}
+
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction", "encrypted_content" => "old"},
+                   latest
+                 ]
+               })
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [latest]})
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction_summary", "encrypted_content" => "old"},
+                   latest
+                 ]
+               })
+    end
+
+    test "the latest compaction content remains part of the resume anchor" do
+      assert {:post_compaction_resume, first} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction", "encrypted_content" => "old"},
+                   %{"type" => "compaction", "encrypted_content" => "latest-one"}
+                 ]
+               })
+
+      assert {:post_compaction_resume, second} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "compaction", "encrypted_content" => "old"},
+                   %{"type" => "compaction", "encrypted_content" => "latest-two"}
+                 ]
+               })
+
+      refute first == second
+    end
+
+    test "unknown and malformed tail items do not move the latest-pivot anchor" do
+      pivot = %{"type" => "compaction", "encrypted_content" => "latest"}
+
+      assert {:post_compaction_resume, anchor} =
+               NativeTurnContinuation.turn_role(%{"input" => [pivot]})
+
+      assert {:post_compaction_resume, ^anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [pivot, %{"type" => "future_output"}, "malformed"]
+               })
+    end
+
+    # Asked of the segment after the last compaction item, so a tool result that
+    # is part of the compacted history does not move the role.
+    test "a tool result is judged after the last compaction item, not before it" do
+      assert {:post_compaction_resume, _anchor} =
+               NativeTurnContinuation.turn_role(%{
+                 "input" => [
+                   %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"},
+                   %{"type" => "compaction"}
+                 ]
+               })
+
+      assert NativeTurnContinuation.turn_role(%{
+               "input" => [
+                 %{"type" => "compaction"},
+                 %{"type" => "function_call_output", "call_id" => "c1", "output" => "done"}
+               ]
+             }) == :tool_continuation
+    end
+
+    # The compaction TRIGGER is a request control, not a compaction output.
+    test "a compaction_trigger item does not make a request a later one" do
+      assert NativeTurnContinuation.turn_role(%{
+               "input" => [user_message("history"), %{"type" => "compaction_trigger"}]
+             }) == :opening
+    end
+
+    test "a payload with no list input fails CLOSED, to the turn's own claim" do
+      assert NativeTurnContinuation.turn_role(%{}) == :opening
+      assert NativeTurnContinuation.turn_role(%{"input" => "text"}) == :opening
+      assert NativeTurnContinuation.turn_role("not a payload") == :opening
+    end
+  end
+
+  describe "endpoints" do
+    test "the compact route is one of the native routes, from one definition" do
+      assert NativeTurnContinuation.compact_endpoint() == @compact
+
+      assert NativeTurnContinuation.compact_endpoint() in NativeTurnContinuation.native_endpoints()
+
+      assert @responses in NativeTurnContinuation.native_endpoints()
+    end
+  end
+
+  defp document(map), do: CodexPooler.JSON.encode!(map)
+
+  defp payload_for(:body, metadata),
+    do: %{"input" => [], "client_metadata" => %{@metadata_key => document(metadata)}}
+
+  defp payload_for(:header, _metadata), do: %{"input" => []}
+
+  defp options_for(:body, _metadata), do: options()
+  defp options_for(:header, metadata), do: options(headers: [{@metadata_key, document(metadata)}])
+
+  defp options(opts \\ []) do
+    endpoint = Keyword.get(opts, :endpoint, @responses)
+
+    options = RequestOptions.build(%{}, endpoint, %{})
+
+    case Keyword.get(opts, :headers, :absent) do
+      :absent ->
+        options
+
+      :none ->
+        put_in(options.transport.forwarded_metadata_headers, nil)
+
+      headers ->
+        put_in(options.transport.forwarded_metadata_headers, headers)
+    end
+  end
+
+  defp user_message(text),
+    do: %{
+      "type" => "message",
+      "role" => "user",
+      "content" => [%{"type" => "input_text", "text" => text}]
+    }
+
+  defp assistant_message(text),
+    do: %{
+      "type" => "message",
+      "role" => "assistant",
+      "content" => [%{"type" => "output_text", "text" => text}]
+    }
+end

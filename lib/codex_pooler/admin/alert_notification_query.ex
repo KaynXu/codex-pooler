@@ -104,8 +104,7 @@ defmodule CodexPooler.Admin.AlertNotificationQuery do
   defp unread_count(query) do
     Repo.one(
       from [incident, receipt] in query,
-        where:
-          is_nil(receipt.id) or is_nil(receipt.read_at) or receipt.read_at < incident.last_seen_at,
+        where: is_nil(receipt.id) or is_nil(receipt.read_at) or receipt.read_at < incident.last_seen_at,
         select: count(incident.id)
     ) || 0
   end

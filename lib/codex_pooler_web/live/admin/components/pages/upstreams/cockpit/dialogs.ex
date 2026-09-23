@@ -63,9 +63,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             device_event="start_oauth_relink_device"
           />
 
-          <section :if={
-            oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)
-          }>
+          <section :if={oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)}>
             <UpstreamOAuthDialogComponents.browser_authorization_step
               id_prefix="oauth-relink"
               authorization_url={@oauth_relink_authorization_url}

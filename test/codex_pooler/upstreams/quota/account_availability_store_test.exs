@@ -44,14 +44,10 @@ defmodule CodexPooler.Upstreams.Quota.AccountAvailabilityStoreTest do
 
   test "validates current epoch, freshness, and future skew without expiring blockers" do
     available =
-      AccountAvailabilityStore.decode!(
-        AccountAvailabilityStore.encode!(:available, @observed_at, 4)
-      )
+      AccountAvailabilityStore.decode!(AccountAvailabilityStore.encode!(:available, @observed_at, 4))
 
     blocked =
-      AccountAvailabilityStore.decode!(
-        AccountAvailabilityStore.encode!(:blocked, @observed_at, 4)
-      )
+      AccountAvailabilityStore.decode!(AccountAvailabilityStore.encode!(:blocked, @observed_at, 4))
 
     ttl = Evidence.freshness_ttl_seconds()
     skew = Evidence.future_observed_skew_seconds()

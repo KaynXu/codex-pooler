@@ -52,10 +52,10 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
   # The connection-idle backstop is a scenario budget: it is the behaviour under
   # test, and any value proves it. It must still leave enough time for Bandit's
   # request process to send the response headers and first chunk while the
-  # suite saturates the machine; the plug does no work, so two seconds is still
+  # suite saturates the machine; the plug does no work, so half a second is still
   # orders of magnitude above that. Everything else here is failure detection
   # and stays above that scenario budget.
-  @idle_timeout_ms 2_000
+  @idle_timeout_ms 500
   @recv_timeout 15_000
 
   defmodule RaiseAfterChunkPlug do

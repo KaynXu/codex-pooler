@@ -4,9 +4,11 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   require Logger
 
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Routing.RoutingSelection
   alias CodexPooler.Gateway.Transports.TransportFailureReason
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
@@ -67,7 +69,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     with {:ok, body, byte_size} <- readable_file_stream(path) do
       upload_url
       |> upload_request()
-      |> Req.put(upload_req_options(body, content_type, byte_size))
+      |> OutboundHTTP.put(upload_req_options(upload_url, body, content_type, byte_size))
       |> normalize_upload_response(opts)
     end
   rescue
@@ -199,8 +201,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         {:ok, url}
 
       {:error, :invalid_upstream_base_url} ->
-        {:error,
-         safe_error(502, :invalid_upstream_base_url, "upstream file bridge is misconfigured")}
+        {:error, safe_error(502, :invalid_upstream_base_url, "upstream file bridge is misconfigured")}
     end
   end
 
@@ -213,10 +214,10 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         retry: false,
         headers: headers(identity, token, forwarded_headers(opts))
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
     url
-    |> Req.post(request_options)
+    |> OutboundHTTP.post(request_options)
     |> normalize_transport_result(identity, opts)
   rescue
     exception in [
@@ -266,7 +267,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     path == root or String.starts_with?(path, root <> "/")
   end
 
-  defp upload_req_options(body, content_type, byte_size) do
+  defp upload_req_options(upload_url, body, content_type, byte_size) do
     configured_upload_req_options()
     |> Keyword.merge(
       body: body,
@@ -276,7 +277,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         {"x-ms-blob-type", "BlockBlob"}
       ],
       redirect: false,
-      retry: false
+      retry: false,
+      finch: OperationalSettings.upstream_http_pool_options(upload_url, [])
     )
   end
 
@@ -403,11 +405,9 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       exception: exception |> TransportFailureReason.safe_exception() |> safe_log_value(),
       reason: exception |> TransportFailureReason.safe_reason() |> safe_log_value(),
       pool_upstream_assignment_id: safe_log_value(file_bridge.pool_upstream_assignment_id),
-      upstream_identity_id:
-        safe_log_value(file_bridge.upstream_identity_id || identity_id(identity)),
+      upstream_identity_id: safe_log_value(file_bridge.upstream_identity_id || identity_id(identity)),
       route_class: safe_log_value(route_metadata[:route_class] || route_metadata["route_class"]),
-      routing_strategy:
-        safe_log_value(route_metadata[:routing_strategy] || route_metadata["routing_strategy"])
+      routing_strategy: safe_log_value(route_metadata[:routing_strategy] || route_metadata["routing_strategy"])
     ]
     |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
   end
@@ -439,6 +439,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     )
   end
 
+  # The captured headers go to `TransportEnvelope.headers/4` as they were
+  # captured; the envelope itself applies the closed metadata allowlist and
+  # value bounds shared with native Responses and compact dispatch, so a
+  # client routing hint, beta feature key or unbounded flag never reaches the
+  # upstream files endpoint. The Codex client sends only its auth headers on
+  # `/backend-api/files` (openai/codex main c11ed24c2, codex-api/src/files.rs
+  # `authorized_request`), so nothing an upload needs lies outside that list
+  # (findings#240).
   defp forwarded_headers(%RequestOptions{} = request_options),
     do: request_options.file_bridge.forwarded_headers
 
@@ -458,8 +466,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   end
 
   defp json_success(%Req.Response{status: status}, operation) do
-    {:error,
-     safe_error(status, :upstream_file_bridge_failed, "upstream file #{operation} failed")}
+    {:error, safe_error(status, :upstream_file_bridge_failed, "upstream file #{operation} failed")}
   end
 
   defp retry_options(opts) do

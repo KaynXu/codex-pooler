@@ -111,8 +111,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
       visible_channel_ids = Enum.map(channels, & &1.id)
 
       %{
-        linked_rules_by_incident:
-          linked_rules_by_incident(incident_ids, visible_pool_ids, visible_channel_ids),
+        linked_rules_by_incident: linked_rules_by_incident(incident_ids, visible_pool_ids, visible_channel_ids),
         delivery_summaries_by_incident: delivery_summaries(incident_ids, channels)
       }
     else
@@ -224,8 +223,7 @@ defmodule CodexPooler.Admin.AlertIncidentRelationships do
   defp delivery_attempt_rows(incident_ids, visible_channel_ids) do
     ranked_query =
       from attempt in AlertDeliveryAttempt,
-        where:
-          attempt.incident_id in ^incident_ids and attempt.channel_id in ^visible_channel_ids,
+        where: attempt.incident_id in ^incident_ids and attempt.channel_id in ^visible_channel_ids,
         windows: [
           incident_attempts: [
             partition_by: attempt.incident_id,

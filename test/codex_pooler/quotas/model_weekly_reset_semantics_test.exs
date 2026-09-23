@@ -9,9 +9,7 @@ defmodule CodexPooler.Quotas.ModelWeeklyResetSemanticsTest do
 
   describe "classify/1" do
     test "given atom and string target-scope maps, when anchored evidence is classified, then both scopes are anchored" do
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{metadata: %{"reset_state" => "anchored"}})
-             ) ==
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{metadata: %{"reset_state" => "anchored"}})) ==
                :anchored
 
       assert ModelWeeklyResetSemantics.classify(
@@ -23,9 +21,7 @@ defmodule CodexPooler.Quotas.ModelWeeklyResetSemanticsTest do
     end
 
     test "given Evidence and AccountQuotaWindow values, when valid shared fields are classified, then struct provenance does not change semantics" do
-      assert ModelWeeklyResetSemantics.classify(
-               evidence(%{metadata: %{"reset_state" => "anchored"}})
-             ) == :anchored
+      assert ModelWeeklyResetSemantics.classify(evidence(%{metadata: %{"reset_state" => "anchored"}})) == :anchored
 
       assert ModelWeeklyResetSemantics.classify(
                account_quota_window(%{
@@ -37,21 +33,13 @@ defmodule CodexPooler.Quotas.ModelWeeklyResetSemanticsTest do
     end
 
     test "given valid recognized non-target windows, when semantics are classified, then account feature and nonweekly rows are not applicable" do
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{quota_scope: "account", window_minutes: 10_080})
-             ) == :not_applicable
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{quota_scope: "account", window_minutes: 10_080})) == :not_applicable
 
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{quota_scope: "feature", window_minutes: 10_080})
-             ) == :not_applicable
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{quota_scope: "feature", window_minutes: 10_080})) == :not_applicable
 
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{quota_scope: "model", window_minutes: 300})
-             ) == :not_applicable
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{quota_scope: "model", window_minutes: 300})) == :not_applicable
 
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{quota_scope: "upstream_model", window_minutes: 300})
-             ) == :not_applicable
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{quota_scope: "upstream_model", window_minutes: 300})) == :not_applicable
     end
 
     test "given malformed scope or duration fields, when applicability is decided, then classification is unknown before non-target handling" do
@@ -116,17 +104,11 @@ defmodule CodexPooler.Quotas.ModelWeeklyResetSemanticsTest do
     end
 
     test "given exact reset-state metadata rules, when matching conflicting and malformed maps are classified, then only permitted shapes receive semantics" do
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{metadata: %{reset_state: "floating"}})
-             ) == :unknown
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{metadata: %{reset_state: "floating"}})) == :unknown
 
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{metadata: %{"reset_state" => "floating", reset_state: "floating"}})
-             ) == :unknown
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{metadata: %{"reset_state" => "floating", reset_state: "floating"}})) == :unknown
 
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{metadata: %{"reset_state" => "floating", reset_state: "anchored"}})
-             ) == :unknown
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{metadata: %{"reset_state" => "floating", reset_state: "anchored"}})) == :unknown
 
       for metadata <- [
             %{"reset_state" => nil},
@@ -144,9 +126,7 @@ defmodule CodexPooler.Quotas.ModelWeeklyResetSemanticsTest do
     end
 
     test "given resetless and incompatible explicit states, when classified, then they are unknown" do
-      assert ModelWeeklyResetSemantics.classify(
-               weekly_window(%{reset_at: nil, metadata: %{"reset_state" => "anchored"}})
-             ) == :unknown
+      assert ModelWeeklyResetSemantics.classify(weekly_window(%{reset_at: nil, metadata: %{"reset_state" => "anchored"}})) == :unknown
 
       assert ModelWeeklyResetSemantics.classify(
                weekly_window(%{

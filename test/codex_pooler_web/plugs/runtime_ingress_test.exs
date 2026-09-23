@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   setup do
-    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous_operational_settings = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -51,7 +51,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
       Repo.delete_all(Settings)
       InstanceSettings.reset_cache_for_test()
     end)
@@ -153,8 +152,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       for {path, content_type, body} <- [
             {"/%62ackend-api/codex/responses", "application/json", ~s({"model":)},
             {"/backend-api/%66iles", "application/json", ~s({"file_name":)},
-            {"/backend-api/%74ranscribe", "multipart/form-data; boundary=example",
-             "invalid multipart fixture"}
+            {"/backend-api/%74ranscribe", "multipart/form-data; boundary=example", "invalid multipart fixture"}
           ] do
         conn =
           conn
@@ -406,12 +404,11 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                  "code" => "settings_unavailable",
                  "message" => "runtime settings are temporarily unavailable",
                  "param" => nil,
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              }
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "settings_unavailable"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "settings_unavailable"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -514,8 +511,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert json_response(denied, 403)["error"]["code"] == "access_denied"
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "invalid_allowlist_rules"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "invalid_allowlist_rules"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -916,8 +912,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert_pruned_helper_side_effects_absent(conn, upstream)
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "not_allowed"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "not_allowed"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -941,14 +936,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                  "code" => "settings_unavailable",
                  "message" => "runtime settings are temporarily unavailable",
                  "param" => nil,
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              }
 
       assert_pruned_helper_side_effects_absent(conn, upstream)
 
-      assert_received {@firewall_denied_event, %{count: 1},
-                       %{scope: "runtime", reason: "settings_unavailable"}}
+      assert_received {@firewall_denied_event, %{count: 1}, %{scope: "runtime", reason: "settings_unavailable"}}
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
@@ -997,8 +991,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
             {"POST", "/backend-api/codex/analytics-events/events", "application/json", "{}"},
             {"POST", "/backend-api/codex/memories/trace_summarize", "application/json", "{}"},
             {"POST", "/backend-api/codex/alpha/search", "application/json", "{}"},
-            {"POST", "/backend-api/codex/realtime/calls", "application/sdp",
-             "v=0\r\ns=codex-pooler-test\r\n"},
+            {"POST", "/backend-api/codex/realtime/calls", "application/sdp", "v=0\r\ns=codex-pooler-test\r\n"},
             {"POST", "/backend-api/codex/safety/arc", "application/json", "{}"}
           ] do
         conn =
@@ -1600,7 +1593,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   defp setup_runtime_ingress_override(%OperationalSettings{} = settings) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -1609,12 +1602,18 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp with_cache_unregistered(fun) when is_function(fun, 0) do
     cache = Process.whereis(Cache)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs, and
+    # every later test in the run would find the cache process without its name.
+    on_exit(fn ->
+      if is_pid(cache) and Process.alive?(cache) and is_nil(Process.whereis(Cache)),
+        do: Process.register(cache, Cache)
+    end)
+
     Process.unregister(Cache)
 
     try do

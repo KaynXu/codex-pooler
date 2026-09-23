@@ -274,6 +274,55 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
     end
   end
 
+  describe "strip_untrusted_models_etag/1" do
+    test "removes every provider models ETag spelling and keeps the other fields" do
+      event = %{
+        "type" => "codex.response.metadata",
+        "headers" => %{
+          "x-models-etag" => "hostile-provider-etag-sentinel",
+          "X-Models-Etag" => "hostile-provider-etag-sentinel-mixed",
+          "x-reasoning-included" => "true"
+        },
+        "sequence_number" => 3
+      }
+
+      assert NativeCodexResponseControl.strip_untrusted_models_etag(event) ==
+               {:changed,
+                %{
+                  "type" => "codex.response.metadata",
+                  "headers" => %{"x-reasoning-included" => "true"},
+                  "sequence_number" => 3
+                }}
+    end
+
+    test "omits an emptied or malformed header container" do
+      assert NativeCodexResponseControl.strip_untrusted_models_etag(%{
+               "type" => "codex.response.metadata",
+               "headers" => %{"x-models-etag" => "hostile-provider-etag-sentinel"}
+             }) == {:changed, %{"type" => "codex.response.metadata"}}
+
+      for malformed <- [[["x-models-etag", "hostile"]], "x-models-etag: hostile", 1, nil] do
+        assert NativeCodexResponseControl.strip_untrusted_models_etag(%{
+                 "type" => "codex.response.metadata",
+                 "headers" => malformed
+               }) == {:changed, %{"type" => "codex.response.metadata"}}
+      end
+    end
+
+    test "leaves other events and metadata without a models ETag unchanged" do
+      for event <- [
+            %{"type" => "codex.response.metadata", "headers" => %{"openai-model" => "gpt-x"}},
+            %{"type" => "codex.response.metadata"},
+            %{"type" => "response.output_text.delta", "delta" => "synthetic"}
+          ] do
+        assert NativeCodexResponseControl.strip_untrusted_models_etag(event) == :unchanged
+      end
+
+      assert NativeCodexResponseControl.strip_untrusted_models_etag("event") ==
+               {:error, :invalid_event}
+    end
+  end
+
   describe "pooler_metadata_event/2" do
     test "constructs Pooler-owned metadata from the trusted ETag and safe provider model only" do
       provider_headers = %{
@@ -316,6 +365,43 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
                  "headers" => %{"x-models-etag" => "trusted-etag"}
                }
       end
+    end
+  end
+
+  # findings#239: public surfaces drop every provider event header object.
+  describe "drop_event_headers/1" do
+    test "drops the top-level and nested response header objects" do
+      event = %{
+        "type" => "response.created",
+        "headers" => %{"openai-model" => "gpt-event-header"},
+        "response" => %{"id" => "resp_1", "headers" => %{"openai-model" => "gpt-nested-header"}}
+      }
+
+      assert NativeCodexResponseControl.drop_event_headers(event) ==
+               {:changed, %{"type" => "response.created", "response" => %{"id" => "resp_1"}}}
+    end
+
+    test "drops a non-map header value and leaves other fields alone" do
+      assert NativeCodexResponseControl.drop_event_headers(%{
+               "type" => "response.output_text.delta",
+               "delta" => "hi",
+               "headers" => "not-a-map"
+             }) == {:changed, %{"type" => "response.output_text.delta", "delta" => "hi"}}
+    end
+
+    test "reports an event without header objects as unchanged" do
+      assert NativeCodexResponseControl.drop_event_headers(%{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_2", "status" => "completed"}
+             }) == :unchanged
+
+      assert NativeCodexResponseControl.drop_event_headers(%{"type" => "response.in_progress"}) ==
+               :unchanged
+    end
+
+    test "rejects a non-map event" do
+      assert NativeCodexResponseControl.drop_event_headers("frame") == {:error, :invalid_event}
+      assert NativeCodexResponseControl.drop_event_headers(nil) == {:error, :invalid_event}
     end
   end
 end

@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
   import CodexPooler.RequestReplayFixtures
 
-  alias CodexPooler.Accounting.{RequestReplay, RequestReplayEntitlement}
+  alias CodexPooler.Accounting.{LedgerReads, RequestReplay, RequestReplayEntitlement}
   alias CodexPooler.Gateway.Transports.Streaming.{RuntimeAdmissionProof, StreamProtocol}
   alias CodexPooler.Gateway.Transports.Websocket.{NativeReplayAdmission, WebsocketOwnerSession}
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -27,6 +27,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
     end
 
     last = replay_fixture(reservation?: true)
+    assert LedgerReads.outstanding_reservation_count(last.api_key.id) == 1
 
     insert_entitlement!(last, %{
       armed_at: DateTime.add(due_at, -29, :second),
@@ -46,6 +47,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
     assert Repo.reload!(last.request).last_error_code == "websocket_replay_expired"
     assert terminal_ledger_count(last.request.id, "settlement") == 1
+    assert LedgerReads.outstanding_reservation_count(last.api_key.id) == 0
 
     assert Repo.aggregate(
              from(row in RequestReplayEntitlement,
@@ -75,6 +77,9 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
   test "revoked or expired committed replay cannot start and compensates exactly once" do
     for cause <- [:revoked, :expired] do
       fixture = replay_fixture(reservation?: true)
+
+      assert LedgerReads.outstanding_reservation_count(fixture.api_key.id) == 1
+
       assert {:ok, armed} = RequestReplay.arm(arm_input(fixture))
 
       assert {:ok, consumed} =
@@ -98,6 +103,8 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
 
       assert terminal_ledger_count(fixture.request.id, "settlement") == 1
       assert terminal_ledger_count(fixture.request.id, "release") == 1
+
+      assert LedgerReads.outstanding_reservation_count(fixture.api_key.id) == 0
     end
   end
 
@@ -136,8 +143,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
       timeouts: %{connect: 1_000, receive: 1_000},
       message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1,
       native_replay_binding: binding,
-      native_replay_proof:
-        RuntimeAdmissionProof.new(self(), make_ref(), make_ref(), <<7::256>>, :native_replay),
+      native_replay_proof: RuntimeAdmissionProof.new(self(), make_ref(), make_ref(), <<7::256>>, :native_replay),
       provisional_token: state.suspended_replay.provisional_token
     }
 
@@ -151,6 +157,9 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
   defp measured_cleanup(label, opts \\ []) do
     ref = make_ref()
     handler = {__MODULE__, ref}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler) end)
 
     :ok =
       :telemetry.attach(
@@ -167,9 +176,7 @@ defmodule CodexPooler.Accounting.RequestReplayCleanupTest do
       duration_us = System.monotonic_time(:microsecond) - started_at
       queries = drain_query_count(ref, 0)
 
-      CodexPooler.TestDiagnostics.puts(
-        CodexPooler.JSON.encode!(%{cleanup: label, duration_us: duration_us, queries: queries})
-      )
+      CodexPooler.TestDiagnostics.puts(CodexPooler.JSON.encode!(%{cleanup: label, duration_us: duration_us, queries: queries}))
 
       result
     after

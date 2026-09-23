@@ -38,20 +38,41 @@ defmodule CodexPooler.Gateway.Contracts do
           optional(:route_class) => String.t(),
           optional(:accounting_disposition) => :zero_work,
           optional(:internal_reason) => String.t(),
+          optional(:compaction_invalid_reason) => String.t(),
           optional(:public_compaction_error?) => boolean(),
           optional(:retryable) => boolean(),
           optional(:requires_new_upstream_session) => boolean(),
-          optional(:recovery) => recovery_contract()
+          optional(:recovery) => recovery_contract(),
+          # Set by construction on every Pooler-authored policy denial
+          # (`Denials.policy_error/4`); read only by the `/v1` redaction
+          # exemption, never rendered or persisted (findings#221).
+          optional(:pooler_policy) => true
         }
   @type body_result :: %{
           required(:status) => pos_integer(),
           optional(:headers) => response_headers(),
-          required(:body) => map()
+          required(:body) => map(),
+          optional(:public_full_rejection) => validation_rejection(),
+          # Full projection markers read by the public senders: an upstream
+          # 404 on an input file reference, and the stream-startup error code.
+          optional(:public_input_file_upstream_404?) => boolean(),
+          optional(:public_stream_startup_error_code) => String.t() | nil
+        }
+  # The structured rejection a public `/v1` sender re-renders through the
+  # caller-facing parameter mapper: carried as `public_validation_rejection`
+  # next to a relayed raw body, and as `public_full_rejection` next to a
+  # rendered Full body (codex-pooler-findings#219).
+  @type validation_rejection :: %{
+          required(:code) => String.t(),
+          required(:param) => String.t() | nil,
+          required(:supported_values) => [String.t()] | nil,
+          required(:supported_values_state) => String.t() | nil
         }
   @type raw_body_result :: %{
           required(:status) => pos_integer(),
           optional(:headers) => response_headers(),
-          required(:raw_body) => binary()
+          required(:raw_body) => binary(),
+          optional(:public_validation_rejection) => validation_rejection()
         }
   @type stream_callback :: (Plug.Conn.t() -> {:ok, Plug.Conn.t()} | {:error, gateway_error()})
   @type stream_result :: %{

@@ -15,8 +15,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   @websocket_frame_timeout 1_000
+
+  for shape <- native_turn_failure_shapes() do
+    @tag :single_turn_terminal
+    test "direct native turn failing as #{shape} pushes exactly one terminal frame" do
+      shape = unquote(shape)
+      upstream = start_upstream(strict_native_turn_failure(shape))
+      setup = gateway_setup(upstream)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+      {:ok, state} =
+        CodexResponsesSocket.init(%{
+          auth: auth,
+          opts: %{
+            request_id: "ws-direct-single-terminal-#{shape}",
+            accepted_turn_state: Ecto.UUID.generate(),
+            client_ip: "127.0.0.1"
+          }
+        })
+
+      try do
+        payload =
+          CodexPooler.JSON.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("synthetic single terminal turn"),
+            "stream" => true,
+            "generate" => true
+          })
+
+        assert {:ok, turn_state} =
+                 CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+        {turn_state, frames} = collect_native_turn_frames!(turn_state)
+
+        terminal =
+          assert_single_native_turn_terminal!(frames, native_turn_failure_terminal_type(shape))
+
+        if terminal["type"] == "error", do: assert(terminal["status"] == 502)
+
+        assert :ok = FakeUpstream.verify!(upstream)
+        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        assert request.status == "failed"
+        assert :ok = CodexResponsesSocket.terminate(:closed, turn_state)
+      after
+        CodexResponsesSocket.terminate(:closed, state)
+      end
+    end
+  end
 
   @tag :websocket_failure
   @tag :replay_race
@@ -207,9 +256,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-policy-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-policy-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -433,8 +480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,
-                 where:
-                   entry.request_id == ^failed_request.id and entry.entry_kind == "settlement"
+                 where: entry.request_id == ^failed_request.id and entry.entry_kind == "settlement"
                ),
                :count
              ) == 1
@@ -458,11 +504,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
       assert updated.metadata["probe_in_flight_count"] == 0
 
       persisted =
-        inspect(
-          {failed_request.request_metadata, failed_attempt.response_metadata,
-           succeeded_request.request_metadata, succeeded_attempt.response_metadata,
-           RequestLogs.list(setup.pool)}
-        )
+        inspect({failed_request.request_metadata, failed_attempt.response_metadata, succeeded_request.request_metadata, succeeded_attempt.response_metadata, RequestLogs.list(setup.pool)})
 
       refute persisted =~ provider_wording
       refute persisted =~ "provider.policy.param"
@@ -621,9 +663,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-status-code-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-status-code-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -721,8 +761,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
             "type" => "invalid_request_error",
             "code" => "previous_response_not_found",
             "param" => "previous_response_id",
-            "message" =>
-              "Previous response with id '#{previous_response_id}' not found for #{request_content}."
+            "message" => "Previous response with id '#{previous_response_id}' not found for #{request_content}."
           },
           "headers" => %{
             "X-Request-ID" => "ws-multiline-previous-request",
@@ -751,9 +790,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-multiline-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-multiline-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -1163,9 +1200,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
       setup = gateway_setup(upstream)
 
       fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-explicit-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-explicit-fallback", compact?: false)
 
       prime_routing_quota!(fallback.identity)
 
@@ -1267,8 +1302,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "partial"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "partial"}},
             {"error",
              %{
                "type" => "error",
@@ -1373,6 +1407,151 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.TerminalErrorsTest do
 
     assert Repo.all(from(d in BridgeDemotion)) == []
     assert Repo.all(from(c in RoutingCircuitState)) == []
+  end
+
+  # findings#238: frame-carried header values persist under the request-id
+  # bound and the merged map is capped at 32 entries kept by sorted name;
+  # quota evidence keeps reading the uncapped in-memory map.
+  test "websocket frame header values persist bounded and capped by sorted name" do
+    overlong_request_id = "ws-frame-" <> String.duplicate("r", 130)
+    hostile_marker = "Retry later: contact support <" <> String.duplicate("h", 40) <> ">"
+
+    wildcard_names =
+      for index <- 1..31 do
+        "x-zz-limit-#{String.pad_leading(Integer.to_string(index), 2, "0")}-primary-used-percent"
+      end
+
+    frame_headers =
+      wildcard_names
+      |> Map.new(&{&1, "7"})
+      |> Map.merge(%{
+        "x-request-id" => overlong_request_id,
+        "x-codex-primary-used-percent" => "81",
+        "x-codex-rate-limit-reached-type" => hostile_marker
+      })
+
+    {attempt, frame} = failed_turn_attempt!("ws-frame-header-bounds", frame_headers)
+
+    refute frame =~ "headers"
+    refute frame =~ overlong_request_id
+
+    persisted = attempt.response_metadata["websocket_frame_headers"]
+    expected_names = frame_headers |> Map.keys() |> Enum.sort() |> Enum.take(32)
+
+    assert persisted |> Map.keys() |> Enum.sort() == expected_names
+    assert persisted["x-request-id"] == fingerprint(overlong_request_id)
+    assert persisted["x-codex-primary-used-percent"] == "81"
+    assert persisted["x-codex-rate-limit-reached-type"] == fingerprint(hostile_marker)
+    refute Map.has_key?(persisted, "x-zz-limit-30-primary-used-percent")
+    refute Map.has_key?(persisted, "x-zz-limit-31-primary-used-percent")
+
+    assert attempt.response_metadata["upstream_request_id"] == fingerprint(overlong_request_id)
+
+    metadata_text = inspect(attempt.response_metadata)
+    refute metadata_text =~ overlong_request_id
+    refute metadata_text =~ "contact support"
+  end
+
+  # The frame allowlist derives from the metadata writer's request id names:
+  # `x-openai-request-id` was admitted into persisted frame headers and read
+  # by nothing, while `x-oai-request-id` is both stored and read.
+  test "websocket frame x-openai-request-id is neither read as the request id nor stored" do
+    {attempt, _frame} =
+      failed_turn_attempt!("ws-frame-dead-name", %{
+        "x-openai-request-id" => "ws-frame-dead-name-value"
+      })
+
+    refute Map.has_key?(attempt.response_metadata, "upstream_request_id")
+    refute Map.has_key?(attempt.response_metadata, "websocket_frame_headers")
+    refute inspect(attempt.response_metadata) =~ "ws-frame-dead-name-value"
+  end
+
+  # findings#238: `x-ratelimit-*-tokens` frame headers are allowlisted by
+  # name and bounded by value, so the accounting sanitizer keeps them instead
+  # of erasing them through the `token` key fragment.
+  test "websocket frame x-ratelimit token headers persist their values" do
+    {attempt, _frame} =
+      failed_turn_attempt!("ws-frame-token-headers", %{
+        "x-ratelimit-limit-tokens" => "100000",
+        "x-ratelimit-remaining-tokens" => "250",
+        "x-oai-request-id" => "ws-frame-token-request"
+      })
+
+    assert attempt.response_metadata["websocket_frame_headers"] == %{
+             "x-ratelimit-limit-tokens" => "100000",
+             "x-ratelimit-remaining-tokens" => "250",
+             "x-oai-request-id" => "ws-frame-token-request"
+           }
+
+    refute inspect(attempt.response_metadata) =~ "REDACTED"
+  end
+
+  test "websocket frame x-oai-request-id is read as the request id and stored" do
+    {attempt, _frame} =
+      failed_turn_attempt!("ws-frame-oai-name", %{"x-oai-request-id" => "ws-frame-oai-request"})
+
+    assert attempt.response_metadata["upstream_request_id"] == "ws-frame-oai-request"
+
+    assert attempt.response_metadata["websocket_frame_headers"] == %{
+             "x-oai-request-id" => "ws-frame-oai-request"
+           }
+  end
+
+  defp failed_turn_attempt!(request_id, frame_headers) do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "headers" => frame_headers,
+               "response" => %{
+                 "id" => "resp_#{String.replace(request_id, "-", "_")}",
+                 "status" => "failed",
+                 "error" => %{"code" => "invalid_request", "message" => "synthetic failure"}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               CodexPooler.JSON.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [
+                   %{"type" => "message", "role" => "user", "content" => "bound frame headers"}
+                 ],
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: request_id},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"type" => "response.failed"} = CodexPooler.JSON.decode!(frame)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+
+    {attempt, frame}
+  end
+
+  defp fingerprint(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, 12))
   end
 
   defp wait_for_response_header_window(identity, window_kind, deadline \\ nil) do

@@ -5,7 +5,6 @@ defmodule CodexPooler.Accounting.ReportingTest do
 
   alias CodexPooler.Accounting.{DailyRollup, DailyRollupCoverage, Reporting, Rollups}
   alias CodexPooler.Admin.Stats.Aggregates
-  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -607,9 +606,7 @@ defmodule CodexPooler.Accounting.ReportingTest do
       settled_cost_micros: 9_999
     )
 
-    insert_model_usage!(pool, api_key, assignment, identity, nil, model_less_time,
-      total_tokens: 5_000
-    )
+    insert_model_usage!(pool, api_key, assignment, identity, nil, model_less_time, total_tokens: 5_000)
 
     result =
       Reporting.model_usage_buckets_for_pool_ids(
@@ -651,9 +648,7 @@ defmodule CodexPooler.Accounting.ReportingTest do
           {ended_at, 30},
           {~U[2026-08-09 00:00:00.000001Z], 4_000}
         ] do
-      insert_model_usage!(pool, api_key, assignment, identity, model, occurred_at,
-        total_tokens: tokens
-      )
+      insert_model_usage!(pool, api_key, assignment, identity, model, occurred_at, total_tokens: tokens)
     end
 
     result =
@@ -692,6 +687,7 @@ defmodule CodexPooler.Accounting.ReportingTest do
            ).rows == []
   end
 
+  @tag slow: "compares SQL query counts and result cardinality across seven models and tenfold real ledger volume"
   test "model usage query count and returned cardinality stay invariant as fixture volume grows" do
     started_at = ~U[2026-08-14 10:15:00.000000Z]
     ended_at = ~U[2026-08-14 12:45:00.000000Z]
@@ -816,6 +812,9 @@ defmodule CodexPooler.Accounting.ReportingTest do
     handler_id = "reporting-query-events-#{System.unique_integer([:positive])}"
     caller = self()
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok =
       :telemetry.attach(
         handler_id,
@@ -890,7 +889,7 @@ defmodule CodexPooler.Accounting.ReportingTest do
 
   defp cleanup_atomic_snapshot_fixture!(pool_id, identity_id, dates) do
     Sandbox.unboxed_run(Repo, fn ->
-      Repo.delete_all(from pool in Pool, where: pool.id == ^pool_id)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([pool_id])
 
       Repo.delete_all(
         from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,

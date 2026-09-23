@@ -156,15 +156,11 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
            |> Enum.count() == 2
 
     assert fragment
-           |> LazyHTML.query(
-             "#stats-traffic-chart-plot[data-chart-stacked='true'][data-chart-bar-radius='0'][data-chart-zoom='false'][data-chart-legend='always'][data-chart-safe-tooltip='true']"
-           )
+           |> LazyHTML.query("#stats-traffic-chart-plot[data-chart-stacked='true'][data-chart-bar-radius='0'][data-chart-zoom='false'][data-chart-legend='always'][data-chart-safe-tooltip='true']")
            |> Enum.count() == 1
 
     assert fragment
-           |> LazyHTML.query(
-             "#stats-token-cost-chart-plot[data-chart-bar-radius='0'][data-chart-zoom='false']"
-           )
+           |> LazyHTML.query("#stats-token-cost-chart-plot[data-chart-bar-radius='0'][data-chart-zoom='false']")
            |> Enum.count() == 1
 
     for selector <- [
@@ -2145,9 +2141,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
   end
 
   defp await_stats_dashboard_params(view, expected_params, 0) do
-    flunk(
-      "stats dashboard did not load params #{inspect(expected_params)}: #{inspect(:sys.get_state(view.pid))}"
-    )
+    flunk("stats dashboard did not load params #{inspect(expected_params)}: #{inspect(:sys.get_state(view.pid))}")
   end
 
   defp assert_stats_patch_params(view, expected_params) do
@@ -2164,6 +2158,9 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
        when is_pid(query_pid) and is_function(fun, 0) do
     test_pid = self()
     handler_id = {__MODULE__, :stats_repo_query, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -2372,8 +2369,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       input_tokens: Map.fetch!(attrs, :total_tokens),
       output_tokens: 0,
       estimated_cost_micros: Map.get(attrs, :estimated_cost_micros, 0),
-      settled_cost_micros:
-        Map.get(attrs, :settled_cost_micros, Map.get(attrs, :estimated_cost_micros, 0))
+      settled_cost_micros: Map.get(attrs, :settled_cost_micros, Map.get(attrs, :estimated_cost_micros, 0))
     })
 
     %{api_key: api_key, raw_key: raw_key, identity: identity, assignment: assignment}

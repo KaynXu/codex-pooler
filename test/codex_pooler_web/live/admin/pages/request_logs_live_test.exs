@@ -394,7 +394,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(view, "#request-log-row-#{fast_request.id}", "gpt-5.3-codex-spark")
     refute has_element?(view, "#request-log-#{fast_request.id}-fast-mode")
-    refute has_element?(view, "#request-log-#{fast_request.id}-requested-tier")
+
+    assert has_element?(
+             view,
+             "#request-log-#{fast_request.id}-requested-tier",
+             "priority requested"
+           )
 
     assert has_element?(view, "#request-log-row-#{model_default_request.id}", "gpt-5.4")
     assert has_element?(view, "#request-log-row-#{model_default_request.id}", "default")
@@ -409,9 +414,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#request-log-#{fast_request.id}-protocol [data-role='fast-mode-indicator']"
            )
 
+    # Requested fast mode that the upstream reported as default is priced as
+    # default, so the bolt stays off and the row names the requested tier.
+    refute has_element?(
+             view,
+             "#request-log-#{requested_fast_request.id}-protocol [data-role='fast-mode-indicator']"
+           )
+
     assert has_element?(
              view,
-             "#request-log-#{requested_fast_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+             "#request-log-#{requested_fast_request.id}-requested-tier",
+             "priority requested"
            )
 
     assert has_element?(
@@ -639,9 +652,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
       refute render(view) =~ "synthetic private prompt must not appear"
 
-      render_click(
-        element(view, "#request-log-detail-sidebar [aria-label='Close request details']")
-      )
+      render_click(element(view, "#request-log-detail-sidebar [aria-label='Close request details']"))
 
       assert_patch(view)
     end
@@ -794,9 +805,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     view
-    |> element(
-      "#request-log-upstream-filter [data-role='upstream-filter-option'][data-upstream-id='#{second_identity.id}']"
-    )
+    |> element("#request-log-upstream-filter [data-role='upstream-filter-option'][data-upstream-id='#{second_identity.id}']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?upstream_identity_id=#{second_identity.id}")
@@ -811,6 +820,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{first_request.id}")
   end
 
+  @tag slow: "seeds a full 50-row page plus excluded history and verifies mounted filter choices across two pools"
   test "filter controls use custom selectors with status icons and table-derived models", %{
     conn: conn,
     scope: scope
@@ -926,9 +936,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     view
-    |> element(
-      "#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{second_pool.id}']"
-    )
+    |> element("#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{second_pool.id}']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?pool_id=#{second_pool.id}")
@@ -939,9 +947,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{failed_request.id}")
 
     view
-    |> element(
-      "#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{first_pool.id}']"
-    )
+    |> element("#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{first_pool.id}']")
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?pool_id=#{first_pool.id}")
@@ -1012,9 +1018,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     view
-    |> element(
-      "#request-log-model-filter [data-role='model-filter-option'][data-model='gpt-custom-failed']"
-    )
+    |> element("#request-log-model-filter [data-role='model-filter-option'][data-model='gpt-custom-failed']")
     |> render_click()
 
     _ = assert_patch(view)
@@ -1026,9 +1030,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-row-#{second_pool_request.id}")
 
     view
-    |> element(
-      "#request-log-status-filter [data-role='status-filter-option'][data-status='failed']"
-    )
+    |> element("#request-log-status-filter [data-role='status-filter-option'][data-status='failed']")
     |> render_click()
 
     _ = assert_patch(view)
@@ -1298,7 +1300,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#request-log-#{full_details_request.id}-model-details[title='gpt-5.1 high / default']"
+             "#request-log-#{full_details_request.id}-model-details[title='gpt-5.1 high / tier default']"
            )
 
     assert has_element?(
@@ -1315,7 +1317,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{tier_diff_request.id}-model-details",
-             "gpt-5.1 low / default"
+             "gpt-5.1 low / tier default"
            )
 
     assert has_element?(
@@ -1330,11 +1332,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{tier_diff_request.id}-requested-tier",
-             "requested: flex"
+             "flex requested"
            )
 
     refute has_element?(view, "#request-log-#{full_details_request.id}-requested-tier")
-    refute has_element?(view, "#request-log-#{fast_tier_diff_request.id}-requested-tier")
+
+    assert has_element?(
+             view,
+             "#request-log-#{fast_tier_diff_request.id}-requested-tier",
+             "priority requested"
+           )
 
     assert has_element?(
              view,
@@ -1344,7 +1351,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{actual_fast_tier_diff_request.id}-requested-tier",
-             "requested: flex"
+             "flex requested"
            )
 
     assert has_element?(
@@ -1357,8 +1364,111 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{in_progress_request.id}-model-details",
-             "gpt-5.5 high / default"
+             "gpt-5.5 high / tier default"
            )
+  end
+
+  test "model line spells out a model-default effort and labels the service tier",
+       %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "model-default-effort", name: "Model Default"})
+
+    %{request: default_effort_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-default-effort",
+        requested_model: "gpt-5.4-mini",
+        endpoint: "/backend-api/codex/responses",
+        service_tier: "default",
+        status: "succeeded",
+        attempt_response_metadata: %{"reasoning" => %{"policy_mode" => "unrestricted"}}
+      })
+
+    %{request: explicit_effort_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-explicit-effort",
+        requested_model: "gpt-5.5",
+        endpoint: "/backend-api/codex/responses",
+        reasoning_effort: "xhigh",
+        service_tier: "default",
+        status: "succeeded"
+      })
+
+    %{request: transcription_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-no-reasoning-concept",
+        requested_model: "gpt-4o-transcribe",
+        endpoint: "/backend-api/transcribe",
+        transport: "http_multipart",
+        status: "succeeded"
+      })
+
+    %{request: rejected_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-rejected-no-effort",
+        requested_model: "gpt-5.4-mini",
+        endpoint: "/backend-api/codex/responses",
+        status: "rejected"
+      })
+
+    %{request: failed_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-failed-no-effort",
+        requested_model: "gpt-5.4-mini",
+        endpoint: "/backend-api/codex/responses",
+        status: "failed",
+        attempt_status: "failed",
+        last_error_code: "upstream_network_error"
+      })
+
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    default_cell = "#request-log-#{default_effort_request.id}-model-details"
+
+    assert has_element?(
+             view,
+             "#request-log-#{default_effort_request.id}-reasoning-default[data-role='model-reasoning-default']",
+             "model default"
+           )
+
+    refute has_element?(view, "#{default_cell} [data-role='model-reasoning']")
+    assert has_element?(view, "#{default_cell} [data-role='model-service-tier']", "tier default")
+
+    assert has_element?(
+             view,
+             "#{default_cell} [data-role='model-service-tier'][title='Service tier']"
+           )
+
+    assert has_element?(
+             view,
+             "#{default_cell}[title='gpt-5.4-mini model default / tier default']"
+           )
+
+    explicit_cell = "#request-log-#{explicit_effort_request.id}-model-details"
+
+    assert has_element?(view, "#{explicit_cell} [data-role='model-reasoning']", "xhigh")
+    refute has_element?(view, "#{explicit_cell} [data-role='model-reasoning-default']")
+    assert has_element?(view, "#{explicit_cell}", "xhigh / tier default")
+
+    transcription_cell = "#request-log-#{transcription_request.id}-model-details"
+
+    refute has_element?(view, "#{transcription_cell} [data-role='model-reasoning-default']")
+    refute has_element?(view, "#{transcription_cell} [data-role='model-reasoning']")
+    refute has_element?(view, "#{transcription_cell}", "/")
+
+    assert has_element?(
+             view,
+             "#{transcription_cell} [data-role='model-service-tier']",
+             "tier default"
+           )
+
+    assert has_element?(view, "#{transcription_cell}[title='gpt-4o-transcribe tier default']")
+
+    for request <- [rejected_request, failed_request] do
+      cell = "#request-log-#{request.id}-model-details"
+
+      refute has_element?(view, "#{cell} [data-role='model-reasoning-default']")
+      refute has_element?(view, cell, "model default")
+      assert has_element?(view, "#{cell} [data-role='model-service-tier']", "tier default")
+    end
   end
 
   test "plan badge helper uses upstream account plan fields and generated styles",
@@ -1672,9 +1782,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         refute html =~ forbidden
       end
 
-      render_click(
-        element(view, "#request-log-detail-sidebar [aria-label='Close request details']")
-      )
+      render_click(element(view, "#request-log-detail-sidebar [aria-label='Close request details']"))
 
       assert_patch(view)
     end
@@ -2186,7 +2294,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     # phrase lives in the title rather than in one run of text.
     assert has_element?(
              view,
-             "#{row_selector} [data-role='model-details'][title='gpt-5.1 max requested: high / default']"
+             "#{row_selector} [data-role='model-details'][title='gpt-5.1 max requested: high / tier default']"
            )
 
     assert has_element?(
@@ -3022,6 +3130,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
+  @tag slow: "seeds fifty-one request lifecycles and exercises mounted pagination after a live arrival"
   test "paging forward after a live refresh does not skip records admitted since the load", %{
     conn: conn,
     scope: scope
@@ -3407,6 +3516,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       end
     end
 
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], handler, nil)
 
     try do
@@ -3495,11 +3607,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       attempt_fixture(request, assignment, %{
         status: Map.get(attrs, :attempt_status, "succeeded"),
         latency_ms: Map.get(attrs, :latency_ms),
-        usage_status:
-          Map.get(attrs, :attempt_usage_status, Map.get(attrs, :usage_status, "usage_known")),
+        usage_status: Map.get(attrs, :attempt_usage_status, Map.get(attrs, :usage_status, "usage_known")),
         upstream_status_code: Map.get(attrs, :response_status_code, 200),
-        network_error_code:
-          Map.get(attrs, :attempt_network_error_code, Map.get(attrs, :last_error_code)),
+        network_error_code: Map.get(attrs, :attempt_network_error_code, Map.get(attrs, :last_error_code)),
         response_metadata: Map.get(attrs, :attempt_response_metadata, %{})
       })
 
@@ -3513,8 +3623,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       output_tokens: Map.get(attrs, :output_tokens, 1),
       total_tokens: Map.get(attrs, :total_tokens, 2),
       settled_cost_micros: Map.get(attrs, :settled_cost_micros, 0),
-      usage_status:
-        Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known")),
+      usage_status: Map.get(attrs, :settlement_usage_status, Map.get(attrs, :usage_status, "usage_known")),
       details: Map.get(attrs, :settlement_details, %{})
     })
 

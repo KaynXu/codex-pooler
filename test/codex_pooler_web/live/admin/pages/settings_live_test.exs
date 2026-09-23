@@ -81,7 +81,10 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert has_element?(account_view, "#settings-account-datetime-format")
     assert has_element?(account_view, "#settings-account-timezone")
 
-    {:ok, security_view, _html} = live(conn, ~p"/admin/settings?tab=security")
+    account_view |> element("#settings-tab-security") |> render_click()
+    assert_patch(account_view, ~p"/admin/settings?tab=security")
+    security_view = account_view
+    refute has_element?(security_view, "#settings-tab-account[aria-selected='true']")
 
     assert has_element?(security_view, "#settings-tab-security[aria-selected='true']")
     assert has_element?(security_view, "#settings-security-panel")
@@ -130,6 +133,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert {"Europe/Rome", "Europe/Rome"} in timezone_options
   end
 
+  @tag slow: "saves real operator display preferences and remounts the page to verify persistence"
   test "saves datetime preferences through the account form and reloads selected", %{
     conn: conn,
     user: user
@@ -228,6 +232,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert has_element?(view, "#settings-mcp-usage-warning", "Usage is not tracked per key")
   end
 
+  @tag slow: "creates a real operator credential and remounts the settings page to prove the raw secret is shown only once"
   test "creates MCP key and reveals raw token only for the create result", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/settings?tab=account")
 
@@ -253,6 +258,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     refute remounted_html =~ raw_token
   end
 
+  @tag slow: "mounts authenticated settings and updates an actual credential while checking its secret is never rendered"
   test "renames MCP key without re-revealing raw token", %{conn: conn, user: user} do
     {:ok, %{key: key, raw_token: raw_token}} =
       MCP.create_operator_token(user, %{label: "Old MCP"})
@@ -390,8 +396,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert Accounts.get_user_by_session_token(current_token)
     refute Accounts.get_user_by_session_token(parallel_token)
 
-    assert_receive {:disconnect_user_sessions,
-                    %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
+    assert_receive {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
 
     assert user_id == user.id
     assert except_live_socket_id == UserAuth.live_socket_id_for_token(current_token)
@@ -450,8 +455,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
              Accounts.login_user(
                %{"email" => user.email, "password" => valid_user_password()},
                %{
-                 user_agent:
-                   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
+                 user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
                  ip_address: "203.0.113.55"
                }
              )
@@ -481,8 +485,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     refute Accounts.get_user_by_session_token(parallel_token)
     refute has_element?(view, "#settings-session-list li", "Firefox/150.0")
 
-    assert_receive {:disconnect_user_sessions,
-                    %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
+    assert_receive {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
 
     assert user_id == user.id
     assert except_live_socket_id == UserAuth.live_socket_id_for_token(current_token)

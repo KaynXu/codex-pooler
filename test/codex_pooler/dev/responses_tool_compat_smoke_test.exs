@@ -16,8 +16,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
 
   setup do
     run_id = "20260803T120000Z-#{random_hex(6)}"
-    run_dir = Path.join(["tmp", "issue-241", "runtime", run_id])
-    receipt_path = Path.join(["tmp", "issue-241", "receipts", "#{run_id}.json"])
+    run_dir = Path.join(["tmp", "responses-tool-compat", "runtime", run_id])
+    receipt_path = Path.join(["tmp", "responses-tool-compat", "receipts", "#{run_id}.json"])
 
     on_exit(fn ->
       File.rm_rf(run_dir)
@@ -133,8 +133,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
         Enum.with_index(@labels, 1)
         |> Enum.map(fn {label, index} ->
           %{
-            id:
-              "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
+            id: "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
             label: label,
             status: "active"
           }
@@ -142,8 +141,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
       other_client_application_names: []
     }
 
-    assert {:ok,
-            "dry-run passed: localhost, sole owner, three distinct active identities, no writes"} =
+    assert {:ok, "dry-run passed: localhost, sole owner, three distinct active identities, no writes"} =
              Smoke.execute(command,
                inspection: inspection,
                server_check: fn _uri -> :ok end
@@ -270,7 +268,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
   test "cleanup plan contains exact recorded ids only and has dependency order", %{run_id: run_id} do
     journal =
       Smoke.new_journal(run_id, @owner_id, @labels)
-      |> Smoke.record_resource("pool", "pool-exact", %{slug: "issue-241-#{run_id}-01"})
+      |> Smoke.record_resource("pool", "pool-exact", %{slug: "responses-tool-compat-#{run_id}-01"})
       |> Smoke.record_resource("model", "model-exact", %{pool_id: "pool-exact"})
       |> Smoke.record_resource("api_key", "key-exact", %{pool_id: "pool-exact"})
       |> Smoke.record_resource("assignment", "assignment-exact", %{pool_id: "pool-exact"})
@@ -299,7 +297,11 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     {:ok, pool} =
       Pools.create_pool(
         scope,
-        %{slug: "Issue-241-#{run_id}-01", name: "Issue 241 ownership test", status: "active"},
+        %{
+          slug: "Responses-tool-compat-#{run_id}-01",
+          name: "Responses tool compatibility ownership test",
+          status: "active"
+        },
         broadcast?: false
       )
 
@@ -309,7 +311,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
 
     assert :ok = Smoke.validate_cleanup_ownership(plan, valid)
 
-    mismatched = [%{hd(plan) | "slug" => "issue-241-mismatched"}]
+    mismatched = [%{hd(plan) | "slug" => "responses-tool-compat-mismatched"}]
 
     assert {:error, "journaled Pool ownership did not match its deterministic slug"} =
              Smoke.validate_cleanup_ownership(mismatched, valid)
@@ -320,9 +322,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     model = %CodexPooler.Catalog.Model{}
 
     assert {:ok, %{sync_run: ^sync_run, models: [^model]}} =
-             Smoke.accept_catalog_sync_result(
-               {:ok, %{sync_run: sync_run, models: [model], partial?: false}}
-             )
+             Smoke.accept_catalog_sync_result({:ok, %{sync_run: sync_run, models: [model], partial?: false}})
 
     assert {:error, "catalog sync was partial"} =
              Smoke.accept_catalog_sync_result({:ok, %{partial?: true}})
@@ -331,9 +331,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              Smoke.accept_catalog_sync_result({:ok, %{skipped?: true}})
 
     assert {:error, "provisioning returned an unexpected shape"} =
-             Smoke.accept_catalog_sync_result(
-               {:ok, %{sync_run: %URI{}, models: [model], partial?: false}}
-             )
+             Smoke.accept_catalog_sync_result({:ok, %{sync_run: %URI{}, models: [model], partial?: false}})
 
     assert {:error, "provisioning returned an unexpected shape"} =
              Smoke.accept_catalog_sync_result(:unexpected)
@@ -350,9 +348,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
 
     assert Smoke.classify_candidate_probe_result(:not_tested) == "not_tested_http_failed"
 
-    assert Smoke.classify_candidate_probe_result(
-             {:error, "provider did not return the required tool call"}
-           ) == "missing_forced_tool_call"
+    assert Smoke.classify_candidate_probe_result({:error, "provider did not return the required tool call"}) == "missing_forced_tool_call"
 
     assert Smoke.classify_candidate_probe_result({:error, :response_timeout}) ==
              "transport_failed"
@@ -450,7 +446,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     call = %{
       "type" => "function_call",
       "name" => smoke_case.name,
-      "arguments" => CodexPooler.JSON.encode!(%{"goal" => %{"value" => "issue241"}})
+      "arguments" => CodexPooler.JSON.encode!(%{"goal" => %{"value" => "responses_tool"}})
     }
 
     assert :ok = Smoke.validate_terminal_output(%{"output" => [call]}, smoke_case)
@@ -520,7 +516,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
                    %{
                      "type" => "custom_tool_call",
                      "name" => lark_case.name,
-                     "input" => "issue241"
+                     "input" => "responses_tool"
                    }
                  ]
                },
@@ -564,7 +560,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
                    %{
                      "type" => "custom_tool_call",
                      "name" => regex_case.name,
-                     "input" => "issue241"
+                     "input" => "responses_tool"
                    }
                  ]
                },
@@ -610,8 +606,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              )
 
     for output <- [
-          [%{"type" => "function_call", "name" => lark_case.name, "input" => "issue241"}],
-          [%{"type" => "custom_tool_call", "name" => "wrong-name", "input" => "issue241"}],
+          [%{"type" => "function_call", "name" => lark_case.name, "input" => "responses_tool"}],
+          [%{"type" => "custom_tool_call", "name" => "wrong-name", "input" => "responses_tool"}],
           []
         ] do
       assert {:error, "provider did not return the required tool call"} =
@@ -623,7 +619,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
   end
 
   test "websocket terminals are backfilled from streamed output item frames" do
-    call = %{"type" => "custom_tool_call", "name" => "probe", "input" => "issue241"}
+    call = %{"type" => "custom_tool_call", "name" => "probe", "input" => "responses_tool"}
 
     frames = [
       %{"type" => "response.created"},
@@ -709,12 +705,10 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     owner = owner_fixture!()
     scope = Scope.for_user(owner)
     identity = active_identity_fixture!()
-    slug = "issue-241-no-job-#{System.unique_integer([:positive])}"
+    slug = "responses-tool-compat-no-job-#{System.unique_integer([:positive])}"
 
     assert {:ok, pool} =
-             Pools.create_pool(scope, %{slug: slug, name: "No job smoke", status: "active"},
-               broadcast?: false
-             )
+             Pools.create_pool(scope, %{slug: slug, name: "No job smoke", status: "active"}, broadcast?: false)
 
     assert :ok =
              Upstreams.sync_pool_assignments_for_pool_edit(pool, [identity.id],
@@ -759,8 +753,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
         Enum.with_index(@labels, 1)
         |> Enum.map(fn {label, index} ->
           %{
-            id:
-              "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
+            id: "00000000-0000-4000-8000-#{String.pad_leading(Integer.to_string(index), 12, "0")}",
             label: label,
             status: "active"
           }
@@ -775,8 +768,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     user =
       %User{}
       |> User.bootstrap_changeset(%{
-        "email" => "issue-241-owner-#{System.unique_integer([:positive])}@example.com",
-        "display_name" => "Issue 241 Owner",
+        "email" => "responses-tool-compat-owner-#{System.unique_integer([:positive])}@example.com",
+        "display_name" => "Responses tool compatibility Owner",
         "password" => "bootstrap-pass-123"
       })
       |> Repo.insert!()
@@ -799,8 +792,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
     unique = System.unique_integer([:positive])
 
     %UpstreamIdentity{
-      chatgpt_account_id: "acct_issue241_#{unique}",
-      account_label: "issue-241-identity-#{unique}",
+      chatgpt_account_id: "acct_responses_tool_#{unique}",
+      account_label: "responses-tool-compat-identity-#{unique}",
       onboarding_method: "import",
       status: "active",
       headers_profile_version: 1,

@@ -3,6 +3,7 @@ defmodule CodexPooler.OpenAIStatus do
 
   import Ecto.Query
   alias CodexPooler.Repo
+  alias CodexPooler.Status.Freshness
   alias CodexPooler.Status.Schemas.{Dismissal, FeedState, Incident}
   alias CodexPooler.Status.Sync
 
@@ -20,14 +21,16 @@ defmodule CodexPooler.OpenAIStatus do
   @spec list_incidents(keyword()) :: [Incident.t()]
   def list_incidents(opts \\ []) do
     limit = min(max(Keyword.get(opts, :limit, @cap), 0), @cap)
-    from(i in Incident, order_by: [desc: i.last_seen_at, desc: i.id], limit: ^limit) |> Repo.all()
+
+    from(i in Incident, order_by: [desc: i.published_at, asc: i.guid], limit: ^limit)
+    |> Repo.all()
   end
 
   @spec active_incidents() :: [Incident.t()]
   def active_incidents do
     from(i in Incident,
       where: is_nil(i.resolved_at) and is_nil(i.retired_at),
-      order_by: [desc: i.last_seen_at]
+      order_by: [desc: i.published_at, asc: i.guid]
     )
     |> Repo.all()
   end
@@ -46,7 +49,8 @@ defmodule CodexPooler.OpenAIStatus do
       last_success_at: state && state.last_success_at,
       last_attempt_at: state && state.last_attempt_at,
       last_error_code: state && state.last_error_code,
-      stale?: stale?(state),
+      stale?: Freshness.stale?(state && state.last_success_at),
+      polling_enabled?: CodexPooler.InstanceSettings.current().operator.openai_status_polling_enabled,
       cap_pressure: (state && state.cap_pressure) || "none"
     }
   end
@@ -206,7 +210,7 @@ defmodule CodexPooler.OpenAIStatus do
       last_seen_at: now,
       revision: 1,
       omission_count: 0,
-      resolved_at: if(status == "Resolved", do: now),
+      resolved_at: if(status == "Resolved", do: attrs[:published_at]),
       created_at: now,
       updated_at: now
     })
@@ -221,7 +225,7 @@ defmodule CodexPooler.OpenAIStatus do
 
     resolved_at =
       cond do
-        status == "Resolved" and existing.resolved_at == nil -> now
+        status == "Resolved" and existing.resolved_at == nil -> attrs[:published_at]
         status == "Resolved" -> existing.resolved_at
         true -> nil
       end
@@ -229,7 +233,7 @@ defmodule CodexPooler.OpenAIStatus do
     attrs
     |> Map.merge(%{
       first_seen_at: existing.first_seen_at,
-      last_seen_at: now,
+      last_seen_at: if(changed?, do: now, else: existing.last_seen_at),
       revision: if(changed?, do: existing.revision + 1, else: existing.revision),
       omission_count: 0,
       resolved_at: resolved_at,
@@ -356,10 +360,4 @@ defmodule CodexPooler.OpenAIStatus do
     dismissed = dismissed_ids(operator_id, incidents)
     Enum.reject(incidents, &MapSet.member?(dismissed, &1.id))
   end
-
-  defp stale?(nil), do: true
-  defp stale?(%FeedState{last_success_at: nil}), do: true
-
-  defp stale?(%FeedState{last_success_at: at}),
-    do: DateTime.diff(DateTime.utc_now(), at, :second) > 900
 end

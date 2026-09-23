@@ -102,9 +102,7 @@ defmodule CodexPoolerWeb.V1.ImagesNativeDispatchTest do
       conn: conn
     } do
       upstream =
-        start_upstream(
-          {:json, 200, %{"created" => 1, "data" => [%{"b64_json" => Base.encode64(png())}]}}
-        )
+        start_upstream({:json, 200, %{"created" => 1, "data" => [%{"b64_json" => Base.encode64(png())}]}})
 
       setup = gateway_setup(upstream)
       now = DateTime.utc_now()

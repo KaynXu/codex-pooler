@@ -41,9 +41,7 @@ defmodule CodexPooler.AccountsTest do
       assert Repo.get_by(AuditEvent, action: "auth.bootstrap", actor_user_id: user.id)
 
       assert {:error, :bootstrap_already_completed} =
-               Accounts.bootstrap_owner(
-                 valid_bootstrap_attributes(%{"email" => "second@example.com"})
-               )
+               Accounts.bootstrap_owner(valid_bootstrap_attributes(%{"email" => "second@example.com"}))
     end
 
     test "serializes concurrent bootstrap attempts through the singleton lock" do
@@ -54,9 +52,7 @@ defmodule CodexPooler.AccountsTest do
           Task.async(fn ->
             Sandbox.allow(Repo, parent, self())
 
-            Accounts.bootstrap_owner(
-              valid_bootstrap_attributes(%{"email" => "owner-#{idx}@example.com"})
-            )
+            Accounts.bootstrap_owner(valid_bootstrap_attributes(%{"email" => "owner-#{idx}@example.com"}))
           end)
         end
 

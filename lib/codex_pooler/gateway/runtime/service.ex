@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
+  alias CodexPooler.Gateway.Payloads.NativeHttpTurnIdentity
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
@@ -151,7 +152,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        when is_binary(enforced_model) do
     if native_image_request?(endpoint, request_options) and
          canonical_model_identifier(requested_model) != canonical_model_identifier(enforced_model) do
-      {:error, error(403, "model_not_allowed", "api key is not allowed to use this model")}
+      {:error, Denials.policy_error(403, "model_not_allowed", "api key is not allowed to use this model")}
     else
       {:ok, enforced_model}
     end
@@ -200,11 +201,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp execute_with_validation(auth, endpoint, payload, %RequestOptions{} = opts, validation)
        when is_map(payload) do
-    opts = RequestOptions.capture_api_key_runtime_epoch(opts, auth)
+    opts =
+      opts
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+      |> RequestOptions.capture_tenant_scope(auth)
 
     if image_generation_permission_denied?(auth, opts) do
       {:error,
-       error(
+       Denials.policy_error(
          403,
          "image_generation_disabled",
          "Image generation is disabled for this pool"
@@ -265,9 +269,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
             )
 
           {:error, reason} ->
-            Denials.log_gateway(
-              denial_context(auth, nil, reason, endpoint, payload, request_options)
-            )
+            Denials.log_gateway(denial_context(auth, nil, reason, endpoint, payload, request_options))
         end
 
       {:error, %{code: _code} = reason} ->
@@ -444,9 +446,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:error, reason}
 
       {:error, %{code: _code} = reason} ->
-        log_gateway_denial(
-          denial_context(auth, model, reason, endpoint, payload, request_options)
-        )
+        log_gateway_denial(denial_context(auth, model, reason, endpoint, payload, request_options))
     end
   end
 
@@ -485,7 +485,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         payload,
         model,
         request_options,
-        Map.put(replay, :routing_settings, routing_settings),
+        replay
+        |> Map.put(:routing_settings, routing_settings)
+        |> Map.put(
+          :models_etag,
+          ReplayPreparation.models_etag(original_attempt.response_metadata)
+        ),
         identity
       )
     else
@@ -679,8 +684,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp clear_native_compaction_admission(%RequestOptions{} = request_options) do
-    _result = RequestOptions.clear_native_compaction_admission(request_options)
-    :ok
+    case RequestOptions.clear_native_compaction_admission(request_options) do
+      :ok -> :ok
+      {:error, reason} -> log_compaction_admission_cleanup_failure(reason)
+    end
+  rescue
+    exception -> log_compaction_admission_cleanup_failure(exception.__struct__)
+  catch
+    kind, _reason -> log_compaction_admission_cleanup_failure(kind)
+  end
+
+  defp log_compaction_admission_cleanup_failure(reason) do
+    Logger.warning(
+      "native compaction reservation cleanup failed " <>
+        "reason_code=#{DiagnosticTaxonomy.reason_code(reason) || "unknown"}"
+    )
   end
 
   defp route_filter_input(auth, model, endpoint, payload, request_options, candidates) do
@@ -706,9 +724,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     request_options =
       opts
       |> request_options(endpoint, payload)
-      |> RequestOptions.put_payload_context(
-        forced_transcription_model: @backend_transcription_model
-      )
+      |> RequestOptions.put_payload_context(forced_transcription_model: @backend_transcription_model)
 
     case TranscriptionPayload.normalize(payload, request_options) do
       {:ok, safe_payload, media_opts} -> execute(auth, endpoint, safe_payload, media_opts)
@@ -750,7 +766,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   def prepare_replay_intent(_auth, _prepared),
-    do: {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+    do: {:error, log_prepared_frame_provenance_breach("replay_intent_shape", :unknown, nil, nil, nil)}
 
   defp validate_replay_prepared_frame(%PreparedWebsocketFrame{} = prepared) do
     case WebsocketCodec.validate_prepared_frame(prepared) do
@@ -758,12 +774,45 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         :ok
 
       {:error, :consumed} ->
-        {:error,
-         error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
+        {:error, error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
 
       {:error, :invalid} ->
-        {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+        {:error, prepared_frame_provenance_breach(prepared, "replay_frame_validation")}
     end
+  end
+
+  # A prepared frame is minted and verified milliseconds later in the same OS
+  # process, so a digest that stops verifying is a gateway invariant breach, not
+  # a malformed client request. The client-blamed `400 invalid_request` this
+  # replaces was also completely silent — findings#168 could only be traced
+  # from the client's local store, because none of the three emit sites logged
+  # and the rejection telemetry event is not registered. `request_id`,
+  # `codex_session_id`, `endpoint` and `variant` are not in the logger metadata
+  # allowlist in `config/config.exs`, so they travel inside the message.
+  defp prepared_frame_provenance_breach(%PreparedWebsocketFrame{} = prepared, stage) do
+    session = Map.get(prepared.request_options.continuity, :codex_session)
+    session_id = if is_struct(session, CodexSession), do: session.id
+
+    log_prepared_frame_provenance_breach(
+      stage,
+      prepared.variant,
+      prepared.request_options.request_metadata.request_id,
+      session_id,
+      prepared.endpoint
+    )
+  end
+
+  defp log_prepared_frame_provenance_breach(stage, variant, request_id, session_id, endpoint) do
+    Logger.error(fn ->
+      "prepared websocket frame provenance invalid " <>
+        "stage=#{stage} " <>
+        "frame_variant=#{variant} " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
+        "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
+        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket"
+    end)
+
+    error(500, "server_error", "prepared websocket frame provenance could not be verified")
   end
 
   defp replay_preflight_context(
@@ -801,9 +850,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp replay_preflight_context(_auth, %PreparedWebsocketFrame{request_options: request_options}) do
-    log_duplicate_turn(request_options, :invalid_replay_context,
-      stage: "runtime_replay_preflight"
-    )
+    log_duplicate_turn(request_options, :invalid_replay_context, stage: "runtime_replay_preflight")
 
     {:error, duplicate_turn_error()}
   end
@@ -814,7 +861,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       with :ok <- validate_replay_session_binding(locked_session, context.auth),
            {:ok, authorization} <-
-             Access.authorize_api_key_runtime_turn(
+             Access.authorize_api_key_runtime_turn_for_read(
                context.auth.api_key.id,
                context.api_key_runtime_epoch
              ),
@@ -850,6 +897,28 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       replay_claim_digest: context.replay_claim_digest
     }
 
+    if final_native_compaction_admission?(context.request_options) do
+      replay_intent_result(:fresh, authorization_binding, nil)
+    else
+      classify_replay_preflight(
+        preflight,
+        locked_session,
+        authorization,
+        model,
+        context,
+        authorization_binding
+      )
+    end
+  end
+
+  defp classify_replay_preflight(
+         preflight,
+         locked_session,
+         authorization,
+         model,
+         context,
+         authorization_binding
+       ) do
     case Accounting.replay_preflight_snapshot(preflight) do
       :none ->
         classify_client_retry_intent(
@@ -887,6 +956,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
+  defp final_native_compaction_admission?(%RequestOptions{
+         native_compaction_admission: %RequestOptions.NativeCompactionAdmission{capability: %{phase: :final}} = admission
+       }),
+       do: RequestOptions.NativeCompactionAdmission.valid?(admission)
+
+  defp final_native_compaction_admission?(%RequestOptions{}), do: false
+
   defp classify_native_compaction_lifecycle_conflict(
          session,
          api_key,
@@ -895,26 +971,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          authorization_binding
        ) do
     case native_compaction_retry_preflight(session, api_key, model, context) do
-      {:ok, lifecycle} -> replay_intent_result(:fresh, authorization_binding, lifecycle)
-      {:error, :successor_claimed} -> replay_intent_result(:fresh, authorization_binding, nil)
-      :none -> reject_replay_intent(context, session, :missing_witness)
-      {:error, reason} -> reject_replay_intent(context, session, reason)
-    end
-  end
+      {:ok, lifecycle} ->
+        replay_intent_result(:fresh, authorization_binding, lifecycle)
 
-  defp classify_client_retry_intent(
-         _session,
-         _api_key,
-         _model,
-         %{
-           semantic_turn_claim_key: semantic_claim,
-           request_options: %{continuity: %{request_claim_key: request_claim}}
-         },
-         authorization_binding
-       )
-       when is_binary(request_claim) and is_binary(semantic_claim) and
-              request_claim != semantic_claim do
-    replay_intent_result(:fresh, authorization_binding, nil)
+      {:error, :successor_claimed} ->
+        replay_intent_result(:fresh, authorization_binding, %{
+          replay_generation: 0,
+          compaction_successor_pending?: true
+        })
+
+      :none ->
+        reject_replay_intent(context, session, :missing_witness)
+
+      {:error, reason} ->
+        reject_replay_intent(context, session, reason)
+    end
   end
 
   defp classify_client_retry_intent(
@@ -956,6 +1027,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       true ->
         reject_replay_intent(context, session, :missing_witness)
     end
+  end
+
+  defp classify_client_retry_intent(
+         _session,
+         _api_key,
+         _model,
+         %{
+           semantic_turn_claim_key: semantic_claim,
+           request_options: %{continuity: %{request_claim_key: request_claim}}
+         },
+         authorization_binding
+       )
+       when is_binary(request_claim) and is_binary(semantic_claim) and
+              request_claim != semantic_claim do
+    replay_intent_result(:fresh, authorization_binding, nil)
   end
 
   defp classify_client_retry_intent(session, api_key, model, context, authorization_binding) do
@@ -1082,7 +1168,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:error, reason}
 
       {:error, _reason} ->
-        {:error, error(403, "model_not_allowed", "api key is not allowed to use this model")}
+        {:error,
+         Denials.policy_error(
+           403,
+           "model_not_allowed",
+           "api key is not allowed to use this model"
+         )}
     end
   end
 
@@ -1145,11 +1236,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         end)
 
       {:error, :consumed} ->
-        {:error,
-         error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
+        {:error, error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
 
       {:error, :invalid} ->
-        {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+        {:error, prepared_frame_provenance_breach(prepared, "prepared_dispatch_consume")}
     end
   end
 
@@ -1206,8 +1296,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   def execute_websocket_response_for_socket(_auth, _raw_payload, _opts, _push_frame) do
-    {:socket_response_result, :local_complete,
-     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
+    {:socket_response_result, :local_complete, {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
   end
 
   @spec execute_prepared_websocket_response_for_socket(
@@ -1320,13 +1409,22 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           prepared.request_options
       end
 
-    execute_with_validation(
-      auth,
-      prepared.endpoint,
-      prepared.payload,
-      request_options,
-      {:prepared_websocket, prepared.provenance.validation, runtime_proof}
-    )
+    # A websocket turn must reach the upstream websocket; fail closed before
+    # validation, reservation, or upstream work rather than posting its body
+    # to the HTTP endpoint.
+    case UpstreamAttempt.transport_decision(request_options) do
+      :websocket_without_upstream ->
+        {:error, UpstreamAttempt.websocket_transport_required_error()}
+
+      _decision ->
+        execute_with_validation(
+          auth,
+          prepared.endpoint,
+          prepared.payload,
+          request_options,
+          {:prepared_websocket, prepared.provenance.validation, runtime_proof}
+        )
+    end
   end
 
   defp websocket_admission_metadata(%{endpoint: endpoint, request_options: request_options}) do
@@ -1407,6 +1505,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         candidates: [{replay.assignment, identity}],
         routing_settings: replay.routing_settings
       })
+      |> put_replay_models_etag(replay)
 
     context = %SelectedCandidateContext{
       auth: auth,
@@ -1442,6 +1541,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     CandidateDispatch.dispatch_selected(context, &dispatch_decrypted_candidate/1)
   end
 
+  # A native replay does not rebuild the catalog snapshot: it re-emits the
+  # original turn's models ETag (backend_responses_etag.snapshot_lifetime).
+  defp put_replay_models_etag(%RouteState{} = route_state, %{models_etag: models_etag})
+       when is_binary(models_etag),
+       do: RouteState.put_codex_models_etag(route_state, models_etag)
+
+  defp put_replay_models_etag(%RouteState{} = route_state, _replay), do: route_state
+
   @spec replay_route_plan(
           auth(),
           Model.t(),
@@ -1472,7 +1579,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       locality: %{},
       model_serving_mode_snapshot: RequestOptions.model_serving_mode_snapshot(options),
       request_metadata: routing_metadata,
-      selected_assignment_id: assignment.id
+      selected_assignment_id: assignment.id,
+      # A replay plans its single pinned route here, so this is its turn start
+      # for `BridgeRing.record_success/3`'s demotion-resolution fence.
+      planned_at: DateTime.utc_now()
     }
   end
 
@@ -1529,6 +1639,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       denial_context(auth, model, reason, endpoint, payload, request_options),
       turn_claim
     )
+  end
+
+  defp claim_explicit_websocket_turn(
+         _auth,
+         _model,
+         _payload,
+         _endpoint,
+         %RequestOptions{
+           runtime: %{replay_lifecycle_binding: %{compaction_successor_pending?: true}}
+         } = request_options,
+         %RouteState{},
+         runtime_admission_proof
+       ) do
+    redeem_client_retry_runtime_admission(request_options, runtime_admission_proof)
   end
 
   defp claim_explicit_websocket_turn(
@@ -1623,11 +1747,6 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         maybe_log_client_resend_admitted(request_options, endpoint, claim)
         {:ok, request, nil}
 
-      {:error, %{code: :duplicate_request} = reason} ->
-        if native_full_history_compaction?(endpoint, request_options),
-          do: {:ok, nil, nil},
-          else: {:error, reason}
-
       {:error, reason} ->
         {:error, reason}
     end
@@ -1721,14 +1840,39 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       when is_binary(predecessor_request_id) ->
         reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
 
+      %{compaction_successor_pending?: true} ->
+        reserve_client_retry(auth, model, payload, endpoint, request_options, attrs)
+
       _ordinary ->
-        if is_nil(turn_claim) and native_full_history_compaction?(endpoint, request_options) do
-          reserve_compaction_retry(auth, model, payload, request_options, attrs)
-        else
-          Accounting.reserve(auth, model, payload, attrs)
-        end
+        auth
+        |> Accounting.reserve(model, payload, attrs)
+        |> normalize_native_http_turn_duplicate(endpoint, request_options)
     end
   end
+
+  # A native Codex HTTP turn now reserves under the same turn claim a websocket
+  # frame does, so its resend meets the resend policy inside the reservation
+  # transaction and comes back as an accounting duplicate. It gets the public
+  # websocket verdict rather than a reservation failure (findings#212).
+  defp normalize_native_http_turn_duplicate(
+         {:error, %{code: :duplicate_request} = reason},
+         endpoint,
+         %RequestOptions{} = request_options
+       ) do
+    if NativeHttpTurnIdentity.fenced?(request_options) do
+      log_duplicate_turn(request_options, :reservation_duplicate,
+        stage: "native_http_turn_claim",
+        endpoint: endpoint,
+        extra: [resend_disposition: Map.get(reason, :resend_disposition)]
+      )
+
+      {:error, duplicate_turn_error()}
+    else
+      {:error, reason}
+    end
+  end
+
+  defp normalize_native_http_turn_duplicate(result, _endpoint, %RequestOptions{}), do: result
 
   defp reserve_client_retry(auth, model, payload, endpoint, request_options, attrs) do
     if native_full_history_compaction?(endpoint, request_options) do
@@ -1758,6 +1902,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       case Accounting.claim_client_retry_successor(auth, model, payload, retry_attrs) do
         {:ok, claim} ->
           {:ok, Map.from_struct(claim)}
+
+        {:error, %{code: :api_key_concurrency_limit_exceeded}} = denial ->
+          denial
 
         {:error, reason} ->
           log_duplicate_turn(request_options, reason,
@@ -1813,6 +1960,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:ok, claim} ->
         {:ok, Map.from_struct(claim)}
 
+      {:error, %{code: :api_key_concurrency_limit_exceeded}} = denial ->
+        denial
+
       {:error, reason} ->
         log_duplicate_turn(request_options, reason, stage: "compaction_retry_claim")
         {:error, duplicate_turn_error()}
@@ -1831,8 +1981,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            owner.forwarder_opts
          ) do
       {:ok, %CompactionRetrySubmitHold{} = hold} ->
-        {:ok,
-         RequestOptions.put_runtime_context(request_options, compaction_retry_submit_hold: hold)}
+        {:ok, RequestOptions.put_runtime_context(request_options, compaction_retry_submit_hold: hold)}
 
       {:error, :owner_unavailable} ->
         {:error,
@@ -1864,7 +2013,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:ok, request_options}
       end
 
-    with {:ok, request_options} <- hold_result do
+    with :ok <- CodexPooler.Gateway.Admission.checkpoint(),
+         {:ok, request_options} <- hold_result do
       transact_reserved_turn(
         auth,
         model,
@@ -1890,6 +2040,74 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        ) do
     maybe_test_runtime_authorization_barrier(:reservation_lock, :before)
 
+    # Owner renewal locks this session too. Enter the capability phase before
+    # acquiring database locks, so renewal cannot prevent this control's reply.
+    # This is a preparation latch: reservation and send authority still follow,
+    # and every failed transaction clears this capability outside the lock.
+    with :ok <-
+           RequestOptions.mark_native_compaction_accounting_started(
+             request_options,
+             System.system_time(:millisecond)
+           ) do
+      reserve_turn_transaction(
+        auth,
+        model,
+        payload,
+        endpoint,
+        request_options,
+        route_state,
+        turn_claim,
+        authorized_correlation_id
+      )
+    end
+    |> case do
+      {:ok, reserved} ->
+        case request_options.runtime.compaction_retry_submit_hold do
+          %CompactionRetrySubmitHold{} = hold ->
+            {:ok, Map.put(reserved, :compaction_retry_submit_hold, hold)}
+
+          nil ->
+            {:ok, reserved}
+        end
+
+      {:error, reason} ->
+        cancel_compaction_retry_hold(request_options)
+        {:error, reason}
+    end
+  rescue
+    error in Ecto.ConstraintError ->
+      cancel_compaction_retry_hold(request_options)
+
+      case reservation_constraint_error(error, request_options) do
+        {:error, _gateway_error} = result ->
+          result
+
+        :reraise ->
+          clear_native_compaction_admission(request_options)
+          reraise(error, __STACKTRACE__)
+      end
+
+    error ->
+      clear_native_compaction_admission(request_options)
+      cancel_compaction_retry_hold(request_options)
+      reraise(error, __STACKTRACE__)
+  catch
+    kind, reason ->
+      clear_native_compaction_admission(request_options)
+      cancel_compaction_retry_hold(request_options)
+      :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
+  defp reserve_turn_transaction(
+         auth,
+         model,
+         payload,
+         endpoint,
+         request_options,
+         route_state,
+         turn_claim,
+         authorized_correlation_id
+       ) do
     Repo.transaction(fn ->
       request_options = lock_codex_session_before_reservation(request_options)
 
@@ -1911,47 +2129,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                payload,
                request_options,
                authorized_correlation_id
-             ),
-           :ok <-
-             RequestOptions.mark_native_compaction_accounting_started(
-               request_options,
-               System.system_time(:millisecond)
              ) do
         reserved
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> case do
-      {:ok, reserved} ->
-        case request_options.runtime.compaction_retry_submit_hold do
-          %CompactionRetrySubmitHold{} = hold ->
-            {:ok, Map.put(reserved, :compaction_retry_submit_hold, hold)}
-
-          nil ->
-            {:ok, reserved}
-        end
-
-      {:error, reason} ->
-        cancel_compaction_retry_hold(request_options)
-        {:error, reason}
-    end
-  rescue
-    error in Ecto.ConstraintError ->
-      cancel_compaction_retry_hold(request_options)
-
-      case reservation_constraint_error(error, request_options) do
-        {:error, _gateway_error} = result -> result
-        :reraise -> reraise(error, __STACKTRACE__)
-      end
-
-    error ->
-      cancel_compaction_retry_hold(request_options)
-      reraise(error, __STACKTRACE__)
-  catch
-    kind, reason ->
-      cancel_compaction_retry_hold(request_options)
-      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   defp cancel_compaction_retry_hold(%RequestOptions{
@@ -1991,9 +2174,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp register_final_window_alias(_auth, _payload, _request_options, _correlation), do: :ok
 
-  defp lock_codex_session_before_reservation(
-         %RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{}}} = request_options
-       ) do
+  defp lock_codex_session_before_reservation(%RequestOptions{runtime: %{session_owner_witness: %OwnerWitness{}}} = request_options) do
     :ok =
       PersistenceSessionContinuity.validate_session_owner_witness_for_reservation(request_options)
 
@@ -2048,6 +2229,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        )
        when is_binary(request_claim_key),
        do: true
+
+  # The native HTTP fence resolves its predecessor under the codex session lock
+  # before inserting, so this is only the race backstop: a claim that met the
+  # constraint anyway is the same duplicate turn, not a gateway fault.
+  defp duplicate_turn_reservation_constraint?(
+         %Ecto.ConstraintError{constraint: "requests_correlation_id_uq"},
+         %RequestOptions{} = request_options
+       ),
+       do: NativeHttpTurnIdentity.fenced?(request_options)
 
   defp duplicate_turn_reservation_constraint?(_error, _opts), do: false
 
@@ -2138,30 +2328,47 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         " #{key}=#{DiagnosticTaxonomy.reason_code(value) || "unknown"}"
       end)
 
+    {label, transport} = replay_rejection_channel(request_options)
+
     Logger.info(fn ->
-      "websocket replay rejection " <>
+      label <>
+        " replay rejection " <>
         "stage=#{stage} " <>
         "reason_code=#{reason_code} " <>
         "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
         "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>
-        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=websocket" <>
+        "endpoint=#{DiagnosticTaxonomy.safe_correlator(endpoint)} transport=#{transport}" <>
         extra_fields
     end)
   end
 
+  # The websocket line is load-bearing for triage and greps, so it stays exactly
+  # as it was. A native HTTP refusal is a different path and must say so rather
+  # than claim a websocket that does not exist (findings#212).
+  defp replay_rejection_channel(%RequestOptions{transport: %{transport: transport}})
+       when is_binary(transport) and transport != "websocket",
+       do: {"native http", DiagnosticTaxonomy.safe_correlator(transport)}
+
+  defp replay_rejection_channel(%RequestOptions{}), do: {"websocket", "websocket"}
+
   defp maybe_log_client_resend_admitted(
          %RequestOptions{} = request_options,
          endpoint,
-         %{client_resend: %{predecessor_request_id: predecessor_request_id}}
+         %{client_resend: %{predecessor_request_id: predecessor_request_id} = client_resend}
        ) do
     request_id = request_options.request_metadata.request_id
     session = Map.get(request_options.continuity, :codex_session)
     session_id = if is_struct(session, CodexSession), do: session.id
 
+    predecessor_shape =
+      DiagnosticTaxonomy.resend_predecessor_shape(Map.get(client_resend, :predecessor_shape)) ||
+        "unknown"
+
     Logger.info(fn ->
       "websocket client resend admitted " <>
         "stage=websocket_turn_claim " <>
         "reason_code=failed_predecessor_retry " <>
+        "predecessor_shape=#{predecessor_shape} " <>
         "request_id=#{DiagnosticTaxonomy.safe_correlator(request_id)} " <>
         "predecessor_request_id=#{DiagnosticTaxonomy.safe_correlator(predecessor_request_id)} " <>
         "codex_session_id=#{DiagnosticTaxonomy.safe_correlator(session_id)} " <>

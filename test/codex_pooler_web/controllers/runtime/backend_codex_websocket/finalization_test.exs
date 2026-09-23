@@ -81,12 +81,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalizationTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
-          {"response.created",
-           %{"type" => "response.created", "response" => %{"id" => response_id}}},
-          {"response.output_text.delta",
-           %{"type" => "response.output_text.delta", "delta" => String.duplicate("x", 70_000)}},
-          {"response.completed",
-           %{"type" => "response.completed", "response" => %{"status" => "completed"}}}
+          {"response.created", %{"type" => "response.created", "response" => %{"id" => response_id}}},
+          {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => String.duplicate("x", 70_000)}},
+          {"response.completed", %{"type" => "response.completed", "response" => %{"status" => "completed"}}}
         ])
       )
 
@@ -634,8 +631,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalizationTest do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     for {suffix, initial_usage} <- [
-          {"reused",
-           %{status: "usage_known", input_tokens: 4, output_tokens: 3, total_tokens: 7}},
+          {"reused", %{status: "usage_known", input_tokens: 4, output_tokens: 3, total_tokens: 7}},
           {"replaced", %{status: "usage_unknown", source: "owner_drained"}}
         ] do
       {:ok, session} =
@@ -1061,6 +1057,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.FinalizationTest do
   defp capture_native_stream_telemetry(fun) do
     handler_id = "native-stream-telemetry-#{System.unique_integer([:positive])}"
     parent = self()
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach_many(

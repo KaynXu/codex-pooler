@@ -73,9 +73,7 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycleTest do
     dedupe_key = dedupe_key("acknowledged-duplicate")
 
     assert {:ok, incident} =
-             Alerts.record_incident_match(
-               match_attrs(rule, pool, dedupe_key, matched_at: first_seen)
-             )
+             Alerts.record_incident_match(match_attrs(rule, pool, dedupe_key, matched_at: first_seen))
 
     assert {:ok, acknowledged} = Alerts.acknowledge_incident(owner_scope, incident.id)
     acknowledged_at = acknowledged.acknowledged_at
@@ -106,16 +104,12 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycleTest do
     dedupe_key = dedupe_key("clear-return")
 
     assert {:ok, incident} =
-             Alerts.record_incident_match(
-               match_attrs(rule, pool, dedupe_key, matched_at: first_seen)
-             )
+             Alerts.record_incident_match(match_attrs(rule, pool, dedupe_key, matched_at: first_seen))
 
     assert {:ok, acknowledged} = Alerts.acknowledge_incident(owner_scope, incident.id)
 
     assert {:ok, active_incident} =
-             Alerts.record_incident_match(
-               match_attrs(rule, pool, dedupe_key, matched_at: duplicate_seen)
-             )
+             Alerts.record_incident_match(match_attrs(rule, pool, dedupe_key, matched_at: duplicate_seen))
 
     assert active_incident.id == acknowledged.id
     assert active_incident.state == "acknowledged"
@@ -132,9 +126,7 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycleTest do
     assert resolved_target.resolved_at == cleared_at
 
     assert {:ok, returned_incident} =
-             Alerts.record_incident_match(
-               match_attrs(rule, pool, dedupe_key, matched_at: returned_at)
-             )
+             Alerts.record_incident_match(match_attrs(rule, pool, dedupe_key, matched_at: returned_at))
 
     assert returned_incident.id != incident.id
     assert returned_incident.state == "open"

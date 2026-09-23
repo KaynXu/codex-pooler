@@ -494,9 +494,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
 
     with {:ok, role} <- OperatorRoles.normalize(map_value(attrs, :role) || current_lifecycle.role),
          {:ok, pool_ids} <-
-           OperatorAssignments.normalize_pool_ids(
-             map_value(attrs, :pool_ids, current_lifecycle.assigned_pool_ids)
-           ),
+           OperatorAssignments.normalize_pool_ids(map_value(attrs, :pool_ids, current_lifecycle.assigned_pool_ids)),
          :ok <- OperatorAssignments.ensure_pool_ids_exist(pool_ids) do
       {:ok, %{role: role, pool_ids: OperatorAssignments.role_pool_ids(role, pool_ids)}}
     end
@@ -586,9 +584,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   defp get_operator_target(_operator), do: {:error, :invalid_operator}
 
   defp lock_user(user_id) do
-    case Repo.one(
-           from u in User, where: u.id == ^user_id and is_nil(u.deleted_at), lock: "FOR UPDATE"
-         ) do
+    case Repo.one(from u in User, where: u.id == ^user_id and is_nil(u.deleted_at), lock: "FOR UPDATE") do
       %User{} = user -> {:ok, user}
       nil -> {:error, :invalid_operator}
     end

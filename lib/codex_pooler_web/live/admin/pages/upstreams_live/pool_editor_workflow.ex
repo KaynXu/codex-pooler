@@ -75,8 +75,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
         editing_pool: pool,
         pool_edit_form: PoolForm.edit_form(pool),
         pool_editor_step: step,
-        pool_editor_upstream_options:
-          PoolForm.edit_upstream_identity_options(pool, upstream_options),
+        pool_editor_upstream_options: PoolForm.edit_upstream_identity_options(pool, upstream_options),
         pool_editor_api_key_options: api_key_options,
         pool_editor_warnings: upstream_warnings ++ api_key_warnings
       )
@@ -316,12 +315,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.PoolEditorWorkflow do
       pool_model_serving_form: form,
       pool_model_serving_snapshot: data.snapshot,
       pool_model_serving_models: data.models,
-      pool_model_serving_status:
-        if(pending?, do: :stale, else: model_serving_status(data.catalog_state, form.rows)),
+      pool_model_serving_status: if(pending?, do: :stale, else: model_serving_status(data.catalog_state, form.rows)),
       pool_model_serving_dirty?: pending?,
       pool_model_serving_sync_pending?: pending?,
-      pool_model_serving_pending_attrs:
-        if(pending?, do: Map.put(pending_attrs, "revision", data.snapshot.revision)),
+      pool_model_serving_pending_attrs: if(pending?, do: Map.put(pending_attrs, "revision", data.snapshot.revision)),
       pool_model_serving_load_token: nil
     )
   end

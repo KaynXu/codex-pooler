@@ -113,8 +113,7 @@ defmodule CodexPooler.Access.APIKeys.Queries do
              PoolAuthorization.capability(:pool_api_key_manage),
              pool_id: pool.id
            ) do
-      {:ok,
-       Repo.all(from k in APIKey, where: k.pool_id == ^pool.id, order_by: [desc: k.created_at])}
+      {:ok, Repo.all(from k in APIKey, where: k.pool_id == ^pool.id, order_by: [desc: k.created_at])}
     else
       nil -> {:error, Errors.access_error(:pool_not_found, "pool was not found")}
       {:error, _reason} = error -> error

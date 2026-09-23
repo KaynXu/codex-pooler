@@ -63,6 +63,7 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     "CODEX_POOLER_UPSTREAM_CONNECT_TIMEOUT_MS",
     "CODEX_POOLER_UPSTREAM_POOL_TIMEOUT_MS",
     "CODEX_POOLER_UPSTREAM_RECEIVE_TIMEOUT_MS",
+    "CODEX_POOLER_UPSTREAM_CONN_MAX_IDLE_TIME_MS",
     "CODEX_POOLER_MODEL_CONTEXT_WINDOW_OVERRIDES",
     "CODEX_POOLER_DECOMPRESSION_ALGORITHMS",
     "CODEX_POOLER_MAX_COMPRESSED_BODY_BYTES",
@@ -105,9 +106,7 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     assert Classification.candidate_keys() == Classification.classified_keys()
 
     assert {:error, [:synthetic_unclassified_candidate]} =
-             Classification.validate_candidate_coverage(
-               Classification.candidate_keys() ++ [:synthetic_unclassified_candidate]
-             )
+             Classification.validate_candidate_coverage(Classification.candidate_keys() ++ [:synthetic_unclassified_candidate])
   end
 
   test "lists the plan-mandated env-only boot settings" do
@@ -145,6 +144,17 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
 
   test "classifies websocket owner idle timeout as cached non-secret DB state" do
     setting = Classification.fetch!(:websocket_owner_idle_timeout)
+
+    assert setting.bucket == :db_runtime_cached
+    assert setting.group == :gateway
+    assert setting.env_names == []
+    assert setting.storage == :database
+    assert setting.reloadability == :cached
+    refute Map.get(setting, :sensitive?, false)
+  end
+
+  test "classifies the proactive token refresh margin as cached non-secret DB state" do
+    setting = Classification.fetch!(:upstream_token_refresh_margin)
 
     assert setting.bucket == :db_runtime_cached
     assert setting.group == :gateway
@@ -221,7 +231,7 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
       Classification.settings()
       |> Enum.flat_map(& &1.env_names)
 
-    assert length(@former_database_env_names) == 38
+    assert length(@former_database_env_names) == 39
 
     for env_name <- @former_database_env_names do
       refute env_name in advertised_env_names

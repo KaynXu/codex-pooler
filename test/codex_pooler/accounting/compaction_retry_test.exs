@@ -8,14 +8,116 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
     ClientRetry,
     LedgerEntry,
     Request,
-    RequestClientRetryLink
+    RequestClientRetryLink,
+    RequestLifecycle,
+    RequestReplayEntitlement
   }
 
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Websocket.DirectCleanup
+  alias CodexPooler.Platform.ExecutionIdentity
   alias CodexPooler.Repo
 
   import CodexPooler.AccountingTestSupport
+
+  test "compact successor preserves capacity denial until a different reservation releases" do
+    {setup, _predecessor, opts} = local_failure_predecessor!(:task_exception)
+    update!(setup.api_key, max_active_requests: 1)
+
+    assert {:ok, occupied} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id},
+               %{
+                 correlation_id: Ecto.UUID.generate()
+               }
+             )
+
+    before = row_counts()
+
+    assert {:error, %{code: :api_key_concurrency_limit_exceeded}} =
+             Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+
+    assert row_counts() == before
+
+    assert {:ok, _} =
+             Accounting.finalize_reservation_failure(
+               occupied.request,
+               %{last_error_code: "dispatch_unavailable"}
+             )
+
+    assert {:ok, _} =
+             Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+  end
+
+  for failure <- [:dead_execution, :task_exception] do
+    test "claims exactly one compact successor after verified #{failure}" do
+      {setup, predecessor, opts} = local_failure_predecessor!(unquote(failure))
+
+      assert {:ok, claim} =
+               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+
+      assert claim.predecessor_request_id == predecessor.id
+      assert claim.request.id != predecessor.id
+      assert claim.codex_turn.turn_sequence == 2
+      assert Repo.aggregate(RequestClientRetryLink, :count) == 1
+
+      assert {:error, :successor_claimed} =
+               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+    end
+
+    for mutation <- [
+          :visible,
+          :request_endpoint,
+          :input_endpoint,
+          :generation,
+          :request_status,
+          :attempt_status,
+          :request_usage,
+          :attempt_usage,
+          :response_status,
+          :attempt_identity,
+          :epoch,
+          :model,
+          :anchor,
+          :entitlement
+        ] do
+      test "rejects altered compact #{failure} #{mutation} evidence without a successor" do
+        {setup, predecessor, opts} = local_failure_predecessor!(unquote(failure))
+        turn = Repo.get_by!(CodexTurn, request_id: predecessor.id)
+        attempt = Repo.get!(Attempt, turn.final_attempt_id)
+        opts = alter_local_failure!(unquote(mutation), setup, predecessor, turn, attempt, opts)
+        before = row_counts()
+
+        assert {:error, _} =
+                 Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts),
+               "unexpected successor for #{unquote(failure)} with #{unquote(mutation)}"
+
+        assert row_counts() == before
+      end
+    end
+  end
+
+  test "rejects recovered compact evidence without its execution identity" do
+    for field <- [
+          :owner_instance_id,
+          :owner_instance_boot_id,
+          :owner_process_id,
+          :owner_execution_id
+        ] do
+      {setup, predecessor, opts} = local_failure_predecessor!(:dead_execution)
+      attempt = Repo.get_by!(Attempt, request_id: predecessor.id)
+      update!(attempt, [{field, nil}])
+      before = row_counts()
+
+      assert {:error, :terminal_predecessor} =
+               Accounting.claim_compaction_retry_successor(setup.auth, setup.model, %{}, opts)
+
+      assert row_counts() == before
+    end
+  end
 
   for terminal_status <- ["failed", "interrupted"] do
     test "selects the newest #{terminal_status} compaction when an older failure already has a successor" do
@@ -406,6 +508,7 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
 
   test "reclaims the same unattempted successor and fences the previous downstream cleanup" do
     {setup, _predecessor, opts} = predecessor!("client_disconnected", 0)
+    update!(setup.api_key, max_active_requests: 1)
     opts = live_owner!(setup, opts)
     first_opts = forwarding_opts(opts, 1)
 
@@ -670,6 +773,179 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
     })
   end
 
+  defp local_failure_predecessor!(failure) do
+    setup = accounting_setup(%{price_version: Ecto.UUID.generate()})
+    now = DateTime.utc_now()
+    semantic = :crypto.strong_rand_bytes(32)
+    digest = :crypto.strong_rand_bytes(32)
+    endpoint = "/backend-api/codex/responses/compact"
+    parent = self()
+
+    child =
+      start_supervised!(
+        {Task,
+         fn ->
+           {:ok, reserved} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 10},
+               %{
+                 endpoint: endpoint,
+                 transport: "websocket",
+                 correlation_id: Ecto.UUID.generate()
+               }
+             )
+
+           {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+           send(parent, {:compact_execution, reserved.request, attempt})
+
+           receive do
+             :finish -> :ok
+           end
+         end},
+        id: make_ref()
+      )
+
+    monitor = Process.monitor(child)
+    assert_receive {:compact_execution, request, attempt}, 15_000
+    assert ExecutionIdentity.status(attempt) == :alive
+
+    session =
+      Repo.insert!(%CodexSession{
+        pool_id: setup.pool.id,
+        api_key_id: setup.api_key.id,
+        session_key: Ecto.UUID.generate(),
+        status: "active",
+        created_at: now,
+        updated_at: now
+      })
+
+    Repo.insert!(%CodexTurn{
+      codex_session_id: session.id,
+      request_id: request.id,
+      turn_sequence: 1,
+      transport_kind: "websocket",
+      semantic_turn_digest: semantic,
+      status: "in_progress",
+      started_at: now,
+      created_at: now,
+      updated_at: now
+    })
+
+    send(child, :finish)
+    assert_receive {:DOWN, ^monitor, :process, ^child, :normal}, 15_000
+    assert ExecutionIdentity.status(attempt) == :dead
+    CodexPooler.ExecutionProofSupport.publish_terminal!(attempt)
+
+    case failure do
+      :dead_execution ->
+        assert {:ok, :recovered} =
+                 RequestLifecycle.recover_dead_execution(request, attempt, DateTime.utc_now())
+
+      :task_exception ->
+        assert :ok =
+                 Interruption.finalize_task_exception_request(
+                   %{
+                     session_id: session.id,
+                     request_id: request.id,
+                     correlation_id: request.correlation_id,
+                     api_key_id: setup.api_key.id,
+                     owner_binding: nil,
+                     attempt_id: attempt.id,
+                     replay_generation: attempt.replay_generation
+                   },
+                   "owner_task_exception"
+                 )
+    end
+
+    predecessor = Repo.reload!(request)
+
+    assert predecessor.last_error_code ==
+             if(failure == :dead_execution,
+               do: "dead_execution_recovered",
+               else: "owner_task_exception"
+             )
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    {setup, predecessor,
+     %{
+       full_history?: true,
+       compaction_trigger_bridge?: true,
+       anchor_present?: false,
+       endpoint: endpoint,
+       requested_model: setup.model.exposed_model_id,
+       runtime_revocation_epoch: setup.api_key.runtime_revocation_epoch,
+       codex_session: session,
+       semantic_turn_digest: semantic,
+       replay_claim_digest: digest
+     }}
+  end
+
+  defp alter_local_failure!(:entitlement, setup, request, turn, attempt, opts) do
+    insert_local_entitlement!(setup, request, turn, attempt, opts)
+    opts
+  end
+
+  defp alter_local_failure!(mutation, _setup, request, turn, attempt, opts) do
+    row_mutations = %{
+      visible: {turn, [first_visible_output_at: DateTime.utc_now()]},
+      request_endpoint: {request, [endpoint: "/backend-api/codex/responses"]},
+      generation: {attempt, [replay_generation: 1]},
+      request_status: {request, [status: "cancelled"]},
+      attempt_status: {attempt, [status: "succeeded"]},
+      request_usage: {request, [usage_status: "usage_known"]},
+      attempt_usage: {attempt, [usage_status: "usage_known"]},
+      response_status: {request, [response_status_code: 502]},
+      attempt_identity: {turn, [final_attempt_id: nil]}
+    }
+
+    if change = row_mutations[mutation] do
+      {row, attrs} = change
+      update!(row, attrs)
+    end
+
+    case mutation do
+      :input_endpoint -> Map.put(opts, :endpoint, "/backend-api/codex/responses")
+      :epoch -> Map.update!(opts, :runtime_revocation_epoch, &(&1 + 1))
+      :model -> Map.put(opts, :requested_model, "other-model")
+      :anchor -> Map.put(opts, :anchor_present?, true)
+      _ -> opts
+    end
+  end
+
+  defp insert_local_entitlement!(setup, request, turn, attempt, opts) do
+    now = DateTime.utc_now()
+
+    %RequestReplayEntitlement{}
+    |> RequestReplayEntitlement.changeset(%{
+      request_id: request.id,
+      codex_turn_id: turn.id,
+      eligible_attempt_id: attempt.id,
+      api_key_id: setup.api_key.id,
+      api_key_runtime_epoch: setup.api_key.runtime_revocation_epoch,
+      pool_id: setup.pool.id,
+      model_id: setup.model.id,
+      model_identifier: setup.model.exposed_model_id,
+      semantic_turn_digest: opts.semantic_turn_digest,
+      replay_claim_digest: opts.replay_claim_digest,
+      replay_generation: 1,
+      owner_lease_digest: <<1::256>>,
+      owner_lease_key_version: "test-v1",
+      predecessor_epoch: 1,
+      status: "armed",
+      armed_at: now,
+      expires_at: DateTime.add(now, 30)
+    })
+    |> Repo.insert!()
+  end
+
   defp row_counts do
     Map.new(
       [Request, CodexTurn, LedgerEntry, RequestClientRetryLink],
@@ -679,7 +955,8 @@ defmodule CodexPooler.Accounting.CompactionRetryTest do
 
   defp predecessor!(error, age) do
     setup = accounting_setup(%{price_version: Ecto.UUID.generate()})
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    # Retry age is checked against PostgreSQL time; an age-zero fixture must use that clock too.
+    %{rows: [[now]]} = Repo.query!("SELECT clock_timestamp()")
     completed_at = DateTime.add(now, -age, :second)
     digest = :crypto.strong_rand_bytes(32)
     semantic = :crypto.strong_rand_bytes(32)

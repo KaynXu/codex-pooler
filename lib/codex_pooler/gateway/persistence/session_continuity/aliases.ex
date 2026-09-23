@@ -22,8 +22,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
   @alias_active SessionAliasStatus.active_status()
 
-  @session_alias_conflict_target {:unsafe_fragment,
-                                  "(pool_id, api_key_id, alias_kind, alias_hash) WHERE status = 'active'"}
+  @session_alias_conflict_target {:unsafe_fragment, "(pool_id, api_key_id, alias_kind, alias_hash) WHERE status = 'active'"}
 
   @spec active_session_for_update(
           Ecto.UUID.t(),
@@ -226,8 +225,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
           codex_session_id: ^session.id,
           alias_preview: fragment("EXCLUDED.alias_preview"),
           expires_at: fragment("GREATEST(?, ?)", alias_record.expires_at, ^expires_at),
-          last_seen_at:
-            fragment("GREATEST(COALESCE(?, ?), ?)", alias_record.last_seen_at, ^now, ^now),
+          last_seen_at: fragment("GREATEST(COALESCE(?, ?), ?)", alias_record.last_seen_at, ^now, ^now),
           metadata: fragment("EXCLUDED.metadata"),
           updated_at: fragment("GREATEST(?, ?)", alias_record.updated_at, ^now)
         ]

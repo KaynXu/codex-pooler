@@ -51,9 +51,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Development do
             <div class="grid gap-1">
               <h4 class="text-sm font-semibold text-base-content">Impeccable live helper</h4>
               <p class="text-xs leading-5 text-base-content/55">
-                This instance reads the helper's port and session token from
-                <span class="font-mono text-[11px]">.impeccable/live/server.json</span>
-                on every full page load, so the helper can bind any port and be restarted
+                This instance reads the helper's port and session token from <span class="font-mono text-[11px]">.impeccable/live/server.json</span> on every full page load, so the helper can bind any port and be restarted
                 without restarting the app. Nothing is written to the layout.
               </p>
             </div>

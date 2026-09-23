@@ -163,8 +163,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
         {:ok, %{code: :smtp_test_email_sent}} ->
           %{
             tone: :success,
-            message:
-              "Test email sent to #{operator_email_for_status(socket.assigns.current_scope)}"
+            message: "Test email sent to #{operator_email_for_status(socket.assigns.current_scope)}"
           }
 
         {:error, %Ecto.Changeset{} = changeset} ->
@@ -508,8 +507,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   defp sample_data_import_status(result) do
     %{
       tone: :success,
-      message:
-        "Sample data imported: #{length(result.pools)} pools, #{length(result.api_keys)} API keys, #{length(result.upstream_identities)} upstream accounts, #{length(result.assignments)} assignments, #{length(result.models)} models, #{length(result.quota_windows)} quota windows, #{length(result.request_logs)} request logs, #{length(result.invites)} invites, #{length(result.audit_events)} audit events, and #{length(result.jobs)} jobs."
+      message: "Sample data imported: #{length(result.pools)} pools, #{length(result.api_keys)} API keys, #{length(result.upstream_identities)} upstream accounts, #{length(result.assignments)} assignments, #{length(result.models)} models, #{length(result.quota_windows)} quota windows, #{length(result.request_logs)} request logs, #{length(result.invites)} invites, #{length(result.audit_events)} audit events, and #{length(result.jobs)} jobs."
     }
   end
 

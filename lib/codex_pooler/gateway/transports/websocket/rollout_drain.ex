@@ -5,6 +5,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   require Logger
 
+  alias CodexPooler.Gateway.Transports.Streaming.{DeferredStreamDrain, DeferredStreamRegistry}
+  alias CodexPooler.Telemetry.RelayRuntime
+
   alias CodexPooler.Gateway.Transports.Websocket.{
     ActivityDrain,
     ActivityRegistry,
@@ -13,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   }
 
   @registry WebsocketOwnerSession.Registry
+  @timeout_env "CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS"
   @default_timeout_ms 50_000
   @drain_poll_interval_ms 200
   @owner_call_timeout_ms OwnerDefaults.owner_call_timeout_ms()
@@ -36,6 +40,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           required(:proxy_turns_completed) => non_neg_integer(),
           required(:proxy_turns_aborted) => non_neg_integer(),
           required(:proxy_turns_failed) => non_neg_integer(),
+          required(:http_streams_seen) => non_neg_integer(),
+          required(:http_streams_completed) => non_neg_integer(),
+          required(:http_streams_aborted) => non_neg_integer(),
+          required(:http_streams_failed) => non_neg_integer(),
           required(:timeout_ms) => pos_integer(),
           required(:elapsed_ms) => non_neg_integer(),
           required(:already_draining?) => boolean()
@@ -54,7 +62,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           | {:deadline_margin_ms, non_neg_integer()}
           | {:deadline_floor_ms, non_neg_integer()}
           | {:activity_registry, GenServer.server()}
+          | {:stream_registry, GenServer.server()}
           | {:owner_post_deadline_call_budget_ms, pos_integer()}
+          | {:relay, GenServer.server()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -84,10 +94,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   @spec drain_for_shutdown() :: summary()
   def drain_for_shutdown do
-    timeout_ms = configured_timeout_ms()
+    drain_for_shutdown(shutdown_timeout_ms())
+  end
 
+  @spec drain_for_shutdown(pos_integer(), [option()]) :: summary()
+  def drain_for_shutdown(timeout_ms, opts \\ []) do
     call_drain(
-      [],
+      opts,
       {:drain_for_shutdown, timeout_ms},
       timeout_ms,
       conservative_call_timeout_ms(timeout_ms)
@@ -96,23 +109,43 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   @spec configured_timeout_ms() :: pos_integer()
   def configured_timeout_ms do
-    "CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS"
+    @timeout_env
     |> System.get_env()
     |> parse_timeout_ms()
+  end
+
+  # A release sets the shutdown budget through the environment or takes the default. Only the test
+  # configuration sets `:shutdown_timeout_ms`, and only while the environment variable is unset:
+  # `mix codex_pooler.test` stops the application before dropping a run-scoped database, and an
+  # owner a test leaked must not hold that exit for the release budget.
+  defp shutdown_timeout_ms do
+    configured =
+      :codex_pooler
+      |> Application.get_env(__MODULE__, [])
+      |> Keyword.get(:shutdown_timeout_ms)
+
+    case {System.get_env(@timeout_env), configured} do
+      {nil, timeout_ms} when is_integer(timeout_ms) and timeout_ms > 0 -> timeout_ms
+      _environment_or_default -> configured_timeout_ms()
+    end
   end
 
   @impl GenServer
   def init(opts) do
     activity_registry = Keyword.get(opts, :activity_registry, ActivityRegistry)
+    stream_registry = Keyword.get(opts, :stream_registry, DeferredStreamRegistry)
 
     {:ok,
      %{
        draining?: activity_registry_draining?(activity_registry),
        active_drain: nil,
+       deadline_ms: nil,
        shutdown_started_at_ms: nil,
        shutdown_timeout_ms: nil,
        drain_policy: drain_policy(opts),
-       activity_registry: activity_registry
+       activity_registry: activity_registry,
+       stream_registry: stream_registry,
+       relay: Keyword.get(opts, :relay, RelayRuntime)
      }}
   end
 
@@ -141,6 +174,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
         %{active_drain: active_drain} = state
       )
       when is_map(active_drain) do
+    quiesce_relay!(state)
     active_drain = %{active_drain | waiters: [from | active_drain.waiters]}
 
     {:noreply,
@@ -150,6 +184,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   end
 
   def handle_call({:drain_for_shutdown, timeout_ms}, from, state) do
+    quiesce_relay!(state)
+
     case shutdown_timeout_budget(state) do
       :not_started ->
         start_local_drain(timeout_ms, from, state, true, state.drain_policy)
@@ -172,14 +208,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  @spec drain_local_work(pos_integer(), boolean(), map(), GenServer.server()) :: summary()
-  defp drain_local_work(timeout_ms, already_draining?, drain_policy, activity_registry) do
+  @spec drain_local_work(
+          pos_integer(),
+          boolean(),
+          map(),
+          GenServer.server(),
+          {GenServer.server(), reference(), integer()}
+        ) :: summary()
+  defp drain_local_work(
+         timeout_ms,
+         already_draining?,
+         drain_policy,
+         activity_registry,
+         {stream_registry, stream_drain_epoch, deadline_ms}
+       ) do
     started_at = System.monotonic_time(:millisecond)
-    deadline_started_at = drain_policy.now_ms.()
-    deadline_ms = poll_deadline_ms(timeout_ms, deadline_started_at, drain_policy)
     {drain_epoch, activities} = ActivityRegistry.begin_drain(name: activity_registry)
     owners = local_owner_sessions()
-    work = Enum.map(owners, &{:owner, &1}) ++ Enum.map(activities, &{:activity, &1})
+
+    work =
+      Enum.map(owners, &{:owner, &1}) ++
+        Enum.map(activities, &{:activity, &1}) ++ [:http_streams]
 
     results =
       work
@@ -189,8 +238,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
             {:owner, drain_owner_after_turn(owner, deadline_ms, drain_policy)}
 
           {:activity, activity} ->
-            {:activity, activity.kind,
-             ActivityDrain.drain(activity, deadline_ms, drain_policy, activity_registry)}
+            {:activity, activity.kind, ActivityDrain.drain(activity, deadline_ms, drain_policy, activity_registry)}
+
+          :http_streams ->
+            {:http_streams, DeferredStreamDrain.drain_all(deadline_ms, drain_policy, stream_registry)}
         end,
         max_concurrency: max(1, length(work)),
         on_timeout: :kill_task,
@@ -201,9 +252,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     counters =
       work
       |> Enum.zip(results)
-      |> Enum.reduce(empty_counters(activities), &count_work_result/2)
+      |> Enum.reduce(empty_counters(activities, []), &count_work_result/2)
 
     :ok = ActivityRegistry.complete_drain(drain_epoch, name: activity_registry)
+    :ok = DeferredStreamRegistry.complete_drain(stream_drain_epoch, name: stream_registry)
 
     elapsed_ms = max(0, System.monotonic_time(:millisecond) - started_at)
     owners_seen = length(owners)
@@ -224,6 +276,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
       proxy_turns_completed: counters.proxy_turns_completed,
       proxy_turns_aborted: counters.proxy_turns_aborted,
       proxy_turns_failed: counters.proxy_turns_failed,
+      http_streams_seen: counters.http_streams_seen,
+      http_streams_completed: counters.http_streams_completed,
+      http_streams_aborted: counters.http_streams_aborted,
+      http_streams_failed: counters.http_streams_failed,
       timeout_ms: timeout_ms,
       elapsed_ms: elapsed_ms,
       already_draining?: already_draining?
@@ -361,6 +417,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   defp count_work_result({{:activity, %{kind: kind}}, _result}, counters),
     do: count_activity_outcome(counters, kind, :failed)
 
+  defp count_work_result({:http_streams, {:ok, {:http_streams, entries}}}, counters) do
+    Enum.reduce(entries, counters, fn
+      %{phase: :streaming, status: {:finished, outcome}}, counters ->
+        counters
+        |> Map.update!(:http_streams_seen, &(&1 + 1))
+        |> count_http_stream_outcome(outcome)
+
+      _admission, counters ->
+        counters
+    end)
+  end
+
+  defp count_work_result({:http_streams, _result}, counters),
+    do: count_http_stream_outcome(counters, :failed)
+
   defp count_outcome(counters, :idle), do: Map.update!(counters, :owners_idle, &(&1 + 1))
 
   defp count_outcome(counters, :completed),
@@ -373,6 +444,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     Map.update!(counters, activity_counter(kind, outcome), &(&1 + 1))
   end
 
+  defp count_http_stream_outcome(counters, outcome) do
+    Map.update!(counters, http_stream_counter(outcome), &(&1 + 1))
+  end
+
+  defp http_stream_counter(:completed), do: :http_streams_completed
+  defp http_stream_counter(:aborted), do: :http_streams_aborted
+  defp http_stream_counter(:failed), do: :http_streams_failed
+
   defp activity_counter(:direct, :completed), do: :direct_turns_completed
   defp activity_counter(:direct, :aborted), do: :direct_turns_aborted
   defp activity_counter(:direct, :failed), do: :direct_turns_failed
@@ -380,7 +459,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   defp activity_counter(:proxy, :aborted), do: :proxy_turns_aborted
   defp activity_counter(:proxy, :failed), do: :proxy_turns_failed
 
-  defp empty_counters(activities) do
+  defp empty_counters(activities, streams) do
     %{
       owners_drained: 0,
       owners_idle: 0,
@@ -394,14 +473,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
       proxy_turns_seen: Enum.count(activities, &(&1.kind == :proxy)),
       proxy_turns_completed: 0,
       proxy_turns_aborted: 0,
-      proxy_turns_failed: 0
+      proxy_turns_failed: 0,
+      http_streams_seen: length(streams),
+      http_streams_completed: 0,
+      http_streams_aborted: 0,
+      http_streams_failed: 0
     }
   end
 
   defp drain_result(counters) do
-    if counters.owners_failed + counters.direct_turns_failed + counters.proxy_turns_failed == 0,
-      do: :ok,
-      else: :error
+    if counters.owners_failed + counters.direct_turns_failed + counters.proxy_turns_failed +
+         counters.http_streams_failed == 0,
+       do: :ok,
+       else: :error
   end
 
   defp call_drain(opts, request, timeout_ms, call_timeout) do
@@ -416,10 +500,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     end
   end
 
+  # Only a shutdown drain closes relay claim admission: quiesce is permanent
+  # for the consumer's lifetime, and a pod that drains but keeps serving must
+  # keep consuming the shared relay. Every shutdown branch (fresh, joining an
+  # active drain, exhausted budget) passes through here.
+  defp quiesce_relay!(state), do: :ok = RelayRuntime.quiesce(state.relay, 5_000)
+
   defp start_local_drain(timeout_ms, from, state, shutdown?, drain_policy) do
     already_draining? = state.draining?
     ref = make_ref()
     caller = self()
+
+    deadline_ms =
+      state.deadline_ms || poll_deadline_ms(timeout_ms, drain_policy.now_ms.(), drain_policy)
+
+    {stream_epoch, _streams} =
+      DeferredStreamRegistry.begin_drain(
+        name: state.stream_registry,
+        deadline: %{at: deadline_ms, now_ms: drain_policy.now_ms}
+      )
 
     log_drain_started(timeout_ms, already_draining?)
 
@@ -430,7 +529,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
             timeout_ms,
             already_draining?,
             drain_policy,
-            state.activity_registry
+            state.activity_registry,
+            {state.stream_registry, stream_epoch, deadline_ms}
           )
 
         log_drain_finished(summary)
@@ -442,7 +542,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     state =
       state
       |> ensure_shutdown_budget_started(timeout_ms, shutdown?)
-      |> Map.merge(%{draining?: true, active_drain: active_drain})
+      |> Map.merge(%{draining?: true, active_drain: active_drain, deadline_ms: deadline_ms})
 
     {:noreply, state}
   end
@@ -611,6 +711,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
         "proxy_turns_completed=#{summary.proxy_turns_completed} " <>
         "proxy_turns_aborted=#{summary.proxy_turns_aborted} " <>
         "proxy_turns_failed=#{summary.proxy_turns_failed} " <>
+        "http_streams_seen=#{summary.http_streams_seen} " <>
+        "http_streams_completed=#{summary.http_streams_completed} " <>
+        "http_streams_aborted=#{summary.http_streams_aborted} " <>
+        "http_streams_failed=#{summary.http_streams_failed} " <>
         "timeout_ms=#{summary.timeout_ms} " <>
         "elapsed_ms=#{summary.elapsed_ms} " <>
         "result=#{summary.result}"
@@ -634,6 +738,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
       proxy_turns_completed: 0,
       proxy_turns_aborted: 0,
       proxy_turns_failed: 0,
+      http_streams_seen: 0,
+      http_streams_completed: 0,
+      http_streams_aborted: 0,
+      http_streams_failed: 0,
       timeout_ms: timeout_ms,
       elapsed_ms: 0,
       already_draining?: already_draining?

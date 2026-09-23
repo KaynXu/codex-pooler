@@ -22,8 +22,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
   )
   @model_serving_websocket_routes [
     {:backend_responses, "/backend-api/codex/responses", "/backend-api/codex/responses", true},
-    {:backend_v1_responses, "/backend-api/codex/v1/responses", "/backend-api/codex/responses",
-     true},
+    {:backend_v1_responses, "/backend-api/codex/v1/responses", "/backend-api/codex/responses", true},
     {:public_v1_responses, "/v1/responses", "/v1/responses", false}
   ]
 
@@ -427,9 +426,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-retry-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-retry-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -465,8 +462,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
         )
       end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, upstream_pid, ^release_ref},
                    1_000
 
     try do
@@ -509,9 +505,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
     release_ref = make_ref()
 
     timeout_upstream =
-      start_upstream(
-        FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref))
 
     fallback_upstream =
       start_upstream(
@@ -525,9 +519,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
     setup = gateway_setup(timeout_upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -564,8 +556,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.CatalogModelServingTest d
         )
       end)
 
-    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid, ^release_ref},
                    1_000
 
     try do

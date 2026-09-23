@@ -18,6 +18,45 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.RouteClass
 
   @assignment_id "00000000-0000-0000-0000-000000000001"
+
+  test "portable history classification follows the current payload and preserves opaque fences" do
+    endpoint = "/backend-api/codex/responses"
+    base = RequestOptions.build(%{}, endpoint, %{})
+
+    history = [
+      %{
+        "type" => "reasoning",
+        "encrypted_content" => "synthetic-encrypted-reasoning",
+        "summary" => []
+      },
+      %{
+        "type" => "function_call",
+        "call_id" => "call_example",
+        "name" => "example",
+        "arguments" => "{}"
+      },
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_example",
+        "output" => "synthetic result"
+      }
+    ]
+
+    options = RequestOptions.for_payload(base, endpoint, %{"input" => history})
+    assert options.payload_context.portable_full_history?
+
+    for payload <- [
+          %{"input" => history, "previous_response_id" => "resp_opaque_anchor"},
+          %{"input" => [%{"type" => "item_reference", "id" => "msg_opaque"}]},
+          %{"input" => [%{"type" => "compaction", "encrypted_content" => "synthetic"}]},
+          %{"input" => [%{"type" => "input_file", "file_id" => "file_opaque"}]}
+        ] do
+      refute RequestOptions.for_payload(options, endpoint, payload).payload_context.portable_full_history?
+
+      refute RequestOptions.retarget(options, endpoint, payload).payload_context.portable_full_history?
+    end
+  end
+
   @identity_id "00000000-0000-0000-0000-000000000002"
   @effective_model "gpt-5.4"
   @reset_probe_route_class "proxy_http"
@@ -244,11 +283,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       cases = [
         {:ordinary, base},
-        {:bridge_only,
-         RequestOptions.put_payload_context(base, compaction_trigger_bridge?: true)},
+        {:bridge_only, RequestOptions.put_payload_context(base, compaction_trigger_bridge?: true)},
         {:websocket_only, RequestOptions.for_websocket(base, payload)},
-        {:collect_only,
-         RequestOptions.put_transport(base, websocket_delivery_mode: :collect_compaction)},
+        {:collect_only, RequestOptions.put_transport(base, websocket_delivery_mode: :collect_compaction)},
         {:full_history_websocket_collect,
          full_history_base
          |> RequestOptions.for_websocket(%{"input" => [%{"type" => "compaction_trigger"}]})
@@ -530,6 +567,52 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       invalid = RequestOptions.put_continuity(options, request_claim_key: "codex-request:invalid")
       assert invalid.continuity.request_claim_key == request_claim_key
+    end
+
+    test "normalizes every native durable claim domain with the same digest validation" do
+      digest = :crypto.hash(:sha256, "synthetic-native-claim")
+      encoded = Base.url_encode64(digest, padding: false)
+
+      for prefix <- ["codex-request:", "codex-resume:", "codex-kind:"] do
+        claim = prefix <> encoded
+
+        options =
+          RequestOptions.build(
+            %{transport: "websocket", request_claim_key: claim},
+            "/backend-api/codex/responses",
+            %{"model" => "example-model"}
+          )
+
+        assert options.continuity.request_claim_key == claim
+        assert RequestOptions.server_correlation_id(options) == claim
+
+        invalid = RequestOptions.put_continuity(options, request_claim_key: prefix <> "invalid")
+        assert invalid.continuity.request_claim_key == claim
+      end
+    end
+
+    test "rejects unknown prefixes and non-32-byte native claim digests" do
+      valid =
+        "codex-resume:" <>
+          (:crypto.hash(:sha256, "valid-resume-claim")
+           |> Base.url_encode64(padding: false))
+
+      options =
+        RequestOptions.build(
+          %{request_claim_key: valid},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      for invalid <- [
+            "codex-unknown:" <> String.duplicate("A", 43),
+            "codex-kind:" <> Base.url_encode64(:crypto.strong_rand_bytes(31), padding: false),
+            "codex-resume:" <> Base.url_encode64(:crypto.strong_rand_bytes(33), padding: false),
+            "codex-request:not-base64"
+          ] do
+        updated = RequestOptions.put_continuity(options, request_claim_key: invalid)
+        assert updated.continuity.request_claim_key == valid
+      end
     end
 
     test "websocket correlations fall back through turn claim and request id" do
@@ -1024,9 +1107,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
           payload
         )
 
-      assert OpenAICompatibility.translated_responses_surface?(
-               public_responses.openai_compatibility
-             )
+      assert OpenAICompatibility.translated_responses_surface?(public_responses.openai_compatibility)
 
       assert OpenAICompatibility.translated_responses_surface?(public_chat.openai_compatibility)
       assert OpenAICompatibility.translated_responses_surface?(backend_chat.openai_compatibility)
@@ -1035,17 +1116,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       refute OpenAICompatibility.translated_responses_surface?(raw_backend.openai_compatibility)
 
-      refute OpenAICompatibility.translated_responses_surface?(
-               raw_backend_source.openai_compatibility
-             )
+      refute OpenAICompatibility.translated_responses_surface?(raw_backend_source.openai_compatibility)
 
-      refute OpenAICompatibility.translated_responses_surface?(
-               wrong_media_endpoint.openai_compatibility
-             )
+      refute OpenAICompatibility.translated_responses_surface?(wrong_media_endpoint.openai_compatibility)
 
-      refute OpenAICompatibility.translated_responses_surface?(
-               malformed_source.openai_compatibility
-             )
+      refute OpenAICompatibility.translated_responses_surface?(malformed_source.openai_compatibility)
 
       assert websocket.openai_compatibility.source_endpoint == "/v1/responses"
 
@@ -1250,10 +1325,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
                )
 
       changed_scopes = [
-        {:scope_mismatch, "00000000-0000-0000-0000-000000000003", @identity_id, @effective_model,
-         @reset_probe_route_class},
-        {:scope_mismatch, @assignment_id, "00000000-0000-0000-0000-000000000004",
-         @effective_model, @reset_probe_route_class},
+        {:scope_mismatch, "00000000-0000-0000-0000-000000000003", @identity_id, @effective_model, @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, "00000000-0000-0000-0000-000000000004", @effective_model, @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, "gpt-5.4-mini", @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, "GPT-5.4", @reset_probe_route_class},
         {:scope_mismatch, @assignment_id, @identity_id, @effective_model, "proxy_stream"},
@@ -2073,19 +2146,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     test "classifies request compression route surfaces without promoting public compact" do
       cases = [
         {"POST", "/backend-api/codex/responses", %{}, nil, "proxy_http", "http_json"},
-        {"POST", "/backend-api/codex/responses", %{"stream" => true}, nil, "proxy_stream",
-         "http_sse"},
+        {"POST", "/backend-api/codex/responses", %{"stream" => true}, nil, "proxy_stream", "http_sse"},
         {"POST", "/backend-api/codex/v1/responses", %{}, nil, "proxy_http", "http_json"},
         {"POST", "/backend-api/codex/v1/chat/completions", %{}, nil, "proxy_http", "http_json"},
         {"POST", "/v1/responses", %{}, nil, "proxy_http", "http_json"},
         {"POST", "/v1/chat/completions", %{}, nil, "proxy_http", "http_json"},
-        {"POST", "/backend-api/codex/responses/compact", %{}, nil, "proxy_compact",
-         "http_compact_json"},
-        {"POST", "/backend-api/codex/v1/responses/compact", %{}, nil, "proxy_compact",
-         "http_compact_json"},
+        {"POST", "/backend-api/codex/responses/compact", %{}, nil, "proxy_compact", "http_compact_json"},
+        {"POST", "/backend-api/codex/v1/responses/compact", %{}, nil, "proxy_compact", "http_compact_json"},
         {"GET", "/backend-api/codex/responses", %{}, "websocket", "proxy_websocket", "websocket"},
-        {"GET", "/backend-api/codex/v1/responses", %{}, "websocket", "proxy_websocket",
-         "websocket"},
+        {"GET", "/backend-api/codex/v1/responses", %{}, "websocket", "proxy_websocket", "websocket"},
         {"GET", "/v1/responses", %{}, "websocket", "proxy_websocket", "websocket"},
         {"POST", "/v1/responses/compact", %{}, nil, "proxy_http", "http_json"}
       ]
@@ -2613,9 +2682,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
           forwarded_headers: [{"x-codex-client", :invalid}],
           finalize_retry_timeout_ms: -1
         )
-        |> RequestOptions.put_runtime_context(
-          payload_compression: %{"enabled" => true, "attempted" => false, "status" => "disabled"}
-        )
+        |> RequestOptions.put_runtime_context(payload_compression: %{"enabled" => true, "attempted" => false, "status" => "disabled"})
 
       assert updated.continuity.session_header_source == "session-id"
       assert updated.continuity.reconnect_window_seconds == nil
@@ -2656,9 +2723,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
           forwarded_headers: [{"user-agent", "codex_cli_rs/0.0.0"}],
           finalize_retry_timeout_ms: 0
         )
-        |> RequestOptions.put_runtime_context(
-          payload_compression: %{"attempted" => true, "status" => "no_change"}
-        )
+        |> RequestOptions.put_runtime_context(payload_compression: %{"attempted" => true, "status" => "no_change"})
 
       assert updated.continuity.session_header_source == "x-session-id"
 

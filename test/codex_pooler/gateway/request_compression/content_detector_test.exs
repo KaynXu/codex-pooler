@@ -111,9 +111,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
 
       assert_noop(
         :text,
-        ContentDetector.detect(
-          "synthetic quoted value " <> CodexPooler.JSON.encode!(embedded_object)
-        )
+        ContentDetector.detect("synthetic quoted value " <> CodexPooler.JSON.encode!(embedded_object))
       )
 
       assert_noop(:text, ContentDetector.detect("synthetic prefix {\n  \"broken\": true"))

@@ -15,7 +15,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
 
   setup do
     old_files_config = Application.get_env(:codex_pooler, Files, [])
-    old_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+    CodexPooler.TestAppEnv.restore_on_exit(FileBridge)
 
     Application.put_env(:codex_pooler, Files,
       max_file_size_bytes: 64,
@@ -27,10 +27,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       finalize_retry_interval_ms: 0
     )
 
-    on_exit(fn ->
-      Application.put_env(:codex_pooler, Files, old_files_config)
-      Application.put_env(:codex_pooler, FileBridge, old_bridge_config)
-    end)
+    on_exit(fn -> Application.put_env(:codex_pooler, Files, old_files_config) end)
 
     :ok
   end
@@ -587,14 +584,12 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       message: "upstream file upload failed with status #{status}"
     )
 
-    assert_receive {:upload_redirect, ^file_id, "PUT", :https, "upload.example.invalid",
-                    ^upload_path, ^file_contents, headers},
+    assert_receive {:upload_redirect, ^file_id, "PUT", :https, "upload.example.invalid", ^upload_path, ^file_contents, headers},
                    1_000
 
     assert_exact_safe_upload_headers(headers, "text/plain")
 
-    refute_received {:upload_private_target, ^file_id, _method, _scheme, _host, _path, _body,
-                     _headers}
+    refute_received {:upload_private_target, ^file_id, _method, _scheme, _host, _path, _body, _headers}
 
     assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(upstream)
 
@@ -635,9 +630,17 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
 
   defp assert_openai_error(conn, status, opts) do
     assert %{"error" => error} = json_response(conn, status)
-    assert error["type"] == "invalid_request_error"
+    assert error["type"] == Keyword.get(opts, :type, public_error_type(status))
     assert error["code"] == Keyword.fetch!(opts, :code)
     assert error["message"] == Keyword.fetch!(opts, :message)
     assert error["param"] == Keyword.get(opts, :param)
   end
+
+  # The public contract for errors the Pooler authors: a 5xx is never typed as a
+  # client error, and a 429 is a throttle (findings#191). This helper used to
+  # assert `invalid_request_error` for every status, which pinned the defect for
+  # the 502 upload failures rather than describing them.
+  defp public_error_type(status) when status >= 500, do: "server_error"
+  defp public_error_type(429), do: "rate_limit_error"
+  defp public_error_type(_status), do: "invalid_request_error"
 end

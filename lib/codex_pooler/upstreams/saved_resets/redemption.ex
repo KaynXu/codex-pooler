@@ -7,6 +7,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   alias CodexPooler.Events
   alias CodexPooler.Gateway.Routing.CircuitHealth
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -690,7 +691,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp list_recovery_chatgpt_credits(recovery) do
-    case Req.get(recovery.list_url,
+    case OutboundHTTP.get(recovery.list_url,
            headers:
              CloudflareCookies.request_headers(
                recovery.list_url,
@@ -701,7 +702,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
                )
              ),
            retry: false,
-           receive_timeout: recovery.receive_timeout
+           receive_timeout: recovery.receive_timeout,
+           finch: OutboundHTTP.pool_options_for_url(recovery.list_url)
          )
          |> store_cloudflare_cookies(recovery.list_url) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
@@ -997,7 +999,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       %{"redeem_request_id" => idempotency_key(recovery)}
       |> maybe_put_recovery_credit_id(endpoint_kind, credit_id)
 
-    case Req.post(recovery.consume_url,
+    case OutboundHTTP.post(recovery.consume_url,
            headers:
              CloudflareCookies.request_headers(
                recovery.consume_url,
@@ -1009,7 +1011,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ),
            body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
-           receive_timeout: recovery.receive_timeout
+           receive_timeout: recovery.receive_timeout,
+           finch: OutboundHTTP.pool_options_for_url(recovery.consume_url)
          )
          |> store_cloudflare_cookies(recovery.consume_url) do
       {:ok, %{status: status, body: response_body}} ->
@@ -1205,8 +1208,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     else
       case recovery_replay_due_at(%{
              "provider_dispatches" => recovery.provider_dispatches,
-             "last_provider_dispatched_at" =>
-               encode_optional_datetime(recovery.last_provider_dispatched_at),
+             "last_provider_dispatched_at" => encode_optional_datetime(recovery.last_provider_dispatched_at),
              "next_action_at" => nil
            }) do
         {:ok, replay_due_at} -> later_datetime(requested_due_at, replay_due_at)
@@ -1408,8 +1410,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
 
       %UpstreamIdentity{status: @identity_disabled} ->
-        {:error,
-         lifecycle_error(:upstream_identity_unavailable, "upstream identity is not available")}
+        {:error, lifecycle_error(:upstream_identity_unavailable, "upstream identity is not available")}
 
       %UpstreamIdentity{status: status} = identity
       when status not in [@identity_deleted, @identity_disabled] ->
@@ -1424,9 +1425,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     do: {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
 
   defp ensure_identity_usable(%UpstreamIdentity{status: @identity_disabled}),
-    do:
-      {:error,
-       lifecycle_error(:upstream_identity_unavailable, "upstream identity is not available")}
+    do: {:error, lifecycle_error(:upstream_identity_unavailable, "upstream identity is not available")}
 
   defp ensure_identity_usable(%UpstreamIdentity{}), do: :ok
 
@@ -2217,8 +2216,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
             available_count_before: available_count,
             available_count_after: 0,
             http_status: http_status,
-            saved_reset_observation:
-              no_credit_observation_intent(snapshot, available_count, claim.started_at)
+            saved_reset_observation: no_credit_observation_intent(snapshot, available_count, claim.started_at)
           }
 
         %{credit_id: credit_id, available_count: available_count} ->
@@ -2271,14 +2269,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp list_chatgpt_credits(url, identity, access_token, receive_timeout) do
-    case Req.get(url,
+    case OutboundHTTP.get(url,
            headers:
              CloudflareCookies.request_headers(
                url,
                request_headers(access_token, identity.chatgpt_account_id, :get)
              ),
            retry: false,
-           receive_timeout: receive_timeout
+           receive_timeout: receive_timeout,
+           finch: OutboundHTTP.pool_options_for_url(url)
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
@@ -2368,7 +2367,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         do: Map.put(body, "credit_id", reserved_credit_id),
         else: body
 
-    case Req.post(url,
+    case OutboundHTTP.post(url,
            headers:
              CloudflareCookies.request_headers(
                url,
@@ -2380,7 +2379,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ),
            body: CodexPooler.JSON.encode_to_iodata!(body),
            retry: false,
-           receive_timeout: reserved_claim.receive_timeout
+           receive_timeout: reserved_claim.receive_timeout,
+           finch: OutboundHTTP.pool_options_for_url(url)
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: response_body}} ->
@@ -2426,9 +2426,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         # refresh so evidence is only accepted when observed at/after it.
         consumed_at = claim[:finished_at] || now()
 
-        case PoolReconciliation.refresh_quota_from_usage(identity, assignment,
-               receive_timeout: claim.receive_timeout
-             ) do
+        case PoolReconciliation.refresh_quota_from_usage(identity, assignment, receive_timeout: claim.receive_timeout) do
           {:ok, refreshed_identity} ->
             available_count_after = SavedResets.snapshot(refreshed_identity).available_count
 
@@ -2504,16 +2502,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
     case snapshot.usage_path do
       "/wham/usage" ->
-        {:ok, base <> "/wham/rate-limit-reset-credits",
-         base <> "/wham/rate-limit-reset-credits/consume"}
+        {:ok, base <> "/wham/rate-limit-reset-credits", base <> "/wham/rate-limit-reset-credits/consume"}
 
       "/backend-api/wham/usage" ->
-        {:ok, base <> "/backend-api/wham/rate-limit-reset-credits",
-         base <> "/backend-api/wham/rate-limit-reset-credits/consume"}
+        {:ok, base <> "/backend-api/wham/rate-limit-reset-credits", base <> "/backend-api/wham/rate-limit-reset-credits/consume"}
 
       nil ->
-        {:ok, base <> "/backend-api/wham/rate-limit-reset-credits",
-         base <> "/backend-api/wham/rate-limit-reset-credits/consume"}
+        {:ok, base <> "/backend-api/wham/rate-limit-reset-credits", base <> "/backend-api/wham/rate-limit-reset-credits/consume"}
 
       _usage_path ->
         {:error, %{status: :noop, applied?: false, code: "saved_reset_endpoint_unknown"}}
@@ -2564,20 +2559,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp send_chatgpt_account_header?(chatgpt_account_id) when is_binary(chatgpt_account_id) do
-    chatgpt_account_id = String.trim(chatgpt_account_id)
-
-    chatgpt_account_id != "" and not String.starts_with?(chatgpt_account_id, "email_") and
-      not String.starts_with?(chatgpt_account_id, "local_")
-  end
-
-  defp send_chatgpt_account_header?(_chatgpt_account_id), do: false
-
-  defp emitted_chatgpt_account_scope(chatgpt_account_id) do
-    if send_chatgpt_account_header?(chatgpt_account_id),
-      do: String.trim(chatgpt_account_id),
-      else: nil
-  end
+  defp emitted_chatgpt_account_scope(chatgpt_account_id),
+    do: UpstreamIdentity.account_scope(chatgpt_account_id)
 
   defp put_provider_replay_contract(metadata, claim, identity, assignment, started_at) do
     snapshot = SavedResets.snapshot(identity, started_at)
@@ -2608,8 +2591,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         endpoint_family = "chatgpt_api"
         account_scope = emitted_chatgpt_account_scope(identity.chatgpt_account_id) || ""
 
-        {:ok, endpoint_family, consume_url,
-         CreditLocator.scope_fingerprint(endpoint_family, consume_url, account_scope)}
+        {:ok, endpoint_family, consume_url, CreditLocator.scope_fingerprint(endpoint_family, consume_url, account_scope)}
 
       {:error, _result} ->
         :unsupported
@@ -2621,8 +2603,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       {:ok, consume_url} ->
         endpoint_family = "codex_api"
 
-        {:ok, endpoint_family, consume_url,
-         CreditLocator.scope_fingerprint(endpoint_family, consume_url, "")}
+        {:ok, endpoint_family, consume_url, CreditLocator.scope_fingerprint(endpoint_family, consume_url, "")}
 
       {:error, _result} ->
         :unsupported
@@ -3090,8 +3071,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     decision_at = later_datetime(finished_at, now())
     evidence = Windows.list_evidence(identity)
 
-    {finalize_confirmation_phase(result, {identity, evidence}, decision_at), evidence,
-     decision_at}
+    {finalize_confirmation_phase(result, {identity, evidence}, decision_at), evidence, decision_at}
   end
 
   defp finalize_confirmation(_identity, result, _finished_at), do: {result, [], nil}
@@ -3311,8 +3291,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           }
           |> Map.merge(expiration_metadata(snapshot, intent.authoritative_zero?, observed_at))
 
-        {Map.put(metadata, "saved_resets", saved_reset_metadata),
-         identity.saved_reset_first_seen_ledger}
+        {Map.put(metadata, "saved_resets", saved_reset_metadata), identity.saved_reset_first_seen_ledger}
 
       :skip ->
         {metadata, identity.saved_reset_first_seen_ledger}

@@ -13,6 +13,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     ClientRetry,
     LedgerEntry,
     Metadata,
+    PreAttemptRelease,
     PricingResolution,
     Request,
     RequestLogFacts,
@@ -21,6 +22,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   }
 
   alias CodexPooler.Accounting.RequestLifecycle.{
+    AbsentInstanceRecovery,
     IdentitySnapshot,
     LedgerEntries,
     Recovery,
@@ -30,6 +32,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Events
+  alias CodexPooler.Gateway.Persistence.RuntimeCleanup
+  alias CodexPooler.Platform.ExecutionIdentity
+  alias CodexPooler.Platform.ExecutionTerminalProofs
+  alias CodexPooler.Platform.InstancePresence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
@@ -77,9 +83,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   def reserve(_auth, _model_or_id, _payload, _opts),
-    do:
-      {:error,
-       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec claim_websocket_turn(auth(), model_ref(), map()) :: request_result()
   def claim_websocket_turn(%{pool: _pool, api_key: _api_key} = auth, model_or_id, opts) do
@@ -91,9 +95,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   def claim_websocket_turn(_auth, _model_or_id, _opts),
-    do:
-      {:error,
-       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec claim_client_retry_successor(auth(), model_ref(), map(), map()) ::
           {:ok, CodexPooler.Accounting.ClientRetry.SuccessorClaim.t()} | {:error, atom() | map()}
@@ -138,14 +140,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   def record_denied_request(_auth, _model_or_id, _opts),
-    do:
-      {:error,
-       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+    do: {:error, Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
   @spec recover_stale_reservations(DateTime.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def recover_stale_reservations(now \\ DateTime.utc_now(), opts \\ []) do
     Recovery.recover_stale_reservations(DateTime.truncate(now, :microsecond), opts)
   end
+
+  @spec recover_absent_instance_attempts(DateTime.t(), keyword()) ::
+          {:ok, AbsentInstanceRecovery.summary()}
+          | {:error, term(), AbsentInstanceRecovery.summary()}
+  def recover_absent_instance_attempts(now \\ DateTime.utc_now(), opts \\ []) do
+    AbsentInstanceRecovery.recover_absent_instance_attempts(
+      DateTime.truncate(now, :microsecond),
+      opts
+    )
+  end
+
+  @spec recover_dead_execution_attempts(DateTime.t(), keyword()) ::
+          {:ok, map()} | {:error, term(), map()}
+  def recover_dead_execution_attempts(now \\ DateTime.utc_now(), opts \\ []),
+    do: __MODULE__.DeadExecutionRecovery.recover(DateTime.truncate(now, :microsecond), opts)
 
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
@@ -351,9 +366,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   defp ensure_no_request_replay!(request_id) do
-    if Repo.exists?(
-         from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id
-       ) do
+    if Repo.exists?(from replay in RequestReplayEntitlement, where: replay.request_id == ^request_id) do
       Repo.rollback(
         Metadata.accounting_error(
           :request_replay_required,
@@ -380,9 +393,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   @spec finalize_reserved_request_failure(Request.t(), map()) :: request_result()
   def finalize_reserved_request_failure(%Request{} = request, attrs \\ %{}) do
+    caller_owned_transaction? = Repo.in_transaction?()
     request_status = Map.get(attrs, :request_status, Map.get(attrs, :status, "failed"))
     last_error_code = blank_to_nil(Map.get(attrs, :last_error_code))
     usage_status = Map.get(attrs, :usage_status, @usage_not_applicable)
+
+    # A release written after a terminal attempt (`released_after_attempt:`)
+    # is not a pre-attempt release: it carries that attempt's id, no phase
+    # key, and never enters the pre-attempt series (findings#221).
+    released_after_attempt =
+      case Map.get(attrs, :released_after_attempt) do
+        %Attempt{} = attempt -> attempt
+        _other -> nil
+      end
+
+    pre_attempt_phase =
+      if released_after_attempt,
+        do: nil,
+        else: PreAttemptRelease.phase(Map.get(attrs, :pre_attempt_phase))
 
     Repo.transaction(fn ->
       request =
@@ -391,6 +419,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
             where: locked_request.id == ^request.id,
             lock: "FOR UPDATE"
         )
+
+      # A request that already completed keeps its outcome and failure reason:
+      # a second reservation-failure finalization (a drain racing a task
+      # exception, an interruption racing a rejection) must not rewrite a
+      # terminal row or re-count its release (findings#221).
+      ensure_request_dispatchable!(request)
 
       timestamp = ClientRetry.completion_timestamp(request, now(attrs))
 
@@ -411,21 +445,68 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           source_event_id: LedgerEntries.reservation_source_event_id(request.id)
         )
 
-      release =
+      {release, release_status} =
         request
         |> LedgerEntries.reservation_failure_release_attrs(
           reservation,
           usage_status,
           last_error_code,
-          timestamp
+          pre_attempt_phase,
+          timestamp,
+          released_after_attempt
         )
-        |> LedgerEntries.create_or_get!()
+        |> LedgerEntries.create_or_get_with_status!()
 
-      %{request: request, attempt: nil, release: release}
+      %{
+        request: request,
+        attempt: released_after_attempt,
+        release: release,
+        release_status: release_status
+      }
     end)
     |> unwrap_transaction()
+    |> attach_pre_attempt_release_marker(pre_attempt_phase, last_error_code)
+    |> emit_pre_attempt_release_after_commit(caller_owned_transaction?)
+    |> strip_release_status()
     |> tap_request_finalized_events_unless_stale()
   end
+
+  # Counted only for the write that created the release, and counted apart
+  # from every settlement of a dispatched attempt: a pre-attempt abandonment
+  # that used to surface only as a six-hour backstop row is a live series
+  # here. An immutable release that already existed is not a second
+  # abandonment.
+  #
+  # A nested transaction has released only a savepoint. It hands the marker to
+  # its owner, while the outermost call emits only after its transaction has
+  # returned successfully. This is the same commit boundary used by stream
+  # interruption outcomes and prevents a later turn failure from counting a
+  # release row the shared transaction rolls back.
+  defp attach_pre_attempt_release_marker(result, nil, _last_error_code), do: result
+
+  defp attach_pre_attempt_release_marker(
+         {:ok, %{request: request, release_status: :inserted} = value},
+         pre_attempt_phase,
+         last_error_code
+       ) do
+    marker = PreAttemptRelease.marker(pre_attempt_phase, request.transport, last_error_code)
+    {:ok, Map.put(value, :after_commit_markers, [marker])}
+  end
+
+  defp attach_pre_attempt_release_marker(result, _pre_attempt_phase, _last_error_code), do: result
+
+  defp emit_pre_attempt_release_after_commit(
+         {:ok, %{after_commit_markers: markers} = value},
+         false
+       ) do
+    Enum.each(markers, &PreAttemptRelease.emit_marker/1)
+    {:ok, Map.delete(value, :after_commit_markers)}
+  end
+
+  defp emit_pre_attempt_release_after_commit(result, _caller_owned_transaction?), do: result
+
+  defp strip_release_status({:ok, %{} = value}), do: {:ok, Map.delete(value, :release_status)}
+  defp strip_release_status(result), do: result
 
   defp tap_request_finalized_events_unless_stale({:ok, %{stale_generation?: true}} = result),
     do: result
@@ -437,6 +518,120 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     request
     |> finalize_request_with_disposition(attempt, attrs)
     |> strip_finalization_disposition()
+  end
+
+  @doc false
+  @spec recover_dead_execution(Request.t(), Attempt.t(), DateTime.t()) ::
+          {:ok, :recovered | :noop} | {:error, term()}
+  def recover_dead_execution(request, candidate, timestamp) do
+    recover_execution(request, candidate, timestamp, :terminal, [])
+  end
+
+  @doc false
+  @spec recover_absent_execution(Request.t(), Attempt.t(), DateTime.t(), keyword()) ::
+          {:ok, :recovered | :noop} | {:error, term()}
+  def recover_absent_execution(request, candidate, timestamp, opts) do
+    recover_execution(request, candidate, timestamp, :absent, opts)
+  end
+
+  defp recover_execution(request, candidate, timestamp, authority, opts) do
+    Repo.transaction(fn ->
+      {request, attempt, _reservation, settlement, entitlement} =
+        lock_finalization_rows(request, candidate)
+
+      latest_id =
+        Repo.one(
+          from a in Attempt,
+            where: a.request_id == ^request.id,
+            order_by: [desc: a.attempt_number],
+            limit: 1,
+            select: a.id
+        )
+
+      if recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) and
+           execution_recovery_authorized?(attempt, authority, opts) do
+        finalize_dead_execution(request, attempt, timestamp, authority)
+      else
+        :noop
+      end
+    end)
+  end
+
+  defp recoverable_execution?(request, attempt, candidate, latest_id, settlement, entitlement) do
+    request.status in @dispatchable_request_statuses and
+      attempt.status in @retryable_attempt_statuses and latest_id == candidate.id and
+      same_execution?(attempt, candidate) and
+      is_nil(settlement) and is_nil(entitlement)
+  end
+
+  defp execution_recovery_authorized?(attempt, :terminal, _opts),
+    do: ExecutionTerminalProofs.terminal?(attempt)
+
+  defp execution_recovery_authorized?(attempt, :absent, opts) do
+    presence_now = InstancePresence.database_now()
+
+    owner =
+      InstancePresence.Identity.owner(attempt.owner_instance_id, attempt.owner_instance_boot_id)
+
+    InstancePresence.observer_fresh?(presence_now, opts) and
+      InstancePresence.absent?(owner, presence_now, opts) and
+      absent_execution_dead?(attempt, owner)
+  end
+
+  # Stale presence is candidate evidence, never proof: the owner may be alive
+  # with failing heartbeat writes (findings#214). Exact death comes from a
+  # reachable owner node reporting the execution gone, or, without BEAM
+  # connectivity to the owner (the production worker topology, findings#207),
+  # from a successor incarnation publishing presence under the same node name.
+  # A reachable owner reporting the execution alive vetoes both.
+  defp absent_execution_dead?(attempt, owner) do
+    case ExecutionIdentity.status(attempt) do
+      :dead -> true
+      :alive -> false
+      :unknown -> InstancePresence.superseded?(owner)
+    end
+  end
+
+  defp same_execution?(attempt, candidate) do
+    attempt.replay_generation == 0 and candidate.replay_generation == 0 and
+      Map.take(attempt, [
+        :owner_execution_id,
+        :owner_instance_id,
+        :owner_instance_boot_id,
+        :owner_process_id
+      ]) ==
+        Map.take(candidate, [
+          :owner_execution_id,
+          :owner_instance_id,
+          :owner_instance_boot_id,
+          :owner_process_id
+        ])
+  end
+
+  defp finalize_dead_execution(request, attempt, timestamp, authority) do
+    code =
+      if authority == :absent, do: "absent_instance_recovered", else: "dead_execution_recovered"
+
+    case finalize_request(request, attempt, %{
+           request_status: "failed",
+           attempt_status: "failed",
+           response_status_code: 499,
+           last_error_code: code,
+           error_message: "request execution ended before settlement",
+           usage: %{status: "usage_unknown", source: code},
+           now: timestamp
+         }) do
+      {:ok, _result} ->
+        RuntimeCleanup.recover_stale_request_turn(request.id, attempt.id,
+          now: timestamp,
+          error_code: code
+        )
+
+        :recovered
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
   end
 
   @doc false
@@ -628,12 +823,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           lock: "FOR UPDATE"
       )
 
+    # Reader lock: finalization never writes the `api_keys` row, and interruption
+    # and replay transactions reach this prefix after taking the reader lock, so
+    # a writer lock here would upgrade theirs inside one transaction.
     _api_key =
-      Repo.one!(
-        from api_key in CodexPooler.Access.APIKey,
-          where: api_key.id == ^request.api_key_id,
-          lock: "FOR UPDATE"
-      )
+      CodexPooler.Access.lock_api_key_for_read(request.api_key_id) ||
+        raise(Ecto.NoResultsError, queryable: CodexPooler.Access.APIKey)
 
     _turn =
       Repo.one!(
@@ -651,6 +846,58 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         limit: 1,
         select: type(fragment("request_replay_db_now()"), :utc_datetime_usec)
     )
+  end
+
+  @doc """
+  Revokes the request's armed replay entitlement without touching the
+  request, attempt or turn, for callers that finalize those rows themselves
+  (a task exception or an interruption whose reservation is already released,
+  a post-attempt release). The entitlement must be armed for `attempt`
+  (its eligible attempt); anything else is left alone. Must run inside the
+  caller's transaction, after the request locks the caller already holds;
+  the entitlement row lock is taken last, as every replay transaction does.
+  `terminal_at` is clamped above `armed_at`, which the replay module stamps
+  from the database clock, so a lagging application clock cannot fail the
+  lifecycle tuple inside a finalization (findings#221).
+  """
+  @spec revoke_armed_replay_entitlement!(Ecto.UUID.t(), Attempt.t() | nil, DateTime.t()) ::
+          :revoked | :noop
+  def revoke_armed_replay_entitlement!(request_id, attempt, %DateTime{} = timestamp)
+      when is_binary(request_id) do
+    unless Repo.in_transaction?() do
+      raise ArgumentError, "revoke_armed_replay_entitlement!/3 must run inside a transaction"
+    end
+
+    query =
+      from replay in RequestReplayEntitlement,
+        where: replay.request_id == ^request_id and replay.status == "armed",
+        lock: "FOR UPDATE"
+
+    query =
+      case attempt do
+        %Attempt{id: id} -> from replay in query, where: replay.eligible_attempt_id == ^id
+        _none -> query
+      end
+
+    query
+    |> Repo.one()
+    |> case do
+      %RequestReplayEntitlement{armed_at: %DateTime{} = armed_at} = entitlement ->
+        terminal_at =
+          if DateTime.compare(timestamp, armed_at) == :gt,
+            do: timestamp,
+            else: DateTime.add(armed_at, 1, :microsecond)
+
+        :ok =
+          close_replay_entitlement(entitlement, terminal_at, %{
+            replay_entitlement_close_status: "revoked"
+          })
+
+        :revoked
+
+      nil ->
+        :noop
+    end
   end
 
   defp close_replay_entitlement(nil, _timestamp, _attrs), do: :ok
@@ -785,13 +1032,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         %{
           status: finalization.attempt_status,
           completed_at: finalization.timestamp,
-          upstream_status_code:
-            Map.get(attrs, :upstream_status_code, finalization.response_status_code),
+          upstream_status_code: Map.get(attrs, :upstream_status_code, finalization.response_status_code),
           retryable: Map.get(attrs, :retryable, false),
           network_error_code: finalization.last_error_code,
           error_message: finalization.error_message,
           latency_ms: Map.get(attrs, :latency_ms),
           usage_status: usage.status,
+          served_model: usage.served_model,
           response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :attempt_metadata, %{}))
         }
       end
@@ -989,6 +1236,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           else: "invalid_usage_tokens"
         ),
       service_tier: attr(usage, :service_tier),
+      served_model: Metadata.bounded_model_identifier(attr(usage, :served_model)),
       recorded_at: attr(usage, :recorded_at) || now()
     }
   end
@@ -1046,15 +1294,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
        ),
        do: usage
 
-  defp fill_unknown_usage_from_reservation(usage, reservation, timestamp) do
+  defp fill_unknown_usage_from_reservation(usage, reservation, _timestamp) do
     %{
       usage
       | input_tokens: reservation.input_tokens || 0,
         cached_input_tokens: reservation.cached_input_tokens || 0,
         output_tokens: reservation.output_tokens || 0,
         reasoning_tokens: reservation.reasoning_tokens || 0,
-        total_tokens: reservation.total_tokens || 0,
-        recorded_at: timestamp
+        total_tokens: reservation.total_tokens || 0
     }
   end
 
@@ -1072,6 +1319,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   defp insert_attempt!(request, assignment, attrs, timestamp) do
     model = attempt_model(request, attrs)
     pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
+    {owner_instance_id, owner_instance_boot_id} = attempt_owner(attrs)
+
+    execution =
+      if Map.has_key?(attrs, :owner_instance_id),
+        do: %{owner_process_id: nil, owner_execution_id: nil},
+        else: ExecutionIdentity.local()
 
     attempt_number =
       Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count, :id) + 1
@@ -1086,6 +1339,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       model_id: request.model_id,
       upstream_model_id: (model && model.upstream_model_id) || request.requested_model,
       transport: request.transport,
+      owner_instance_id: owner_instance_id,
+      owner_instance_boot_id: owner_instance_boot_id,
+      owner_process_id: execution.owner_process_id,
+      owner_execution_id: execution.owner_execution_id,
       status: Map.get(attrs, :status, "in_progress"),
       started_at: timestamp,
       retryable: Map.get(attrs, :retryable, false),
@@ -1109,6 +1366,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
       {:error, changeset} ->
         Repo.rollback(changeset)
+    end
+  end
+
+  # The dispatching instance owns this attempt until it settles. Recording it
+  # here, before any upstream byte arrives, is what lets another replica recover
+  # the row when this instance never comes back. The owner is the node name and
+  # the VM incarnation together, because a container that restarts in place
+  # comes back under the same node name; the pair is taken or overridden
+  # atomically so an attempt never mixes one instance's name with another's
+  # incarnation.
+  defp attempt_owner(attrs) do
+    case Map.fetch(attrs, :owner_instance_id) do
+      {:ok, owner_instance_id} ->
+        {owner_instance_id, Map.get(attrs, :owner_instance_boot_id)}
+
+      :error ->
+        owner = InstancePresence.local_identity()
+        {owner.node_name, owner.boot_id}
     end
   end
 

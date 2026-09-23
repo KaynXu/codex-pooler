@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   alias CodexPooler.Gateway.OpenAICompatibility.{PublicResponse, Responses}
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
@@ -346,7 +347,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {event_type, decoded} = stream_block_event(block)
 
     decoded =
-      Responses.restore_custom_tool_call_namespaces(decoded, state.custom_tool_namespaces)
+      decoded
+      |> drop_provider_event_headers()
+      |> Responses.restore_custom_tool_call_namespaces(state.custom_tool_namespaces)
 
     source_type = effective_source_public_type(event_type, decoded)
     source_terminal_outcome = source_terminal_outcome(source_type, decoded)
@@ -541,6 +544,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
+  # Public /v1 events carry no provider header objects: `headers` and the
+  # nested `response.headers` are dropped from every decoded event before it
+  # is shaped and re-encoded, on SSE and on the public websocket alike
+  # (findings#239). The one exemption is `codex.response.metadata`, whose
+  # header object is the event's payload (the owner-forwarded Pooler ETag
+  # event on a public turn); the session already strips an untrusted
+  # provider ETag from it. An event without header objects is returned as is.
+  @spec drop_provider_event_headers(map()) :: map()
+  def drop_provider_event_headers(%{"type" => "codex.response.metadata"} = decoded), do: decoded
+
+  def drop_provider_event_headers(%{} = decoded) do
+    case NativeCodexResponseControl.drop_event_headers(decoded) do
+      {:changed, dropped} -> dropped
+      _unchanged -> decoded
+    end
+  end
+
   @spec normalize_terminal_errors(String.t() | nil, map()) :: map()
   def normalize_terminal_errors("response.failed", %{} = decoded) do
     response =
@@ -670,9 +690,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   # A real top-level error alongside a null nested error keeps the existing
   # copy-into-response behavior instead of fabricating from the null.
-  defp normalize_response_error(
-         %{"error" => %{} = public_error, "response" => %{"error" => nil} = response} = decoded
-       ) do
+  defp normalize_response_error(%{"error" => %{} = public_error, "response" => %{"error" => nil} = response} = decoded) do
     Map.put(decoded, "response", Map.put(response, "error", public_error))
   end
 
@@ -686,9 +704,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     )
   end
 
-  defp normalize_response_error(
-         %{"error" => %{} = public_error, "response" => %{} = response} = decoded
-       ) do
+  defp normalize_response_error(%{"error" => %{} = public_error, "response" => %{} = response} = decoded) do
     Map.put(decoded, "response", Map.put(response, "error", public_error))
   end
 
@@ -712,8 +728,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       "created_at" => 0,
       "status" => "failed",
       "error" => normalize_terminal_error(Map.get(response, "error")),
-      "incomplete_details" =>
-        project_failed_incomplete_details(Map.get(response, "incomplete_details")),
+      "incomplete_details" => project_failed_incomplete_details(Map.get(response, "incomplete_details")),
       "model" => "unknown",
       "object" => "response",
       "output" => [],
@@ -763,8 +778,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     %{
       "input_tokens" => input_tokens,
       "input_tokens_details" => %{
-        "cache_write_tokens" =>
-          bounded_usage_integer(Map.get(input_details, "cache_write_tokens")),
+        "cache_write_tokens" => bounded_usage_integer(Map.get(input_details, "cache_write_tokens")),
         "cached_tokens" => bounded_usage_integer(Map.get(input_details, "cached_tokens"))
       },
       "output_tokens" => output_tokens,

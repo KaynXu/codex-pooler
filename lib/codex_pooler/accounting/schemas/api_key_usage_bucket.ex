@@ -10,6 +10,10 @@ defmodule CodexPooler.Accounting.APIKeyUsageBucket do
     field :effective_request_count, :integer
     field :effective_total_tokens, :integer
     field :effective_cost_micros, :decimal
+    field :known_total_tokens, :integer
+    field :provisional_total_tokens, :integer
+    field :admission_count, :integer
+    field :known_cost_micros, :decimal
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end

@@ -105,9 +105,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   def public_openai_responses_passthrough_terminal_kind(state),
     do: PublicResponses.passthrough_terminal_kind(state)
 
-  @spec public_openai_responses_passthrough_terminal_failure(
-          public_openai_responses_stream_state()
-        ) ::
+  @spec public_openai_responses_passthrough_terminal_failure(public_openai_responses_stream_state()) ::
           terminal_failure() | nil
   def public_openai_responses_passthrough_terminal_failure(state),
     do: PublicResponses.passthrough_terminal_failure(state)
@@ -137,6 +135,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   @spec websocket_error_frame_headers(binary() | map()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
+
+  @spec upstream_request_id_header_names() :: [String.t()]
+  defdelegate upstream_request_id_header_names(), to: WebsocketErrorHeaders
+
+  @spec websocket_error_frame_header_allowed?(term()) :: boolean()
+  defdelegate websocket_error_frame_header_allowed?(name),
+    to: WebsocketErrorHeaders,
+    as: :allowed_header_name?
 
   @spec new_sse_block_state() :: sse_block_state()
   defdelegate new_sse_block_state(), to: SSEParser, as: :new_block_state
@@ -196,6 +202,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec downstream_visible_event?(term()) :: boolean()
   defdelegate downstream_visible_event?(event), to: TerminalOutcome
 
+  @spec retry_window_preamble_event?(term()) :: boolean()
+  defdelegate retry_window_preamble_event?(event), to: TerminalOutcome
+
+  @spec preamble_only_stream_data?(term()) :: boolean()
+  defdelegate preamble_only_stream_data?(data), to: TerminalOutcome
+
+  @spec split_preamble_blocks(term()) :: {binary(), boolean()}
+  defdelegate split_preamble_blocks(data), to: TerminalOutcome
+
+  @doc false
+  @spec partition_preamble_blocks(term()) :: {binary(), binary(), boolean()}
+  defdelegate partition_preamble_blocks(data), to: TerminalOutcome
+
   @spec stream_data_visible?(term()) :: boolean()
   defdelegate stream_data_visible?(data), to: TerminalOutcome
 
@@ -216,6 +235,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   @spec decode_sse_data(term()) :: map()
   defdelegate decode_sse_data(data), to: SSEParser
+
+  @spec stream_block_event(binary()) :: {String.t() | nil, map()}
+  defdelegate stream_block_event(block), to: SSEParser
 
   @spec valid_json?(term()) :: boolean()
   defdelegate valid_json?(body), to: SSEParser

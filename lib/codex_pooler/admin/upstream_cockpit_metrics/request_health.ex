@@ -236,6 +236,12 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
   end
 
   defp recent_request_event_rows_for_pools(identity_id, pool_ids, limit) do
+    target_attempt_query =
+      from attempt in Attempt,
+        where: attempt.request_id == parent_as(:request).id,
+        where: attempt.upstream_identity_id == ^identity_id,
+        select: 1
+
     retry_query =
       from attempt in Attempt,
         where: attempt.request_id == parent_as(:request).id,
@@ -243,14 +249,13 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
         limit: 1,
         select: 1
 
-    # Probe candidates in request order, stopping once the event limit is met.
-    # The lateral limit avoids grouping an identity's entire attempt history.
+    # Start from the selected identity's request ids. Scanning requests in time
+    # order first is unbounded when this identity is sparse among newer traffic.
     recent_requests_query =
       from request in Request,
         as: :request,
-        inner_lateral_join: target in subquery(target_attempt_query(identity_id)),
-        on: true,
         where: request.pool_id in ^pool_ids,
+        where: exists(subquery(target_attempt_query)),
         where: request.status in ^@request_failed_statuses or exists(subquery(retry_query)),
         order_by: [desc: request.admitted_at, desc: request.id],
         limit: ^limit,

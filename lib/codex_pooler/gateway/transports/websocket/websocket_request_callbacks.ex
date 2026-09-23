@@ -106,8 +106,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
          native_codex_response_control: owner_request.native_codex_response_control,
          request_id: owner_request.observation.request_id,
          attempt_id: owner_request.observation.attempt_id,
-         native_client_retry_observation:
-           native_client_retry_observation(owner_request.observation),
+         native_client_retry_observation: native_client_retry_observation(owner_request.observation),
          native_compaction_capability: capability,
          first_compact_collection: first_compact_collection,
          expected_connection_lifecycle: %{
@@ -183,8 +182,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
          native_codex_response_control: owner_request.native_codex_response_control,
          request_id: owner_request.observation.request_id,
          attempt_id: owner_request.observation.attempt_id,
-         native_client_retry_observation:
-           native_client_retry_observation(owner_request.observation),
+         native_client_retry_observation: native_client_retry_observation(owner_request.observation),
          native_replay_binding: owner_request.native_replay_binding,
          native_replay_proof: owner_request.native_replay_proof,
          provisional_token: owner_request.provisional_token,
@@ -210,8 +208,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
          :ok <- validate_client_retry_owner_request(owner_request),
          {:ok, full_history} <- WebsocketOwnerRequestV7.full_history_request(owner_request),
          {:ok, request} <- materialize(full_history, nil) do
-      {:ok,
-       %{request | client_retry_dispatch_authority: owner_request.client_retry_dispatch_authority}}
+      {:ok, %{request | client_retry_dispatch_authority: owner_request.client_retry_dispatch_authority}}
     end
   end
 
@@ -236,8 +233,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
          native_codex_response_control: owner_request.native_codex_response_control,
          request_id: owner_request.observation.request_id,
          attempt_id: owner_request.observation.attempt_id,
-         native_client_retry_observation:
-           native_client_retry_observation(owner_request.observation),
+         native_client_retry_observation: native_client_retry_observation(owner_request.observation),
          assignment_advertised?: owner_request.assignment_advertised?,
          connection_bound_continuation?: owner_request.connection_bound_continuation?,
          websocket_delivery_mode: :collect_full_history,
@@ -273,8 +269,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
          native_codex_response_control: owner_request.native_codex_response_control,
          request_id: owner_request.observation.request_id,
          attempt_id: owner_request.observation.attempt_id,
-         native_client_retry_observation:
-           native_client_retry_observation(owner_request.observation),
+         native_client_retry_observation: native_client_retry_observation(owner_request.observation),
          assignment_advertised?: owner_request.assignment_advertised?,
          connection_bound_continuation?: owner_request.connection_bound_continuation?,
          websocket_delivery_mode: :collect_compaction,
@@ -310,8 +305,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
          native_codex_response_control: owner_request.native_codex_response_control,
          request_id: owner_request.observation.request_id,
          attempt_id: owner_request.observation.attempt_id,
-         native_client_retry_observation:
-           native_client_retry_observation(owner_request.observation),
+         native_client_retry_observation: native_client_retry_observation(owner_request.observation),
          effective_serving_mode: owner_request.observation.mode,
          assignment_advertised?: owner_request.assignment_advertised?,
          connection_bound_continuation?: owner_request.connection_bound_continuation?,
@@ -496,8 +490,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
   defp current_generation_snapshot?(request_id, %Attempt{replay_generation: generation}) do
     not Repo.exists?(
       from entitlement in RequestReplayEntitlement,
-        where:
-          entitlement.request_id == ^request_id and entitlement.replay_generation != ^generation
+        where: entitlement.request_id == ^request_id and entitlement.replay_generation != ^generation
     )
   end
 

@@ -17,10 +17,23 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     ReservationPolicy
   }
 
-  alias CodexPooler.Accounting.RequestLifecycle.{FailedPredecessorResend, LedgerEntries}
+  alias CodexPooler.Accounting.RequestLifecycle.{
+    DeadExecutionResendRecovery,
+    FailedPredecessorResend,
+    LedgerEntries
+  }
+
   alias CodexPooler.Catalog.Model
-  alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Repo
+
+  # The same NUMBER as `FailedPredecessorResend`'s own chain bound, and
+  # deliberately not the same behaviour at it: that one returns
+  # `{:error, :chain_exhausted}` and refuses, this one stops deriving and falls
+  # open to a generated id. See `walk_native_turn_chain/4` for why (findings#212,
+  # row 212-50).
+  @native_turn_chain_depth 16
 
   @usage_pending "usage_pending"
   @usage_not_applicable "not_applicable"
@@ -65,10 +78,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp do_claim_websocket_turn(pool, api_key, model, opts, resend_session) do
     timestamp = now(opts)
     captured_epoch = runtime_revocation_epoch(api_key, opts)
+    caller_owned_transaction? = Repo.in_transaction?()
     maybe_test_runtime_authorization_barrier(:claim, :before)
 
     Repo.transaction(fn ->
-      api_key = authorize_runtime_turn!(api_key, captured_epoch)
+      :ok = lock_resend_session(resend_session)
+      api_key = authorize_runtime_turn_for_read!(api_key, captured_epoch)
       maybe_test_runtime_authorization_barrier(:claim, :after)
       {correlation_id, client_resend} = resend_claim!(resend_session, pool, api_key, model, opts)
 
@@ -83,27 +98,30 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           status: "accepted",
           usage_status: @usage_pending,
           correlation_id: correlation_id,
-          idempotency_key: nil,
           client_ip: blank_to_nil(attr(opts, :client_ip)),
           user_agent: blank_to_nil(attr(opts, :user_agent)),
           request_metadata: claim_request_metadata(opts, client_resend),
           admitted_at: timestamp,
           retry_count: 0
         }
-        |> Ecto.Changeset.change(
-          ClientRetry.request_attrs(attr(opts, :native_client_retry_witness))
-        )
+        |> Ecto.Changeset.change(ClientRetry.request_attrs(attr(opts, :native_client_retry_witness)))
         |> Repo.insert!()
 
       RequestLogFacts.record_request_created!(request)
       :ok = bind_direct_cleanup(opts, request)
+      link_semantic_execution_retry!(opts, client_resend, request, timestamp)
 
       case client_resend do
-        nil -> %{request: request}
-        %{} -> %{request: request, client_resend: client_resend}
+        nil ->
+          %{request: request}
+
+        %{} ->
+          %{request: request, client_resend: Map.delete(client_resend, :recovery_markers)}
+          |> DeadExecutionResendRecovery.put_markers(client_resend)
       end
     end)
     |> unwrap_transaction()
+    |> DeadExecutionResendRecovery.emit_after_commit(caller_owned_transaction?)
   rescue
     error in Ecto.ConstraintError ->
       if error.constraint == "requests_correlation_id_uq" do
@@ -111,6 +129,33 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       else
         reraise(error, __STACKTRACE__)
       end
+  end
+
+  defp link_semantic_execution_retry!(opts, %{predecessor_request_id: id}, request, timestamp) do
+    case attr(opts, :correlation_id) do
+      "codex-turn:" <> _digest ->
+        ClientRetry.insert_link!(%Request{id: id}, request, timestamp)
+
+      _payload_claim ->
+        :ok
+    end
+  end
+
+  defp link_semantic_execution_retry!(_opts, nil, _request, _timestamp), do: :ok
+
+  # Runtime writes lock the codex session before `api_keys`. A resend claim that
+  # authorized the key first held it while waiting on a session an HTTP
+  # reservation already held, which waited on the key in turn. The row is taken
+  # without raising so a missing session still resolves the key authorization
+  # first; `resend_claim!/5` then re-reads it under the lock this transaction
+  # already holds and raises for a missing session exactly as before.
+  defp lock_resend_session(nil), do: :ok
+
+  defp lock_resend_session(%CodexSession{id: session_id}) do
+    _locked_or_missing =
+      Repo.one(from session in CodexSession, where: session.id == ^session_id, lock: "FOR UPDATE")
+
+    :ok
   end
 
   defp resend_claim!(nil, _pool, _api_key, _model, opts), do: {attr(opts, :correlation_id), nil}
@@ -123,17 +168,185 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       api_key_id: api_key.id,
       model_id: model.id,
       endpoint: attr(opts, :endpoint),
+      codex_session_id: session.id,
+      native_client_retry_witness: attr(opts, :native_client_retry_witness),
       anchor_present?: attr(opts, :anchor_present?) == true
     }
 
     case FailedPredecessorResend.resolve(attr(opts, :correlation_id), scope) do
-      {:ok, %{claim: claim, predecessor: predecessor}} ->
-        {claim, %{predecessor_request_id: predecessor.id, reason: :failed_predecessor}}
+      {:ok,
+       %{
+         claim: claim,
+         predecessor: predecessor,
+         predecessor_shape: shape,
+         recovery_markers: recovery_markers
+       }} ->
+        {claim,
+         %{
+           predecessor_request_id: predecessor.id,
+           reason: :failed_predecessor,
+           predecessor_shape: shape,
+           recovery_markers: recovery_markers
+         }}
 
       {:error, disposition} ->
         Repo.rollback(duplicate_request_error(disposition))
     end
   end
+
+  defp native_turn_resend_claim!(nil, %{correlation_id: correlation_id}),
+    do: {correlation_id, nil}
+
+  # This reservation runs inside the caller's transaction, so a uniqueness
+  # conflict cannot be rescued and re-resolved in a second transaction the way
+  # `claim_websocket_turn/3` does: an aborted transaction cannot read. The
+  # predecessor is therefore looked up first, under the codex session lock that
+  # serializes concurrent resends of one turn, and only an actual predecessor
+  # reaches the resend policy. A turn nobody has recorded keeps its claim and
+  # inserts exactly as before, so an unfenceable first request is never taxed
+  # with the policy's anchored/entitlement refusals.
+  defp native_turn_resend_claim!(%CodexSession{} = session, context),
+    do: walk_native_turn_chain(session, context, context.correlation_id, 0)
+
+  # Falling open must not abandon the turn's identity. A zero-output predecessor
+  # is stepped over by deriving the next claim from it -- the same deterministic
+  # derivation the websocket resend chain uses -- so the successor is still
+  # named by this turn. Reserving a fresh UUID instead would park the turn's
+  # claim on a row that can never be met again and switch the fence off for that
+  # turn permanently, letting a later attempt that DOES deliver output be
+  # resent and dispatched a second time.
+  # At the bound the walk stops deriving, it does not start refusing. Every step
+  # it took was a ZERO-OUTPUT predecessor -- `rate_limit_exceeded`, a relayed
+  # 4xx, `no_eligible_backend`, a pre-first-event idle timeout -- and those are
+  # the states `delivered_provider_output?/1` deliberately serves, which the
+  # runbook records as served and a 409 for any of them as a defect. Rolling
+  # back here turned the seventeenth consecutive zero-output attempt of one turn
+  # into a hard terminal `409` on the default transport with no duplicate spend
+  # anywhere to protect, an edge the unbounded pre-chain behaviour did not have
+  # (findings#212, row 212-50).
+  #
+  # Falling open to a fresh id costs this turn its fence -- a LATER attempt that
+  # does deliver output can then be resent and dispatched twice -- which is the
+  # trade the chain exists to avoid. After sixteen consecutive attempts that
+  # bought nothing it is the cheaper of the two, and it is what the missing app
+  # secret arm below already does.
+  defp walk_native_turn_chain(_session, _context, _claim, depth)
+       when depth > @native_turn_chain_depth,
+       do: {Ecto.UUID.generate(), nil}
+
+  defp walk_native_turn_chain(session, context, claim, depth) do
+    case native_turn_predecessor(claim) do
+      nil ->
+        {claim, nil}
+
+      %Request{} = predecessor ->
+        if delivered_provider_output?(predecessor) do
+          resolve_native_turn_resend!(session, context, claim)
+        else
+          step_over_native_turn_predecessor(session, context, claim, predecessor, depth)
+        end
+    end
+  end
+
+  defp step_over_native_turn_predecessor(session, context, claim, predecessor, depth) do
+    case ClientRetry.deterministic_failed_predecessor_claim(claim, predecessor.id) do
+      {:ok, derived} ->
+        walk_native_turn_chain(session, context, derived, depth + 1)
+
+      # Without the app secret no claim can be derived; keep today's behaviour
+      # rather than refusing a request that has no duplicate.
+      {:error, _reason} ->
+        {Ecto.UUID.generate(), nil}
+    end
+  end
+
+  defp resolve_native_turn_resend!(session, context, claim) do
+    %{pool: pool, api_key: api_key, model: model, opts: opts} = context
+    _locked = SessionContinuity.lock_codex_session_for_turn(session)
+
+    scope = %{
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      model_id: model.id,
+      endpoint: context.endpoint,
+      codex_session_id: session.id,
+      native_client_retry_witness: attr(opts, :native_client_retry_witness),
+      native_http_input_count: attr(opts, :native_http_input_count),
+      native_http_semantic_turn_key: attr(opts, :native_http_semantic_turn_key),
+      payload: context.payload,
+      anchor_present?: attr(opts, :anchor_present?) == true
+    }
+
+    case FailedPredecessorResend.resolve(claim, scope) do
+      {:ok,
+       %{
+         claim: resolved_claim,
+         predecessor: resolved,
+         predecessor_shape: shape,
+         recovery_markers: recovery_markers
+       }} ->
+        {resolved_claim,
+         %{
+           predecessor_request_id: resolved.id,
+           reason: :failed_predecessor,
+           predecessor_shape: shape,
+           recovery_markers: recovery_markers
+         }}
+
+      {:error, disposition} ->
+        Repo.rollback(duplicate_request_error(disposition))
+    end
+  end
+
+  defp native_turn_predecessor(correlation_id) do
+    Repo.one(from request in Request, where: request.correlation_id == ^correlation_id)
+  end
+
+  # Codes whose failure happened after the relay to this client had begun. A
+  # code outside this set failed before the provider produced anything for the
+  # turn (a first-event verdict, a refusal, or no dispatch at all), so a resend
+  # of it buys nothing twice.
+  @post_relay_cut_codes [
+    "owner_drained",
+    "client_disconnected",
+    "upstream_stream_error",
+    "stream_idle_timeout",
+    "owner_task_exception",
+    "dead_execution_recovered"
+  ]
+
+  # The fence exists to stop the provider being paid twice for one turn, so it
+  # refuses only a resend whose predecessor already delivered provider output
+  # for that turn: a completed turn, or a cut that happened mid-relay. Anything
+  # else falls open to today's behaviour -- a fresh correlation id and a
+  # dispatch -- because there is nothing to protect and a refusal would be a new
+  # terminal error on the default transport.
+  #
+  # `first_visible_output_at` alone cannot carry this: the Pooler marks a turn
+  # visible when any downstream-visible event is written, including a relayed
+  # error event, so a first-event `server_error` sets it exactly as a real
+  # stream does (measured). Pairing it with the cut vocabulary is what separates
+  # "output reached the client and was cut" from "the provider refused before
+  # producing anything".
+  #
+  # What this deliberately serves rather than refuses: a predecessor left live
+  # by a killed node (`completed_at` stays null until the `*/15` `runtime_cleanup`
+  # cron finalizes it), a pre-attempt drain, a pre-first-event idle timeout,
+  # `no_eligible_backend`, and every zero-output provider refusal such as
+  # `rate_limit_exceeded`, a relayed 4xx, or a retryable first-event verdict.
+  defp delivered_provider_output?(%Request{completed_at: nil}), do: false
+
+  defp delivered_provider_output?(%Request{status: "succeeded"}), do: true
+
+  defp delivered_provider_output?(%Request{last_error_code: code, id: request_id})
+       when code in @post_relay_cut_codes do
+    Repo.exists?(
+      from turn in CodexTurn,
+        where: turn.request_id == ^request_id and not is_nil(turn.first_visible_output_at)
+    )
+  end
+
+  defp delivered_provider_output?(%Request{}), do: false
 
   defp claim_request_metadata(opts, nil),
     do: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{})
@@ -228,9 +441,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
               attr(opts, :reservation_estimate)
             )
 
-          case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
-            :ok -> :ok
-            {:error, _reason} -> Repo.rollback(:authorization_changed)
+          case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate) do
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              Repo.rollback(reason)
           end
 
           context = %{
@@ -245,7 +461,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
             auth: auth,
             pricing: pricing,
             estimate: estimate,
-            opts: Map.put(opts, :turn_claim, nil),
+            # Original witnesses belong to generation zero; a successor must
+            # dispatch through its link authority instead.
+            opts:
+              opts
+              |> Map.put(:turn_claim, nil)
+              |> Map.delete(:native_client_retry_witness),
             timestamp: timestamp
           }
 
@@ -372,6 +593,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp changed_cleanup_owner?(_old_owner, _new_owner, _opts), do: false
 
   defp normalize_retry_claim_error(%Ecto.Changeset{}), do: :successor_claimed
+
+  defp normalize_retry_claim_error(%{code: :api_key_concurrency_limit_exceeded} = reason),
+    do: reason
+
   defp normalize_retry_claim_error(reason) when is_map(reason), do: :authorization_changed
   defp normalize_retry_claim_error(reason), do: reason
 
@@ -440,10 +665,40 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         correlation_id,
         pricing,
         effective_model,
-        captured_epoch
+        captured_epoch,
+        native_turn_resend_session(opts, transport, correlation_id)
       )
     end
   end
+
+  # A native Codex HTTP turn reserves under the same turn claim its websocket
+  # twin uses, so a resend of one turn meets `requests_correlation_id_uq`
+  # instead of buying a second upstream dispatch (findings#212). Only that shape
+  # takes the resend path; a generated correlation id, a websocket reservation
+  # (which already claimed its row in `claim_websocket_turn/3` and only updates
+  # it here), and a request without a codex session are untouched.
+  defp native_turn_resend_session(opts, transport, correlation_id) do
+    with true <- transport != "websocket",
+         true <- is_nil(attr(opts, :turn_claim)),
+         true <- native_turn_claim?(correlation_id),
+         %CodexSession{} = session <- attr(opts, :codex_session) do
+      session
+    else
+      _not_a_native_http_turn -> nil
+    end
+  end
+
+  # Every claim shape the native HTTP resolver can produce: the bare turn claim
+  # that names a turn's opening request, and the payload-scoped `codex-request:`
+  # claims that name one later request of it -- a tool-result continuation, the
+  # resume after a compaction, the compaction itself, and a `prewarm`/`memory`
+  # request that shares the turn id. Those four are one prefix on purpose: they
+  # differ by HMAC domain, not by name, so this predicate keeps routing all of
+  # them into the resend path without enumerating them (findings#212, 212-54).
+  defp native_turn_claim?(correlation_id) when is_binary(correlation_id),
+    do: WebsocketTurnIdentity.native_claim?(correlation_id)
+
+  defp native_turn_claim?(_correlation_id), do: false
 
   # Existing reservation inputs stay explicit at the private handoff.
   # credo:disable-for-next-line Credo.Check.Refactor.FunctionArity
@@ -461,12 +716,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
          correlation_id,
          pricing,
          effective_model,
-         captured_epoch
+         captured_epoch,
+         resend_session
        ) do
+    caller_owned_transaction? = Repo.in_transaction?()
+
     Repo.transaction(fn ->
+      :ok = lock_resend_session(resend_session)
       api_key = authorize_runtime_turn!(api_key, captured_epoch)
       auth = Map.put(auth, :api_key, api_key)
       maybe_test_runtime_authorization_barrier(:reserve, :after)
+
+      {correlation_id, client_resend} =
+        native_turn_resend_claim!(resend_session, %{
+          correlation_id: correlation_id,
+          pool: pool,
+          api_key: api_key,
+          model: model,
+          endpoint: endpoint,
+          opts: opts,
+          payload: payload
+        })
 
       policy =
         ReservationPolicy.policy_for_update(
@@ -482,7 +752,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           attr(opts, :reservation_estimate)
         )
 
-      case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
+      case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate) do
         :ok -> :ok
         {:error, error} -> Repo.rollback(error)
       end
@@ -496,6 +766,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         endpoint: endpoint,
         transport: transport,
         correlation_id: correlation_id,
+        client_resend: client_resend,
         auth: auth,
         pricing: pricing,
         estimate: estimate,
@@ -519,8 +790,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         reservation: reservation,
         estimate: estimate
       }
+      |> DeadExecutionResendRecovery.put_markers(client_resend)
     end)
     |> unwrap_transaction()
+    |> DeadExecutionResendRecovery.emit_after_commit(caller_owned_transaction?)
   end
 
   @spec record_denied_request(CodexPooler.Access.auth_context(), term(), map()) ::
@@ -534,11 +807,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     reason = attr(opts, :last_error_code) || "policy_denied"
 
     Repo.transaction(fn ->
+      # A deletion after authentication clears attribution, not rejection history.
+      # Hold a surviving key through insertion so deletion cannot race the foreign key.
+      persisted_api_key = Access.lock_api_key_for_read(api_key.id)
+
       attrs =
         denied_request_attrs(%{
           auth: auth,
           pool: pool,
-          api_key: api_key,
+          api_key_id: persisted_api_key && persisted_api_key.id,
           model: model,
           requested_model: requested_model,
           endpoint: endpoint,
@@ -559,7 +836,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   defp denied_request_attrs(context) do
     %{
       pool_id: context.pool.id,
-      api_key_id: context.api_key.id,
+      api_key_id: context.api_key_id,
       model_id: context.model && context.model.id,
       requested_model:
         blank_to_nil(context.requested_model) ||
@@ -569,7 +846,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       status: "rejected",
       usage_status: @usage_not_applicable,
       correlation_id: attr(context.opts, :correlation_id) || Ecto.UUID.generate(),
-      idempotency_key: nil,
       client_ip: blank_to_nil(attr(context.opts, :client_ip)),
       user_agent: blank_to_nil(attr(context.opts, :user_agent)),
       request_metadata: denied_request_metadata(context.auth, context.opts),
@@ -613,9 +889,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       )
       |> Repo.update!()
     else
-      Repo.rollback(
-        Metadata.accounting_error(:request_already_finalized, "request was already finalized")
-      )
+      Repo.rollback(Metadata.accounting_error(:request_already_finalized, "request was already finalized"))
     end
   end
 
@@ -630,7 +904,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp insert_reserved_request!(context) do
     request_metadata =
-      reserve_metadata(context.auth, context.pricing, context.estimate, context.opts)
+      context.auth
+      |> reserve_metadata(context.pricing, context.estimate, context.opts)
+      |> put_client_resend_metadata(Map.get(context, :client_resend))
 
     settings_snapshot =
       PricingResolution.request_settings_snapshot(
@@ -639,26 +915,27 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         context.pricing
       )
 
-    attrs = %{
-      pool_id: context.pool.id,
-      api_key_id: context.api_key.id,
-      model_id: context.model.id,
-      requested_model: context.requested_model,
-      endpoint: context.endpoint,
-      transport: context.transport,
-      status: "in_progress",
-      usage_status: @usage_pending,
-      correlation_id: context.correlation_id,
-      idempotency_key: nil,
-      client_ip: blank_to_nil(attr(context.opts, :client_ip)),
-      user_agent: blank_to_nil(attr(context.opts, :user_agent)),
-      request_metadata: request_metadata,
-      reasoning_effort: settings_snapshot.reasoning_effort,
-      requested_service_tier: settings_snapshot.requested_service_tier,
-      actual_service_tier: settings_snapshot.actual_service_tier,
-      service_tier: settings_snapshot.service_tier,
-      admitted_at: context.timestamp
-    }
+    attrs =
+      %{
+        pool_id: context.pool.id,
+        api_key_id: context.api_key.id,
+        model_id: context.model.id,
+        requested_model: context.requested_model,
+        endpoint: context.endpoint,
+        transport: context.transport,
+        status: "in_progress",
+        usage_status: @usage_pending,
+        correlation_id: context.correlation_id,
+        client_ip: blank_to_nil(attr(context.opts, :client_ip)),
+        user_agent: blank_to_nil(attr(context.opts, :user_agent)),
+        request_metadata: request_metadata,
+        reasoning_effort: settings_snapshot.reasoning_effort,
+        requested_service_tier: settings_snapshot.requested_service_tier,
+        actual_service_tier: settings_snapshot.actual_service_tier,
+        service_tier: settings_snapshot.service_tier,
+        admitted_at: context.timestamp
+      }
+      |> Map.merge(ClientRetry.request_attrs(attr(context.opts, :native_client_retry_witness)))
 
     request =
       case attr(context.opts, :turn_claim) do
@@ -676,6 +953,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
     :ok = bind_direct_cleanup(context.opts, request)
     request
+  end
+
+  defp put_client_resend_metadata(metadata, nil), do: metadata
+
+  defp put_client_resend_metadata(metadata, %{predecessor_request_id: predecessor_request_id}) do
+    Map.put(metadata, "client_resend", %{
+      "predecessor_request_id" => predecessor_request_id,
+      "reason" => "failed_predecessor"
+    })
   end
 
   defp bind_direct_cleanup(opts, request) do
@@ -715,8 +1001,25 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   defp requested_model(payload, opts), do: attr(opts, :requested_model) || attr(payload, :model)
 
+  # Window limits are checked against usage summed over the whole key, while
+  # only the effective policy binding row is locked, so two same-key requests
+  # that resolve to different bindings (a model binding and the default one)
+  # need a key-wide mutex of their own. `authorize_api_key_runtime_turn/2`
+  # supplies it as an advisory lock and reads the key under the reader lock, so
+  # the mutex covers this transaction's whole write set without making every
+  # `api_keys` reader on the key wait for it to commit.
   defp authorize_runtime_turn!(api_key, captured_epoch) do
     case Access.authorize_api_key_runtime_turn(api_key, captured_epoch) do
+      {:ok, %{api_key: authorized_api_key}} -> authorized_api_key
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  # A websocket claim writes no ledger entry and checks no window limit; the
+  # session lock and `requests_correlation_id_uq` fence concurrent claims, so it
+  # takes the reader lock and never writes the key row afterwards.
+  defp authorize_runtime_turn_for_read!(api_key, captured_epoch) do
+    case Access.authorize_api_key_runtime_turn_for_read(api_key, captured_epoch) do
       {:ok, %{api_key: authorized_api_key}} -> authorized_api_key
       {:error, reason} -> Repo.rollback(reason)
     end

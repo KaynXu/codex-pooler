@@ -8,10 +8,7 @@ defmodule CodexPooler.Repo.Migrations.AddNativeClientRetryLineage do
       add :native_client_retry_auth_epoch, :bigint
     end
 
-    create constraint(:requests, :requests_native_client_retry_witness_check,
-             check:
-               "(native_client_retry_version IS NULL AND native_client_retry_digest IS NULL AND native_client_retry_auth_epoch IS NULL) OR (native_client_retry_version = 1 AND octet_length(native_client_retry_digest) = 32 AND native_client_retry_auth_epoch >= 0)"
-           )
+    create constraint(:requests, :requests_native_client_retry_witness_check, check: "(native_client_retry_version IS NULL AND native_client_retry_digest IS NULL AND native_client_retry_auth_epoch IS NULL) OR (native_client_retry_version = 1 AND octet_length(native_client_retry_digest) = 32 AND native_client_retry_auth_epoch >= 0)")
 
     create table(:request_client_retry_links, primary_key: false) do
       add :id, :binary_id, primary_key: true, default: fragment("gen_random_uuid()")
@@ -27,13 +24,9 @@ defmodule CodexPooler.Repo.Migrations.AddNativeClientRetryLineage do
       add :created_at, :utc_datetime_usec, null: false
     end
 
-    create unique_index(:request_client_retry_links, [:predecessor_request_id],
-             name: :request_client_retry_links_predecessor_request_id_uq
-           )
+    create unique_index(:request_client_retry_links, [:predecessor_request_id], name: :request_client_retry_links_predecessor_request_id_uq)
 
-    create unique_index(:request_client_retry_links, [:successor_request_id],
-             name: :request_client_retry_links_successor_request_id_uq
-           )
+    create unique_index(:request_client_retry_links, [:successor_request_id], name: :request_client_retry_links_successor_request_id_uq)
 
     create constraint(
              :request_client_retry_links,

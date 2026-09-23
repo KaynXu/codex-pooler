@@ -1229,7 +1229,22 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
         "rejection_error_type" => "invalid_request_error",
         "rejection_error_param" => "input[0].content",
         "rejection_message_present" => true,
-        "rejection_message_bytes" => byte_size(raw_message)
+        "rejection_message_bytes" => byte_size(raw_message),
+        "rejection_supported_values_state" => "present",
+        "rejection_supported_values" => ~w(low medium high)
+      }
+    })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 2,
+      status: "failed",
+      response_metadata: %{
+        "rejection_error_code" => "invalid_request",
+        # A provider that named no alternatives, and a stored list that no
+        # longer satisfies the parser's bounds, must not read alike
+        # (codex-pooler-findings#177).
+        "rejection_supported_values_state" => "none",
+        "rejection_supported_values" => ["an invalid value"]
       }
     })
 
@@ -1241,12 +1256,16 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert %{"item" => item} = result["structuredContent"]
-    assert [attempt] = item["debug"]["attempts"]
+    assert [attempt, none_attempt] = item["debug"]["attempts"]
     assert attempt["rejection_error_code"] == "invalid_request"
     assert attempt["rejection_error_type"] == "invalid_request_error"
     assert attempt["rejection_error_param"] == "input[0].content"
     assert attempt["rejection_message_present"] == true
     assert attempt["rejection_message_bytes"] == byte_size(raw_message)
+    assert attempt["rejection_supported_values_state"] == "present"
+    assert attempt["rejection_supported_values"] == ~w(low medium high)
+    assert none_attempt["rejection_supported_values_state"] == "none"
+    refute Map.has_key?(none_attempt, "rejection_supported_values")
     assert text =~ "rejection_error_code=invalid_request"
     assert text =~ "rejection_message_present=true"
     refute inspect(result) =~ raw_message
@@ -1525,13 +1544,13 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert %{"status" => "ok", "item" => item} = result["structuredContent"]
     assert [attempt_debug] = item["debug"]["attempts"]
 
+    # The attempt records no `stream_text_frame_count`, so the visibility keys
+    # are absent rather than fabricated (findings#165).
     assert attempt_debug["transport_failure"] == %{
              "reason_class" => "upstream_stream_interrupted",
              "reason" => "closed_before_terminal",
              "phase" => "upstream_close",
-             "pre_visible_output" => false,
-             "terminal_seen" => false,
-             "text_frame_count" => 1
+             "terminal_seen" => false
            }
 
     assert text =~ "1 request log returned"
@@ -2394,8 +2413,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       |> Ecto.Changeset.change(%{
         latency_ms: 321,
         network_error_code: Map.fetch!(attrs, :attempt_error),
-        error_message:
-          Map.get(attrs, :error_message, "raw attempt error message must stay out of MCP output"),
+        error_message: Map.get(attrs, :error_message, "raw attempt error message must stay out of MCP output"),
         response_metadata:
           Map.merge(
             %{"websocket_frame" => "raw debug websocket frame"},
@@ -2585,6 +2603,66 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert item["id"] == request.id
     assert :ok = Redaction.assert_mcp_output_safe!(result)
     item["debug"]
+  end
+
+  test "request-log items name the model the upstream served next to the one sent", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-served-model", name: "MCP Served Model"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP served key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "served-model-upstream",
+        assignment_label: "served-model-assignment"
+      })
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-6-astra",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "mcp-served-model",
+        response_status_code: 200
+      })
+
+    attempt_fixture(request, assignment, %{
+      upstream_model_id: "gpt-6-astra",
+      served_model: "gpt-5.6-luna",
+      latency_ms: 120
+    })
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "limit" => 5},
+               %{auth: auth}
+             )
+
+    assert result["isError"] == false
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+    assert [item] = result["structuredContent"]["items"]
+    assert item["requested_model"] == "gpt-6-astra"
+    assert item["upstream_model"] == "gpt-6-astra"
+    assert item["served_model"] == "gpt-5.6-luna"
+
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert text =~ "gpt-5.6-luna"
+
+    assert {:ok, detail} =
+             ToolDispatch.call(
+               "codex_pooler_get_request_log",
+               %{"id" => request.id},
+               %{auth: auth}
+             )
+
+    assert detail["isError"] == false
+    assert :ok = Redaction.assert_mcp_output_safe!(detail)
+    assert detail["structuredContent"]["item"]["served_model"] == "gpt-5.6-luna"
+    assert detail["structuredContent"]["item"]["upstream_model"] == "gpt-6-astra"
+    assert [%{"type" => "text", "text" => detail_text}] = detail["content"]
+    assert detail_text =~ "gpt-5.6-luna"
+    assert detail_text =~ "gpt-6-astra"
   end
 
   defp attempt_with_latency(request, assignment, latency_ms, response_metadata \\ %{}) do

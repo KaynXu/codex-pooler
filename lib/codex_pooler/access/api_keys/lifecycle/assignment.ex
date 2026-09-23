@@ -34,9 +34,7 @@ defmodule CodexPooler.Access.APIKeys.Assignment do
   end
 
   def assign_api_keys_to_pool(_scope, _pool_or_id, _api_key_ids),
-    do:
-      {:error,
-       Errors.access_error(:invalid_request, "user scope, Pool, and API key ids are required")}
+    do: {:error, Errors.access_error(:invalid_request, "user scope, Pool, and API key ids are required")}
 
   defp selected_api_key_ids(api_key_ids) do
     api_key_ids

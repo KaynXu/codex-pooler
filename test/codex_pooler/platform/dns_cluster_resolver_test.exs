@@ -101,14 +101,7 @@ defmodule CodexPooler.Platform.DNSClusterResolverTest do
       with_pod_ip("10.42.0.130", fn ->
         capture_log(fn ->
           assert {:ok, _pid} =
-                   start_supervised(
-                     {DNSCluster,
-                      name: __MODULE__.Cluster,
-                      query: "cluster.invalid",
-                      resource_types: [:a, :aaaa, :srv],
-                      interval: :timer.hours(1),
-                      resolver: ContractResolver}
-                   )
+                   start_supervised({DNSCluster, name: __MODULE__.Cluster, query: "cluster.invalid", resource_types: [:a, :aaaa, :srv], interval: :timer.hours(1), resolver: ContractResolver})
         end)
 
         for resource_type <- [:a, :aaaa, :srv] do
@@ -125,6 +118,17 @@ defmodule CodexPooler.Platform.DNSClusterResolverTest do
   defp with_pod_ip(value, fun) do
     previous = System.get_env("POD_IP")
 
+    restore = fn ->
+      if previous do
+        System.put_env("POD_IP", previous)
+      else
+        System.delete_env("POD_IP")
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
+
     if value do
       System.put_env("POD_IP", value)
     else
@@ -134,11 +138,7 @@ defmodule CodexPooler.Platform.DNSClusterResolverTest do
     try do
       fun.()
     after
-      if previous do
-        System.put_env("POD_IP", previous)
-      else
-        System.delete_env("POD_IP")
-      end
+      restore.()
     end
   end
 end

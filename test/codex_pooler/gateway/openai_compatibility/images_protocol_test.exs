@@ -83,9 +83,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ImagesProtocolTest do
   test "base64 response format is accepted and user identifiers are discarded" do
     for user <- [nil, "synthetic-user"] do
       assert {:ok, normalized} =
-               Images.validate_generation(
-                 Map.merge(payload(), %{"response_format" => "b64_json", "user" => user})
-               )
+               Images.validate_generation(Map.merge(payload(), %{"response_format" => "b64_json", "user" => user}))
 
       refute Map.has_key?(normalized, "user")
     end

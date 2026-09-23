@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Access
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
+  alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.InputShape
@@ -721,8 +722,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
         case resolution do
           {:ok, resolution} ->
-            {:ok, RequestOptions.put_model_serving_mode(request_options, resolution),
-             effective_modes}
+            {:ok, RequestOptions.put_model_serving_mode(request_options, resolution), effective_modes}
 
           :no_runtime_model ->
             CandidateEligibility.routable_candidates(visible_model_context, effective_model)
@@ -842,29 +842,28 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp ensure_model_supports(%Model{} = model, _endpoint, payload, _opts, has_input_image?) do
+  defp ensure_model_supports(%Model{} = model, _endpoint, payload, opts, has_input_image?) do
     cond do
       not model.supports_responses ->
-        {:error,
-         error(400, "unsupported_model_capability", "model does not support responses", "model")}
+        {:error, error(400, "unsupported_model_capability", "model does not support responses", "model")}
 
-      RouteClass.streaming?(payload) and not model.supports_streaming ->
-        {:error,
-         error(400, "unsupported_model_capability", "model does not support streaming", "stream")}
+      RequestOptions.upstream_streaming?(opts, payload) and not model.supports_streaming ->
+        {:error, error(400, "unsupported_model_capability", "model does not support streaming", "stream")}
 
       has_input_image? and
         ModelMetadata.has_capability_evidence?(model) and
           not ModelMetadata.supports_image_input?(ModelMetadata.metadata(model)) ->
-        {:error,
-         error(400, "unsupported_model_capability", "model does not support image input", "input")}
+        {:error, error(400, "unsupported_model_capability", "model does not support image input", "input")}
 
       true ->
         :ok
     end
   end
 
-  defp policy_error(:model_not_allowed),
-    do: error(403, "model_not_allowed", "api key is not allowed to use this model", nil)
+  # Pooler-authored: the reason's one status and message, marked by the
+  # shared constructor, so this path cannot answer a condition differently
+  # from `Denials.log_policy/1` (findings#221).
+  defp policy_error(reason) when is_atom(reason), do: Denials.policy_denial_error(reason)
 
   defp error(status, code, message, param),
     do: %{status: status, code: code, message: message, param: param}

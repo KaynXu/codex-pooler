@@ -491,8 +491,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   @spec expiration_metadata_from_payload(term(), DateTime.t(), UpstreamIdentity.t() | map() | nil) ::
           %{
-            required(String.t()) =>
-              [String.t()] | [stored_available_expiration_row()] | String.t() | nil
+            required(String.t()) => [String.t()] | [stored_available_expiration_row()] | String.t() | nil
           }
   defp expiration_metadata_from_payload(payload, observed_at, previous_metadata) do
     summary = reset_credit_summary(payload)
@@ -522,8 +521,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
           UpstreamIdentity.t() | map() | nil
         ) ::
           %{
-            required(String.t()) =>
-              [String.t()] | [stored_available_expiration_row()] | String.t() | nil
+            required(String.t()) => [String.t()] | [stored_available_expiration_row()] | String.t() | nil
           }
   defp expiration_metadata_from_detail(
          %{status: :authoritative_zero},
@@ -580,8 +578,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   @spec expiration_metadata_from_summary(term(), DateTime.t(), UpstreamIdentity.t() | map() | nil) ::
           %{
-            required(String.t()) =>
-              [String.t()] | [stored_available_expiration_row()] | String.t() | nil
+            required(String.t()) => [String.t()] | [stored_available_expiration_row()] | String.t() | nil
           }
   defp expiration_metadata_from_summary(payload, observed_at, previous_metadata) do
     summary = reset_credit_summary(payload)

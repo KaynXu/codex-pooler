@@ -31,8 +31,7 @@ defmodule CodexPooler.MCP.ToolDispatch do
   end
 
   def call(%{} = tool, _arguments, _context) do
-    {:ok,
-     error_result(%{code: :invalid_arguments, message: "Invalid tool arguments", tool: tool.name})}
+    {:ok, error_result(%{code: :invalid_arguments, message: "Invalid tool arguments", tool: tool.name})}
   end
 
   defp invoke(%{handler: {module, function}} = tool, arguments, context) do
@@ -50,8 +49,7 @@ defmodule CodexPooler.MCP.ToolDispatch do
     exception ->
       log_handler_exception(tool, module, function, exception)
 
-      {:error,
-       %{code: :tool_execution_failed, message: "MCP tool execution failed", tool: tool.name}}
+      {:error, %{code: :tool_execution_failed, message: "MCP tool execution failed", tool: tool.name}}
   end
 
   defp log_handler_exception(tool, module, function, exception) do

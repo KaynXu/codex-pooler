@@ -109,8 +109,7 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
       {
         "expired key",
         %{
-          expires_at:
-            DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+          expires_at: DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
         }
       }
     ]
@@ -201,6 +200,9 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
 
   defp collect_repo_query_events(fun) do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

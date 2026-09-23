@@ -55,9 +55,7 @@ defmodule CodexPooler.Quotas.WindowClassifierTest do
                window_minutes: 300
              }) == :unknown
 
-      assert WindowClassifier.classify(
-               account_window(%{window_kind: "primary", window_minutes: nil})
-             ) ==
+      assert WindowClassifier.classify(account_window(%{window_kind: "primary", window_minutes: nil})) ==
                :unknown_account_primary
     end
 

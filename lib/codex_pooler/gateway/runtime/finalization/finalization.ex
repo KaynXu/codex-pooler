@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     SettlementAttrs,
     SideEffects,
     Streaming,
+    ValidationRejection,
     Websocket
   }
 
@@ -31,13 +32,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
+  @canonical_full_failure_message "upstream request failed"
   @canonical_full_failure_body %{
     "error" => %{
       "code" => "server_error",
-      "message" => "upstream request failed",
+      "message" => @canonical_full_failure_message,
       "type" => "server_error"
     }
   }
+  @relayed_rejection_code_by_type %{"invalid_request_error" => "invalid_request"}
 
   @type callbacks :: %{
           required(:register_continuity) => (term(), term(), term() -> term()),
@@ -152,17 +155,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        ) do
     cond do
       public_ineligible_misalignment_policy_violation?(status, body, context) ->
-        finalize_upstream_status_failure(response, context, body,
-          failure_projection: :canonical_full
-        )
+        finalize_upstream_status_failure(response, context, body, failure_projection: :canonical_full)
 
       assignment_model_unavailable?(status, body, context) ->
         finalize_assignment_model_unavailable(response, context, body)
 
       true ->
-        finalize_upstream_status_failure(response, context, body,
-          before_finalize: fn -> maybe_record_unauthorized_route_failure(status, context) end
-        )
+        finalize_upstream_status_failure(response, context, body, before_finalize: fn -> maybe_record_unauthorized_route_failure(status, context) end)
     end
   end
 
@@ -259,11 +258,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     to: Websocket,
     as: :finalize_terminal
 
+  # A failed websocket finalization may also ask the dispatcher to move to
+  # the next route candidate (`{:retry, code}`) or report an already
+  # finalized request (`{:ok, finalized}`); declaring only `{:error, map()}`
+  # hid the failover contract from callers (findings#208).
   @spec finalize_failed_websocket_response(
           SelectedCandidateContext.t(),
           failed_websocket_finalization()
         ) ::
-          {:error, map()}
+          {:ok, map()} | {:error, map()} | {:retry, term()}
   defdelegate finalize_failed_websocket_response(context, finalization),
     to: Websocket,
     as: :finalize_failed
@@ -353,9 +356,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:error, gateway_error} -> {:error, gateway_error}
       end
     else
-      finalize_upstream_status_failure(response, context, body,
-        attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed")
-      )
+      finalize_upstream_status_failure(response, context, body, attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed"))
     end
   end
 
@@ -456,8 +457,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           {:ok, finalized}
 
         {:ok, _finalized} ->
-          {:error,
-           error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))}
+          {:error, error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))}
 
         {:error, gateway_error} ->
           {:error, gateway_error}
@@ -509,13 +509,22 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
     accounting_message = Keyword.get(opts, :accounting_message, "upstream returned #{status}")
 
+    # Classified once, before settlement, so the persisted bounded
+    # supported-values fact and the message every projection renders come from
+    # the same parse of the same body rather than from two reads of it
+    # (codex-pooler-findings#177).
+    validation_rejection = ValidationRejection.fetch(response, request_options)
+
     attrs =
       SettlementAttrs.failure(
         context,
         status,
         error_code,
         accounting_message,
-        Metadata.response_metadata(response, error_code, request_options),
+        Map.merge(
+          Metadata.response_metadata(response, error_code, request_options),
+          ValidationRejection.attempt_metadata(validation_rejection)
+        ),
         latency_ms: elapsed_ms(context.started),
         usage: %{status: "usage_unknown", source: "upstream_status"}
       )
@@ -546,7 +555,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
             request_options,
             payload,
             error_code,
-            opts,
+            Keyword.put(opts, :validation_rejection, validation_rejection),
             Metadata.rejection_error(response)
           )
 
@@ -585,18 +594,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
        ) do
     marker = public_input_file_upstream_404?(status, request_options, payload)
 
-    if native_compaction_websocket?(request_options) do
-      {:error, native_compaction_rejection(status, error_code, rejection_error)}
-    else
-      project_failure_result(
-        status,
-        headers,
-        body,
-        request_options,
-        error_code,
-        opts,
-        marker
-      )
+    cond do
+      native_compaction_websocket?(request_options) ->
+        {:error, native_compaction_rejection(status, error_code, rejection_error)}
+
+      CompactionTrigger.streaming_result?(request_options) ->
+        full_failure_result(
+          status,
+          headers,
+          relayable_rejection_error(status, rejection_error),
+          Keyword.get(opts, :validation_rejection),
+          marker
+        )
+
+      true ->
+        project_failure_result(
+          status,
+          headers,
+          body,
+          request_options,
+          error_code,
+          opts,
+          marker,
+          relayable_rejection_error(status, rejection_error)
+        )
     end
   end
 
@@ -607,10 +628,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
          request_options,
          error_code,
          opts,
-         marker
+         marker,
+         relayable_rejection_error
        ) do
-    case {Keyword.get(opts, :failure_projection, :mode_scoped),
-          Metadata.explicit_full_ordinary_responses?(request_options)} do
+    validation_rejection = Keyword.get(opts, :validation_rejection)
+
+    case {Keyword.get(opts, :failure_projection, :mode_scoped), Metadata.explicit_full_ordinary_responses?(request_options)} do
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
         error =
           %{"code" => summary.code, "message" => summary.message}
@@ -618,32 +641,197 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
         %{
           status: status,
-          headers: headers,
+          headers: json_content_type(headers),
           raw_body: CodexPooler.JSON.encode!(%{"error" => error})
         }
 
       {:canonical_full, _explicit_full?} ->
-        %{status: status, headers: headers, body: canonical_failure_body(request_options)}
-
-      {:mode_scoped, true} ->
         %{
           status: status,
-          headers: headers,
-          body: @canonical_full_failure_body,
-          public_input_file_upstream_404?: marker
+          headers: json_content_type(headers),
+          body: canonical_failure_body(request_options)
         }
+
+      {:mode_scoped, true} ->
+        full_failure_result(
+          status,
+          headers,
+          relayable_rejection_error,
+          validation_rejection,
+          marker
+        )
+
+      {:mode_scoped, false} when is_map(validation_rejection) ->
+        validation_rejection_result(status, headers, body, validation_rejection)
 
       {_projection, _explicit_full?} ->
         %{
           status: status,
           headers: headers,
           raw_body: body,
-          public_stream_startup_error_code:
-            stream_startup_error_code(error_code, request_options),
+          public_stream_startup_error_code: stream_startup_error_code(error_code, request_options),
           public_input_file_upstream_404?: marker
         }
     end
   end
+
+  # A streaming drain leaves no public body, so the relayed validation error
+  # becomes the native JSON error envelope. A materialized native body keeps
+  # its existing passthrough; public /v1 surfaces project the marker instead.
+  defp validation_rejection_result(status, headers, "", validation_rejection) do
+    %{
+      status: status,
+      headers: json_content_type(headers),
+      raw_body: CodexPooler.JSON.encode!(%{"error" => ValidationRejection.error(validation_rejection)}),
+      public_validation_rejection: validation_rejection
+    }
+  end
+
+  defp validation_rejection_result(status, headers, body, validation_rejection) do
+    %{
+      status: status,
+      headers: headers,
+      raw_body: body,
+      public_validation_rejection: validation_rejection
+    }
+  end
+
+  defp json_content_type(headers) do
+    headers
+    |> Enum.reject(fn {name, _value} -> String.downcase(to_string(name)) == "content-type" end)
+    |> then(&[{"content-type", "application/json"} | &1])
+  end
+
+  # A non-429 4xx rejection already has its sanitized `type`, `code`, and
+  # `param` persisted as attempt metadata and projected into request logs, so
+  # relaying those bounded tokens to the client discloses nothing new. Keeping
+  # them back is actively wrong: the canonical body says `server_error`, which
+  # is in the retryable vocabulary, so an SDK retries a terminal
+  # `invalid_request_error` forever while Pooler has already settled the
+  # request as failed. Only the tokens travel. The provider message and
+  # body stay unpersisted and unrelayed, and the message stays server-owned.
+  #
+  # The relay window is exactly `Metadata.rejection_metadata_status?/1`. A 429
+  # and a 5xx persist no rejection metadata, so there is nothing sanitized to
+  # relay and their bodies stay byte-identical.
+  defp relayable_rejection_error(status, rejection_error) do
+    if Metadata.rejection_metadata_status?(status), do: rejection_error, else: %{}
+  end
+
+  # A Full body is rendered once here for the native route and carried as a
+  # structured `public_full_rejection` for the public `/v1` sender, which
+  # re-renders `param` and `message` from the same constructor through the
+  # caller-facing parameter mapper (codex-pooler-findings#219). Rendering the
+  # message from the provider param and mapping only `param` afterwards left a
+  # Chat client reading `"param": "reasoning_effort"` next to a message naming
+  # `reasoning.effort`. The structured rejection is a projection input only;
+  # the persisted attempt metadata keeps the provider parameter evidence.
+  defp full_failure_result(
+         status,
+         headers,
+         %{type: type} = rejection_error,
+         validation_rejection,
+         marker
+       )
+       when is_binary(type) do
+    rejection = full_rejection(rejection_error, validation_rejection)
+
+    # The relayed body is rebuilt as JSON whatever the request's transport, so
+    # a streaming request whose upstream 400 carried no content-type must not
+    # inherit `text/event-stream` (findings#219).
+    %{
+      status: status,
+      headers: json_content_type(headers),
+      body: full_failure_body(type, rejection),
+      public_full_rejection: rejection,
+      public_input_file_upstream_404?: marker
+    }
+  end
+
+  defp full_failure_result(status, headers, _rejection_error, _validation_rejection, marker) do
+    %{
+      status: status,
+      headers: json_content_type(headers),
+      body: @canonical_full_failure_body,
+      public_input_file_upstream_404?: marker
+    }
+  end
+
+  # `param` is set unconditionally: a rejection carrying a type but no param
+  # emits an explicit `"param": null`, which is what the provider's own error
+  # bodies do and what an OpenAI SDK expects to read.
+  defp full_rejection(rejection_error, validation_rejection) do
+    %{
+      code: relayed_rejection_code(rejection_error),
+      param: Map.get(rejection_error, :param),
+      supported_values: relayed_supported_values(validation_rejection),
+      supported_values_state: nil
+    }
+  end
+
+  defp full_failure_body(type, %{code: code, param: param} = rejection) do
+    %{
+      "error" => %{
+        "type" => type,
+        "code" => code,
+        "param" => param,
+        "message" => full_failure_message(rejection)
+      }
+    }
+  end
+
+  # Present only when `ValidationRejection.fetch/2` admitted this rejection, so
+  # a 401, a 404, a compact route, an unrecognized code, and every rejection
+  # whose message stated no parseable list all relay the base sentence
+  # unchanged. Those dominate the observed Full rejection population.
+  defp relayed_supported_values(%{supported_values: [_value | _rest] = values}), do: values
+  defp relayed_supported_values(_validation_rejection), do: nil
+
+  # Serving mode must not decide how much a client is told. The non-Full
+  # mode-scoped branch already names the refused parameter, while Full used to
+  # answer the same provider rejection with the canonical
+  # `upstream request failed` (codex-pooler-findings#173), so a
+  # client that moved between Pools saw its diagnostics change for reasons
+  # unrelated to its request — and the advanced override gave the *less*
+  # informative answer.
+  #
+  # Both paths now build the sentence with one constructor,
+  # `ValidationRejection.error/1`, from the code and param this body already
+  # carries as separate fields. Nothing new is disclosed: both tokens are
+  # sanitized, persisted as attempt metadata, and already relayed above.
+  #
+  # The supported-values suffix used to be withheld here
+  # (codex-pooler-findings#173) because it was read from the live provider body
+  # rather than from a persisted field, and #161 left provider prose unrelayed.
+  # It is now parsed once by the same bounded parser, persisted as attempt
+  # metadata next to the code and param, and rendered from that one classified
+  # fact (codex-pooler-findings#177) — so the mode that does *not* rewrite the
+  # client's request stops telling the client less about it. Only the bounded
+  # enumeration travels; the surrounding message stays unrelayed and
+  # unpersisted on every path.
+  # `supported_values_state` is part of `ValidationRejection.rejection()` and is
+  # carried here even though rendering never reads it: the type is what keeps
+  # the four outcomes distinguishable at rest, and a caller that omits the key
+  # is a caller that has not decided which of them it is looking at.
+  defp full_failure_message(rejection) do
+    rejection
+    |> ValidationRejection.error()
+    |> Map.fetch!("message")
+  end
+
+  defp relayed_rejection_code(%{code: code}) when is_binary(code), do: code
+
+  # The observed `tools.defer_loading` rejection carried a type and a param but
+  # no code, so the client-visible `code` needs a defined fallback rather than
+  # the assumption that a provider always supplies one. `invalid_request_error`
+  # maps to `invalid_request`, which is the code Pooler already emits for its
+  # own pre-dispatch rejections of the same type (`OpenAICompatibility.Error`
+  # and `GatewayControllerHelpers.send_error/2`), so one client branch on
+  # `code` sees the same terminal value whoever rejected the request. Any other
+  # type reuses the type itself: it names the same already-sanitized fact
+  # instead of inventing a code the provider never used.
+  defp relayed_rejection_code(%{type: type}),
+    do: Map.get(@relayed_rejection_code_by_type, type, type)
 
   defp canonical_failure_body(%RequestOptions{
          payload_context: %{native_image_request?: true},
@@ -684,9 +872,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp public_input_file_upstream_404?(404, %RequestOptions{} = request_options, payload)
        when is_map(payload) do
     request_options.openai_compatibility.source_endpoint == "/v1/responses" and
-      RequestOptions.OpenAICompatibility.translated_responses_surface?(
-        request_options.openai_compatibility
-      ) and contains_input_file?(payload)
+      RequestOptions.OpenAICompatibility.translated_responses_surface?(request_options.openai_compatibility) and contains_input_file?(payload)
   end
 
   defp public_input_file_upstream_404?(_status, _request_options, _payload), do: false
@@ -913,13 +1099,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp finalize_invalid_compaction(response, context, error, opts \\ []) do
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context
 
+    response_metadata =
+      Metadata.response_metadata(response, error.code, request_options)
+      |> maybe_put_compaction_invalid_reason(error)
+
     attrs =
       SettlementAttrs.failure(
         context,
         error.status,
         error.code,
         error.message,
-        Metadata.response_metadata(response, error.code, request_options),
+        response_metadata,
         latency_ms: elapsed_ms(context.started),
         before_finalize: fn ->
           SideEffects.observe_http_response(context, response, Metadata.response_body(response))
@@ -946,6 +1136,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:error, gateway_error}
     end
   end
+
+  defp maybe_put_compaction_invalid_reason(metadata, %{compaction_invalid_reason: reason})
+       when is_binary(reason), do: Map.put(metadata, "compaction_invalid_reason", reason)
+
+  defp maybe_put_compaction_invalid_reason(metadata, _error), do: metadata
 
   defp finalize_successful_json_response(
          response,

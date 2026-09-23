@@ -56,8 +56,7 @@ defmodule CodexPooler.Repo.Migrations.RepairSavedResetFirstSeenV1Incidents do
                         ] ->
         %{
           id: target_id,
-          repairable?:
-            repairable_target?(evidence, target_metadata, rule_metadata, rule_created_at)
+          repairable?: repairable_target?(evidence, target_metadata, rule_metadata, rule_created_at)
         }
       end)
 

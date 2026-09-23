@@ -107,10 +107,7 @@ defmodule CodexPooler.Pools.Routing do
       settings
       |> RoutingSettings.changeset(%{
         routing_strategy: routing_attr(attrs, "routing_strategy", settings.routing_strategy),
-        bridge_ring_size:
-          parse_positive_integer(
-            routing_attr(attrs, "bridge_ring_size", settings.bridge_ring_size)
-          ),
+        bridge_ring_size: parse_positive_integer(routing_attr(attrs, "bridge_ring_size", settings.bridge_ring_size)),
         sticky_websocket_sessions:
           parse_boolean(
             routing_attr(
@@ -119,10 +116,7 @@ defmodule CodexPooler.Pools.Routing do
               settings.sticky_websocket_sessions
             )
           ),
-        sticky_http_sessions:
-          parse_boolean(
-            routing_attr(attrs, "sticky_http_sessions", settings.sticky_http_sessions)
-          ),
+        sticky_http_sessions: parse_boolean(routing_attr(attrs, "sticky_http_sessions", settings.sticky_http_sessions)),
         prompt_cache_affinity_enabled:
           parse_boolean(
             routing_attr(
@@ -191,9 +185,7 @@ defmodule CodexPooler.Pools.Routing do
   end
 
   def update_routing_settings(_scope, _pool, _attrs, _opts),
-    do:
-      {:error,
-       PoolAuthorization.access_error(:invalid_request, "user scope and Pool are required")}
+    do: {:error, PoolAuthorization.access_error(:invalid_request, "user scope and Pool are required")}
 
   defp default_routing_settings(pool_id) do
     now = now()

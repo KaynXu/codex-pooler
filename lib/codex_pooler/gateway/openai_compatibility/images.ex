@@ -104,8 +104,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
       })
       |> RequestOptions.build(endpoint, native)
 
-    {:ok,
-     %{endpoint: endpoint, payload: native, image_payload: payload, request_options: options}}
+    {:ok, %{endpoint: endpoint, payload: native, image_payload: payload, request_options: options}}
   end
 
   @spec image_response_from_sse(binary()) :: {:ok, map()} | {:error, Error.reason()}
@@ -214,8 +213,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
 
   defp validate_input_fidelity(%{"model" => model, "input_fidelity" => _})
        when model in @native_models or model == "gpt-image-1-mini" do
-    {:error,
-     Error.invalid_request("input_fidelity is not supported for #{model}", "input_fidelity")}
+    {:error, Error.invalid_request("input_fidelity is not supported for #{model}", "input_fidelity")}
   end
 
   defp validate_input_fidelity(payload),
@@ -231,9 +229,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
     do: {:error, Error.invalid_request("mask is only supported for image edits", "mask")}
 
   defp validate_generation_only(%{"input_fidelity" => _}),
-    do:
-      {:error,
-       Error.invalid_request("input_fidelity is only supported for image edits", "input_fidelity")}
+    do: {:error, Error.invalid_request("input_fidelity is only supported for image edits", "input_fidelity")}
 
   defp validate_generation_only(_payload), do: :ok
 

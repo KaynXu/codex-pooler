@@ -153,8 +153,7 @@ defmodule CodexPooler.Gateway.Websocket.DeliveryReceipt do
         where: a.id == ^attempt_id,
         update: [
           set: [
-            response_metadata:
-              fragment("COALESCE(?, '{}'::jsonb) || ?", a.response_metadata, type(^patch, :map))
+            response_metadata: fragment("COALESCE(?, '{}'::jsonb) || ?", a.response_metadata, type(^patch, :map))
           ]
         ]
 

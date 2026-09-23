@@ -100,6 +100,58 @@
   },
   "panels": [
     {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Websocket Control Path Failure Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Observed websocket callback failures and deferred cleanup, including initialization before request reservation. These are server observations, not proof of a TCP reset or a delivered close frame. Investigate any sustained database_error or process_exit increase; cleanup_deferred means supervised cleanup outlived the socket's close budget.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (phase, reason) (rate(codex_pooler_gateway_websocket_control_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{phase}} {{reason}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
       "type": "row",
       "collapsed": false,
       "id": 0,
@@ -107,7 +159,7 @@
       "title": "Triage Signals",
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 8,
         "h": 1,
         "w": 24
       }
@@ -141,7 +193,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 1
+        "y": 9
       }
     },
     {
@@ -173,7 +225,7 @@
         "h": 4,
         "w": 5,
         "x": 4,
-        "y": 1
+        "y": 9
       }
     },
     {
@@ -205,7 +257,7 @@
         "h": 4,
         "w": 5,
         "x": 9,
-        "y": 1
+        "y": 9
       }
     },
     {
@@ -237,7 +289,7 @@
         "h": 4,
         "w": 5,
         "x": 14,
-        "y": 1
+        "y": 9
       }
     },
     {
@@ -269,7 +321,7 @@
         "h": 4,
         "w": 5,
         "x": 19,
-        "y": 1
+        "y": 9
       }
     },
     {
@@ -280,7 +332,7 @@
       "title": "Memory",
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 13,
         "h": 1,
         "w": 24
       }
@@ -341,7 +393,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 14
       }
     },
     {
@@ -448,7 +500,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 14
       }
     },
     {
@@ -507,7 +559,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 22
       }
     },
     {
@@ -575,7 +627,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 22
       }
     },
     {
@@ -627,7 +679,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 21
+        "y": 29
       }
     },
     {
@@ -695,7 +747,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 21
+        "y": 29
       }
     },
     {
@@ -747,7 +799,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 21
+        "y": 29
       }
     },
     {
@@ -799,7 +851,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 28
+        "y": 36
       }
     },
     {
@@ -851,7 +903,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 28
+        "y": 36
       }
     },
     {
@@ -862,7 +914,7 @@
       "title": "Gateway Pressure",
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 43,
         "h": 1,
         "w": 24
       }
@@ -915,7 +967,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 36
+        "y": 44
       }
     },
     {
@@ -966,7 +1018,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 36
+        "y": 44
       }
     },
     {
@@ -1018,7 +1070,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 36
+        "y": 44
       }
     },
     {
@@ -1077,7 +1129,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 51
       }
     },
     {
@@ -1089,7 +1141,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Oversized observations are saturated at 128 MiB for Prometheus histogram export, keeping p95 finite. This changes telemetry only, not stream-buffer handling or the raw telemetry event.",
+      "description": "p95 observed oversized and truncated stream-buffer payload size. Oversized observations saturate at 128 MiB for histogram export, so a value at that ceiling means 128 MiB or larger. The saturation changes telemetry only, not stream-buffer handling or the raw telemetry event.",
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
@@ -1137,7 +1189,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 51
       }
     },
     {
@@ -1189,7 +1241,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 50
+        "y": 58
       }
     },
     {
@@ -1273,7 +1325,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 50
+        "y": 58
       }
     },
     {
@@ -1333,7 +1385,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 50
+        "y": 58
       }
     },
     {
@@ -1393,7 +1445,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 57
+        "y": 65
       }
     },
     {
@@ -1404,7 +1456,7 @@
       "title": "Database / Ecto Query Pressure",
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 72,
         "h": 1,
         "w": 24
       }
@@ -1457,7 +1509,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 65
+        "y": 73
       }
     },
     {
@@ -1508,7 +1560,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 65
+        "y": 73
       }
     },
     {
@@ -1560,7 +1612,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 65
+        "y": 73
       }
     },
     {
@@ -1611,7 +1663,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 72
+        "y": 80
       }
     },
     {
@@ -1662,7 +1714,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 72
+        "y": 80
       }
     },
     {
@@ -1713,7 +1765,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 72
+        "y": 80
       }
     },
     {
@@ -1765,7 +1817,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 79
+        "y": 87
       }
     },
     {
@@ -1817,7 +1869,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 79
+        "y": 87
       }
     },
     {
@@ -1869,7 +1921,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 79
+        "y": 87
       }
     },
     {
@@ -1880,7 +1932,7 @@
       "title": "Restart Evidence",
       "gridPos": {
         "x": 0,
-        "y": 86,
+        "y": 94,
         "h": 1,
         "w": 24
       }
@@ -1941,7 +1993,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 87
+        "y": 95
       }
     },
     {
@@ -1974,7 +2026,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 87
+        "y": 95
       }
     },
     {
@@ -1985,7 +2037,7 @@
       "title": "Admin Stats Dashboard",
       "gridPos": {
         "x": 0,
-        "y": 94,
+        "y": 102,
         "h": 1,
         "w": 24
       }
@@ -2039,7 +2091,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 95
+        "y": 103
       }
     },
     {
@@ -2091,7 +2143,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 95
+        "y": 103
       }
     },
     {
@@ -2143,7 +2195,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 95
+        "y": 103
       }
     },
     {
@@ -2195,7 +2247,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 102
+        "y": 110
       }
     },
     {
@@ -2247,7 +2299,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 102
+        "y": 110
       }
     },
     {
@@ -2258,7 +2310,7 @@
       "title": "Gateway Outcomes",
       "gridPos": {
         "x": 0,
-        "y": 109,
+        "y": 117,
         "h": 1,
         "w": 24
       }
@@ -2312,7 +2364,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 110
+        "y": 118
       }
     },
     {
@@ -2324,7 +2376,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod.",
+      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the turns that expired-owner recovery settles from the runtime cleanup job are never exported here. A low or empty interrupted series means interruptions settled by that job are not measured, not that they did not happen; read the accounting request and attempt rows instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2352,7 +2404,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (outcome, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_outcome_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (outcome, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_outcome_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{outcome}} {{downstream_transport}} -> {{upstream_transport}}",
           "range": true,
@@ -2364,7 +2416,59 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 110
+        "y": 118
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Pre-attempt Reservation Releases",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Reservations released with no attempt row, by bounded pre-attempt phase. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. routing_rejected is a deliberate refusal before dispatch and is expected traffic. turn_interrupted is a live turn interrupted before any attempt existed (client disconnect, owner drain or crash, expired lease); the release ledger entry's release_reason says which. task_exception is the pre-dispatch path raising before it created an attempt, so a sustained rate there is a defect to chase rather than traffic to explain. unrecorded means the releasing path declared no boundary; no release path in the application writes it any more, so a rising unrecorded count means a new release site reached the ledger without declaring one. stale_sweep is the six-hour backstop closing a reservation nothing live ever reached, and is the series to act on: a sustained rate means pre-attempt turns are being abandoned and only the backstop is noticing, six hours late. The stale_sweep series is only emitted where the sweeper runs beside the Prometheus reporter (OBAN_MODE=all); on split web/worker deployments read it from the release ledger's pre_attempt_phase detail instead.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (phase, transport) (rate(codex_pooler_accounting_reservation_pre_attempt_release_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{phase}} {{transport}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 127
       }
     },
     {
@@ -2423,8 +2527,8 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 0,
-        "y": 119
+        "x": 12,
+        "y": 127
       }
     },
     {
@@ -2436,7 +2540,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. Repeated candidate decisions indicate a convergence loop.",
+      "description": "Quota cycle refresh, confirmation, candidate, rejection, and superseded-primary rejection rate. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Repeated candidate decisions indicate a convergence loop. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so the decisions taken by account reconciliation, saved-reset redemption and alert evaluation are never exported here. An empty or low graph means those roles are not measured, not that no cycle decision was taken; read the account quota window rows and their evidence history instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2464,7 +2568,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (scope, decision, source) (rate(codex_pooler_quota_cycle_decision_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (scope, decision, source) (rate(codex_pooler_quota_cycle_decision_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{scope}} {{decision}} {{source}}",
           "range": true,
@@ -2475,8 +2579,8 @@
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 12,
-        "y": 119
+        "x": 0,
+        "y": 136
       }
     },
     {
@@ -2487,7 +2591,7 @@
       "title": "Saved-reset Post-consume Convergence",
       "gridPos": {
         "x": 0,
-        "y": 128,
+        "y": 145,
         "h": 1,
         "w": 24
       }
@@ -2501,7 +2605,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Committed post-consume transitions observed by scraped web nodes only. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory.",
+      "description": "Committed post-consume transitions observed by scraped web nodes only. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -2529,7 +2633,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (source, outcome) (rate(codex_pooler_saved_reset_convergence_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (source, outcome) (rate(codex_pooler_saved_reset_convergence_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}}",
           "range": true,
@@ -2541,7 +2645,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 129
+        "y": 146
       }
     },
     {
@@ -2553,7 +2657,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Best-effort web-node timing for committed transitions. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency.",
+      "description": "Best-effort web-node timing for committed transitions. This panel is the native in-process share (via=in_process) while the job relay remains shadowed. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency. Only web-role pods run the Prometheus reporter (it is disabled for OBAN_MODE=worker and scheduler), so transitions committed by the saved-reset redemption and account reconciliation workers are never exported here. An empty graph means this is not measured on those roles, not that convergence never happened; confirm worker-side transitions from the upstream identity saved_reset_redemption lifecycle metadata instead.",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -2581,7 +2685,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}} applied to canonical",
           "range": true,
@@ -2589,7 +2693,7 @@
           "editorMode": "code"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}} canonical to lifecycle",
           "range": true,
@@ -2597,7 +2701,7 @@
           "editorMode": "code"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\", via=\"in_process\"}[$__rate_interval])))",
           "refId": "",
           "legendFormat": "{{source}} {{outcome}} applied to lifecycle",
           "range": true,
@@ -2609,7 +2713,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 129
+        "y": 146
       }
     },
     {
@@ -2661,7 +2765,59 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 138
+        "y": 155
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Affinity Stale Writes",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Affinity writes refused by the updated_at fence, by pod, bounded operation, and affinity kind. The fence orders writers on the event clock each writer stamps from its own node clock, so it is correct and a low cluster-wide rate is ordinary reordering between nodes. The pod label names the writer that was refused, not the writer that caused it: a sustained rate concentrated on one pod means that pod's clock lags its peers and it loses every affinity write it attempts, while a sustained rate spread across every pod but one means the remaining pod's clock runs ahead and its stamps refuse everyone else's writes. Either way the affected pods stop contributing prompt-cache steering while serving traffic normally; routing, retries, settlement, and accounting are unaffected. Compare the pods' clocks against each other.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (pod, operation, affinity_kind) (rate(codex_pooler_gateway_routing_affinity_stale_write_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{pod}} {{operation}} {{affinity_kind}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 155
       }
     },
     {
@@ -2712,8 +2868,245 @@
       "gridPos": {
         "h": 9,
         "w": 12,
+        "x": 0,
+        "y": 164
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Instance Heartbeat Write Failure Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Failed instance-presence heartbeat writes on scraped pods. InstanceHeartbeat runs on every release role, but OBAN_MODE=worker and scheduler have no Prometheus reporter; this graph shows only the web/all share. An empty graph does not prove those roles are healthy. Check instance_presences.last_seen_at for durable presence freshness on every role.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(codex_pooler_instance_presence_heartbeat_failure_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "failed writes",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
         "x": 12,
-        "y": 138
+        "y": 164
+      }
+    },
+    {
+      "type": "row",
+      "collapsed": false,
+      "id": 0,
+      "panels": [],
+      "title": "Job Telemetry Relay",
+      "gridPos": {
+        "x": 0,
+        "y": 173,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Relay Unclaimed Backlog",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Shared unclaimed rows and samples, including expired backlog. Values are replicated observations: max avoids counting each app observer again. job_relay remains shadowed; in_process panels stay authoritative.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(codex_pooler_telemetry_relay_backlog_rows{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "rows",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "max(codex_pooler_telemetry_relay_backlog_samples{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "samples",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 174
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Relay Fresh Consumers",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Non-quiesced consumers with a heartbeat in the last 60 seconds. This is consumer health, not the writer database-access insert gate. A missing series means no scraped observer, not zero backlog.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(codex_pooler_telemetry_relay_consumers_fresh{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "fresh consumers",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 174
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Relay Known Lost Samples",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Durable cumulative loss totals by fixed reason. max avoids duplicate observer counts. Includes expired unclaimed, buffer overflow and shutdown unflushed samples when persistence succeeds. Hard kills, unavailable loss persistence and post-claim/pre-scrape loss remain unquantified.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (reason) (codex_pooler_telemetry_relay_loss_samples{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "{{reason}} samples",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "max by (reason) (codex_pooler_telemetry_relay_loss_rows{job=\"codex-pooler-app\", namespace=\"$namespace\", pod=~\"${pod:regex}\"})",
+          "refId": "",
+          "legendFormat": "{{reason}} rows",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 182
       }
     }
   ]

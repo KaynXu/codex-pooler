@@ -1021,12 +1021,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id} > footer.pool-card-metrics.border-t")
 
     metric_links = [
-      {"pool-upstream-count-cell", "pool-row-#{pool.id}-upstream-account-count",
-       "/admin/upstreams?pool_id=#{pool.id}", "Upstreams", "1"},
-      {"pool-api-key-count-cell", "pool-row-#{pool.id}-api-key-count",
-       "/admin/api-keys?pool_id=#{pool.id}", "API keys", "2"},
-      {"pool-request-count-cell", "pool-row-#{pool.id}-request-throughput",
-       "/admin/request-logs?pool_id=#{pool.id}", "Req/TPS 24h", "0 / 0"}
+      {"pool-upstream-count-cell", "pool-row-#{pool.id}-upstream-account-count", "/admin/upstreams?pool_id=#{pool.id}", "Upstreams", "1"},
+      {"pool-api-key-count-cell", "pool-row-#{pool.id}-api-key-count", "/admin/api-keys?pool_id=#{pool.id}", "API keys", "2"},
+      {"pool-request-count-cell", "pool-row-#{pool.id}-request-throughput", "/admin/request-logs?pool_id=#{pool.id}", "Req/TPS 24h", "0 / 0"}
     ]
 
     for {role, value_id, href, label, value} <- metric_links do
@@ -2433,7 +2430,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-create-upstream-identity-options-plan-badge-#{first_identity.id}.border-primary\\/20.bg-primary\\/10.text-primary"
+             "#pool-create-upstream-identity-options-plan-badge-#{first_identity.id}.admin-plan-badge.admin-plan-badge--pro"
            )
 
     view
@@ -2904,8 +2901,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     for request <- full_requests do
       expected = %{
-        "model_serving_mode_configured" =>
-          if(request == hd(full_requests), do: "lite", else: "full"),
+        "model_serving_mode_configured" => if(request == hd(full_requests), do: "lite", else: "full"),
         "model_serving_mode" => if(request == hd(full_requests), do: "lite", else: "full"),
         "model_serving_mode_source" => "override"
       }
@@ -3675,9 +3671,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     _sync_run =
-      catalog_sync_run_fixture(pool, "succeeded",
-        finished_at: DateTime.add(DateTime.utc_now(), -2, :day)
-      )
+      catalog_sync_run_fixture(pool, "succeeded", finished_at: DateTime.add(DateTime.utc_now(), -2, :day))
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view)
@@ -4872,6 +4866,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   defp capture_repo_queries(query_pid, fun) when is_pid(query_pid) and is_function(fun, 0) do
     test_pid = self()
     handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

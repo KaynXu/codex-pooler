@@ -181,9 +181,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LeakageTes
     assert_no_leak_in_persistence!(setup.pool.id)
 
     {:ok, owner_pid} =
-      WebsocketOwnerSession.lookup(
-        Repo.get_by!(CodexSession, session_key: turn_state_session_key("leak-success")).id
-      )
+      WebsocketOwnerSession.lookup(Repo.get_by!(CodexSession, session_key: turn_state_session_key("leak-success")).id)
 
     assert_no_leak!("owner state after success", :sys.get_state(owner_pid))
     assert :ok = FakeUpstream.verify!(upstream)
@@ -237,9 +235,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LeakageTes
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      owner_socket(auth, "ws-owner-leak-sensitive", "leak-sensitive",
-        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
-      )
+      owner_socket(auth, "ws-owner-leak-sensitive", "leak-sensitive", websocket_owner_forwarder_opts: [upstream: upstream_boundary])
 
     logs =
       capture_log(fn ->
@@ -344,8 +340,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwarding.LeakageTes
 
         assert_receive {:crashing_owner_upstream_received, upstream_pid}
 
-        assert_receive {:websocket_owner_frame, "corr-owner-crash", 1,
-                        {:error, :owner_crashed, safe_payload}}
+        assert_receive {:websocket_owner_frame, "corr-owner-crash", 1, {:error, :owner_crashed, safe_payload}}
 
         assert safe_payload.metadata.reason == "owner_crashed"
         assert_no_leak!("owner crash payload", safe_payload)

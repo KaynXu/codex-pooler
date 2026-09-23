@@ -24,9 +24,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
         {:path_json,
          %{
            "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-           "/api/codex/usage" =>
-             {200,
-              %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}},
+           "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}},
            "/backend-api/codex/responses" =>
              {200,
               %{
@@ -88,11 +86,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
         {:path_json,
          %{
            "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-           "/api/codex/usage" =>
-             {200,
-              %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}},
-           "/backend-api/codex/responses" =>
-             {404, %{"error" => %{"code" => "model_not_found", "param" => "model"}}}
+           "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}},
+           "/backend-api/codex/responses" => {404, %{"error" => %{"code" => "model_not_found", "param" => "model"}}}
          }}
       )
 
@@ -108,9 +103,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     use_deterministic_rotation!(setup.pool, 2)
 
     sibling =
-      gateway_upstream(setup.pool, sibling_upstream, "upstream-token-reset-probe-sibling",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, sibling_upstream, "upstream-token-reset-probe-sibling", compact?: false)
 
     sibling_identity =
       sibling.identity
@@ -213,8 +206,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
   } do
     scenarios = [
       {"quota-shaped 429", quota_exhausted_response(), 429, "upstream_rate_limited", "reblocked"},
-      {"generic 429", FakeUpstream.generic_429(), 429, "upstream_rate_limited",
-       "consumed_pending_probe"},
+      {"generic 429", FakeUpstream.generic_429(), 429, "upstream_rate_limited", "consumed_pending_probe"},
       {"5xx", FakeUpstream.generic_5xx(), 503, "upstream_status", "consumed_pending_probe"}
     ]
 
@@ -260,9 +252,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     release_ref = make_ref()
 
     fixture =
-      reset_probe_fixture(
-        FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
-      )
+      reset_probe_fixture(FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref))
 
     setup_runtime_settings_override(%{
       OperationalSettings.current()
@@ -279,8 +269,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
             post_reset_probe(conn, fixture, "receive timeout reset probe")
           end)
 
-        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
-                        ^release_ref},
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
                        1_000
 
         response = Task.await(task, 1_000)
@@ -375,9 +364,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
         {:path_json,
          %{
            "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-           "/api/codex/usage" =>
-             {200,
-              %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}},
+           "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}},
            "/backend-api/codex/responses" => response_mode
          }}
       )
@@ -394,9 +381,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     use_deterministic_rotation!(setup.pool, 2)
 
     sibling =
-      gateway_upstream(setup.pool, sibling_upstream, "upstream-token-reset-probe-matrix-sibling",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, sibling_upstream, "upstream-token-reset-probe-matrix-sibling", compact?: false)
 
     sibling_identity =
       sibling.identity
@@ -601,7 +586,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
   end
 
   defp setup_runtime_settings_override(%OperationalSettings{} = settings) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -610,7 +595,5 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 end

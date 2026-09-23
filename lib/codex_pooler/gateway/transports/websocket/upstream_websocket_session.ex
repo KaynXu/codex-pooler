@@ -7,8 +7,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   alias CodexPooler.Accounting.ClientRetry
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
+  alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Streaming.CollectedBody
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -35,6 +37,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
+  alias CodexPooler.RouteClass
 
   @default_keepalive_interval_ms 25_000
   @dev_features_build_enabled Application.compile_env(
@@ -134,8 +137,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   def connection_lifecycle_snapshot(_pid), do: {:error, :invalid_input}
 
   @spec compaction_reservation_snapshot(pid()) ::
-          {:ok,
-           %{lifecycle_id: Ecto.UUID.t(), generation: pos_integer(), serving_mode: :full | :lite}}
+          {:ok, %{lifecycle_id: Ecto.UUID.t(), generation: pos_integer(), serving_mode: :full | :lite}}
           | {:error, atom()}
   def compaction_reservation_snapshot(pid) when is_pid(pid),
     do: admission_call(pid, :compaction_reservation_snapshot)
@@ -344,8 +346,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   else
     def handle_call(
-          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization,
-           _restorer},
+          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization, _restorer},
           _from,
           state
         ),
@@ -426,8 +427,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:reply, {:error, :invalid_input}, state}
 
   def handle_call(
-        {:authorize_first_compact_collection, %Binding{} = binding,
-         %FirstCompactResult{} = receipt},
+        {:authorize_first_compact_collection, %Binding{} = binding, %FirstCompactResult{} = receipt},
         _from,
         state
       ) do
@@ -447,8 +447,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, admission, provenance} ->
         admission = %{admission | compaction_item_digest: receipt.item_digest}
 
-        {:reply, {:ok, provenance},
-         state |> Map.delete(:first_compact_result) |> put_admission(admission)}
+        {:reply, {:ok, provenance}, state |> Map.delete(:first_compact_result) |> put_admission(admission)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -550,8 +549,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:reply, :ok, clear_admission(state, :compact_failure)}
 
   def handle_call(
-        {:acknowledge_compact_finalization,
-         {:success, digest, %Confirmation{} = confirmation, expires_at_ms}},
+        {:acknowledge_compact_finalization, {:success, digest, %Confirmation{} = confirmation, expires_at_ms}},
         _from,
         state
       ) do
@@ -732,7 +730,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     ConnectionUpgrade.connect_state(state, key, url, headers, timeouts, request_caller)
   end
 
-  defp request_key(%Request{} = request), do: {request.url, request.headers}
+  # Like the Codex client, a connection keeps the routing hint of the handshake
+  # that opened it: a later turn's tier or model hint never forces a reconnect.
+  # Every other header still scopes the connection, including the provider
+  # session headers (`session-id`, `thread-id`, `x-client-request-id`): a
+  # reusable owner can serve several downstream sockets and API keys of one
+  # Pool, so a turn whose values differ or are absent opens its own connection
+  # instead of riding one whose handshake carried another client's session.
+  defp request_key(%Request{} = request),
+    do: {request.url, Enum.reject(request.headers, &routing_hint_header?/1)}
+
+  defp routing_hint_header?({name, _value}) when is_binary(name),
+    do: String.downcase(name) == "x-codex-routing-hint"
+
+  defp routing_hint_header?(_header), do: false
 
   defp request_on_connection(state, key, %Request{} = request, request_caller) do
     reused_connection? = reusable_connection?(state, key)
@@ -756,6 +767,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp collect_compaction?(%Request{}), do: false
 
+  # Only a collecting turn pays for the larger accumulator; a relayed turn keeps
+  # the bounded diagnostic retention alone.
+  defp new_collected_body(%Request{} = request) do
+    if collect_compaction?(request), do: CollectedBody.empty(), else: CollectedBody.disabled()
+  end
+
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
 
@@ -778,6 +795,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         mode: request.websocket_delivery_mode,
         effective_serving_mode: request.effective_serving_mode
       },
+      collected_body: new_collected_body(request),
       request_caller_pid: request_caller_pid,
       request_caller_monitor: request_caller_monitor,
       native_client_retry_observation: request.native_client_retry_observation,
@@ -900,9 +918,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp guard_connection_bound_continuation(state, receive_state, connection_usage) do
     terminal =
-      StreamProtocol.canonicalize_native_codex_responses_json_message(
-        ~s({"type":"error","error":{"code":"previous_response_not_found"}})
-      )
+      StreamProtocol.canonicalize_native_codex_responses_json_message(~s({"type":"error","error":{"code":"previous_response_not_found"}}))
 
     decoded = decode_text_frame(terminal)
 
@@ -980,8 +996,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp retain_first_compact_result({:ok, result} = response, state, request) do
     case FirstCompactResult.from_collection(request, result, connection_lifecycle_state(state)) do
       {:ok, receipt} ->
-        {{:ok, Map.put(result, :first_compact_result, receipt)},
-         Map.put(state, :first_compact_result, receipt)}
+        {{:ok, Map.put(result, :first_compact_result, receipt)}, Map.put(state, :first_compact_result, receipt)}
 
       :error ->
         {response, state}
@@ -995,8 +1010,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, receipt} ->
         {:ok, response} = result
 
-        {{:ok, Map.put(response, :ordinary_success_result, receipt)},
-         Map.put(state, :ordinary_success_result, receipt)}
+        {{:ok, Map.put(response, :ordinary_success_result, receipt)}, Map.put(state, :ordinary_success_result, receipt)}
 
       :error ->
         {result, state}
@@ -1236,8 +1250,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     attrs =
       %{
         phase: phase,
-        termination_source:
-          Map.get(state, :transport_failure_source) || request_failure_source(reason),
+        termination_source: Map.get(state, :transport_failure_source) || request_failure_source(reason),
         pre_visible_output: true,
         terminal_seen: false,
         text_frame_count: 0
@@ -1585,7 +1598,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:terminal, state, receive_state, terminal} ->
         result =
           %{
-            body: receive_body(receive_state),
+            body: terminal_body(receive_state),
             terminal: terminal,
             response_usage: receive_state.response_usage,
             status: 200,
@@ -1612,10 +1625,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             headers: Map.get(state, :headers, []),
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers,
-            transport_failure:
-              transport_failure_metadata(reason, state, receive_state,
-                phase: failure_phase(reason)
-              ),
+            transport_failure: transport_failure_metadata(reason, state, receive_state, phase: failure_phase(reason)),
             native_client_retry_observation: final_client_retry_observation(receive_state)
           }}, next_state}
     end
@@ -1764,9 +1774,46 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end)
   end
 
-  defp append_receive_body(%ReceiveState{body: body} = receive_state, text) do
-    %{receive_state | body: RetainedBody.append(body, ["data: ", text, "\n\n"])}
+  defp append_receive_body(
+         %ReceiveState{body: body, collected_body: collected_body} = receive_state,
+         text
+       ) do
+    data = ["data: ", text, "\n\n"]
+    telemetry_opts = buffer_telemetry_opts(receive_state)
+
+    %{
+      receive_state
+      | body: RetainedBody.append(body, data, telemetry_opts),
+        collected_body: append_collected_body(collected_body, data, telemetry_opts)
+    }
   end
+
+  defp append_collected_body(collected_body, data, telemetry_opts) do
+    appended = CollectedBody.append(collected_body, data)
+
+    if CollectedBody.overflow?(appended) and not CollectedBody.overflow?(collected_body) do
+      BufferTelemetry.record_oversized_incomplete(
+        "collected_body",
+        CollectedBody.bytes(appended),
+        CollectedBody.max_bytes(),
+        telemetry_opts
+      )
+    end
+
+    appended
+  end
+
+  # A truncated retained body can only be attributed once the metric says which
+  # transport and route class produced it. A collecting turn is admitted as
+  # `proxy_compact` inside the outer websocket route class.
+  defp buffer_telemetry_opts(%ReceiveState{delivery: %Delivery{mode: mode}}) do
+    [transport: "websocket", route_class: buffer_route_class(mode)]
+  end
+
+  defp buffer_route_class(mode) when mode in [:collect_compaction, :collect_full_history],
+    do: RouteClass.proxy_compact()
+
+  defp buffer_route_class(_mode), do: RouteClass.proxy_websocket()
 
   defp handle_text_frame(
          state,
@@ -1800,6 +1847,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       raw_decoded
       |> maybe_put_terminal_upstream_error(receive_state)
       |> maybe_put_response_id(raw_decoded)
+      |> maybe_put_served_model(raw_decoded)
       |> put_websocket_frame_headers(raw_decoded)
       |> increment_text_frame_count()
       |> capture_terminal_usage(raw_decoded, terminal_discriminator)
@@ -1860,7 +1908,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp capture_terminal_usage(receive_state, decoded, %TerminalDiscriminator{terminal: terminal})
        when is_binary(terminal) do
-    %{receive_state | response_usage: ResponseUsage.from_stream_event(decoded)}
+    usage = ResponseUsage.from_stream_event(decoded)
+
+    # The first response object declared the served model; the terminal event
+    # repeats it, so the earlier declaration wins when both exist.
+    usage =
+      case receive_state.served_model do
+        nil -> usage
+        model -> Map.put(usage, :served_model, model)
+      end
+
+    %{receive_state | response_usage: usage}
   end
 
   defp capture_terminal_usage(receive_state, _decoded, _discriminator), do: receive_state
@@ -1943,14 +2001,60 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          %{} = decoded,
          %ReceiveState{downstream_output_started?: false} = receive_state
        ) do
-    decoded
-    |> StreamProtocol.event_summary()
-    |> retryable_pre_visible_terminal_event(receive_state)
+    retryable_pre_visible_terminal_event(
+      StreamProtocol.event_summary(decoded),
+      receive_state,
+      decoded
+    )
   end
 
   defp retryable_first_text_frame(_raw_text, %ReceiveState{}), do: :error
 
-  defp retryable_pre_visible_terminal_event(event, receive_state) do
+  defp retryable_pre_visible_terminal_event(event, receive_state, decoded) do
+    case quota_exhausted_first_event(event, decoded) do
+      {:ok, failure} -> {:ok, {:quota_exhausted_first_event, failure}}
+      :error -> retryable_auth_first_event(event, receive_state)
+    end
+  end
+
+  defp quota_exhausted_first_event(event, decoded) do
+    with {:ok, %{code: code} = failure} <- StreamProtocol.terminal_failure_event(event),
+         true <- code in ["usage_limit_reached", "usage_limit_exceeded"],
+         true <- valid_quota_usage_shape?(decoded) do
+      {:ok, Map.put(failure, :quota_rejection_before_output?, true)}
+    else
+      _other -> :error
+    end
+  end
+
+  defp valid_quota_usage_shape?(%{} = decoded) do
+    valid_quota_usage_field?(decoded) and
+      case Map.get(decoded, "response") do
+        %{} = response -> valid_quota_usage_field?(response)
+        _absent -> true
+      end
+  end
+
+  defp valid_quota_usage_field?(envelope) do
+    case Map.fetch(envelope, "usage") do
+      :error ->
+        true
+
+      {:ok, nil} ->
+        true
+
+      {:ok, %{} = usage} ->
+        match?(
+          %{status: "usage_known", total_tokens: 0},
+          ResponseUsage.from_stream_event(%{"usage" => usage})
+        )
+
+      _malformed ->
+        false
+    end
+  end
+
+  defp retryable_auth_first_event(event, receive_state) do
     case StreamProtocol.auth_refresh_first_terminal_failure(event) do
       {:ok, failure} -> {:ok, {:auth_refresh_first_event, failure}}
       :error -> retryable_assignment_model_unavailable_event(event, receive_state)
@@ -2034,8 +2138,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           | terminal_upstream_error_code:
               receive_state.terminal_upstream_error_code ||
                 StreamProtocol.upstream_error_code(decoded),
-            terminal_upstream_error_param:
-              receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
+            terminal_upstream_error_param: receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
         }
 
       _other ->
@@ -2082,6 +2185,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp maybe_put_response_id(%ReceiveState{} = receive_state, _decoded), do: receive_state
 
+  defp maybe_put_served_model(%ReceiveState{served_model: nil} = receive_state, %{} = decoded) do
+    served_model =
+      case Map.fetch(decoded, "type") do
+        {:ok, type} when type in @response_identity_event_types -> ResponseUsage.served_model(decoded)
+        :error -> ResponseUsage.served_model(decoded)
+        _typed_or_invalid -> nil
+      end
+
+    case served_model do
+      nil -> receive_state
+      model -> %{receive_state | served_model: model}
+    end
+  end
+
+  defp maybe_put_served_model(%ReceiveState{} = receive_state, _decoded), do: receive_state
+
   defp bounded_response_id(response_id) when is_binary(response_id) do
     response_id = String.trim(response_id)
 
@@ -2106,6 +2225,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp receive_body(%ReceiveState{body: body}), do: websocket_body(body)
 
+  # A collected turn's body is the authoritative compact result rather than
+  # error diagnostics, so a completed or provider-terminal collection reads the
+  # whole accumulated turn. Every other result keeps the bounded diagnostic
+  # suffix.
+  defp terminal_body(%ReceiveState{collected_body: :disabled} = receive_state),
+    do: receive_body(receive_state)
+
+  defp terminal_body(%ReceiveState{collected_body: collected_body}),
+    do: CollectedBody.read(collected_body)
+
   defp observe_native_client_retry(
          %ReceiveState{native_client_retry_observation: nil} = receive_state,
          _decoded
@@ -2120,8 +2249,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     %{
       receive_state
-      | native_client_retry_observation:
-          ClientRetry.observe_frame(observation, decoded, observed_at)
+      | native_client_retry_observation: ClientRetry.observe_frame(observation, decoded, observed_at)
     }
   end
 
@@ -2220,19 +2348,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
+  # Without a Pooler snapshot the turn is a public /v1 origin (the snapshot is
+  # built only for native Responses origins), and the public contract carries
+  # no native controls: `headers` and `response.headers` are dropped on every
+  # relayed event, not only the terminal (findings#239). A terminal event is
+  # always re-encoded canonically, dropped headers or not, because the
+  # retained terminal body is pinned to `encode!(decode!(text))` (usage
+  # attribution); a non-terminal event keeps its bytes when nothing was
+  # dropped. A relayed `codex.response.metadata` keeps only its ETag strip
+  # because its header object is the event's payload.
   defp sanitize_downstream_text({text, %{} = decoded}, _native_snapshot) when is_binary(text) do
     case Map.get(decoded, "type") do
       type
       when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
-        sanitized = Map.drop(decoded, ["headers"])
+        sanitized = public_event_without_headers(decoded)
         {CodexPooler.JSON.encode!(sanitized), sanitized}
 
+      "codex.response.metadata" ->
+        decoded
+        |> NativeCodexResponseControl.strip_untrusted_models_etag()
+        |> reencode_when_changed(text, decoded)
+
       _other ->
-        {text, decoded}
+        decoded
+        |> NativeCodexResponseControl.drop_event_headers()
+        |> reencode_when_changed(text, decoded)
     end
   end
 
   defp sanitize_downstream_text({text, decoded}, _native_snapshot), do: {text, decoded}
+
+  defp public_event_without_headers(decoded) do
+    case NativeCodexResponseControl.drop_event_headers(decoded) do
+      {:changed, sanitized} -> sanitized
+      _unchanged -> decoded
+    end
+  end
+
+  defp reencode_when_changed({:changed, sanitized}, _text, _decoded),
+    do: {CodexPooler.JSON.encode!(sanitized), sanitized}
+
+  defp reencode_when_changed(_unchanged, text, decoded), do: {text, decoded}
 
   defp decode_text_frame(text) do
     case CodexPooler.JSON.decode(text) do

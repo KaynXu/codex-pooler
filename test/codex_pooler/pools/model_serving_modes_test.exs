@@ -544,13 +544,10 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
 
       for {field, value, constraint} <- [
             {:exposed_model_id, "", :pool_model_serving_overrides_exposed_model_id_check},
-            {:exposed_model_id, String.duplicate("a", 256),
-             :pool_model_serving_overrides_exposed_model_id_check},
-            {:exposed_model_id, " Model-A ",
-             :pool_model_serving_overrides_exposed_model_id_check},
+            {:exposed_model_id, String.duplicate("a", 256), :pool_model_serving_overrides_exposed_model_id_check},
+            {:exposed_model_id, " Model-A ", :pool_model_serving_overrides_exposed_model_id_check},
             {:exposed_model_id, "Model-A", :pool_model_serving_overrides_exposed_model_id_check},
-            {:exposed_model_id, "\tmodel-a",
-             :pool_model_serving_overrides_exposed_model_id_check},
+            {:exposed_model_id, "\tmodel-a", :pool_model_serving_overrides_exposed_model_id_check},
             {:mode, "auto", :pool_model_serving_overrides_mode_check}
           ] do
         attrs = %{
@@ -683,9 +680,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
       unrelated_user =
         Sandbox.unboxed_run(Repo, fn ->
           %User{}
-          |> User.bootstrap_changeset(
-            valid_bootstrap_attributes(%{"email" => unique_user_email()})
-          )
+          |> User.bootstrap_changeset(valid_bootstrap_attributes(%{"email" => unique_user_email()}))
           |> Repo.insert!()
         end)
 
@@ -712,19 +707,19 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
                    where: state.owner_user_id == ^fixture.owner.id
                )
 
-        refute Repo.exists?(
-                 from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id
-               )
+        refute Repo.exists?(from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id)
 
         assert Repo.get(User, unrelated_user.id)
       end)
     end
   end
 
+  # The tests exercise the explicit cleanup below; the owner's registered removal is the teardown
+  # that still runs when a test dies before it gets there.
   defp create_unboxed_model_serving_fixture(exposed_model_id) do
+    %{user: owner} = committed_bootstrap_owner_fixture!()
+
     Sandbox.unboxed_run(Repo, fn ->
-      reset_bootstrap_state_fixture!()
-      %{user: owner} = bootstrap_owner_fixture()
       scope = Scope.for_user(owner, ["instance_owner"])
       pool = pool_fixture(%{created_by_user_id: owner.id})
       %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
@@ -746,11 +741,9 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
         Repo.insert!(%PlatformBootstrapState{singleton: true, status: "pending"})
       end
 
-      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool.id])
 
-      Repo.delete_all(
-        from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id
-      )
+      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
 
       Repo.delete_all(from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id)
       Repo.delete_all(from user in User, where: user.id == ^fixture.owner.id)
@@ -830,6 +823,9 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
   defp count_repo_sources(fun) do
     parent = self()
     handler_id = "model-serving-query-count-#{System.unique_integer([:positive])}"
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

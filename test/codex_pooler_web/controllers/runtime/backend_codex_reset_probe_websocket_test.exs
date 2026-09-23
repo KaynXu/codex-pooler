@@ -95,9 +95,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     release_ref = make_ref()
 
     fixture =
-      reset_probe_fixture(
-        FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref)
-      )
+      reset_probe_fixture(FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref))
 
     parent = self()
 
@@ -107,8 +105,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
         execute_reset_probe(fixture, [connect_timeout_ms: 25], parent)
       end)
 
-    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid, ^release_ref},
                    1_000
 
     assert {:error, %{code: "upstream_request_failed", status: 502}} =
@@ -204,9 +201,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     fixture =
       reset_probe_fixture(
         FakeUpstream.strict_sequence([
-          strict_bound_probe_request(
-            websocket_terminal_failure("websocket_connection_limit_reached")
-          )
+          strict_bound_probe_request(websocket_terminal_failure("websocket_connection_limit_reached"))
         ])
       )
 
@@ -576,8 +571,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       {:path_json,
        %{
          "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-         "/api/codex/usage" =>
-           {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+         "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
        }}
     )
   end

@@ -366,9 +366,7 @@ defmodule CodexPooler.Pools.ModelServingModes do
   end
 
   defp authorize(scope, pool_id) do
-    Authorization.require_capability(scope, Authorization.capability(:pool_operate),
-      pool_id: pool_id
-    )
+    Authorization.require_capability(scope, Authorization.capability(:pool_operate), pool_id: pool_id)
   end
 
   defp attr(row, key), do: Map.get(row, key, Map.get(row, Atom.to_string(key)))

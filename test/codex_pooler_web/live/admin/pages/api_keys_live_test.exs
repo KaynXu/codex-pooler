@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
+  alias Phoenix.LiveViewTest.ClientProxy
 
   setup :register_and_log_in_user
 
@@ -377,14 +378,25 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     refute html =~ "Recorded usage"
   end
 
-  test "mount and policy flows never read ledger entries", %{conn: conn, scope: scope} do
+  test "edit loads one key-scoped budget snapshot while other policy flows skip ledger reads", %{
+    conn: conn,
+    scope: scope
+  } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "query-proof", name: "Query Proof Pool"})
 
-    {:ok, %{api_key: api_key}} =
+    {:ok, %{api_key: api_key, raw_key: raw_key}} =
       Access.create_api_key(scope, pool, %{
         display_name: "Query proof key",
         default_policy: %{max_tokens_per_week: 1_000}
       })
+
+    {:ok, %{api_key: other_key, raw_key: other_raw_key}} =
+      Access.create_api_key(scope, pool, %{display_name: "Other query proof key"})
+
+    for {key, tokens} <- [{api_key, 123}, {other_key, 987_654}] do
+      request = request_fixture(%{pool: pool, api_key: key})
+      ledger_entry_fixture(request, %{total_tokens: tokens})
+    end
 
     {{:ok, view, _html}, mount_queries} =
       capture_repo_queries(fn -> live(conn, ~p"/admin/api-keys") end)
@@ -392,11 +404,43 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert_no_ledger_reads(mount_queries)
 
     {_html, edit_queries} =
-      capture_repo_queries(view.pid, fn ->
-        view |> element("#edit-api-key-#{api_key.id}") |> render_click()
-      end)
+      capture_repo_queries(
+        fn ->
+          view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+          _ = render_async(view, 5_000)
+        end,
+        fn _query_pid -> true end,
+        page_reads_only?: false,
+        details?: true
+      )
 
-    assert_no_ledger_reads(edit_queries)
+    assert_budget_snapshot_queries(edit_queries, api_key, other_key)
+
+    # Discriminate missing, repeated and wrong-key snapshots using the actual
+    # captured statements, including raw SQL telemetry with no source label.
+    [pressure] = Enum.filter(edit_queries, &String.contains?(&1.query, "api_key_usage_buckets"))
+    [_, windows, as_of] = pressure.params
+    foreign_pressure = %{pressure | params: [Ecto.UUID.dump!(other_key.id), windows, as_of]}
+
+    for changed_queries <- [
+          List.delete(edit_queries, pressure),
+          [pressure | edit_queries],
+          Enum.map(edit_queries, &if(&1 == pressure, do: foreign_pressure, else: &1))
+        ] do
+      assert_raise ExUnit.AssertionError, fn ->
+        assert_budget_snapshot_queries(changed_queries, api_key, other_key)
+      end
+    end
+
+    view |> element("#api-key-tab-limits") |> render_click()
+
+    for window <- ["daily", "weekly"] do
+      assert has_element?(view, "#api-key-budget-#{window}-known", "123")
+      refute view |> element("#api-key-budget-#{window}-known") |> render() =~ "987,654"
+    end
+
+    refute render(view) =~ raw_key
+    refute render(view) =~ other_raw_key
 
     {_html, review_queries} =
       capture_repo_queries(view.pid, fn ->
@@ -418,12 +462,76 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
     view |> element("#edit-api-key-#{api_key.id}") |> render_click()
 
+    # This assertion owns cancel's query shape, not cancellation of an active
+    # snapshot query on the shared sandbox connection.
+    _ = render_async(view, 5_000)
+
     {_html, cancel_queries} =
       capture_repo_queries(view.pid, fn ->
         view |> element("#api-key-cancel-edit") |> render_click()
       end)
 
     assert_no_ledger_reads(cancel_queries)
+  end
+
+  test "edit renders before the budget snapshot finishes", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "async-edit", name: "Async Edit Pool"})
+
+    {:ok, %{api_key: api_key}} =
+      Access.create_api_key(scope, pool, %{display_name: "Async edit key"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    test_pid = self()
+    handler_id = {__MODULE__, :api_key_budget_query, make_ref()}
+    key_id = Ecto.UUID.dump!(api_key.id)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               is_binary(metadata[:query]) and
+               String.starts_with?(metadata.query, "WITH bounds AS") and
+               match?([^key_id | _rest], metadata[:params]) and
+               is_nil(Process.get(handler_id)) do
+            Process.put(handler_id, true)
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    click_pid =
+      spawn(fn ->
+        html = view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+        send(test_pid, {handler_id, :click_finished, html})
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(click_pid), do: Process.exit(click_pid, :kill)
+    end)
+
+    assert_receive {^handler_id, query_pid}, 1_000
+
+    try do
+      assert_receive {^handler_id, :click_finished, _html}, 2_000
+      assert has_element?(view, "#api-key[open]")
+      assert has_element?(view, "#api-key-budget-loading", "Loading current usage")
+    after
+      send(query_pid, {handler_id, :release})
+    end
+
+    _ = render_async(view, 5_000)
+    refute has_element?(view, "#api-key-budget-loading")
   end
 
   test "mount batches API key and visible model reads across Pools", %{conn: conn, scope: scope} do
@@ -477,10 +585,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
       Access.create_api_key(scope, pool, %{display_name: "Event scope key"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    on_exit(fn -> stop_lifecycle_view(view) end)
 
     view
     |> element("#edit-api-key-#{api_key.id}")
     |> render_click()
+
+    _ = render_async(view, 15_000)
 
     draft_name = "Updated event scope key"
 
@@ -549,12 +660,85 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     |> element("#edit-api-key-#{api_key.id}")
     |> render_click()
 
+    # This test owns lifecycle reload and draft preservation, not cancellation
+    # of a task holding the shared sandbox checkout.
+    _ = render_async(view, 15_000)
+
     view
     |> element("#api-key-cancel-edit")
     |> render_click()
 
     refute has_element?(view, "#api-key-form")
     assert has_element?(view, "#api-key-row-#{api_key.id}", draft_name)
+    stop_lifecycle_view(view)
+    refute Process.alive?(view.pid), "the lifecycle test must stop its LiveView before sandbox teardown"
+  end
+
+  defp stop_lifecycle_view(view) do
+    {_ref, _topic, proxy} = view.proxy
+    processes = [view.pid, proxy]
+    monitors = Enum.map(processes, &{Process.monitor(&1), &1})
+
+    try do
+      ClientProxy.stop(proxy, {:shutdown, :test_complete})
+    catch
+      :exit, {:noproc, _call} -> :ok
+    end
+
+    # Proxy termination orders shutdown, but only the view's own DOWN proves
+    # its database work has stopped before DataCase releases the sandbox.
+    for {monitor, pid} <- monitors do
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 15_000
+    end
+
+    :ok
+  end
+
+  test "lifecycle teardown observes the view exit even when a Pool reload is still running", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "reload-teardown", name: "Reload teardown"})
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    on_exit(fn -> stop_lifecycle_view(view) end)
+    parent = self()
+    handler = {__MODULE__, :reload_teardown, make_ref()}
+    view_pid = view.pid
+
+    # Release first during failure cleanup; never leave the Repo consumer
+    # parked while the later callback is waiting for its shutdown.
+    on_exit(fn ->
+      send(view_pid, {handler, :release})
+      :telemetry.detach(handler)
+    end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == view_pid and metadata[:source] == "api_keys" and not Process.get(handler, false) do
+            Process.put(handler, true)
+            send(parent, {handler, :reload_read})
+
+            receive do
+              {^handler, :release} -> :ok
+            after
+              15_000 -> raise "reload teardown barrier was not released"
+            end
+          end
+        end,
+        nil
+      )
+
+    assert {:ok, _event} = Events.broadcast_pools(pool.id, "pool_changed")
+    assert_receive {^handler, :reload_read}, 15_000
+    {_ref, _topic, proxy} = view.proxy
+    proxy_monitor = Process.monitor(proxy)
+    cleanup = Task.async(fn -> stop_lifecycle_view(view) end)
+    assert_receive {:DOWN, ^proxy_monitor, :process, ^proxy, _reason}, 15_000
+    assert Process.alive?(view_pid)
+    send(view_pid, {handler, :release})
+    assert :ok = Task.await(cleanup, 15_000)
+    refute Process.alive?(view_pid)
+    assert %{rows: [[1]]} = Repo.query!("SELECT 1")
   end
 
   defp open_create_dialog(view) do
@@ -626,8 +810,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   defp capture_repo_queries(fun, query_pid?, opts)
        when is_function(fun, 0) and is_function(query_pid?, 1) do
     page_reads_only? = Keyword.fetch!(opts, :page_reads_only?)
+    details? = Keyword.get(opts, :details?, false)
     test_pid = self()
     handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(
@@ -635,7 +823,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
           if metadata[:repo] == Repo and query_pid?.(self()) do
-            send(test_pid, {handler_id, metadata[:source], page_reads_only?})
+            source = query_capture_data(metadata, details?)
+
+            send(test_pid, {handler_id, source, page_reads_only?})
           end
         end,
         nil
@@ -650,13 +840,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     end
   end
 
+  defp query_capture_data(metadata, true), do: Map.take(metadata, [:source, :query, :params])
+  defp query_capture_data(metadata, false), do: metadata[:source]
+
   defp drain_repo_query_sources(handler_id, sources) do
     receive do
       {^handler_id, source, true} when source in [nil, ""] ->
         drain_repo_query_sources(handler_id, sources)
 
       {^handler_id, source, _page_reads_only?} ->
-        drain_repo_query_sources(handler_id, [to_string(source) | sources])
+        source = if is_map(source), do: source, else: to_string(source)
+        drain_repo_query_sources(handler_id, [source | sources])
     after
       0 -> Enum.reverse(sources)
     end
@@ -664,5 +858,39 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
   defp assert_no_ledger_reads(sources) do
     refute Enum.any?(sources, &String.contains?(&1, "ledger_entries"))
+  end
+
+  defp assert_budget_snapshot_queries(queries, api_key, other_key) do
+    frequencies = queries |> Enum.frequencies_by(& &1.source) |> Map.delete("memberships")
+
+    assert frequencies == %{
+             "api_keys" => 1,
+             "pools" => 1,
+             "api_key_policy_bindings" => 2,
+             "daily_rollups" => 1,
+             "ledger_entries" => 1,
+             nil => 1,
+             "sync_runs" => 3,
+             "models" => 1
+           }
+
+    [pressure] = Enum.filter(queries, &String.contains?(&1.query, "api_key_usage_buckets"))
+    assert pressure.query =~ "public.ledger_entries"
+    assert pressure.query =~ "api_key_id = $1::uuid"
+    assert [key_id, [daily, weekly, minute], as_of] = pressure.params
+    assert key_id == Ecto.UUID.dump!(api_key.id)
+    assert daily == DateTime.new!(DateTime.to_date(as_of), ~T[00:00:00], "Etc/UTC")
+    assert weekly == DateTime.add(as_of, -7, :day)
+    assert minute == DateTime.add(as_of, -60, :second)
+
+    for source <- ["daily_rollups", "ledger_entries"] do
+      [query] = Enum.filter(queries, &(&1.source == source))
+      assert [pool_id, ^key_id, _since, _until] = query.params
+      assert pool_id == Ecto.UUID.dump!(api_key.pool_id)
+      assert query.query =~ ~s("pool_id" = $1)
+      assert query.query =~ ~s("api_key_id" = $2)
+    end
+
+    refute Enum.any?(queries, &(Ecto.UUID.dump!(other_key.id) in List.flatten(&1.params)))
   end
 end

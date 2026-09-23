@@ -44,25 +44,30 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def format_upstream_account_label(_log), do: "—"
 
-  def fast_mode?(log), do: speed_tier_mode(log) == :fast
-
-  def speed_tier_mode(log) when is_map(log) do
-    metadata = Map.get(log, :metadata)
-
-    tiers = [
-      Map.get(log, :requested_service_tier),
-      Map.get(log, :actual_service_tier),
-      Map.get(log, :service_tier)
-    ]
-
-    if fast_metadata?(metadata) or Enum.any?(tiers, &fast_service_tier?/1) do
-      :fast
-    end
+  @doc """
+  `:fast` when the request was priced at the priority tier, so the bolt never
+  claims priority for a request that only asked for it. Rows that recorded no
+  tier at all fall back to the legacy fast-mode request metadata.
+  """
+  def speed_tier_mode(%{cost: %{pricing_availability: "priced"}, service_tier: tier})
+      when is_binary(tier) do
+    if fast_service_tier?(tier), do: :fast
   end
+
+  def speed_tier_mode(log) when is_map(log), do: speed_tier_mode_unpriced(log)
 
   def speed_tier_mode(_log), do: nil
 
-  def speed_tier_label(:fast), do: "Fast mode"
+  # Rows without a priced settlement have no billed tier yet, so the bolt
+  # mirrors the pricing rule instead.
+  defp speed_tier_mode_unpriced(log) do
+    case pricing_basis_tier(log) do
+      nil -> if fast_metadata?(Map.get(log, :metadata)), do: :fast
+      tier -> if fast_service_tier?(tier), do: :fast
+    end
+  end
+
+  def speed_tier_label(:fast), do: "Priced at priority tier"
 
   def protocol_label("websocket"), do: "WebSocket"
   def protocol_label("http_sse"), do: "HTTP SSE"
@@ -105,8 +110,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_total(total), do: Integer.to_string(total || 0)
 
   def format_datetime(value, datetime_preferences),
-    do:
-      DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: "not recorded")
+    do: DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: "not recorded")
 
   def format_datetime(nil), do: "not recorded"
 
@@ -246,16 +250,59 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_model_name(_log), do: "—"
 
   def format_model_details_title(log) do
+    reasoning = format_model_reasoning_slot(log)
+
     [
       format_model_name(log),
-      format_model_reasoning(log),
+      format_served_model_detail(log),
+      reasoning,
       format_requested_reasoning_detail(log),
-      format_model_service_tier(log) && "/ #{format_model_service_tier(log)}",
+      service_tier_phrase(format_model_service_tier(log), reasoning),
       format_requested_tier_detail(log)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" ")
   end
+
+  @doc """
+  What the row prints in the effort slot: the recorded effort, the model-default
+  token when nothing was sent, or nothing when the request has no reasoning
+  concept or the outcome cannot say.
+  """
+  def format_model_reasoning_slot(log) do
+    cond do
+      reasoning = format_model_reasoning(log) -> reasoning
+      model_default_reasoning?(log) -> "model default"
+      true -> nil
+    end
+  end
+
+  @doc """
+  True when a Responses-family request reached an upstream, succeeded, and no
+  effort was recorded at any stage — the client sent none and no key policy
+  injected one — so the backend chose the model's own default.
+
+  Only a succeeded request qualifies: attempts gain their reasoning snapshot when
+  an upstream response is processed, so a failed or in-flight row without one
+  cannot tell "nothing sent" apart from "not recorded yet".
+  """
+  def model_default_reasoning?(log) when is_map(log) do
+    is_nil(format_model_reasoning(log)) and Map.get(log, :status) == "succeeded" and
+      reasoning_endpoint?(log) and dispatched_upstream?(log)
+  end
+
+  def model_default_reasoning?(_log), do: false
+
+  @reasoning_endpoint_suffixes ["/responses", "/responses/compact", "/chat/completions"]
+
+  @doc """
+  Endpoints whose payload carries a reasoning effort: Responses, its compact
+  variant, and chat completions, on both the backend and `/v1` surfaces.
+  """
+  def reasoning_endpoint?(%{endpoint: endpoint}) when is_binary(endpoint),
+    do: String.ends_with?(endpoint, @reasoning_endpoint_suffixes)
+
+  def reasoning_endpoint?(_log), do: false
 
   def format_model_reasoning(log) do
     [
@@ -277,6 +324,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @doc """
+  The model the upstream declared it served, when it is not the model the
+  latest attempt sent. `requested_model` stands in for rows written before the
+  attempt recorded what it sent. A provider that substitutes a model (A/B
+  testing, safety buffering) is otherwise invisible in the list.
+  """
+  def format_served_model_detail(log) do
+    served = present_string(Map.get(log, :served_model))
+
+    basis =
+      present_string(Map.get(log, :upstream_model)) ||
+        present_string(Map.get(log, :requested_model))
+
+    if served && !same_model?(served, basis), do: "served #{served}"
+  end
+
   def format_model_service_tier(log) do
     case effective_service_tier(log) do
       tier when is_binary(tier) -> if(blank?(tier), do: nil, else: tier)
@@ -284,14 +347,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  @doc """
+  The requested tier, when it differs from the tier the row prints. The ChatGPT
+  Codex backend reports `default` for `priority` requests, so this is what keeps
+  "tier default" from hiding that priority was asked for.
+  """
   def format_requested_tier_detail(log) do
-    requested = log.requested_service_tier
-    effective = effective_service_tier(log)
+    requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
 
-    if requested_tier_detail?(log, requested, effective) do
-      "requested: #{requested}"
-    else
-      nil
+    if requested && !same_service_tier?(requested, format_model_service_tier(log)) do
+      "#{requested} requested"
     end
   end
 
@@ -407,14 +472,36 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp fast_service_tier?(tier), do: ServiceTier.fast_mode?(tier)
 
-  defp requested_tier_detail?(log, requested, effective) when is_binary(requested) do
-    requested = String.trim(requested)
+  # Mirrors how accounting picks the tier it prices: the upstream-reported tier
+  # unless it is absent or `auto`, then the requested tier, then the effective
+  # column for rows that recorded neither.
+  defp pricing_basis_tier(log) do
+    reported = ServiceTier.canonicalize(Map.get(log, :actual_service_tier))
+    requested = ServiceTier.canonicalize(Map.get(log, :requested_service_tier))
 
-    requested != "" and requested != effective and !fast_service_tier?(requested) and
-      (!fast_mode?(log) or fast_service_tier?(effective))
+    cond do
+      reported not in [nil, "auto"] -> reported
+      requested -> requested
+      reported -> reported
+      true -> ServiceTier.canonicalize(Map.get(log, :service_tier))
+    end
   end
 
-  defp requested_tier_detail?(_log, _requested, _effective), do: false
+  # `default` is the provider's name for the tier that pricing calls `standard`.
+  defp same_service_tier?(left, right), do: comparable_tier(left) == comparable_tier(right)
+
+  # Catalog model ids are unique case-insensitively, so the comparison is too.
+  defp same_model?(left, right) when is_binary(left) and is_binary(right),
+    do: String.downcase(left) == String.downcase(right)
+
+  defp same_model?(_left, _right), do: false
+
+  defp comparable_tier(tier) do
+    case ServiceTier.canonicalize(tier) do
+      "standard" -> "default"
+      canonical -> canonical
+    end
+  end
 
   defp fast_metadata?(%{} = metadata) do
     truthy?(Map.get(metadata, "fast_mode")) or Map.get(metadata, "codex_mode") == "fast" or
@@ -456,6 +543,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp effective_service_tier(log) do
     log.actual_service_tier || log.service_tier || "default"
+  end
+
+  # "tier" keeps the value from reading as an effort; the slash only separates
+  # it from an effort token, so a row without one does not open on a dangle.
+  defp service_tier_phrase(nil, _reasoning), do: nil
+  defp service_tier_phrase(tier, nil), do: "tier #{tier}"
+  defp service_tier_phrase(tier, _reasoning), do: "/ tier #{tier}"
+
+  defp dispatched_upstream?(log) do
+    present_string(Map.get(log, :upstream_identity_id)) != nil or
+      present_string(Map.get(log, :pool_upstream_assignment_id)) != nil
   end
 
   defp endpoint_model?(model), do: String.starts_with?(String.trim(model), "/")

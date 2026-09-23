@@ -26,6 +26,9 @@ defmodule CodexPooler.InstanceSettings.Settings do
     :upstream_connect_timeout_ms,
     :upstream_pool_timeout_ms,
     :upstream_receive_timeout_ms,
+    :upstream_conn_max_idle_time_ms,
+    :upstream_token_refresh_margin_seconds,
+    :upstream_token_refresh_proactive_enabled,
     :expired_alias_ttl_seconds,
     :bridge_owner_lease_ttl_seconds,
     :bridge_owner_lease_renewal_seconds,
@@ -48,6 +51,9 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :upstream_connect_timeout_ms, :integer
       field :upstream_pool_timeout_ms, :integer
       field :upstream_receive_timeout_ms, :integer
+      field :upstream_conn_max_idle_time_ms, :integer
+      field :upstream_token_refresh_margin_seconds, :integer
+      field :upstream_token_refresh_proactive_enabled, :boolean
       field :expired_alias_ttl_seconds, :integer
       field :bridge_owner_lease_ttl_seconds, :integer
       field :bridge_owner_lease_renewal_seconds, :integer
@@ -87,6 +93,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
     embeds_one :operator, Operator, on_replace: :update, primary_key: false do
       field :login_base_url, :string
+      field :openai_status_polling_enabled, :boolean, default: true
     end
 
     embeds_one :catalog, Catalog, on_replace: :update, primary_key: false do
@@ -106,7 +113,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :bearer_token_hmac_digest, :string
       field :bearer_token_fingerprint, :string
       field :bearer_token_key_version, :string
-      field :bearer_token, :string, virtual: true
+      field :bearer_token, :string, virtual: true, redact: true
       field :bearer_token_action, :string, virtual: true
 
       field :bearer_token_status, Ecto.Enum,
@@ -123,11 +130,11 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :ssl, :boolean
       field :tls, :string
       field :retries, :integer
-      field :password_ciphertext, :string
-      field :password_nonce, :string
+      field :password_ciphertext, :string, redact: true
+      field :password_nonce, :string, redact: true
       field :password_aad, :map
       field :password_key_version, :string
-      field :password, :string, virtual: true
+      field :password, :string, virtual: true, redact: true
       field :password_action, :string, virtual: true
 
       field :password_status, Ecto.Enum,
@@ -233,6 +240,9 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
+      :upstream_conn_max_idle_time_ms,
+      :upstream_token_refresh_margin_seconds,
+      :upstream_token_refresh_proactive_enabled,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -251,6 +261,9 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
+      :upstream_conn_max_idle_time_ms,
+      :upstream_token_refresh_margin_seconds,
+      :upstream_token_refresh_proactive_enabled,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -273,6 +286,19 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_positive_integer(:upstream_connect_timeout_ms)
     |> validate_positive_integer(:upstream_pool_timeout_ms)
     |> validate_positive_integer(:upstream_receive_timeout_ms)
+    |> validate_number(:upstream_conn_max_idle_time_ms,
+      greater_than_or_equal_to: 1_000,
+      less_than_or_equal_to: 3_600_000
+    )
+    # The lower bound keeps the proactive refresh margin far above the
+    # 15-minute recovery cadence, so a pass can still act before the deadline.
+    # The upper bound sits above the observed access-token lifetime, which lets
+    # an operator hold every idle identity permanently inside the margin, paced
+    # only by the recovery cooldown, without accepting an unbounded value.
+    |> validate_number(:upstream_token_refresh_margin_seconds,
+      greater_than_or_equal_to: 3_600,
+      less_than_or_equal_to: 1_209_600
+    )
     |> validate_positive_integer(:expired_alias_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_renewal_seconds)
@@ -362,8 +388,8 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   defp operator_changeset(operator, attrs) do
     operator
-    |> cast(attrs, [:login_base_url])
-    |> validate_required([:login_base_url])
+    |> cast(attrs, [:login_base_url, :openai_status_polling_enabled])
+    |> validate_required([:login_base_url, :openai_status_polling_enabled])
     |> update_change(:login_base_url, &normalize_operator_app_url/1)
     |> validate_format(:login_base_url, ~r/^https?:\/\//)
     |> validate_change(:login_base_url, &validate_operator_app_url/2)
@@ -619,8 +645,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
       true ->
         [
-          bulkheads:
-            "must contain positive max_concurrency, non-negative queue_limit, and positive queue_timeout_ms"
+          bulkheads: "must contain positive max_concurrency, non-negative queue_limit, and positive queue_timeout_ms"
         ]
     end
   end

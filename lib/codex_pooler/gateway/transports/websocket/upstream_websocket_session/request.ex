@@ -39,16 +39,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
 
   @type writer ::
           (binary() -> any())
-          | (binary(),
-             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator.t() ->
+          | (binary(), CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator.t() ->
                any())
           | nil
   @type delivery_mode :: :relay | :collect_compaction | :collect_full_history
   @type effective_serving_mode :: String.t() | nil
   @type frame_observer ::
           (binary() -> any())
-          | (binary(),
-             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.decoded_frame() ->
+          | (binary(), CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.decoded_frame() ->
                any())
           | nil
 
@@ -58,32 +56,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           payload: binary(),
           timeouts: map(),
           writer: writer(),
-          message_mapper:
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
+          message_mapper: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer: frame_observer(),
           submission_observer: (-> any()) | nil,
           reset_probe: ResetProbe.t() | nil,
           native_codex_response_control: TurnSnapshot.t() | nil,
           native_compaction_capability: Capability.t() | nil,
           first_compact_collection: FirstCompactCollection.t() | nil,
-          native_compaction_metadata:
-            CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
+          native_compaction_metadata: CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
           expected_connection_lifecycle:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.connection_lifecycle_state()
             | nil,
           forwarded_owner_send_handoff: ForwardedOwnerRequestHandoff.t() | nil,
-          native_replay_binding:
-            CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil,
-          native_replay_proof:
-            CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof.t() | nil,
+          native_replay_binding: CodexPooler.Gateway.Transports.Websocket.NativeReplayAdmission.Binding.t() | nil,
+          native_replay_proof: CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof.t() | nil,
           provisional_token: <<_::256>> | nil,
           effective_serving_mode: effective_serving_mode(),
           request_id: Ecto.UUID.t() | nil,
           attempt_id: Ecto.UUID.t() | nil,
-          native_client_retry_observation:
-            CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
-          client_retry_dispatch_authority:
-            CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil,
+          native_client_retry_observation: CodexPooler.Accounting.ClientRetry.Observation.t() | nil,
+          client_retry_dispatch_authority: CodexPooler.Accounting.ClientRetry.DispatchAuthority.t() | nil,
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),
           websocket_delivery_mode: delivery_mode(),

@@ -31,6 +31,15 @@ as `https://localhost`; the port mapping is the local URL to open.
 
 Set release environment variables for values the app needs before it can read database settings.
 
+Set `http_proxy` and `https_proxy` to `http://` proxy URLs to route outbound HTTP,
+HTTPS, and WebSocket traffic by target scheme. Credentials embedded in a proxy
+URL are sent as HTTP Basic proxy authentication. Use the comma-separated
+`no_proxy` list for exact hosts, leading-dot or wildcard domain suffixes, IP
+addresses, CIDR ranges, optional ports, or `*`. Lowercase variables take
+precedence over `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`; an explicitly empty
+lowercase value disables its uppercase fallback.
+Proxy and `no_proxy` selection is evaluated again when an allowed Req caller follows a redirect, so the redirected destination cannot inherit the first URL's proxy route.
+
 <table>
   <thead>
     <tr>
@@ -50,6 +59,18 @@ Set release environment variables for values the app needs before it can read da
     <tr>
       <td><code>CODEX_POOLER_HTTP_PORT</code></td>
       <td>Local host port, default <code>4000</code></td>
+    </tr>
+    <tr>
+      <td><code>http_proxy</code> / <code>HTTP_PROXY</code></td>
+      <td>Optional HTTP proxy for outbound HTTP and WS destinations; lowercase takes precedence</td>
+    </tr>
+    <tr>
+      <td><code>https_proxy</code> / <code>HTTPS_PROXY</code></td>
+      <td>Optional HTTP CONNECT proxy for outbound HTTPS and WSS destinations; lowercase takes precedence</td>
+    </tr>
+    <tr>
+      <td><code>no_proxy</code> / <code>NO_PROXY</code></td>
+      <td>Optional comma-separated destination bypass list; lowercase takes precedence</td>
     </tr>
     <tr>
       <td><code>DATABASE_URL</code></td>
@@ -108,7 +129,9 @@ Official release images include the OS IANA timezone database used for operator 
 
 ## Admin-Managed Settings
 
-After the app boots, manage operational settings from the admin UI instead of editing code. Instance settings cover areas such as file limits, ingress trust, gateway diagnostics, route-class admission, circuit thresholds, metrics auth, operator email, model metadata, upstream timeouts, pricing catalog settings, and SMTP delivery.
+After the app boots, manage operational settings from the admin UI instead of editing code. Instance settings cover areas such as file limits, ingress trust, gateway diagnostics, route-class admission, circuit thresholds, metrics auth, operator email, model metadata, upstream timeouts and connection reuse, pricing catalog settings, and SMTP delivery.
+
+OpenAI incident polling makes an outbound HTTPS request to `status.openai.com` every five minutes by default. On the System page's Gateway tab, owners can turn off **OpenAI status polling** (`operator.openai_status_polling_enabled`, default `true`). The database-backed setting applies after the settings cache reloads, without a restart. Disabled scheduled checks make no outbound request and retain the last known incident history. Expected network or provider failures remain visible as feed status and cancel that check until the next scheduled poll; internal sync failures remain job failures.
 
 Secret settings stay write-only in the UI. For example, metrics bearer material is stored as a keyed digest and SMTP credentials are stored encrypted for mail delivery and credential checks.
 
@@ -199,6 +222,14 @@ A longer owner-retention window can improve the chance of reusing an upstream co
 To roll back an ingress policy change, restore the previous allowlist and
 trusted-proxy settings in the admin UI. New requests use the restored snapshot;
 a websocket already revoked by the prior policy must reconnect.
+
+### Upstream connection idle bound
+
+Upstream HTTP requests reuse pooled keep-alive connections to each provider origin. `upstream_conn_max_idle_time_ms` is the longest time a pooled connection may sit idle before it is replaced instead of reused. It applies to every outbound HTTP request Codex Pooler sends: gateway traffic, usage and quota probes, token refresh and device sign-in, saved-reset redemption, model catalog sync, the pricing catalog import, the OpenAI status feed, alert webhook deliveries, and file uploads to the provider's storage URL. Background requests such as the hourly pricing import run far less often than gateway traffic, so their connections are the most likely to sit idle past an egress timeout; cloud NAT gateways commonly drop idle connections after a few minutes. Change it on the System page, Gateway tab, in the Upstream timing group, next to the connect, pool, and receive timeouts. The default is `45000` ms and the accepted range is `1000..3600000` ms. A saved value applies immediately to new upstream requests without a restart; the first requests after a change open new connections. Treat this setting and the upstream connect timeout as low-churn: each distinct combination of their saved values keeps its own connection pools until the next restart, so change them deliberately and do not drive them from automation. Changing the pool or receive timeout does not create new pools.
+
+The bound is checked only when a connection is taken for a new request, so it never interrupts an in-flight or streaming request, however long that request runs.
+
+A NAT gateway, load balancer, or proxy on the egress path can silently drop a connection that has been idle longer than its own timeout. Reusing such a connection fails the request within milliseconds as an upstream network error with a `closed` transport failure in the request phase, and the gateway does not retry it on the same account, because the request may already have reached the provider. Alert webhook deliveries and file uploads are not retried in place either; scheduled jobs and webhook deliveries try again on their normal retry schedule. If those failures appear, lower the bound below the shortest idle timeout on your egress path. A longer bound means fewer reconnects but more exposure to dropped connections; a shorter bound means more connection setup but fewer stale reuses.
 
 ## Runtime URLs
 

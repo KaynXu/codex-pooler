@@ -38,8 +38,7 @@ defmodule CodexPooler.Gateway.Transports.ClientRetryOwnerTest do
     args = [Ecto.UUID.generate(), %{pid: self(), epoch: 1}, :opaque_v5_request]
 
     reason =
-      {:exception, :undef,
-       [{module, :remote_submit_request_v5, args, [file: ~c"previous_release.ex", line: 1]}]}
+      {:exception, :undef, [{module, :remote_submit_request_v5, args, [file: ~c"previous_release.ex", line: 1]}]}
 
     log =
       capture_log(fn ->

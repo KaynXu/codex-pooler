@@ -28,9 +28,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           </p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this key before closing</h2>
           <p id="api-key-created-secret" class="mt-2 text-sm leading-6 text-base-content/70">
-            It is shown once. Afterwards only the fingerprint
-            <span class="font-semibold text-base-content">{@created_secret.key_prefix}</span>
-            identifies it.
+            It is shown once. Afterwards only the fingerprint <span class="font-semibold text-base-content">{@created_secret.key_prefix}</span> identifies it.
           </p>
         </div>
 
@@ -86,7 +84,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             Delete {@api_key.display_name}?
           </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            It stops working immediately, and its request history goes with it. This cannot be undone.
+            It stops working immediately. Request history is retained without a link to this key.
+            Deleting the key cannot be undone.
           </p>
         </div>
 
@@ -107,8 +106,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             required
           >
             <:label_content>
-              Type <span class="font-semibold text-base-content">{@api_key.key_prefix}</span>
-              to confirm
+              Type <span class="font-semibold text-base-content">{@api_key.key_prefix}</span> to confirm
             </:label_content>
           </.input>
         </.form>
@@ -160,8 +158,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 pb-3 text-sm"
       >
         <span class="inline-flex min-w-0 items-center gap-2 text-base-content/70">
-          <.icon name="hero-funnel" class="size-4 shrink-0 text-primary" /> Showing
-          <span class="font-semibold text-base-content">{@selected_pool.name}</span>
+          <.icon name="hero-funnel" class="size-4 shrink-0 text-primary" /> Showing <span class="font-semibold text-base-content">{@selected_pool.name}</span>
         </span>
         <.link
           id="api-key-clear-pool-filter"
@@ -178,10 +175,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         class="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 pb-3 text-sm text-warning"
       >
         <span class="inline-flex items-center gap-2">
-          <.icon name="hero-exclamation-triangle" class="size-4" />
-          Unavailable model references: {ApiKeysReadModel.unavailable_model_policy_count_label(
-            @unavailable_model_policy_count
-          )}
+          <.icon name="hero-exclamation-triangle" class="size-4" /> Unavailable model references: {ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count)}
         </span>
         <.link
           id="api-key-clear-model-policy-filter"
@@ -198,10 +192,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         class="flex flex-wrap items-center justify-between gap-3 border-b border-warning/30 pb-3 text-sm"
       >
         <span class="inline-flex items-center gap-2 text-warning">
-          <.icon name="hero-exclamation-triangle" class="size-4" />
-          Model policy attention: {ApiKeysReadModel.unavailable_model_policy_count_label(
-            @unavailable_model_policy_count
-          )}
+          <.icon name="hero-exclamation-triangle" class="size-4" /> Model policy attention: {ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count)}
         </span>
         <.link
           id="api-key-filter-unavailable-model-policies"
@@ -367,19 +358,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     </div>
                   </div>
                   <span
-                    :if={
-                      ApiKeysReadModel.model_policy_warning_label(
-                        Map.get(@model_policy_summaries, api_key.id)
-                      )
-                    }
+                    :if={ApiKeysReadModel.model_policy_warning_label(Map.get(@model_policy_summaries, api_key.id))}
                     id={"api-key-row-#{api_key.id}-model-policy-warning"}
                     class="col-span-2 inline-flex basis-full items-start gap-1.5 text-xs font-medium leading-5 text-warning xl:col-span-1 xl:basis-auto"
                   >
                     <.icon name="hero-exclamation-triangle" class="mt-0.5 size-3.5 shrink-0" />
                     <span>
-                      {ApiKeysReadModel.model_policy_warning_label(
-                        Map.get(@model_policy_summaries, api_key.id)
-                      )}
+                      {ApiKeysReadModel.model_policy_warning_label(Map.get(@model_policy_summaries, api_key.id))}
                     </span>
                   </span>
                 </div>
@@ -605,6 +590,5 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   end
 
   defp model_chip_class,
-    do:
-      "inline-flex max-w-full items-center truncate rounded-full border border-base-300 bg-base-200 px-2 py-0.5 text-[0.7rem] font-medium leading-4 text-base-content/70"
+    do: "inline-flex max-w-full items-center truncate rounded-full border border-base-300 bg-base-200 px-2 py-0.5 text-[0.7rem] font-medium leading-4 text-base-content/70"
 end

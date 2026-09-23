@@ -1,5 +1,6 @@
 defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
   import Ecto.Query
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   alias CodexPooler.{Access, FakeUpstream, Repo}
@@ -9,6 +10,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @moduletag capture_log: true
+  @tag slow: "boots the real owner control boundary, captures a committed reservation and observes actual response-task release"
   test "captures a real committed reservation once and releases its actual response task" do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
@@ -17,7 +19,16 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
     on_exit(fn ->
       NativePreAttemptDrain.disarm()
       Sandbox.mode(Repo, :manual)
-      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+      # Restoring an unset key means deleting it, not writing `nil`. The
+      # runtime reads this through `Application.get_env/3` with a `false`
+      # default, so writing `nil` back does not restore "unset" -- it disables
+      # the default and every later test in the same partition gets `nil` where
+      # a boolean is required, which raises a `BadBooleanError` far away from
+      # here.
+      case previous do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
     end)
 
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
@@ -25,7 +36,7 @@ defmodule CodexPooler.Dev.NativePreAttemptDrainBoundaryTest do
 
     on_exit(fn ->
       Sandbox.unboxed_run(Repo, fn ->
-        Repo.delete!(setup.pool)
+        CodexPooler.PoolerFixtures.delete_committed_pools!([setup.pool.id])
         Repo.delete!(setup.identity)
         Repo.delete!(setup.pricing)
       end)

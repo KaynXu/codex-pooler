@@ -4,6 +4,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
   import Ecto.Query
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFacts}
+  alias CodexPooler.Accounting.PreAttemptRelease
   alias CodexPooler.Accounting.RequestLifecycle
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Repo
@@ -162,7 +163,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
         on: request.id == attempt.request_id,
         where:
           request.status in ^@terminal_request_statuses and
-            attempt.status in ^@open_attempt_statuses and attempt.started_at <= ^cutoff,
+            attempt.status in @open_attempt_statuses and attempt.started_at <= ^cutoff,
         order_by: [asc: attempt.started_at, asc: attempt.id],
         limit: ^limit,
         select: {request.id, attempt.id}
@@ -228,6 +229,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
 
   defp terminal_request_with_open_attempt?(_request, _attempt), do: false
 
+  # Both recovery branches write the same `@recovery_code`, so the error code
+  # alone has never separated a reservation abandoned before any attempt from
+  # one settled after a dispatched attempt; telling them apart meant joining
+  # `attempts`. The phase records that separation on the release itself, and
+  # names this branch for what it is: nothing live ever reached the turn.
   defp release_undispatched_request(%Request{} = request, now) do
     with {:ok, result} <-
            RequestLifecycle.finalize_reserved_request_failure(request, %{
@@ -235,6 +241,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
              response_status_code: 499,
              last_error_code: @recovery_code,
              usage_status: "not_applicable",
+             pre_attempt_phase: PreAttemptRelease.stale_sweep(),
              now: now
            }) do
       recover_stale_turn(request, nil, now)

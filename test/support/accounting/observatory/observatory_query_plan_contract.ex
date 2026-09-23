@@ -15,7 +15,9 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
   @fact_index_predicates ["request_id"]
   @maximum_scoped_rows 240
   @maximum_relation_work 241
-  @minimum_fixture_rows 7_241
+  # Each wrong-key, wrong-pool and outside-window cohort has 480 rows, twice
+  # the unchanged scoped-read budget; losing any scope remains discriminating.
+  @minimum_fixture_rows 1_680
 
   def maximum_relation_work, do: @maximum_relation_work
 
@@ -54,20 +56,15 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
       "bounded_sorts" => sorts_bounded?(plans),
       "bucket_count" => length(projection.buckets) == 12,
       "fact_table_indexed_access" => Support.no_fact_sequential_scans?(plans),
-      "fact_scope_predicates_present" =>
-        predicates_present_for_all?(plans, "request_log_facts", @fact_predicates),
+      "fact_scope_predicates_present" => predicates_present_for_all?(plans, "request_log_facts", @fact_predicates),
       "fixture_volume" => fixture_row_count >= @minimum_fixture_rows,
       "outcome_count" => length(projection.outcomes) <= 12,
-      "outcome_fact_bounded_indexed_access" =>
-        outcome_plan && Support.indexed_access?(outcome_plan.root, "request_log_facts"),
-      "outcome_request_bounded_indexed_access" =>
-        outcome_plan && Support.indexed_access?(outcome_plan.root, "requests"),
-      "outcome_request_ordered_scope_index" =>
-        outcome_plan && Support.uses_index?(outcome_plan.root, @outcomes_request_index),
+      "outcome_fact_bounded_indexed_access" => outcome_plan && Support.indexed_access?(outcome_plan.root, "request_log_facts"),
+      "outcome_request_bounded_indexed_access" => outcome_plan && Support.indexed_access?(outcome_plan.root, "requests"),
+      "outcome_request_ordered_scope_index" => outcome_plan && Support.uses_index?(outcome_plan.root, @outcomes_request_index),
       "projection_set" => Enum.map(plans, & &1.projection) == Support.projections(),
       "query_count" => query_count <= 8,
-      "request_scope_predicates_present" =>
-        predicates_present_for_all?(plans, "requests", @request_predicates),
+      "request_scope_predicates_present" => predicates_present_for_all?(plans, "requests", @request_predicates),
       "result_limits" =>
         plans
         |> Enum.filter(&(&1.projection == :observatory_outcomes))

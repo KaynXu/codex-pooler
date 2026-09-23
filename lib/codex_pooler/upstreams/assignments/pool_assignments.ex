@@ -114,8 +114,7 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
         result
 
       nil ->
-        {:error,
-         lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
+        {:error, lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
     end
   end
 
@@ -131,8 +130,7 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
         })
 
       nil ->
-        {:error,
-         lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
+        {:error, lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
     end
   end
 
@@ -146,8 +144,7 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
         {:error, lifecycle_error(:pool_not_found, "pool was not found")}
 
       is_nil(assignment_id) ->
-        {:error,
-         lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
+        {:error, lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
 
       true ->
         Repo.transaction(fn ->
@@ -187,8 +184,7 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
         )
 
       nil ->
-        {:error,
-         lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
+        {:error, lifecycle_error(:pool_upstream_assignment_not_found, "pool assignment was not found")}
     end
   end
 

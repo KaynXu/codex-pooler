@@ -19,8 +19,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     {:get, "/v1/models", nil},
     {:get, "/v1/responses", nil},
     {:post, "/v1/responses", %{"model" => "gpt-fixture-text", "input" => "synthetic text"}},
-    {:post, "/v1/responses/compact",
-     %{"model" => "gpt-fixture-text", "input" => "synthetic text"}},
+    {:post, "/v1/responses/compact", %{"model" => "gpt-fixture-text", "input" => "synthetic text"}},
     {:post, "/v1/chat/completions",
      %{
        "model" => "gpt-fixture-text",
@@ -30,8 +29,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     {:get, "/v1/files", nil},
     {:post, "/v1/files", %{"purpose" => "user_data"}},
     {:post, "/v1/audio/transcriptions", %{"model" => "gpt-4o-transcribe"}},
-    {:post, "/v1/images/generations",
-     %{"model" => "gpt-image-2", "prompt" => "synthetic image request"}},
+    {:post, "/v1/images/generations", %{"model" => "gpt-image-2", "prompt" => "synthetic image request"}},
     {:post, "/v1/images/edits", %{"model" => "gpt-image-2", "prompt" => "synthetic edit request"}}
   ]
 
@@ -734,6 +732,14 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     File.mkdir_p!(tmp_root)
 
     previous_upload_term = :persistent_term.get(Plug.Upload)
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs, and
+    # every later upload in the run would target the directory this test removes.
+    on_exit(fn ->
+      :persistent_term.put(Plug.Upload, previous_upload_term)
+      File.rm_rf!(tmp_root)
+    end)
+
     :persistent_term.put(Plug.Upload, {[tmp_root], "test-upload-suffix"})
     :ets.delete(Plug.Upload.Dir, self())
     :ets.delete(Plug.Upload.Path, self())

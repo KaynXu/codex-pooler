@@ -152,9 +152,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
 
   defp request_log_items(rows, surface) do
     attempts_by_request =
-      request_log_attempts_by_request(
-        Enum.map(rows, fn {request, _, _, _, _, _, _} -> request.id end)
-      )
+      request_log_attempts_by_request(Enum.map(rows, fn {request, _, _, _, _, _, _} -> request.id end))
 
     turns_by_request =
       rows
@@ -194,10 +192,11 @@ defmodule CodexPooler.Accounting.RequestLogs do
       upstream_account_plan_label: request.upstream_account_plan_label,
       upstream_account_plan_family: request.upstream_account_plan_family,
       requested_model: request.requested_model,
+      upstream_model: latest_attempt_model(request_attempts, :upstream_model_id),
+      served_model: latest_attempt_model(request_attempts, :served_model),
       reasoning_effort: request.reasoning_effort,
       applied_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "applied_effort"),
-      effective_reasoning_effort:
-        reasoning_metadata_field(reasoning_metadata, "effective_effort"),
+      effective_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "effective_effort"),
       reasoning_effort_source: reasoning_metadata_field(reasoning_metadata, "source"),
       reasoning_effort_rewrite: reasoning_metadata_field(reasoning_metadata, "rewrite"),
       service_tier: request.service_tier,
@@ -540,6 +539,19 @@ defmodule CodexPooler.Accounting.RequestLogs do
     |> Repo.all()
     |> Enum.group_by(& &1.request_id)
   end
+
+  # The model the latest attempt sent upstream and the one the provider
+  # declared on its response object; a difference is a provider-side
+  # substitution, which `requested_model` alone cannot show.
+  defp latest_attempt_model(attempts, field) do
+    case List.last(attempts) do
+      %Attempt{} = attempt -> attempt |> Map.get(field) |> present_string()
+      _attempt -> nil
+    end
+  end
+
+  defp present_string(value) when is_binary(value), do: value |> String.trim() |> blank_to_nil()
+  defp present_string(_value), do: nil
 
   defp latest_attempt_reasoning_metadata(attempts) do
     case List.last(attempts) do

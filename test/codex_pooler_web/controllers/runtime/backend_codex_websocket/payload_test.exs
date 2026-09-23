@@ -155,6 +155,157 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     end
   end
 
+  test "native websocket relays provider metadata after the Pooler event without its ETag" do
+    provider_etag = ~s(W/"provider-models-etag-direct-sentinel")
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"codex.response.metadata",
+           %{
+             "type" => "codex.response.metadata",
+             "headers" => %{
+               "x-models-etag" => provider_etag,
+               "openai-model" => "synthetic-provider-model",
+               "x-reasoning-included" => "true"
+             }
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_ws_provider_metadata_etag",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    models_conn = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+    assert [models_etag] = get_resp_header(models_conn, "etag")
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               CodexPooler.JSON.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("synthetic provider metadata request"),
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-provider-metadata-etag", capture_metadata_control?: true},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    frames = received_provider_metadata_frames([])
+    decoded = Enum.map(frames, &CodexPooler.JSON.decode!/1)
+
+    assert [
+             %{
+               "type" => "codex.response.metadata",
+               "headers" => %{"x-models-etag" => ^models_etag}
+             },
+             %{"type" => "codex.response.metadata", "headers" => provider_headers},
+             %{"type" => "response.completed"}
+           ] = decoded
+
+    assert provider_headers == %{
+             "openai-model" => "synthetic-provider-model",
+             "x-reasoning-included" => "true"
+           }
+
+    assert [_pooler_event] = Enum.filter(decoded, &get_in(&1, ["headers", "x-models-etag"]))
+
+    for frame <- frames do
+      refute frame =~ "provider-models-etag-direct-sentinel"
+    end
+  end
+
+  defp received_provider_metadata_frames(frames) do
+    receive do
+      {:websocket_frame, frame} -> received_provider_metadata_frames([frame | frames])
+    after
+      0 -> Enum.reverse(frames)
+    end
+  end
+
+  # findings#239 control: a native turn with a Pooler snapshot keeps
+  # projecting provider event header objects through the native control
+  # allowlist, on the top-level and the nested `response` placement.
+  test "native websocket keeps projecting provider event headers with a snapshot" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "headers" => %{
+               "openai-model" => "synthetic-provider-model",
+               "x-hostile-control" => "hostile-top-sentinel"
+             },
+             "response" => %{
+               "id" => "resp_ws_native_event_headers",
+               "status" => "in_progress",
+               "headers" => %{
+                 "openai-model" => "synthetic-nested-model",
+                 "x-hostile-nested" => "hostile-nested-sentinel"
+               }
+             }
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_ws_native_event_headers",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               CodexPooler.JSON.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("synthetic native event header request"),
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-native-event-headers"},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    frames = received_provider_metadata_frames([])
+    decoded = Enum.map(frames, &CodexPooler.JSON.decode!/1)
+
+    assert [
+             %{
+               "type" => "response.created",
+               "headers" => %{"openai-model" => "synthetic-provider-model"} = top_level,
+               "response" => %{"headers" => %{"openai-model" => "synthetic-nested-model"} = nested}
+             },
+             %{"type" => "response.completed"} = completed
+           ] = decoded
+
+    assert map_size(top_level) == 1
+    assert map_size(nested) == 1
+    refute Map.has_key?(completed, "headers")
+
+    for frame <- frames do
+      refute frame =~ "-sentinel"
+    end
+  end
+
   @tag :prompt_cache_adaptation
   test "GET /backend-api/codex/responses adapts prompt cache controls in a response.create frame" do
     upstream =
@@ -301,6 +452,63 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
       assert Map.new(captured.headers)["x-codex-routing-hint"] ==
                "model=#{setup.model.upstream_model_id};tier=priority"
 
+      refute Enum.any?(captured.headers, fn {name, _value} ->
+               name in ["session-id", "thread-id", "x-client-request-id"]
+             end)
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "backend websocket forwards the client's bounded provider session headers on the upstream handshake" do
+    provider_payload = %{
+      "id" => "resp_backend_ws_session_headers",
+      "object" => "response",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(provider_payload))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "ws-session-headers-#{System.unique_integer([:positive])}"
+
+    # provenance: observed pinned Codex client source rust-v0.154.0 core/src/client.rs build_websocket_headers (handshake session headers; values invented, thread-id made overlong)
+    {conn, websocket, ref, _response_headers} =
+      public_websocket_connect_with_request_headers!(
+        port,
+        setup,
+        turn_state,
+        "/backend-api/codex/responses",
+        [
+          {"session-id", "backend-ws-session-fixture"},
+          {"thread-id", String.duplicate("t", 129)},
+          {"x-client-request-id", "backend-ws-thread-fixture"}
+        ]
+      )
+
+    try do
+      payload =
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert frame == CodexPooler.JSON.encode!(provider_payload)
+      assert [captured] = FakeUpstream.requests(upstream)
+      captured_headers = Map.new(captured.headers)
+
+      assert captured_headers["session-id"] == "backend-ws-session-fixture"
+      assert captured_headers["x-client-request-id"] == "backend-ws-thread-fixture"
+      refute Map.has_key?(captured_headers, "thread-id")
+
       conn
     after
       Mint.HTTP.close(conn)
@@ -380,9 +588,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
     setup = gateway_setup(primary_upstream)
 
     alternate =
-      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-ws-prompt-cache-alternate",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, alternate_upstream, "upstream-token-ws-prompt-cache-alternate", compact?: false)
 
     prime_routing_quota!(alternate.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -496,10 +702,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
   test "backend websocket routes resolve reasoning policy after upgrade" do
     cases = [
       {"/backend-api/codex/responses", [maximum_reasoning_effort: "medium"], %{}, "medium"},
-      {"/backend-api/codex/v1/responses", [maximum_reasoning_effort: "high"],
-       %{"reasoning_effort" => "low"}, "low"},
-      {"/backend-api/codex/responses", [enforced_reasoning_effort: "high"],
-       %{"reasoningEffort" => "low"}, "high"},
+      {"/backend-api/codex/v1/responses", [maximum_reasoning_effort: "high"], %{"reasoning_effort" => "low"}, "low"},
+      {"/backend-api/codex/responses", [enforced_reasoning_effort: "high"], %{"reasoningEffort" => "low"}, "high"},
       {"/backend-api/codex/v1/responses", [], %{"reasoning_effort" => "focused"}, "focused"}
     ]
 
@@ -637,6 +841,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.PayloadTest do
         Mint.HTTP.close(conn)
       end
     end
+  end
+
+  test "websocket response.create rewrites ultra to the highest catalog level when the model lacks max" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_ultra_catalog",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{"supported_reasoning_levels" => ~w(low medium high xhigh)}
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-ultra-catalog"})
+
+    result =
+      execute_websocket_response(
+        auth,
+        CodexPooler.JSON.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "store" => false,
+          "stream" => true,
+          "reasoning" => %{"effort" => "ultra"}
+        }),
+        %{request_id: "ws-ultra-catalog", codex_session: session},
+        fn frame -> send(self(), {:websocket_frame, frame}) end
+      )
+
+    assert result == :ok
+    assert_receive {:websocket_frame, _completed_frame}, @websocket_frame_timeout
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.json["reasoning"]["effort"] == "xhigh"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert get_in(attempt.response_metadata, ["reasoning", "rewrite"]) == "ultra_to_xhigh"
   end
 
   @tag :websocket_response_create_envelope

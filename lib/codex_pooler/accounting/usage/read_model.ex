@@ -26,14 +26,19 @@ defmodule CodexPooler.Accounting.UsageReadModel do
     if is_binary(pool_id) and is_binary(api_key_id) do
       rolling = rolling_api_key_summary(pool_id, api_key_id, as_of)
       cost_summary = rolling_api_key_cost_summary(pool_id, api_key_id, as_of)
-      daily = daily_api_key_summary(pool_id, api_key_id, as_of)
 
       window_usages =
-        LedgerEntries.window_usages(api_key_id,
-          weekly: DateTime.add(as_of, -7, :day),
-          minute: DateTime.add(as_of, -60, :second)
+        LedgerEntries.window_usages(
+          api_key_id,
+          [
+            daily: DateTime.new!(DateTime.to_date(as_of), ~T[00:00:00], "Etc/UTC"),
+            weekly: DateTime.add(as_of, -7, :day),
+            minute: DateTime.add(as_of, -60, :second)
+          ],
+          as_of
         )
 
+      daily = window_usages.daily
       weekly = window_usages.weekly
       minute = window_usages.minute
 
@@ -48,18 +53,18 @@ defmodule CodexPooler.Accounting.UsageReadModel do
          request_count: rolling.request_count,
          total_tokens: rolling.total_tokens,
          cached_input_tokens: rolling.cached_input_tokens,
+         budget_usage: UsageResponses.budget_usage(window_usages),
          total_cost_usd:
            if(cost_summary.priced_settlement_count > 0,
              do: decimal_micros_to_usd(cost_summary.priced_settled_cost_micros),
              else: nil
            ),
-         total_cost_status:
-           if(cost_summary.priced_settlement_count > 0, do: "priced", else: "unpriced"),
+         total_cost_status: if(cost_summary.priced_settlement_count > 0, do: "priced", else: "unpriced"),
          limits:
            UsageResponses.self_usage_limits(
              bindings,
              minute.effective_request_count,
-             daily.total_tokens,
+             daily.effective_total_tokens,
              weekly.effective_total_tokens,
              as_of
            )
@@ -86,6 +91,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   def build_v1_usage_for_api_key(pool_or_id, api_key_or_id, opts \\ []) do
     pool_id = id_for(pool_or_id)
     as_of = Keyword.get(opts, :as_of, now())
+    opts = Keyword.put(opts, :as_of, as_of)
 
     with {:ok, usage} <- build_api_key_self_usage(pool_or_id, api_key_or_id, opts) do
       {:ok,
@@ -93,6 +99,7 @@ defmodule CodexPooler.Accounting.UsageReadModel do
          request_count: usage.request_count,
          total_tokens: usage.total_tokens,
          cached_input_tokens: usage.cached_input_tokens,
+         budget_usage: usage.budget_usage,
          total_cost_usd: v1_total_cost_usd(usage),
          total_cost_status: usage.total_cost_status,
          limits: Enum.map(usage.limits, &normalize_v1_limit/1),
@@ -146,17 +153,6 @@ defmodule CodexPooler.Accounting.UsageReadModel do
         where:
           r.pool_id == ^pool_id and r.api_key_id == ^api_key_id and r.dimension_kind == "api_key" and
             r.rollup_date >= ^start_date and r.rollup_date <= ^end_date
-    )
-  end
-
-  defp daily_api_key_summary(pool_id, api_key_id, as_of) do
-    date = DateTime.to_date(as_of)
-
-    summarize_rollups(
-      from r in DailyRollup,
-        where:
-          r.pool_id == ^pool_id and r.api_key_id == ^api_key_id and r.dimension_kind == "api_key" and
-            r.rollup_date == ^date
     )
   end
 
@@ -221,32 +217,23 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   defp rolling_api_key_cost_summary(pool_id, api_key_id, as_of) do
     start_date = as_of |> DateTime.add(-27, :day) |> DateTime.to_date()
     end_date = DateTime.to_date(as_of)
+    start_at = DateTime.new!(start_date, ~T[00:00:00.000000], "Etc/UTC")
+    end_before = DateTime.new!(Date.add(end_date, 1), ~T[00:00:00.000000], "Etc/UTC")
 
-    rows =
-      Repo.all(
+    {count, cost_micros} =
+      Repo.one(
         from entry in LedgerEntry,
           join: request in Request,
           on: request.id == entry.request_id,
           where:
             request.pool_id == ^pool_id and entry.api_key_id == ^api_key_id and
-              entry.entry_kind == ^@entry_settlement and entry.usage_status == ^@usage_known and
-              fragment("?::date", entry.occurred_at) >= ^start_date and
-              fragment("?::date", entry.occurred_at) <= ^end_date and
+              entry.entry_kind == @entry_settlement and entry.usage_status == @usage_known and
+              entry.occurred_at >= ^start_at and entry.occurred_at < ^end_before and
               not is_nil(fragment("?->>?", entry.details, "settled_cost_micros")),
-          select: entry.settled_cost_micros
+          select: {count(entry.id), type(coalesce(sum(entry.settled_cost_micros), 0), :decimal)}
       )
 
-    Enum.reduce(
-      rows,
-      %{priced_settlement_count: 0, priced_settled_cost_micros: Decimal.new(0)},
-      fn cost, acc ->
-        %{
-          priced_settlement_count: acc.priced_settlement_count + 1,
-          priced_settled_cost_micros:
-            Decimal.add(acc.priced_settled_cost_micros, cost || Decimal.new(0))
-        }
-      end
-    )
+    %{priced_settlement_count: count, priced_settled_cost_micros: cost_micros}
   end
 
   defp id_for(%{id: id}), do: id

@@ -16,8 +16,7 @@ defmodule CodexPoolerWeb.WebsocketResponseTaskFailureDiagnosticsTest do
     }
 
     stacktrace = [
-      {Ecto.Adapters.SQL, :raise_sql_call_error, 1,
-       [file: ~c"lib/ecto/adapters/sql.ex", line: 1]},
+      {Ecto.Adapters.SQL, :raise_sql_call_error, 1, [file: ~c"lib/ecto/adapters/sql.ex", line: 1]},
       {CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle, :start_codex_turn, 3,
        [
          file: ~c"lib/codex_pooler/gateway/persistence/session_continuity/turn_lifecycle.ex",
@@ -27,8 +26,7 @@ defmodule CodexPoolerWeb.WebsocketResponseTaskFailureDiagnosticsTest do
 
     assert WebsocketResponseTaskFailureDiagnostics.metadata(error, stacktrace) == [
              postgres_code: "unique_violation",
-             failure_operation:
-               "CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle.start_codex_turn/3",
+             failure_operation: "CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle.start_codex_turn/3",
              stacktrace_fingerprint: "4fb2824a4782"
            ]
 

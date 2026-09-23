@@ -631,8 +631,7 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
       left_join: assignment_identity in UpstreamIdentity,
       on: assignment.upstream_identity_id == assignment_identity.id,
       left_join: direct_identity in UpstreamIdentity,
-      on:
-        fragment("?->>?", job.args, "upstream_identity_id") == type(direct_identity.id, :string),
+      on: fragment("?->>?", job.args, "upstream_identity_id") == type(direct_identity.id, :string),
       left_join: api_key in APIKey,
       on: fragment("?->>?", job.args, "api_key_id") == type(api_key.id, :string)
   end
@@ -648,8 +647,7 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
       left_join: assignment_identity in UpstreamIdentity,
       on: assignment.upstream_identity_id == assignment_identity.id,
       left_join: direct_identity in UpstreamIdentity,
-      on:
-        fragment("?->>?", job.args, "upstream_identity_id") == type(direct_identity.id, :string),
+      on: fragment("?->>?", job.args, "upstream_identity_id") == type(direct_identity.id, :string),
       left_join: api_key in APIKey,
       on: fragment("?->>?", job.args, "api_key_id") == type(api_key.id, :string)
   end

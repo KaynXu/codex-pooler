@@ -162,9 +162,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
           aria-label="Underlying interval values for Tokens vs cost"
         >
           <li :for={point <- @token_cost_chart.points}>
-            {point.label}: {point.total_tokens} tokens, {point.cached_input_tokens} cached input tokens, {point.standard_output_tokens} standard output tokens, {point.reasoning_tokens} reasoning tokens, {Format.money_from_micros(
-              point.cost_micros
-            )} cost
+            {point.label}: {point.total_tokens} tokens, {point.cached_input_tokens} cached input tokens, {point.standard_output_tokens} standard output tokens, {point.reasoning_tokens} reasoning tokens, {Format.money_from_micros(point.cost_micros)} cost
           </li>
         </ul>
       </section>

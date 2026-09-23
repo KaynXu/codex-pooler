@@ -5,12 +5,20 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   @detection_timeout_ms 15_000
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+
+  @tenant_pool_id "11111111-1111-4111-8111-111111111111"
+  @tenant_api_key_id "22222222-2222-4222-8222-222222222222"
+  @other_api_key_id "33333333-3333-4333-8333-333333333333"
+  @other_pool_id "44444444-4444-4444-8444-444444444444"
+  @tenant_scope %{pool_id: @tenant_pool_id, api_key_id: @tenant_api_key_id}
+  @tenant_auth %{pool: %{id: @tenant_pool_id}, api_key: %{id: @tenant_api_key_id}}
 
   describe "timeout_config/2" do
     test "returns the typed timeout config used by Req options" do
@@ -34,13 +42,38 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         receive_timeout_ms: 30
       }
 
-      assert TransportEnvelope.req_timeout_options(timeouts) == [
-               receive_timeout: 30,
-               finch: [
-                 pool_timeout: 20,
-                 conn_opts: [transport_opts: [timeout: 10]]
+      with_operational_settings(%OperationalSettings{}, fn ->
+        assert TransportEnvelope.req_timeout_options(timeouts) == [
+                 receive_timeout: 30,
+                 finch: [
+                   pool_timeout: 20,
+                   conn_opts: [transport_opts: [timeout: 10]],
+                   conn_max_idle_time: 45_000
+                 ]
                ]
-             ]
+      end)
+    end
+
+    test "carries the instance-settings upstream connection idle bound as a Finch pool option" do
+      timeouts = %TimeoutConfig{
+        connect_timeout_ms: 10,
+        pool_timeout_ms: 20,
+        receive_timeout_ms: 30
+      }
+
+      for idle_ms <- [1_000, 1_234, 3_600_000] do
+        settings = %OperationalSettings{
+          upstream_connect_timeout_ms: 99,
+          upstream_conn_max_idle_time_ms: idle_ms
+        }
+
+        with_operational_settings(settings, fn ->
+          options = TransportEnvelope.req_timeout_options(timeouts)
+
+          assert options[:finch][:conn_max_idle_time] == idle_ms
+          assert options[:finch][:conn_opts] == [transport_opts: [timeout: 10]]
+        end)
+      end
     end
 
     test "executes the configured Req transport without deprecation warnings" do
@@ -70,7 +103,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   describe "headers/4" do
-    test "preserves header order, server account identity, and allowed forwarded metadata" do
+    test "preserves header order, server account identity, and allowlisted forwarded metadata" do
       headers =
         TransportEnvelope.headers(
           identity(),
@@ -83,11 +116,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
           ]
         )
 
+      # An unlisted `x-openai-*` name is dropped by the envelope itself.
       assert headers == [
                {"authorization", "Bearer upstream-token"},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
-               {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-codex-turn-state", "safe-turn-state"}
              ]
     end
@@ -120,7 +153,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"version", version},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
-               {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-codex-turn-state", "safe-turn-state"}
              ]
     end
@@ -154,11 +186,17 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
       headers =
         TransportEnvelope.headers(identity(), " \t#{token}\n", [],
-          forwarded_headers: [{"x-openai-unrelated", "preserved"}]
+          forwarded_headers: [
+            {"x-openai-unrelated", "dropped-by-allowlist"},
+            {"x-codex-window-id", "window-redacted"}
+          ]
         )
 
       assert {"authorization", "Bearer #{token}"} in headers
-      assert {"x-openai-unrelated", "preserved"} in headers
+      # Negative control: a prefix alone never forwards a header (findings#240).
+      refute {"x-openai-unrelated", "dropped-by-allowlist"} in headers
+      refute inspect(headers) =~ "x-openai-unrelated"
+      assert {"x-codex-window-id", "window-redacted"} in headers
 
       assert List.last(headers) ==
                {"x-openai-internal-codex-residency", "region-trimmed"}
@@ -199,7 +237,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"authorization", "Bearer #{token}"},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
-               {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-openai-internal-codex-residency", "region-server"}
              ]
     end
@@ -264,6 +301,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-codex-parent-thread-id", "thread-redacted"},
                {"x-codex-turn-state", "turn-state-redacted"},
                {"x-openai-subagent", "subagent-redacted"},
+               {"x-openai-memgen-request", "true"},
+               {"x-codex-guardian", "reviewer"},
+               {"x-codex-inference-call-id", "0199365e-2f2a-7d3c-9b4e-6f1a2b3c4d5e"},
                {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
                {"thread-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
                {"x-client-request-id", "019a0c74-e494-7162-b789-1ba499fad58e"}
@@ -291,15 +331,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"thread-id", "thread_01.a:b"}
              ]
 
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/v1/responses", forwarded_headers: input_headers)
-             ) == []
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/v1/responses", forwarded_headers: input_headers)) == []
 
       # The envelope narrows the same way when a caller bypasses the runtime filter.
       envelope_headers =
-        TransportEnvelope.headers(identity(), "upstream-token", [],
-          forwarded_headers: input_headers
-        )
+        TransportEnvelope.headers(identity(), "upstream-token", [], forwarded_headers: input_headers)
 
       assert Enum.filter(envelope_headers, fn {name, _value} ->
                name in ["session-id", "thread-id", "x-client-request-id", "x-session-id"]
@@ -307,6 +343,71 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
                {"thread-id", "thread_01.a:b"}
              ]
+    end
+
+    # findings#240: the three per-request client flags are forwarded on native
+    # HTTP only within their bounds; an out-of-bound value is dropped, never
+    # fingerprinted, because it travels to the provider and is not persisted.
+    # The installation id is a websocket frame `client_metadata` key only, so
+    # its header form is never forwarded.
+    test "bounds the per-request client flags on native routes and drops them on /v1" do
+      call_id = "0199365e-2f2a-7d3c-9b4e-6f1a2b3c4d5e"
+      overlong_call_id = String.duplicate("a", 129)
+
+      input_headers = [
+        {"X-OpenAI-Memgen-Request", "true"},
+        {"x-openai-memgen-request", "TRUE"},
+        {"x-openai-memgen-request", "false"},
+        {"x-openai-memgen-request", "1"},
+        {"x-codex-guardian", "reviewer"},
+        {"X-Codex-Guardian", "classifier"},
+        {"x-codex-guardian", "Reviewer"},
+        {"x-codex-guardian", "auditor"},
+        {"x-codex-guardian", ""},
+        {"x-codex-inference-call-id", call_id},
+        {"x-codex-inference-call-id", "trace_01.a:b-c"},
+        {"x-codex-inference-call-id", String.duplicate("b", 128)},
+        {"x-codex-inference-call-id", overlong_call_id},
+        {"x-codex-inference-call-id", "spaced value"},
+        {"x-codex-inference-call-id", "café"},
+        {"x-codex-inference-call-id", ""},
+        {"x-codex-installation-id", "installation-redacted"},
+        {"x-codex-beta-features", "beta-key-redacted"},
+        {"x-codex-routing-hint", "model=forged"}
+      ]
+
+      expected = [
+        {"x-openai-memgen-request", "true"},
+        {"x-codex-guardian", "reviewer"},
+        {"x-codex-guardian", "classifier"},
+        {"x-codex-inference-call-id", call_id},
+        {"x-codex-inference-call-id", "trace_01.a:b-c"},
+        {"x-codex-inference-call-id", String.duplicate("b", 128)}
+      ]
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses", forwarded_headers: input_headers)) == expected
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses/compact", forwarded_headers: input_headers)) == expected
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/v1/responses", forwarded_headers: input_headers)) == []
+
+      # One list and one set of bounds live in the envelope, and `headers/4`
+      # applies them to every `:forwarded_headers` option, so a caller that
+      # skips the runtime pre-filter cannot forward anything else.
+      assert TransportEnvelope.bounded_forwarded_metadata_headers(input_headers) == expected
+      assert TransportEnvelope.bounded_forwarded_metadata_headers(nil) == []
+
+      envelope_headers =
+        TransportEnvelope.headers(identity(), "upstream-token", [], forwarded_headers: input_headers)
+
+      assert Enum.filter(envelope_headers, fn {name, _value} ->
+               name in [
+                 "x-openai-memgen-request",
+                 "x-codex-guardian",
+                 "x-codex-inference-call-id",
+                 "x-codex-installation-id",
+                 "x-codex-beta-features",
+                 "x-codex-routing-hint"
+               ]
+             end) == expected
     end
 
     test "synthesizes the provider session-id from prompt_cache_key on public /v1 origins only" do
@@ -317,10 +418,14 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       ]
 
       payload = %{"model" => "example-model", "prompt_cache_key" => "fixture-cache-key"}
-      expected = TransportEnvelope.prompt_cache_session_id("fixture-cache-key")
+      expected = TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key")
+      assert is_binary(expected)
 
       for source_endpoint <- ["/v1/responses", "/v1/chat/completions"] do
-        options = public_v1_options(source_endpoint, payload, forwarded_headers: client_headers)
+        options =
+          source_endpoint
+          |> public_v1_options(payload, forwarded_headers: client_headers)
+          |> RequestOptions.capture_tenant_scope(@tenant_auth)
 
         # The client's own continuity headers stay local on /v1; only the
         # Pooler-derived session-id goes upstream.
@@ -341,7 +446,25 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                end) == [{"session-id", expected}]
       end
 
-      options = public_v1_options("/v1/responses", payload, forwarded_headers: client_headers)
+      options =
+        "/v1/responses"
+        |> public_v1_options(payload, forwarded_headers: client_headers)
+        |> RequestOptions.capture_tenant_scope(@tenant_auth)
+
+      # Another API key in the same Pool gets its own provider session-id.
+      other_tenant_options =
+        RequestOptions.capture_tenant_scope(options, %{
+          pool: %{id: @tenant_pool_id},
+          api_key: %{id: @other_api_key_id}
+        })
+
+      assert [{"session-id", other_tenant_value}] =
+               UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 other_tenant_options,
+                 payload
+               )
+
+      assert other_tenant_value != expected
 
       # Without a usable key nothing is synthesized and the client headers are
       # still not forwarded.
@@ -360,6 +483,33 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
       assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(options) == []
 
+      # Fail closed without a trusted tenant scope: there is no unscoped
+      # derivation, controller opts and runtime updates cannot supply the
+      # scope, and an auth context missing either id clears a captured one.
+      unscoped = public_v1_options("/v1/responses", payload, forwarded_headers: client_headers)
+
+      for unscoped_options <- [
+            unscoped,
+            public_v1_options("/v1/responses", payload,
+              forwarded_headers: client_headers,
+              tenant_scope: @tenant_scope
+            ),
+            RequestOptions.put_runtime_context(unscoped, tenant_scope: @tenant_scope),
+            RequestOptions.capture_tenant_scope(options, %{
+              pool: %{id: nil},
+              api_key: %{id: @tenant_api_key_id}
+            }),
+            RequestOptions.capture_tenant_scope(options, %{pool: %{id: @tenant_pool_id}})
+          ] do
+        assert unscoped_options.runtime.tenant_scope == nil
+        refute Map.has_key?(unscoped_options.extra, :tenant_scope)
+
+        assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 unscoped_options,
+                 payload
+               ) == []
+      end
+
       # Native routes keep forwarding the client's headers verbatim and never
       # synthesize from the body.
       native_options =
@@ -375,17 +525,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     end
 
     test "gates forwarded metadata to backend responses and compact transport only" do
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/backend-api/codex/responses")
-             ) == approved_forwarded_metadata_headers()
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses")) == approved_forwarded_metadata_headers()
 
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/backend-api/codex/responses/compact")
-             ) == approved_forwarded_metadata_headers()
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/backend-api/codex/responses/compact")) == approved_forwarded_metadata_headers()
 
-      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
-               runtime_options("/v1/responses")
-             ) == []
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(runtime_options("/v1/responses")) == []
 
       assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
                runtime_options("/backend-api/codex/responses",
@@ -410,7 +554,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         {"x-codex-window-id", "window-redacted"},
         {"x-codex-turn-metadata", duplicate},
         {"x-codex-parent-thread-id", "thread-redacted"},
-        {"x-codex-installation-id", "installation-redacted"},
         {"x-codex-turn-state", "turn-state-redacted"},
         {"x-openai-subagent", "subagent-redacted"}
       ]
@@ -425,7 +568,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-codex-window-id", "window-redacted"},
                {"x-codex-turn-metadata", projected_duplicate},
                {"x-codex-parent-thread-id", "thread-redacted"},
-               {"x-codex-installation-id", "installation-redacted"},
                {"x-codex-turn-state", "turn-state-redacted"},
                {"x-openai-subagent", "subagent-redacted"}
              ] = forwarded_headers
@@ -559,40 +701,116 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     }
   end
 
-  describe "prompt_cache_session_id/1" do
+  describe "prompt_cache_session_id/2" do
     # RFC 4122 version 5: version nibble `5`, variant bits `10xx`.
     @uuid_v5 ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
 
-    test "uses the fixed Pooler namespace and RFC 4122 v5 derivation" do
+    test "uses the fixed Pooler namespace and RFC 4122 v5 over the netstring tenant name" do
       # The namespace is itself UUID v5 of the RFC 4122 URL namespace over the
-      # project URL; every value below was cross-checked with Python's uuid5.
+      # project URL. Every value below was cross-checked with Python's
+      # `uuid.uuid5(uuid.UUID("0aac30b0-0311-52bd-8fb7-258f9c6f0278"), name)`
+      # where `name` is the UTF-8 bytes of
+      # `f"{len(pool_id)}:{pool_id},{len(api_key_id)}:{api_key_id},{key}"`
+      # (lengths in bytes).
       assert TransportEnvelope.prompt_cache_session_namespace() ==
                "0aac30b0-0311-52bd-8fb7-258f9c6f0278"
 
-      assert TransportEnvelope.prompt_cache_session_id("fixture-cache-key") ==
-               "b5f972d4-5751-5a43-9ccc-5f82a52174cf"
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key") ==
+               "f228c884-887f-5139-9116-d0d12a32b2a4"
 
-      assert TransportEnvelope.prompt_cache_session_id("other-cache-key") ==
-               "1f500e28-7da5-5c91-98bc-667a4cf365bd"
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, "other-cache-key") ==
+               "5f4379e8-576a-5b98-9e51-76eae22095d9"
 
-      assert TransportEnvelope.prompt_cache_session_id(String.duplicate("a", 512)) ==
-               "1ab9533d-5a8e-5dba-8a6b-04f783b3c09b"
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, String.duplicate("a", 512)) ==
+               "1b022668-2e28-5cd7-95d7-7a37ce6fa1f6"
+
+      assert TransportEnvelope.prompt_cache_session_id(
+               %{pool_id: @tenant_pool_id, api_key_id: @other_api_key_id},
+               "fixture-cache-key"
+             ) == "64dd4d61-404c-5b01-a009-c2e97f90cbc7"
+
+      assert TransportEnvelope.prompt_cache_session_id(
+               %{pool_id: @other_pool_id, api_key_id: @tenant_api_key_id},
+               "fixture-cache-key"
+             ) == "fb4ebc53-19a1-5fb9-aac2-498e7ea5e124"
     end
 
     test "is deterministic, v5-shaped, and bounded by the raw key" do
       for key <- ["fixture-cache-key", "conv:01/𝔘nicode key", String.duplicate("z", 512)] do
-        value = TransportEnvelope.prompt_cache_session_id(key)
+        value = TransportEnvelope.prompt_cache_session_id(@tenant_scope, key)
 
         assert value =~ @uuid_v5
         assert TransportEnvelope.provider_session_header_value?(value)
-        assert TransportEnvelope.prompt_cache_session_id(key) == value
+        assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, key) == value
       end
 
-      assert TransportEnvelope.prompt_cache_session_id("fixture-cache-key") !=
-               TransportEnvelope.prompt_cache_session_id("fixture-cache-key ")
+      assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key") !=
+               TransportEnvelope.prompt_cache_session_id(@tenant_scope, "fixture-cache-key ")
 
       for ignored <- ["", String.duplicate("z", 513), nil, 42, %{}, ["fixture-cache-key"]] do
-        assert TransportEnvelope.prompt_cache_session_id(ignored) == nil
+        assert TransportEnvelope.prompt_cache_session_id(@tenant_scope, ignored) == nil
+      end
+    end
+
+    test "separates tenants: the same key under another API key or Pool gets another id" do
+      key = "default"
+      tenant = TransportEnvelope.prompt_cache_session_id(@tenant_scope, key)
+
+      assert TransportEnvelope.prompt_cache_session_id(
+               %{pool_id: @tenant_pool_id, api_key_id: @tenant_api_key_id},
+               key
+             ) == tenant
+
+      other_values =
+        Enum.map(
+          [
+            %{pool_id: @tenant_pool_id, api_key_id: @other_api_key_id},
+            %{pool_id: @other_pool_id, api_key_id: @tenant_api_key_id},
+            %{pool_id: @other_pool_id, api_key_id: @other_api_key_id},
+            # Swapping the two ids is a different tenant name.
+            %{pool_id: @tenant_api_key_id, api_key_id: @tenant_pool_id}
+          ],
+          &TransportEnvelope.prompt_cache_session_id(&1, key)
+        )
+
+      assert Enum.all?(other_values, &(&1 =~ @uuid_v5))
+      assert Enum.uniq([tenant | other_values]) == [tenant | other_values]
+    end
+
+    test "is injective over (pool id, api key id, key) even when values contain separators" do
+      # A plain `:`-joined name would collapse both triples to "a:b:c:d".
+      assert Enum.join(["a:b", "c", "d"], ":") == Enum.join(["a", "b:c", "d"], ":")
+
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "a:b", api_key_id: "c"}, "d") ==
+               "3d589036-54f8-57d8-9b56-f5e5c9e1b239"
+
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "a", api_key_id: "b:c"}, "d") ==
+               "e27cde86-c9b7-54aa-bae6-74143ea50a11"
+
+      # A pool id that itself looks like a netstring prefix stays distinct.
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "1:a,", api_key_id: "b"}, "c") ==
+               "e1bbbf29-e1d3-5b30-a99d-d9408dce3c8d"
+
+      # Moving the separator byte across the api key id / key boundary changes
+      # the name, because the api key id is length-prefixed.
+      assert TransportEnvelope.prompt_cache_session_id(%{pool_id: "a", api_key_id: "b,"}, "c") !=
+               TransportEnvelope.prompt_cache_session_id(%{pool_id: "a", api_key_id: "b"}, ",c")
+    end
+
+    test "returns nil without a complete trusted tenant scope" do
+      for scope <- [
+            nil,
+            %{},
+            %{pool_id: @tenant_pool_id},
+            %{api_key_id: @tenant_api_key_id},
+            %{pool_id: "", api_key_id: @tenant_api_key_id},
+            %{pool_id: @tenant_pool_id, api_key_id: ""},
+            %{pool_id: nil, api_key_id: @tenant_api_key_id},
+            %{pool_id: @tenant_pool_id, api_key_id: 42},
+            {@tenant_pool_id, @tenant_api_key_id},
+            "fixture-cache-key"
+          ] do
+        assert TransportEnvelope.prompt_cache_session_id(scope, "fixture-cache-key") == nil
       end
     end
   end
@@ -614,8 +832,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp turn_metadata(label) do
     CodexPooler.JSON.encode!(%{
-      "code_mode_tool_names" =>
-        Map.new(1..256, fn index -> {"tool_#{index}", "#{label}-handler-#{index}"} end),
+      "code_mode_tool_names" => Map.new(1..256, fn index -> {"tool_#{index}", "#{label}-handler-#{index}"} end),
       "nested" => %{"code_mode_tool_names" => %{"nested-tool" => "nested sentinel"}},
       "non_ascii" => "cafe \u2615",
       "unrelated" => "#{label}-unrelated"
@@ -676,6 +893,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       {"x-codex-parent-thread-id", "thread-redacted"},
       {"x-codex-turn-state", "turn-state-redacted"},
       {"x-openai-subagent", "subagent-redacted"},
+      {"x-openai-memgen-request", "true"},
+      {"x-codex-guardian", "reviewer"},
+      {"x-codex-inference-call-id", "0199365e-2f2a-7d3c-9b4e-6f1a2b3c4d5e"},
       {"session-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
       {"thread-id", "019a0c74-e494-7162-b789-1ba499fad58e"},
       {"x-client-request-id", "019a0c74-e494-7162-b789-1ba499fad58e"}
@@ -684,6 +904,27 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp identity do
     %UpstreamIdentity{chatgpt_account_id: "acct_test"}
+  end
+
+  defp with_operational_settings(%OperationalSettings{} = settings, fun) do
+    previous = Application.fetch_env(:codex_pooler, OperationalSettings)
+
+    restore = fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:codex_pooler, OperationalSettings, value)
+        :error -> Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end
+
+    # Also on_exit: the ExUnit timeout or a linked crash kills the test before `after` runs.
+    on_exit(restore)
+    Application.put_env(:codex_pooler, OperationalSettings, settings: settings)
+
+    try do
+      fun.()
+    after
+      restore.()
+    end
   end
 
   defp start_http_server! do

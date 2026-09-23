@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounter.RanksTest do
 
   @bpe_beam_file ~c"Elixir.CodexPooler.Gateway.RequestCompression.TokenCounter.BPE.beam"
 
+  @tag slow: "cold-parses a complete bundled rank asset through a real relocated application path"
   test "load/1 resolves a bundled rank asset through a lexically valid dangling priv link" do
     {:module, Ranks} = Code.ensure_loaded(Ranks)
 
@@ -67,6 +68,7 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounter.RanksTest do
     assert map_size(ranks) > 0
   end
 
+  @tag slow: "parses all complete bundled rank assets with CRLF and corruption controls"
   test "load/1 loads CRLF-normalized copies of every bundled rank asset" do
     {:module, Ranks} = Code.ensure_loaded(Ranks)
 

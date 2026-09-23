@@ -40,9 +40,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
                                                                Phoenix.LiveView.Socket.t())) ::
           Phoenix.LiveView.Socket.t()
   def refresh(socket, identity_id, reload_fun) do
-    case Upstreams.enqueue_token_refresh_for_scope(socket.assigns.current_scope, identity_id,
-           trigger_kind: "admin_upstreams_live"
-         ) do
+    case Upstreams.enqueue_token_refresh_for_scope(socket.assigns.current_scope, identity_id, trigger_kind: "admin_upstreams_live") do
       {:ok, %{job: job}} ->
         message =
           if job.conflict?, do: "Token refresh is already queued", else: "Token refresh queued"

@@ -1,0 +1,43 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use POSIX qw(setsid WNOHANG);
+
+@ARGV or die "qa-phase: command required\n";
+my $cancel;
+$SIG{TERM} = sub { $cancel = 143; };
+$SIG{INT} = sub { $cancel = 130; };
+# Erlang Ports already place their executable in an owned process group.
+# A group leader cannot call setsid again, but already has the required fence.
+setsid() >= 0 || getpgrp() == $$ or die "qa-phase: session creation failed\n";
+exit($cancel) if defined($cancel);
+
+my $child = fork();
+defined($child) or die "qa-phase: fork failed\n";
+if ($child == 0) {
+  $SIG{TERM} = 'DEFAULT';
+  $SIG{INT} = 'DEFAULT';
+  exec(@ARGV) or die "qa-phase: command launch failed\n";
+}
+
+while (1) {
+  if (defined($cancel)) {
+    # This supervisor remains the session/group leader until all owned
+    # descendants have received KILL. Its group id cannot be reused meanwhile.
+    $SIG{TERM} = 'IGNORE';
+    $SIG{INT} = 'IGNORE';
+    kill('TERM', -$$);
+    select(undef, undef, undef, 0.2);
+    waitpid($child, WNOHANG);
+    kill('KILL', -$$);
+    die "qa-phase: group shutdown failed\n";
+  }
+
+  my $result = waitpid($child, WNOHANG);
+  if ($result == $child) {
+    my $rc = $?;
+    exit(($rc & 127) ? 128 + ($rc & 127) : $rc >> 8);
+  }
+  $result >= 0 or die "qa-phase: child wait failed\n";
+  select(undef, undef, undef, 0.01);
+}

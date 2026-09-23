@@ -1,6 +1,6 @@
 # Codex Pooler Public Docs For Agents
 
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-20
 
 Inventory scope: curated primary and discovery pages listed below; this index intentionally excludes other rendered pages.
 
@@ -20,6 +20,7 @@ Primary public docs:
 - https://docs.codex-pooler.com/clients/goose/
 - https://docs.codex-pooler.com/clients/kilo-code/
 - https://docs.codex-pooler.com/clients/opencode/
+- https://docs.codex-pooler.com/clients/opencode-v2/
 - https://docs.codex-pooler.com/clients/openclaw/
 - https://docs.codex-pooler.com/clients/openhands/
 - https://docs.codex-pooler.com/clients/omp/

@@ -69,16 +69,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
       {:headers, %{"authorization" => "value"}},
       {:payload, %{arbitrary: "map"}},
       {:mapper, :arbitrary_mapper},
-      {:timeouts,
-       %TimeoutConfig{connect_timeout_ms: -1, pool_timeout_ms: 1, receive_timeout_ms: 1}},
+      {:timeouts, %TimeoutConfig{connect_timeout_ms: -1, pool_timeout_ms: 1, receive_timeout_ms: 1}},
       {:timeouts, %{connect_timeout_ms: 1, pool_timeout_ms: 1, receive_timeout_ms: 1}},
       {:reset_probe, %ResetProbe{token: "not-a-uuid"}},
       {:reset_probe, %{token: Ecto.UUID.generate()}},
       {:native_codex_response_control, %TurnSnapshot{models_etag: ""}},
       {:native_codex_response_control, %{models_etag: "etag"}},
       {:observation, %{request_id: Ecto.UUID.generate()}},
-      {:observation,
-       valid_observation() |> Map.put(:client_request_id, String.duplicate("x", 257))},
+      {:observation, valid_observation() |> Map.put(:client_request_id, String.duplicate("x", 257))},
       {:observation, valid_observation() |> Map.put(:mode, "auto")},
       {:observation, valid_observation() |> Map.put(:unknown, true)},
       {:assignment_advertised?, 1},
@@ -139,8 +137,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
     mutations = [
       {:timeouts, Map.put(attrs.timeouts, :unexpected_callback, function)},
       {:reset_probe, Map.put(attrs.reset_probe, :unexpected_callback, function)},
-      {:native_codex_response_control,
-       Map.put(attrs.native_codex_response_control, :unexpected_callback, function)}
+      {:native_codex_response_control, Map.put(attrs.native_codex_response_control, :unexpected_callback, function)}
     ]
 
     assert Enum.map(mutations, fn {field, snapshot} ->

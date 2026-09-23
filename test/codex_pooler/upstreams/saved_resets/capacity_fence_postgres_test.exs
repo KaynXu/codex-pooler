@@ -77,8 +77,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
     assert evidence.writer_backend_pid in evidence.blocking_pids
     assert evidence.wait_event_type == "Lock"
 
-    assert {:ok,
-            %{status: :noop, applied?: false, code: "gateway_auto_sibling_transient_exclusion"}} =
+    assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_transient_exclusion"}} =
              evidence.claim_result
 
     assert provider_consume_count(fixture.fake) == 0
@@ -296,8 +295,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
         %{fixture | context: context}
       end)
 
-    assert {:ok,
-            %{status: :noop, applied?: false, code: "gateway_auto_sibling_transient_exclusion"}} =
+    assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_transient_exclusion"}} =
              Sandbox.unboxed_run(Repo, fn ->
                SavedResetRedemption.redeem(fixture.target_assignment,
                  trigger_kind: "gateway_auto",
@@ -312,8 +310,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
     fixture = committed_fixture!("open", false)
     on_exit(fn -> cleanup_fixture!(fixture) end)
 
-    assert {:ok,
-            %{status: :noop, applied?: false, code: "gateway_auto_sibling_transient_exclusion"}} =
+    assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_transient_exclusion"}} =
              Sandbox.unboxed_run(Repo, fn ->
                SavedResetRedemption.redeem(fixture.target_assignment,
                  trigger_kind: "gateway_auto",
@@ -881,10 +878,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CapacityFencePostgresTest do
     FakeUpstream.stop(fixture.fake)
 
     Sandbox.unboxed_run(Repo, fn ->
-      case Repo.get(Pool, fixture.pool_id) do
-        %Pool{} = pool -> Repo.delete!(pool)
-        nil -> :ok
-      end
+      CodexPooler.PoolerFixtures.delete_committed_pools!([fixture.pool_id])
 
       identity_ids = [fixture.target_assignment.upstream_identity_id, fixture.sibling_identity_id]
       Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id in ^identity_ids))

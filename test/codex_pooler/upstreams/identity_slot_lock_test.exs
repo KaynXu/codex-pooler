@@ -1,8 +1,9 @@
 defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
-  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
   import Ecto.Query
 
   alias CodexPooler.Pools.Pool
@@ -14,6 +15,8 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     IdentitySlotLock
   }
 
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -77,9 +80,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
         %{chatgpt_account_id: "acct_beta", account_email: "shared@example.COM"}
       )
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN broad_domain account_holder=#{account_holder} account_waiter=#{account_waiter} account_blocking=#{inspect(account_blocking)} email_holder=#{email_holder} email_waiter=#{email_waiter} email_blocking=#{inspect(email_blocking)} terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN broad_domain account_holder=#{account_holder} account_waiter=#{account_waiter} account_blocking=#{inspect(account_blocking)} email_holder=#{email_holder} email_waiter=#{email_waiter} email_blocking=#{inspect(email_blocking)} terminal=ok sqlstate_40P01=0")
   end
 
   test "disjoint identity resources proceed while another transaction holds its slot" do
@@ -102,9 +103,7 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     assert waiter_blocking == []
     assert {:ok, ^waiter_backend_pid} = Task.await(waiter, @detection_timeout_ms)
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN disjoint holder=#{blocker_backend_pid} peer=#{waiter_backend_pid} holder_blocking=#{inspect(blocker_blocking)} peer_blocking=#{inspect(waiter_blocking)} terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN disjoint holder=#{blocker_backend_pid} peer=#{waiter_backend_pid} holder_blocking=#{inspect(blocker_blocking)} peer_blocking=#{inspect(waiter_blocking)} terminal=ok sqlstate_40P01=0")
 
     send(blocker.pid, {barrier, :release})
     assert {:ok, ^blocker_backend_pid} = Task.await(blocker, @detection_timeout_ms)
@@ -130,33 +129,27 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
     assert_receive {^barrier, :waiter, :locked, ^waiter_backend_pid}, @detection_timeout_ms
     assert {:ok, ^waiter_backend_pid} = Task.await(waiter, @detection_timeout_ms)
 
-    CodexPooler.TestDiagnostics.puts(
-      "GREEN reverse_union holder=#{blocker_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} terminal=ok sqlstate_40P01=0"
-    )
+    CodexPooler.TestDiagnostics.puts("GREEN reverse_union holder=#{blocker_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} terminal=ok sqlstate_40P01=0")
   end
 
   test "workspace and subject selection stays distinct after acquiring broader account locks" do
     %{legacy: legacy, alpha: alpha, beta: beta} = committed_workspace_fixture!()
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          attrs = %{
-            chatgpt_account_id: legacy.chatgpt_account_id,
-            workspace_id: beta.workspace_id,
-            chatgpt_user_id: "subject_beta"
-          }
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        attrs = %{
+          chatgpt_account_id: legacy.chatgpt_account_id,
+          workspace_id: beta.workspace_id,
+          chatgpt_user_id: "subject_beta"
+        }
 
-          IdentitySlotLock.lock_slots!([attrs])
-          assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
-          assert selected.id == beta.id
-          refute selected.id == alpha.id
-          refute selected.id == legacy.id
-        end)
+        IdentitySlotLock.lock_slots!([attrs])
+        assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
+        assert selected.id == beta.id
+        refute selected.id == alpha.id
+        refute selected.id == legacy.id
       end)
-    after
-      cleanup_identities!([legacy.id, alpha.id, beta.id])
-    end
+    end)
   end
 
   test "a concrete subject converges on the existing subjectless workspace slot" do
@@ -167,72 +160,140 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
         chatgpt_user_id: nil
       })
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          attrs = %{
-            chatgpt_account_id: identity.chatgpt_account_id,
-            workspace_id: identity.workspace_id,
-            chatgpt_user_id: "subject_new"
-          }
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        attrs = %{
+          chatgpt_account_id: identity.chatgpt_account_id,
+          workspace_id: identity.workspace_id,
+          chatgpt_user_id: "subject_new"
+        }
 
-          IdentitySlotLock.lock_slots!([attrs])
-          assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
-          assert selected.id == identity.id
-        end)
+        IdentitySlotLock.lock_slots!([attrs])
+        assert {:ok, selected} = IdentityLifecycle.select_upsert_identity(attrs)
+        assert selected.id == identity.id
       end)
-    after
-      cleanup_identities!([identity.id])
-    end
+    end)
   end
 
   test "identity, assignment, and secret rows are locked and returned in sorted id order" do
     fixture = committed_graph_fixture!()
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          locked =
-            IdentitySlotLock.lock_identity_rows!([
-              fixture.second.identity.id,
-              fixture.first.identity.id,
-              fixture.second.identity.id
-            ])
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        locked =
+          IdentitySlotLock.lock_identity_rows!([
+            fixture.second.identity.id,
+            fixture.first.identity.id,
+            fixture.second.identity.id
+          ])
 
-          assert Enum.map(locked.identities, & &1.id) ==
-                   Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
+        assert Enum.map(locked.identities, & &1.id) ==
+                 Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
 
-          assert Enum.map(locked.assignments, & &1.id) ==
-                   Enum.sort([fixture.first.assignment.id, fixture.second.assignment.id])
+        assert Enum.map(locked.assignments, & &1.id) ==
+                 Enum.sort([fixture.first.assignment.id, fixture.second.assignment.id])
 
-          assert Enum.map(locked.secrets, & &1.id) == Enum.sort(fixture.secret_ids)
-        end)
+        assert Enum.map(locked.secrets, & &1.id) == Enum.sort(fixture.secret_ids)
       end)
-    after
-      cleanup_graph_fixture!(fixture)
-    end
+    end)
   end
 
   test "credential fencing delegates multi-identity replacement locks in sorted order" do
     fixture = committed_graph_fixture!()
 
-    try do
-      unboxed(fn ->
-        Repo.transaction(fn ->
-          locked =
-            CredentialFencing.lock_credential_replacements([
-              fixture.second.identity,
-              fixture.first.identity.id,
-              fixture.second.identity.id
-            ])
+    unboxed(fn ->
+      Repo.transaction(fn ->
+        locked =
+          CredentialFencing.lock_credential_replacements([
+            fixture.second.identity,
+            fixture.first.identity.id,
+            fixture.second.identity.id
+          ])
 
-          assert Enum.map(locked, & &1.id) ==
-                   Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
+        assert Enum.map(locked, & &1.id) ==
+                 Enum.sort([fixture.first.identity.id, fixture.second.identity.id])
+      end)
+    end)
+  end
+
+  # Fenced reconciliation shape (findings #215): `lock_identity_rows!/1` takes
+  # the identity advisory mutex and then `FOR UPDATE`; the evidence writer in the
+  # same transaction re-enters that transaction-scoped mutex instead of
+  # self-blocking, and a concurrent evidence writer on another backend queues on
+  # the mutex, never on the row.
+  test "identity row locks re-enter the identity advisory mutex for same-transaction evidence" do
+    identity = committed_identity!(%{chatgpt_account_id: unique("acct_reentrant")})
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    parent = self()
+    barrier = make_ref()
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Repo.transaction(fn ->
+            backend_pid = backend_pid!()
+            locked = IdentitySlotLock.lock_identity_rows!([identity])
+            assert Enum.map(locked.identities, & &1.id) == [identity.id]
+
+            assert {:ok, %AccountQuotaWindow{}} =
+                     EvidenceStore.record_evidence(identity, evidence_attrs("22"), observed_at)
+
+            send(parent, {barrier, :holder, :locked, backend_pid})
+            await_release(barrier, true)
+            backend_pid
+          end)
         end)
       end)
-    after
-      cleanup_graph_fixture!(fixture)
-    end
+
+    assert_receive {^barrier, :holder, :locked, holder_backend_pid}, @detection_timeout_ms
+
+    waiter =
+      Task.async(fn ->
+        unboxed(fn ->
+          backend_pid = backend_pid!()
+          send(parent, {barrier, :waiter, :ready, backend_pid})
+
+          result =
+            EvidenceStore.record_evidence(
+              identity,
+              evidence_attrs("31"),
+              DateTime.add(observed_at, 1, :second)
+            )
+
+          send(parent, {barrier, :waiter, :recorded, backend_pid})
+          {backend_pid, result}
+        end)
+      end)
+
+    assert_receive {^barrier, :waiter, :ready, waiter_backend_pid}, @detection_timeout_ms
+    assert holder_backend_pid != waiter_backend_pid
+    blocking_pids = assert_waiting_on!(waiter_backend_pid, holder_backend_pid)
+    assert wait_event!(waiter_backend_pid) == "advisory"
+    # Queued on the mutex, never on the row: no granted identity row reference yet.
+    assert upstream_identity_row_share_locks(waiter_backend_pid) == 0
+
+    send(holder.pid, {barrier, :release})
+    assert {:ok, ^holder_backend_pid} = Task.await(holder, @detection_timeout_ms)
+    assert_receive {^barrier, :waiter, :recorded, ^waiter_backend_pid}, @detection_timeout_ms
+
+    assert {^waiter_backend_pid, {:ok, %AccountQuotaWindow{used_percent: used_percent}}} =
+             Task.await(waiter, @detection_timeout_ms)
+
+    assert Decimal.compare(used_percent, Decimal.new(31)) == :eq
+
+    CodexPooler.TestDiagnostics.puts("GREEN reentrant_advisory holder=#{holder_backend_pid} waiter=#{waiter_backend_pid} blocking=#{inspect(blocking_pids)} wait_event=advisory terminal=ok sqlstate_40P01=0")
+  end
+
+  defp evidence_attrs(used_percent),
+    do: CodexPooler.QuotaEvidenceSupport.account_secondary_evidence(used_percent)
+
+  defp wait_event!(backend_pid) do
+    unboxed(fn ->
+      %{rows: [[wait_event]]} =
+        SQL.query!(Repo, "SELECT wait_event FROM pg_stat_activity WHERE pid = $1", [backend_pid])
+
+      wait_event
+    end)
   end
 
   defp assert_serialized!(first_attrs, second_attrs) do
@@ -321,58 +382,96 @@ defmodule CodexPooler.Upstreams.IdentitySlotLockTest do
 
     %{
       legacy: committed_identity!(%{chatgpt_account_id: account_id}),
-      alpha:
-        committed_identity!(%{chatgpt_account_id: account_id, workspace_id: "workspace_alpha"}),
+      alpha: committed_identity!(%{chatgpt_account_id: account_id, workspace_id: "workspace_alpha"}),
       beta: committed_identity!(%{chatgpt_account_id: account_id, workspace_id: "workspace_beta"})
     }
   end
 
+  # Registered, never scoped. This file runs without a sandbox, so every row it writes is
+  # committed; `try/after` runs only while the test process is alive, and an ExUnit timeout
+  # kill or an exit signal from one of the linked lock tasks skips it. The label is chosen
+  # before the fixture runs so a creation that fails partway through is covered too.
   defp committed_identity!(attrs) do
-    unboxed(fn -> upstream_identity_fixture(attrs) end)
+    label = unique("identity slot lock identity")
+    register_unboxed_cleanup!(fn -> delete_identities_by_label!(label) end)
+    unboxed(fn -> upstream_identity_fixture(Map.put(attrs, :account_label, label)) end)
   end
 
+  # Registered before the commit and keyed on the slugs and labels derived here, so a fixture that
+  # fails partway through is covered too. Nothing here commits a user: the Pools carry no creator,
+  # and `active_upstream_assignment_fixture/2` creates and assigns its identity without one.
   defp committed_graph_fixture! do
-    unboxed(fn ->
-      %{user: owner} = bootstrap_owner_fixture()
-      first_pool = pool_fixture(%{created_by_user_id: owner.id})
-      second_pool = pool_fixture(%{created_by_user_id: owner.id})
-      first = active_upstream_assignment_fixture(first_pool, %{})
-      second = active_upstream_assignment_fixture(second_pool, %{})
+    suffix = System.unique_integer([:positive, :monotonic])
 
-      secret_ids =
-        Repo.all(
-          from secret in CodexPooler.Upstreams.Schemas.EncryptedSecret,
-            where: secret.upstream_identity_id in ^[first.identity.id, second.identity.id],
-            select: secret.id
+    [first_slug, second_slug] =
+      slugs = ["slot-lock-first-#{suffix}", "slot-lock-second-#{suffix}"]
+
+    [first_label, second_label] =
+      labels = ["Slot lock first #{suffix}", "Slot lock second #{suffix}"]
+
+    register_unboxed_cleanup!(fn -> delete_graph_fixture!(slugs, labels) end)
+
+    fixture =
+      unboxed(fn ->
+        first_pool = pool_fixture(%{slug: first_slug})
+        second_pool = pool_fixture(%{slug: second_slug})
+        first = active_upstream_assignment_fixture(first_pool, %{account_label: first_label})
+        second = active_upstream_assignment_fixture(second_pool, %{account_label: second_label})
+
+        secret_ids =
+          Repo.all(
+            from secret in CodexPooler.Upstreams.Schemas.EncryptedSecret,
+              where: secret.upstream_identity_id in ^[first.identity.id, second.identity.id],
+              select: secret.id
+          )
+
+        %{
+          first: first,
+          first_pool_id: first_pool.id,
+          second: second,
+          second_pool_id: second_pool.id,
+          secret_ids: secret_ids
+        }
+      end)
+
+    fixture
+  end
+
+  defp delete_graph_fixture!(slugs, labels) do
+    Enum.each(slugs, fn slug ->
+      %{id: id} = Repo.get_by!(Pool, slug: slug)
+      CodexPooler.PoolerFixtures.delete_committed_pools!([id])
+    end)
+
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label in ^labels)
+    :ok
+  end
+
+  defp delete_identities_by_label!(label) do
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.account_label == ^label)
+    :ok
+  end
+
+  # A granted RowShareLock on `upstream_identities` means the backend already
+  # holds an identity row reference (`FOR UPDATE` / `FOR KEY SHARE`).
+  defp upstream_identity_row_share_locks(backend_pid) do
+    unboxed(fn ->
+      %{rows: [[count]]} =
+        SQL.query!(
+          Repo,
+          """
+          SELECT count(*)
+          FROM pg_locks
+          WHERE pid = $1
+            AND granted
+            AND locktype = 'relation'
+            AND relation = 'upstream_identities'::regclass
+            AND mode = 'RowShareLock'
+          """,
+          [backend_pid]
         )
 
-      %{
-        first: first,
-        first_pool_id: first_pool.id,
-        second: second,
-        second_pool_id: second_pool.id,
-        secret_ids: secret_ids
-      }
-    end)
-  end
-
-  defp cleanup_graph_fixture!(fixture) do
-    unboxed(fn ->
-      Repo.delete_all(
-        from pool in Pool,
-          where: pool.id in ^[fixture.first_pool_id, fixture.second_pool_id]
-      )
-
-      Repo.delete_all(
-        from identity in UpstreamIdentity,
-          where: identity.id in ^[fixture.first.identity.id, fixture.second.identity.id]
-      )
-    end)
-  end
-
-  defp cleanup_identities!(identity_ids) do
-    unboxed(fn ->
-      Repo.delete_all(from identity in UpstreamIdentity, where: identity.id in ^identity_ids)
+      count
     end)
   end
 

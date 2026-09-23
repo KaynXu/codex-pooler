@@ -342,8 +342,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     assert Accounts.get_user_by_session_token(current_token)
     refute Accounts.get_user_by_session_token(parallel_token)
 
-    assert_receive {:disconnect_user_sessions,
-                    %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
+    assert_receive {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
 
     assert user_id == user.id
 
@@ -369,7 +368,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     assert get_session(new_password, :user_token)
   end
 
-  test "login preserves safe return_to and ignores external return_to", %{conn: conn} do
+  test "login preserves only browser-safe local return_to paths", %{conn: conn} do
     bootstrap_owner_fixture(%{"email" => "owner@example.com"})
 
     internal_conn =
@@ -384,17 +383,24 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
     assert redirected_to(conn) == ~p"/admin/pools"
 
-    external_conn =
-      build_conn()
-      |> init_test_session(%{})
-      |> put_session(:user_return_to, "https://example.com/evil")
+    for unsafe_return_to <- [
+          "https://example.com/evil",
+          "/%09evil.example",
+          "/\tevil.example",
+          "/\nevil.example",
+          "/\revil.example",
+          "/\\evil.example"
+        ] do
+      conn =
+        build_conn()
+        |> init_test_session(%{})
+        |> put_session(:user_return_to, unsafe_return_to)
+        |> post(~p"/login", %{
+          "user" => %{"email" => "owner@example.com", "password" => valid_user_password()}
+        })
 
-    conn =
-      post(external_conn, ~p"/login", %{
-        "user" => %{"email" => "owner@example.com", "password" => valid_user_password()}
-      })
-
-    assert redirected_to(conn) == ~p"/admin/pools"
+      assert redirected_to(conn) == ~p"/admin/pools"
+    end
   end
 
   test "password change API rejects anonymous and invalid password requests", %{conn: conn} do
@@ -571,8 +577,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
       assert_redirect(view, ~p"/admin/pools")
 
-      assert_receive {:disconnect_user_sessions,
-                      %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
+      assert_receive {:disconnect_user_sessions, %{user_id: user_id, except_live_socket_id: except_live_socket_id}}
 
       assert user_id == user.id
       assert except_live_socket_id == CodexPoolerWeb.UserAuth.live_socket_id_for_token(token)
@@ -633,7 +638,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
   defp setup_trusted_proxies(trusted_proxies) do
     settings = %OperationalSettings{trusted_proxies: trusted_proxies}
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    previous = CodexPooler.TestAppEnv.restore_on_exit(OperationalSettings)
 
     Application.put_env(
       :codex_pooler,
@@ -642,8 +647,6 @@ defmodule CodexPoolerWeb.AuthControllerTest do
       |> Keyword.put(:settings, settings)
       |> Keyword.put(:use_instance_settings?, false)
     )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp extracted_page_title(html) do

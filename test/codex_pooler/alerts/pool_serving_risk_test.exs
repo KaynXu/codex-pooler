@@ -37,8 +37,7 @@ defmodule CodexPooler.Alerts.PoolServingRiskTest do
     upstream_assignment_fixture(pool, %{
       identity_metadata: %{
         "credential_epoch" => 1,
-        AccountAvailabilityStore.metadata_key() =>
-          AccountAvailabilityStore.encode!(:available, timestamp, 1)
+        AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, timestamp, 1)
       }
     })
 
@@ -126,8 +125,7 @@ defmodule CodexPooler.Alerts.PoolServingRiskTest do
     |> Ecto.Changeset.change(%{
       metadata: %{
         "credential_epoch" => 1,
-        AccountAvailabilityStore.metadata_key() =>
-          AccountAvailabilityStore.encode!(:available, timestamp, 1)
+        AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, timestamp, 1)
       }
     })
     |> Repo.update!()
@@ -447,8 +445,7 @@ defmodule CodexPooler.Alerts.PoolServingRiskTest do
     |> Ecto.Changeset.change(%{
       metadata: %{
         "credential_epoch" => 1,
-        AccountAvailabilityStore.metadata_key() =>
-          AccountAvailabilityStore.encode!(:available, timestamp, 1)
+        AccountAvailabilityStore.metadata_key() => AccountAvailabilityStore.encode!(:available, timestamp, 1)
       }
     })
     |> Repo.update!()

@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
 
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket.Adapter
 
   test "normalized init and terminate metadata prefer the current socket ownership" do
@@ -70,17 +72,11 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
   end
 
   test "continuation frames are ordered while warmups do not produce request rows" do
-    assert Adapter.continuity_ordered_payload?(
-             CodexPooler.JSON.encode!(%{"type" => "response.processed"})
-           )
+    assert Adapter.continuity_ordered_payload?(CodexPooler.JSON.encode!(%{"type" => "response.processed"}))
 
-    assert Adapter.request_row_producing_response_payload?(
-             CodexPooler.JSON.encode!(%{"type" => "response.create"})
-           )
+    assert Adapter.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"type" => "response.create"}))
 
-    refute Adapter.request_row_producing_response_payload?(
-             CodexPooler.JSON.encode!(%{"type" => "response.create", "generate" => false})
-           )
+    refute Adapter.request_row_producing_response_payload?(CodexPooler.JSON.encode!(%{"type" => "response.create", "generate" => false}))
 
     refute Adapter.continuity_ordered_payload?("invalid-json")
   end
@@ -139,7 +135,62 @@ defmodule CodexPooler.Gateway.Websocket.AdapterTest do
                message: "busy"
              })
 
-    assert %{"status" => 500, "error" => %{"code" => "websocket_request_failed"}} =
-             Adapter.websocket_error(:closed)
+    # findings#184: a status-500 gateway failure is a server-side failure by
+    # construction, whatever the unrecognized reason was.
+    assert %{
+             "status" => 500,
+             "error" => %{"code" => "websocket_request_failed", "type" => "server_error"}
+           } = Adapter.websocket_error(:closed)
+
+    # findings#191: this used to be `invalid_request_error`, taken from the
+    # error's own `retryable: false`. That field says Codex Pooler will not route
+    # around the denial itself, not that the caller must change the request --
+    # the recorded operator action is to wait for the pinned upstream to recover
+    # and then restart -- and reading it as a client class also mistyped a 500
+    # pre-attempt reservation failure, which carries the same flag. The coarse
+    # SDK signal follows the 503; the `recovery` contract in the same envelope
+    # carries the precise instruction.
+    assert error["retryable"] == false
+    assert error["recovery_kind"] == "restart_with_full_context"
+    assert error["type"] == "server_error"
+  end
+
+  # findings#184: `error_type/1` special-cased one code and defaulted the rest to
+  # the do-not-retry class, so every owner-lifecycle failure told an SDK its own
+  # frame was malformed. The whole owner vocabulary is enumerated now; this walks
+  # it through the real renderer so a code added to
+  # `OwnerErrorVocabulary` without a class cannot ship silently.
+  test "every owner-lifecycle error renders the class its status implies" do
+    expected_types = %{
+      owner_busy: "server_error",
+      owner_crashed: "server_error",
+      owner_drained: "server_error",
+      owner_forward_timeout: "server_error",
+      owner_forwarding_disabled: "server_error",
+      owner_unavailable: "server_error",
+      stale_owner: "server_error",
+      upstream_stream_error: "server_error",
+      upstream_websocket_terminal_delivery_timeout: "server_error",
+      client_disconnected: "invalid_request_error",
+      duplicate_downstream: "invalid_request_error",
+      stale_downstream: "invalid_request_error"
+    }
+
+    owner_errors = OwnerErrorVocabulary.owner_errors()
+    assert Enum.sort(Map.keys(expected_types)) == Enum.sort(owner_errors)
+
+    for owner_error <- owner_errors do
+      assert {:ok, payload} = WebsocketOwnerContract.safe_error_payload(owner_error, nil)
+      rendered = Adapter.websocket_error(payload)
+
+      assert rendered["error"]["type"] == expected_types[owner_error],
+             "#{owner_error} rendered #{inspect(rendered["error"]["type"])}"
+
+      # A server-class answer must never contradict its own status: a 5xx that
+      # says `invalid_request_error` is the defect this test exists for.
+      if rendered["status"] >= 500 do
+        assert rendered["error"]["type"] == "server_error"
+      end
+    end
   end
 end

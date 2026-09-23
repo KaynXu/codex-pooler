@@ -241,9 +241,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           candidates: filter_input.candidates,
           circuit_snapshots: %{setup.assignment.id => true}
         })
-        |> RouteState.put_quota_snapshots(
-          QuotaWindows.load_routing_quota_snapshots([identity.id], snapshot_at)
-        )
+        |> RouteState.put_quota_snapshots(QuotaWindows.load_routing_quota_snapshots([identity.id], snapshot_at))
 
       for opts <- [[], [quota_mode: :optional]] do
         assert {:error,
@@ -608,9 +606,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" =>
-               {200,
-                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+             "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -684,6 +680,324 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       metadata_json = CodexPooler.JSON.encode!(persisted.metadata)
       refute metadata_json =~ consume_request.json["redeem_request_id"]
       refute metadata_json =~ "credit_id"
+    end
+
+    for sibling_block <- [
+          :missing,
+          :primary,
+          :model,
+          :additional,
+          :primary_and_weekly,
+          :model_and_weekly,
+          :additional_and_weekly
+        ],
+        mode <- ["blocked", "threshold"] do
+      @tag :saved_reset_mixed_exclusions
+      test "redeems weekly target in #{mode} mode with #{sibling_block} sibling exclusion" do
+        %{upstream: upstream, target: target, input: input, sibling: sibling} =
+          mixed_exclusion_arrangement(unquote(sibling_block), unquote(mode))
+
+        {{:ok, [{assignment, identity}], _options}, _log} =
+          with_info_log(fn -> RouteFiltering.filter_candidates(input) end)
+
+        assert assignment.id == target.assignment.id
+        assert identity.id == target.identity.id
+        assert consume_count(upstream) == 1
+        assert Repo.reload!(target.identity).metadata["saved_resets"]["available_count"] == 1
+        refute Repo.reload!(sibling.identity).metadata["saved_reset_redemption"]
+
+        # Restore corroborated pressure with a remaining credit: cooldown/latch,
+        # not an empty bank or newly available quota, prevents a second consume.
+        upsert_weekly_exhausted_quota!(Repo.reload!(target.identity))
+        with_info_log(fn -> RouteFiltering.filter_candidates(input) end)
+        assert consume_count(upstream) == 1
+      end
+    end
+
+    @tag :saved_reset_mixed_exclusions
+    test "mixed exclusions do not authorize a target with an independent blocker" do
+      for blocker <- [:primary, :model, :additional, :uncorroborated, :missing, :disabled] do
+        %{upstream: upstream, target: target, input: input} =
+          mixed_exclusion_arrangement(:primary, "threshold", blocker)
+
+        assert {:error, _error} = RouteFiltering.filter_candidates(input)
+        assert consume_count(upstream) == 0
+        refute Repo.reload!(target.identity).metadata["saved_reset_redemption"]
+        assert Repo.reload!(target.identity).metadata["saved_resets"]["available_count"] == 2
+      end
+    end
+
+    @tag :saved_reset_mixed_exclusions
+    test "usable sibling still prevents a mixed-exclusion weekly target from spending" do
+      %{upstream: upstream, input: input, sibling: sibling} =
+        mixed_exclusion_arrangement(:usable, "threshold")
+
+      assert {:ok, [{assignment, _identity}], _options} = RouteFiltering.filter_candidates(input)
+      assert assignment.id == sibling.assignment.id
+      assert consume_count(upstream) == 0
+    end
+
+    for blocker <- [:primary, :monthly, :model, :additional, nil] do
+      @tag :saved_reset_mixed_exclusions
+      test "provider blocked account preserves #{inspect(blocker)} target window eligibility" do
+        %{upstream: upstream, input: input, target: target} =
+          mixed_exclusion_arrangement(:missing, "blocked", unquote(blocker))
+
+        identity = Repo.reload!(target.identity)
+
+        metadata =
+          Map.put(
+            identity.metadata,
+            AccountAvailabilityStore.metadata_key(),
+            AccountAvailabilityStore.encode!(:blocked, DateTime.utc_now(), 1)
+          )
+
+        identity = identity |> Ecto.Changeset.change(metadata: metadata) |> Repo.update!()
+
+        candidates =
+          Enum.map(input.candidates, fn
+            {assignment, %{id: id}} when id == identity.id -> {assignment, identity}
+            candidate -> candidate
+          end)
+
+        input = FilterInput.put_candidates(input, candidates)
+
+        # The same raw-window veto must run at claim and immediately before
+        # dispatch even if the route's earlier exclusion was availability-only.
+        plan = %{filter_input: input}
+
+        {:ok, context} =
+          plan
+          |> SavedResetAutoRedeem.gateway_auto_context(
+            target.assignment,
+            identity,
+            :blocked_weekly_exhaustion
+          )
+          |> AutoEligibility.normalize_context()
+
+        timestamp = DateTime.utc_now()
+
+        expected =
+          if unquote(blocker) == nil, do: :ok, else: {:noop, "gateway_auto_trigger_not_current"}
+
+        assert AutoEligibility.validate_locked_gateway_auto(
+                 identity,
+                 target.assignment,
+                 context,
+                 timestamp
+               ) == expected
+
+        assert AutoEligibility.validate_reserved_gateway_auto(
+                 identity,
+                 target.assignment,
+                 context,
+                 timestamp
+               ) == expected
+
+        {result, _log} = with_info_log(fn -> RouteFiltering.filter_candidates(input) end)
+
+        if unquote(blocker) == nil do
+          assert consume_count(upstream) == 1
+          assert {:ok, _, _} = result
+        else
+          assert consume_count(upstream) == 0
+          assert {:error, _error} = result
+        end
+      end
+    end
+
+    @tag :saved_reset_mixed_exclusions
+    test "monthly-only exhaustion without corroboration does not authorize a reset" do
+      %{upstream: upstream, input: input, target: target} =
+        mixed_exclusion_arrangement(:missing, "blocked", :missing)
+
+      put_mixed_quota_block!(target.identity, :monthly, input.model)
+      assert {:error, _error} = RouteFiltering.filter_candidates(input)
+      assert consume_count(upstream) == 0
+    end
+
+    for {mode, percent} <- [{"blocked", "100"}, {"threshold", "96"}] do
+      @tag :monthly_saved_reset
+      test "monthly account #{mode} pressure redeems once and confirms from provider quota" do
+        %{upstream: upstream, input: input, target: target} =
+          mixed_exclusion_arrangement(:missing, unquote(mode), :missing)
+
+        attrs =
+          primary_quota_attrs(Decimal.new(unquote(percent)))
+          |> Map.merge(%{
+            window_minutes: 43_200,
+            reset_at: DateTime.add(DateTime.utc_now(), 20, :day)
+          })
+
+        assert {:ok, [window]} = QuotaWindows.upsert_quota_windows(target.identity, [attrs])
+
+        SavedResetConfirmationFixtures.confirm_automatic_pressure!(target.identity,
+          windows: [window]
+        )
+
+        monthly_payload =
+          usage_payload(1)
+          |> put_in(["rate_limit", "primary_window", "used_percent"], 0)
+          |> put_in(["rate_limit", "primary_window", "limit_window_seconds"], 43_200 * 60)
+          |> put_in(["rate_limit", "primary_window", "reset_after_seconds"], 30 * 86_400)
+          |> put_in(
+            ["rate_limit", "primary_window", "reset_at"],
+            DateTime.to_unix(DateTime.add(window.reset_at, 10, :day))
+          )
+
+        FakeUpstream.set_mode(
+          upstream,
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {200, monthly_payload}
+           }}
+        )
+
+        # Threshold policy still needs every dispatch participant at pressure.
+        input = FilterInput.put_candidates(input, [{target.assignment, target.identity}])
+        {result, _log} = with_info_log(fn -> RouteFiltering.filter_candidates(input) end)
+        assert consume_count(upstream) == 1
+        assert {:ok, _, _} = result
+
+        assert Repo.reload!(target.identity).metadata["saved_reset_redemption"]["phase"] ==
+                 "consumed_pending_probe"
+
+        # A percent-only zero is not reset proof. Preserve that guard, then
+        # exercise convergence with the provider's usable positive observation.
+        monthly_payload =
+          put_in(monthly_payload, ["rate_limit", "primary_window", "used_percent"], 1)
+
+        FakeUpstream.set_mode(
+          upstream,
+          {:path_json, %{"/api/codex/usage" => {200, monthly_payload}}}
+        )
+
+        assert {:ok, _} =
+                 PoolReconciliation.reconcile_pool_account(
+                   input.auth.pool.id,
+                   target.assignment.id
+                 )
+
+        assert Repo.reload!(target.identity).metadata["saved_reset_redemption"]["phase"] ==
+                 "confirmed_by_quota"
+      end
+    end
+
+    @tag :monthly_saved_reset
+    test "monthly threshold confirmation comes from two real provider receipts" do
+      %{upstream: upstream, target: target, input: input} =
+        mixed_exclusion_arrangement(:missing, "threshold", :missing)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(now, 20, :day)
+
+      # Both receipts must advance the snapshot, regardless of the wall-clock second
+      # in which the fixture was created.
+      target.identity
+      |> Ecto.Changeset.change(
+        metadata:
+          put_in(
+            target.identity.metadata,
+            ["saved_resets", "observed_at"],
+            DateTime.to_iso8601(DateTime.add(now, -120, :second))
+          )
+      )
+      |> Repo.update!()
+
+      for age <- [60, 0] do
+        observed_at = DateTime.add(now, -age, :second)
+
+        payload = %{
+          "rate_limit_reset_credits" => %{"available_count" => 2},
+          "rate_limit" => %{
+            "allowed" => true,
+            "limit_reached" => false,
+            "primary_window" => %{
+              "used_percent" => 96,
+              "limit_window_seconds" => 2_592_000,
+              "reset_at" => DateTime.to_unix(reset_at),
+              "reset_after_seconds" => DateTime.diff(reset_at, observed_at)
+            }
+          }
+        }
+
+        FakeUpstream.set_mode(upstream, {:path_json, %{"/api/codex/usage" => {200, payload}}})
+        observe_provider!(target.identity, target.assignment, upstream, observed_at)
+        [window] = QuotaWindows.list_evidence(target.identity)
+
+        assert SavedResetConfirmationFixtures.marker_state(window) ==
+                 if(age == 0, do: "confirmed", else: "candidate")
+      end
+
+      identity = Repo.reload!(target.identity)
+
+      assert [_] =
+               AutoEligibility.confirmation_refs(
+                 :threshold_pressure,
+                 identity,
+                 [identity.id],
+                 DateTime.utc_now()
+               )
+
+      FakeUpstream.set_mode(
+        upstream,
+        {:path_json,
+         %{
+           "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+           "/api/codex/usage" => {200, usage_payload(1)}
+         }}
+      )
+
+      input = FilterInput.put_candidates(input, [{target.assignment, identity}])
+      {result, _log} = with_info_log(fn -> RouteFiltering.filter_candidates(input) end)
+      assert {:ok, _, _} = result
+      assert consume_count(upstream) == 1
+    end
+
+    @tag :monthly_saved_reset
+    test "usable primary selection cannot hide conflicting weekly and monthly reset descriptors" do
+      %{input: input, target: target} = mixed_exclusion_arrangement(:missing, "threshold")
+      put_mixed_quota_block!(target.identity, :monthly, input.model)
+      upsert_primary_quota!(target.identity, Decimal.new("10"))
+      refute AutoEligibility.target_windows_resettable?(target.identity, nil, DateTime.utc_now())
+    end
+
+    @tag :saved_reset_mixed_exclusions
+    test "weekly target eligibility requires all exact-pair exclusion records" do
+      %{upstream: upstream, input: input, target: target, sibling: sibling} =
+        mixed_exclusion_arrangement(:primary, "blocked")
+
+      {:refreshable_quota, plan} = CandidateEligibility.filter_quota_eligible_candidates(input)
+
+      {:error, error} =
+        CandidateEligibility.quota_unavailable_error(input, plan.candidate_exclusions, false)
+
+      target_exclusion =
+        Enum.find(error.candidate_exclusions, &(&1.upstream_identity_id == target.identity.id))
+
+      sibling_exclusion =
+        Enum.find(error.candidate_exclusions, &(&1.upstream_identity_id == sibling.identity.id))
+
+      blocked_target = %{target_exclusion | reasons: sibling_exclusion.reasons}
+
+      for exclusions <- [
+            [target_exclusion],
+            [sibling_exclusion],
+            [target_exclusion, sibling_exclusion, blocked_target],
+            [blocked_target, sibling_exclusion, target_exclusion],
+            [nil | error.candidate_exclusions],
+            [%{target_exclusion | upstream_identity_id: sibling.identity.id}, sibling_exclusion],
+            [%{target_exclusion | reasons: []}, sibling_exclusion],
+            [%{target_exclusion | reasons: nil}, sibling_exclusion]
+          ] do
+        result = {:error, %{error | candidate_exclusions: exclusions}}
+
+        assert SavedResetAutoRedeem.maybe_redeem_after_quota_exhaustion(result, plan, :required) ==
+                 result
+
+        assert consume_count(upstream) == 0
+      end
     end
 
     @tag :saved_reset_redemption_cause
@@ -1264,9 +1578,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" =>
-               {200,
-                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+             "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -1772,8 +2084,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         FakeUpstream.start_link(
           {:path_json,
            %{
-             "/api/codex/rate-limit-reset-credits/consume" =>
-               {200, %{"code" => "nothing_to_reset"}}
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "nothing_to_reset"}}
            }}
         )
 
@@ -2272,9 +2583,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" =>
-               {200,
-                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+             "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -2980,9 +3289,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     identity = Repo.reload!(identity)
 
     identity
-    |> Ecto.Changeset.change(
-      metadata: Map.put(identity.metadata || %{}, "usage_base_url", FakeUpstream.url(fake))
-    )
+    |> Ecto.Changeset.change(metadata: Map.put(identity.metadata || %{}, "usage_base_url", FakeUpstream.url(fake)))
     |> Repo.update!()
   end
 
@@ -2990,9 +3297,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     assignment = Repo.reload!(assignment)
 
     assignment
-    |> Ecto.Changeset.change(
-      metadata: Map.put(assignment.metadata || %{}, "usage_base_url", FakeUpstream.url(fake))
-    )
+    |> Ecto.Changeset.change(metadata: Map.put(assignment.metadata || %{}, "usage_base_url", FakeUpstream.url(fake)))
     |> Repo.update!()
   end
 
@@ -3002,6 +3307,107 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
     )
   end
+
+  defp mixed_exclusion_arrangement(sibling_block, mode, target_block \\ nil) do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+           "/api/codex/usage" => {200, usage_payload(1)}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    target =
+      active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 2)})
+
+    sibling =
+      active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+    target = %{
+      target
+      | identity:
+          enable_saved_reset_auto_redeem!(target.identity, %{
+            saved_reset_auto_redeem_trigger_mode: mode
+          })
+    }
+
+    sibling = %{
+      sibling
+      | identity:
+          enable_saved_reset_auto_redeem!(sibling.identity, %{
+            saved_reset_auto_redeem_trigger_mode: mode
+          })
+    }
+
+    input =
+      filter_input(
+        pool,
+        api_key,
+        [{sibling.assignment, sibling.identity}, {target.assignment, target.identity}],
+        "mixed-exclusions"
+      )
+
+    case target_block do
+      :missing -> :ok
+      :uncorroborated -> upsert_uncorroborated_weekly_exhausted_quota!(target.identity)
+      _other -> upsert_weekly_exhausted_quota!(target.identity)
+    end
+
+    if target_block == :disabled do
+      target.identity
+      |> Ecto.Changeset.change(saved_reset_auto_redeem_enabled: false)
+      |> Repo.update!()
+    else
+      put_mixed_quota_block!(target.identity, target_block, input.model)
+    end
+
+    put_mixed_quota_block!(sibling.identity, sibling_block, input.model)
+    %{upstream: upstream, target: target, sibling: sibling, input: input}
+  end
+
+  defp put_mixed_quota_block!(identity, :primary, _model),
+    do: upsert_primary_exhausted_quota!(identity)
+
+  defp put_mixed_quota_block!(identity, :monthly, _model) do
+    attrs = Map.put(primary_quota_attrs(Decimal.new("100")), :window_minutes, 43_200)
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+  end
+
+  defp put_mixed_quota_block!(identity, :primary_and_weekly, _model) do
+    upsert_weekly_exhausted_quota!(identity)
+    upsert_primary_exhausted_quota!(identity)
+  end
+
+  defp put_mixed_quota_block!(identity, block, model)
+       when block in [:model_and_weekly, :additional_and_weekly] do
+    upsert_weekly_exhausted_quota!(identity)
+    scope = if block == :model_and_weekly, do: :model, else: :additional
+    put_mixed_quota_block!(identity, scope, model)
+  end
+
+  defp put_mixed_quota_block!(identity, :usable, _model),
+    do: upsert_primary_quota!(identity, Decimal.new("10"))
+
+  defp put_mixed_quota_block!(identity, scope, model) when scope in [:model, :additional] do
+    upsert_primary_quota!(identity, Decimal.new("10"))
+
+    attrs =
+      weekly_exhausted_quota_attrs()
+      |> Map.merge(%{
+        quota_key: "sample_#{scope}",
+        quota_scope: "model",
+        quota_family: if(scope == :model, do: "codex_model", else: "additional"),
+        model: model.exposed_model_id
+      })
+
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+  end
+
+  defp put_mixed_quota_block!(_identity, _block, _model), do: :ok
 
   defp filter_input(pool, api_key, assignment, identity, suffix) do
     filter_input(pool, api_key, [{assignment, identity}], suffix)
@@ -3181,8 +3587,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       model_fixture(pool, %{
         exposed_model_id: "gpt-route-filtering-#{suffix}-#{System.unique_integer([:positive])}",
         metadata: %{
-          "source_assignment_ids" =>
-            Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+          "source_assignment_ids" => Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
         }
       })
 
@@ -3230,8 +3635,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       {:path_json,
        %{
          "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-         "/api/codex/usage" =>
-           {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+         "/api/codex/usage" => {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
        }}
     )
   end
@@ -3453,6 +3857,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   defp with_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> Logger.configure(level: previous_level) end)
     Logger.configure(level: :info)
 
     try do
@@ -3485,8 +3891,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
     snapshots =
       Map.new(windows_by_identity_id, fn {identity_id, windows} ->
-        {identity_id,
-         RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
+        {identity_id, RoutingQuotaSnapshot.from_identity(Map.fetch!(identities, identity_id), windows, as_of)}
       end)
 
     RouteState.put_quota_snapshots(route_state, snapshots)

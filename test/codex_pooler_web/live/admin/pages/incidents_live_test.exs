@@ -6,8 +6,81 @@ defmodule CodexPoolerWeb.Admin.IncidentsLiveTest do
   alias CodexPooler.Repo
   alias CodexPooler.Status.Events
   alias CodexPooler.Status.Schemas.Incident
+  alias CodexPooler.Status.Sync
 
   setup :register_and_log_in_user
+
+  test "polling disabled is distinct from unavailable and stale", %{conn: conn} do
+    settings = CodexPooler.InstanceSettings.ensure_singleton!()
+
+    assert {:ok, _} =
+             CodexPooler.InstanceSettings.update_system_settings(settings, %{
+               "operator" => %{"openai_status_polling_enabled" => false}
+             })
+
+    {:ok, view, _} = live(conn, ~p"/admin/incidents")
+    assert has_element?(view, "#admin-incidents-feed-state[data-state='disabled']")
+    assert has_element?(view, "#admin-incidents-feed-disabled[role='status']")
+    refute has_element?(view, "#admin-incidents-feed-unavailable")
+    refute has_element?(view, "#admin-incidents-stale")
+  end
+
+  test "mount registers exactly one status subscription", %{conn: conn} do
+    {:ok, view, _} = live(conn, ~p"/admin/incidents")
+
+    entries =
+      Registry.lookup(CodexPooler.PubSub, Events.topic())
+      |> Enum.filter(fn {pid, _} -> pid == view.pid end)
+
+    assert length(entries) == 1
+  end
+
+  test "real sync history is newest first beyond fifty rows", %{conn: conn} do
+    now = ~U[2026-09-10 10:00:00.000000Z]
+
+    items =
+      for n <- 1..55 do
+        %{
+          guid: "history-sync-#{n}",
+          title: "Historical incident #{n}",
+          status: "Resolved",
+          summary: "Service recovered",
+          component: nil,
+          link: "https://status.openai.com/incidents/sample-#{n}",
+          published_at: DateTime.add(now, -n * 60, :second)
+        }
+      end
+
+    assert {:ok, _} =
+             Sync.sync(
+               fetcher: fn _, _ -> {:ok, %{items: Enum.reverse(items)}} end,
+               now: now
+             )
+
+    {:ok, view, _} = live(conn, ~p"/admin/incidents")
+
+    rows =
+      render(view)
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#admin-incidents-history-desktop tbody tr")
+
+    assert Enum.count(rows) == 50
+    assert rows |> Enum.at(0) |> LazyHTML.text() =~ "Historical incident 1"
+    assert rows |> Enum.at(49) |> LazyHTML.text() =~ "Historical incident 50"
+    assert has_element?(view, "#admin-incidents-history-overflow", "+5 more")
+    assert has_element?(view, "#admin-incidents-history-desktop", "Unspecified")
+  end
+
+  test "a failed first poll remains unavailable and never claims no active incidents", %{
+    conn: conn
+  } do
+    assert {:error, _} =
+             Sync.sync(fetcher: fn _, _ -> {:error, %{code: :network_error}} end)
+
+    {:ok, view, _} = live(conn, ~p"/admin/incidents")
+    assert has_element?(view, "#admin-incidents-feed-state[data-state='unavailable']")
+    refute has_element?(view, "#admin-incidents-active-empty", "No active incidents")
+  end
 
   test "redirects unauthenticated operators to login" do
     assert {:error, {:redirect, %{to: "/login"}}} = live(build_conn(), ~p"/admin/incidents")
@@ -148,7 +221,7 @@ defmodule CodexPoolerWeb.Admin.IncidentsLiveTest do
     refute html =~ "network_error"
   end
 
-  test "shows a complete stale message when no successful fetch exists", %{conn: conn} do
+  test "shows unavailable when no successful fetch exists", %{conn: conn} do
     now = DateTime.utc_now()
 
     assert {:ok, _state} =
@@ -164,8 +237,8 @@ defmodule CodexPoolerWeb.Admin.IncidentsLiveTest do
 
     assert has_element?(
              view,
-             "#admin-incidents-stale",
-             "No successful refresh has been recorded yet"
+             "#admin-incidents-feed-unavailable",
+             "first successful refresh is still pending"
            )
 
     refute html =~ "last successful fetch was ."

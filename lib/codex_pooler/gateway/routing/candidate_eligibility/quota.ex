@@ -236,10 +236,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   end
 
   defp classify_quota_candidates(%Model{} = model, candidates, route_state) do
-    {precise_candidates, credit_backed_probe_candidates, weekly_probe_candidates,
-     reset_probe_candidates, windowless_candidates, exclusions, refreshable_candidates} =
-      Enum.reduce(candidates, {[], [], [], [], [], [], []}, fn {assignment, identity} = candidate,
-                                                               acc ->
+    {precise_candidates, credit_backed_probe_candidates, weekly_probe_candidates, reset_probe_candidates, windowless_candidates, exclusions, refreshable_candidates} =
+      Enum.reduce(candidates, {[], [], [], [], [], [], []}, fn {assignment, identity} = candidate, acc ->
         identity
         |> routing_quota_eligibility(model, route_state)
         |> add_classified_quota_candidate(candidate, assignment, acc)
@@ -331,8 +329,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          _assignment,
          {precise, credit_backed, weekly_probes, reset_probes, windowless, excluded, refreshable}
        ) do
-    {[candidate | precise], credit_backed, weekly_probes, reset_probes, windowless, excluded,
-     refreshable}
+    {[candidate | precise], credit_backed, weekly_probes, reset_probes, windowless, excluded, refreshable}
   end
 
   defp add_classified_quota_candidate(
@@ -341,8 +338,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          _assignment,
          {precise, credit_backed, weekly_probes, reset_probes, windowless, excluded, refreshable}
        ) do
-    {precise, [candidate | credit_backed], weekly_probes, reset_probes, windowless, excluded,
-     refreshable}
+    {precise, [candidate | credit_backed], weekly_probes, reset_probes, windowless, excluded, refreshable}
   end
 
   defp add_classified_quota_candidate(
@@ -351,8 +347,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          _assignment,
          {precise, credit_backed, weekly_probes, reset_probes, windowless, excluded, refreshable}
        ) do
-    {precise, credit_backed, [candidate | weekly_probes], reset_probes, windowless, excluded,
-     refreshable}
+    {precise, credit_backed, [candidate | weekly_probes], reset_probes, windowless, excluded, refreshable}
   end
 
   defp add_classified_quota_candidate(
@@ -362,8 +357,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          {precise, credit_backed, weekly_probes, reset_probes, windowless, excluded, refreshable}
        )
        when state in [:windowless_provider_available, :provider_available] do
-    {precise, credit_backed, weekly_probes, reset_probes, [{state, candidate} | windowless],
-     excluded, refreshable}
+    {precise, credit_backed, weekly_probes, reset_probes, [{state, candidate} | windowless], excluded, refreshable}
   end
 
   defp add_classified_quota_candidate(
@@ -377,14 +371,12 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
       # post-reset lifecycle that a successful probe or fresh quota already
       # confirmed as temporarily routeable. Route it as a guarded reset probe
       # instead of excluding it — this is what sustainably breaks the deadlock.
-      {precise, credit_backed, weekly_probes, [candidate | reset_probes], windowless, excluded,
-       refreshable}
+      {precise, credit_backed, weekly_probes, [candidate | reset_probes], windowless, excluded, refreshable}
     else
       exclusion = quota_candidate_exclusion(assignment, identity, reasons)
       refreshable = maybe_add_refreshable_quota_candidate(refreshable, candidate, reasons)
 
-      {precise, credit_backed, weekly_probes, reset_probes, windowless, [exclusion | excluded],
-       refreshable}
+      {precise, credit_backed, weekly_probes, reset_probes, windowless, [exclusion | excluded], refreshable}
     end
   end
 

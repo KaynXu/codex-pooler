@@ -145,7 +145,11 @@ defmodule CodexPooler.Accounting.APIKeyUsageBucketsTest do
         |> LedgerEntries.window_usages(weekly: since)
         |> Map.fetch!(:weekly)
 
-      assert usage.effective_request_count == 3
+      # These imported settlements have no committed reservation/admission.
+      assert usage.effective_request_count == 0
+      assert usage.known_total_tokens == 60
+      assert usage.provisional_total_tokens == 0
+      assert usage.pending_total_tokens == 0
       assert usage.effective_total_tokens == 60
       assert Decimal.equal?(usage.effective_cost_micros, Decimal.new(60))
     end
@@ -193,15 +197,34 @@ defmodule CodexPooler.Accounting.APIKeyUsageBucketsTest do
                )
 
       assert corrected.settlement.correction_of_entry_id == failed.settlement.id
-      assert_bucket!(setup.api_key.id, minute_start(reservation_at), 0, 0, "0")
+      assert corrected.settlement.occurred_at == unknown_at
+      assert corrected.settlement.created_at == known_at
 
       assert_bucket!(
         setup.api_key.id,
-        minute_start(known_at),
+        minute_start(unknown_at),
         1,
         3,
         Decimal.to_string(corrected.settlement.settled_cost_micros)
       )
+
+      usage =
+        LedgerEntries.window_usages(setup.api_key.id, [minute: reservation_at], known_at).minute
+
+      assert usage.effective_request_count == 1
+      assert usage.known_total_tokens == 3
+      assert usage.provisional_total_tokens == 0
+      assert usage.pending_total_tokens == 0
+
+      later =
+        LedgerEntries.window_usages(
+          setup.api_key.id,
+          [minute: DateTime.add(unknown_at, 1, :microsecond)],
+          known_at
+        ).minute
+
+      assert later.effective_request_count == 0
+      assert later.effective_total_tokens == 0
     end
 
     test "API-key cascades remove ledger entries and buckets without recreating projection rows" do
@@ -246,6 +269,92 @@ defmodule CodexPooler.Accounting.APIKeyUsageBucketsTest do
       |> Repo.delete!()
 
       assert_bucket!(setup.api_key.id, bucket, 0, 0, "0")
+    end
+
+    test "exact upper edge excludes future known, provisional and reservation events" do
+      setup = accounting_setup()
+      since = ~U[2026-08-02 00:00:30.000000Z]
+      as_of = ~U[2026-08-02 00:01:15.000000Z]
+
+      for {timestamp, tokens} <- [
+            {since, 10},
+            {as_of, 20},
+            {DateTime.add(as_of, 1, :microsecond), 1_000}
+          ] do
+        insert_entry!(setup, timestamp, %{
+          entry_kind: "settlement",
+          usage_status: "usage_known",
+          total_tokens: tokens
+        })
+      end
+
+      insert_entry!(setup, DateTime.add(as_of, 1, :minute), %{
+        entry_kind: "reservation",
+        usage_status: "usage_pending",
+        total_tokens: 2_000
+      })
+
+      future = DateTime.add(as_of, 1, :second)
+
+      {:ok, reserved} =
+        Accounting.reserve(setup.auth, setup.model, %{"model" => setup.model.exposed_model_id}, %{
+          now: future
+        })
+
+      {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      {:ok, _} =
+        Accounting.finalize_failure(reserved.request, attempt, %{
+          now: future,
+          usage: %{status: "usage_unknown", recorded_at: future}
+        })
+
+      assert %{
+               known_total_tokens: 30,
+               provisional_total_tokens: 0,
+               pending_total_tokens: 0,
+               effective_total_tokens: 30,
+               effective_request_count: 0
+             } =
+               LedgerEntries.window_usages(setup.api_key.id, [window: since], as_of).window
+    end
+
+    test "rebuild is idempotent and matches insert, void, update and delete arithmetic" do
+      setup = accounting_setup()
+      timestamp = ~U[2026-08-02 00:00:30.000000Z]
+
+      {:ok, reserved} =
+        Accounting.reserve(setup.auth, setup.model, %{"model" => setup.model.exposed_model_id}, %{
+          now: timestamp
+        })
+
+      {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      {:ok, failed} =
+        Accounting.finalize_failure(reserved.request, attempt, %{
+          now: DateTime.add(timestamp, 90, :second),
+          usage: %{status: "usage_unknown", recorded_at: DateTime.add(timestamp, 90, :second)}
+        })
+
+      assert_rebuild_unchanged!(setup.api_key.id)
+      failed.settlement |> Ecto.Changeset.change(amount_status: "voided") |> Repo.update!()
+      assert_rebuild_unchanged!(setup.api_key.id)
+      Repo.delete!(failed.release)
+      assert_rebuild_unchanged!(setup.api_key.id)
+      Repo.delete!(Repo.reload!(failed.settlement))
+      assert_rebuild_unchanged!(setup.api_key.id)
+    end
+  end
+
+  defp assert_rebuild_unchanged!(api_key_id) do
+    sql =
+      "SELECT bucket_started_at, effective_request_count, effective_total_tokens, effective_cost_micros, known_total_tokens, provisional_total_tokens, admission_count, known_cost_micros FROM api_key_usage_buckets WHERE api_key_id = $1::text::uuid ORDER BY bucket_started_at"
+
+    before = Repo.query!(sql, [api_key_id]).rows
+
+    for _ <- 1..2 do
+      Repo.query!("SELECT public.rebuild_api_key_usage_components()")
+      assert Repo.query!(sql, [api_key_id]).rows == before
     end
   end
 

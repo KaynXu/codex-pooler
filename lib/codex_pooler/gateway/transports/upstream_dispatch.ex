@@ -37,6 +37,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV6
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV7
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
+  alias CodexPooler.Platform.OutboundHTTP
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
@@ -54,14 +55,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
   ]
-  @regular_runtime_metadata_header_names [
-    "x-codex-turn-metadata",
-    "x-codex-window-id",
-    "x-codex-parent-thread-id",
-    "x-codex-installation-id",
-    "x-codex-turn-state",
-    "x-openai-subagent"
-  ]
+  # The closed client metadata header allowlist and its value bounds live in
+  # `TransportEnvelope` (findings#240); this module only gates them by endpoint.
   @responses_lite_header_name "x-openai-internal-codex-responses-lite"
   @routing_hint_header_name "x-codex-routing-hint"
   @stable_downstream_keys [:active_turn_reconnect?, :correlation_id, :epoch, :pid]
@@ -81,14 +76,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:identity) => UpstreamIdentity.t(),
           required(:observation) => WebsocketOwnerRequest.observation(),
           required(:reset_probe) => ResetProbe.t() | nil,
-          required(:native_codex_response_control) =>
-            CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
+          required(:native_codex_response_control) => CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
           required(:assignment_advertised?) => boolean(),
           required(:connection_bound_continuation?) => boolean(),
-          required(:websocket_delivery_mode) =>
-            :relay | :collect_compaction | :collect_full_history,
-          required(:native_compaction_metadata) =>
-            CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
+          required(:websocket_delivery_mode) => :relay | :collect_compaction | :collect_full_history,
+          required(:native_compaction_metadata) => CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata.t() | nil,
           required(:effective_serving_mode) => String.t(),
           required(:request_id) => Ecto.UUID.t() | nil,
           required(:attempt_id) => Ecto.UUID.t() | nil,
@@ -98,8 +90,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:native_compaction_capability) =>
             CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t()
             | nil,
-          required(:first_compact_collection) =>
-            NativeCompactionAdmission.FirstCompactCollection.t() | nil,
+          required(:first_compact_collection) => NativeCompactionAdmission.FirstCompactCollection.t() | nil,
           required(:expected_connection_lifecycle) => map() | nil,
           required(:forward_error_body?) => boolean(),
           required(:native_client_retry_observation) => ClientRetry.Observation.t() | nil,
@@ -297,26 +288,30 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         _payload
       )
       when endpoint in @regular_runtime_metadata_endpoints and is_list(forwarded_headers) do
-    filter_regular_runtime_forwarded_metadata_headers(forwarded_headers)
+    TransportEnvelope.bounded_forwarded_metadata_headers(forwarded_headers)
   end
 
   # Public `/v1` origin: the client's continuity headers stay local, and the
   # only provider session header sent upstream is the Pooler-derived
-  # `session-id` synthesized from the request's `prompt_cache_key`. It goes
-  # through the same `forwarded_metadata_header/2` bounds as a client header.
-  # The `/v1` websocket surfaces are unaffected on purpose: a bridged HTTP turn
-  # rides the continuity owner's upstream connection and a public websocket
-  # turn rides its socket-bound upstream session, and the provider pins the
-  # prompt cache to that connection rather than to a per-request header.
+  # `session-id` synthesized from the request's `prompt_cache_key`, scoped to
+  # the authenticated Pool and API key captured in the runtime context so two
+  # tenants that send the same key never share a provider session. Without a
+  # captured tenant scope nothing is synthesized. It goes through the same
+  # `forwarded_metadata_header/2` bounds as a client header.
+  # `websocket_provider_session_headers/2` applies the same policy to the `/v1`
+  # websocket handshake, where the derived id survives an owner reconnect.
   def regular_runtime_forwarded_metadata_headers(
         %RequestOptions{
           transport: %{upstream_endpoint: endpoint},
           openai_compatibility: %{source_endpoint: source_endpoint}
-        },
+        } = request_options,
         %{"prompt_cache_key" => prompt_cache_key}
       )
       when endpoint in @regular_runtime_metadata_endpoints and is_binary(source_endpoint) do
-    case TransportEnvelope.prompt_cache_session_id(prompt_cache_key) do
+    case TransportEnvelope.prompt_cache_session_id(
+           prompt_cache_tenant_scope(request_options),
+           prompt_cache_key
+         ) do
       session_id when is_binary(session_id) -> forwarded_metadata_header("session-id", session_id)
       nil -> []
     end
@@ -324,51 +319,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   def regular_runtime_forwarded_metadata_headers(%RequestOptions{}, _payload), do: []
 
-  defp filter_regular_runtime_forwarded_metadata_headers(headers) do
-    Enum.flat_map(headers, fn
-      {name, value} when is_binary(name) and is_binary(value) ->
-        forwarded_metadata_header(String.downcase(name), value)
+  defp prompt_cache_tenant_scope(%RequestOptions{runtime: %{tenant_scope: scope}}), do: scope
+  defp prompt_cache_tenant_scope(%RequestOptions{}), do: nil
 
-      _other ->
-        []
-    end)
-  end
-
-  # Runtime lookup: the envelope owns the provider session header names and a
-  # compile-time reference would add a forbidden xref edge.
-  defp forwarded_metadata_header(name, value) do
-    cond do
-      name in TransportEnvelope.provider_session_header_names() ->
-        if TransportEnvelope.provider_session_header_value?(value), do: [{name, value}], else: []
-
-      name in @regular_runtime_metadata_header_names ->
-        [{name, maybe_project_turn_metadata_header(name, value)}]
-
-      true ->
-        []
-    end
-  end
-
-  defp maybe_project_turn_metadata_header("x-codex-turn-metadata", value) do
-    case CodexPooler.JSON.decode(value) do
-      {:ok, %{"code_mode_tool_names" => _value} = metadata} ->
-        encode_projected_turn_metadata(metadata, value)
-
-      _other ->
-        value
-    end
-  end
-
-  defp maybe_project_turn_metadata_header(_name, value), do: value
-
-  defp encode_projected_turn_metadata(metadata, original) do
-    case metadata
-         |> Map.delete("code_mode_tool_names")
-         |> CodexPooler.JSON.encode(escape: :unicode_safe) do
-      {:ok, projected} -> projected
-      {:error, _error} -> original
-    end
-  end
+  # Runtime lookup only: the envelope owns the allowlist, the provider session
+  # names and every value bound, and a compile-time reference to it would add
+  # a forbidden xref edge. `name` must already be lowercase.
+  defp forwarded_metadata_header(name, value),
+    do: TransportEnvelope.bounded_forwarded_metadata_header(name, value)
 
   @spec http_request(DispatchRequest.t()) :: {:ok, Req.Response.t()} | {:error, map()}
   def http_request(%DispatchRequest{
@@ -394,9 +352,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             ])
           )
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
-    result = Req.post(url, request_options)
+    result = OutboundHTTP.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
     result = maybe_drain_rejection_body(result, opts)
 
@@ -455,7 +413,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         retry: false,
         headers: upstream_header_list
       ]
-      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts, url))
 
     request_options =
       if streaming_request?(payload, opts) do
@@ -468,7 +426,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         )
       end
 
-    result = Req.post(url, request_options)
+    result = OutboundHTTP.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
     result = maybe_drain_rejection_body(result, opts)
 
@@ -502,11 +460,18 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         request_options: %RequestOptions{} = request_options,
         client_retry_dispatch_authority: client_retry_dispatch_authority
       }) do
+    # The final upstream body is read twice on a websocket handshake — for the
+    # routing hint and for the `/v1` derived provider session id — so decode it
+    # once per turn.
+    decoded_payload = decoded_upstream_payload(payload_body)
+
     headers =
       websocket_headers(
         identity,
         token,
-        routing_hint_header(payload_body, routing_hint_authorized?, request_options)
+        routing_hint_header(decoded_payload, routing_hint_authorized?, request_options),
+        request_options,
+        decoded_payload
       )
 
     emit_egress_observation(:websocket, headers, request_options, payload_body)
@@ -664,8 +629,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           do: Map.get(lifecycle, :replay_attempt_id, attempt.id),
           else: Map.get(lifecycle, :eligible_attempt_id, attempt.id)
         ),
-      replay_generation:
-        Map.get(attempt, :replay_generation, Map.get(lifecycle, :replay_generation, 0))
+      replay_generation: Map.get(attempt, :replay_generation, Map.get(lifecycle, :replay_generation, 0))
     }
 
     WebsocketOwnerForwarder.prepare_next_replay_descriptor(
@@ -824,8 +788,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           assignment_advertised?: request_data.assignment_advertised?,
           connection_bound_continuation?: request_data.connection_bound_continuation?,
           forward_error_body?: request_data.forward_error_body?,
-          submission_notification?:
-            is_function(request_options.transport.websocket_owner_submission_observer, 0)
+          submission_notification?: is_function(request_options.transport.websocket_owner_submission_observer, 0)
         }
 
         owner_request_envelope(attrs, request_data, request_options)
@@ -903,8 +866,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp owner_request_envelope_without_replay(attrs, request_data, request_options, admission) do
     case {request_data.websocket_delivery_mode, admission} do
-      {delivery_mode,
-       {:ok, capability, {:forwarded, _session, _lease, _downstream, _opts}, _lifecycle}}
+      {delivery_mode, {:ok, capability, {:forwarded, _session, _lease, _downstream, _opts}, _lifecycle}}
       when delivery_mode in [:relay, :collect_compaction] ->
         owner_request_v3(
           attrs,
@@ -943,8 +905,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         |> Map.merge(%{
           version: 7,
           client_retry_dispatch_authority: authority,
-          compaction_retry_submit_hold:
-            Map.get(request_options.runtime, :compaction_retry_submit_hold)
+          compaction_retry_submit_hold: Map.get(request_options.runtime, :compaction_retry_submit_hold)
         })
         |> WebsocketOwnerRequestV7.new()
     end
@@ -1354,14 +1315,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       {:status, reply.status != 200},
       {:headers, not owner_response_headers?(reply.headers)},
       {:response_id, invalid_optional_owner_field?(reply, :response_id, &clean_binary?/1)},
-      {:upstream_websocket_connection,
-       invalid_optional_owner_field?(reply, :upstream_websocket_connection, &is_map/1)},
-      {:websocket_frame_headers,
-       invalid_optional_owner_field?(reply, :websocket_frame_headers, &is_map/1)},
-      {:upstream_error_code,
-       invalid_optional_owner_field?(reply, :upstream_error_code, &nil_or_clean_binary?/1)},
-      {:upstream_error_param,
-       invalid_optional_owner_field?(reply, :upstream_error_param, &nil_or_clean_binary?/1)},
+      {:upstream_websocket_connection, invalid_optional_owner_field?(reply, :upstream_websocket_connection, &is_map/1)},
+      {:websocket_frame_headers, invalid_optional_owner_field?(reply, :websocket_frame_headers, &is_map/1)},
+      {:upstream_error_code, invalid_optional_owner_field?(reply, :upstream_error_code, &nil_or_clean_binary?/1)},
+      {:upstream_error_param, invalid_optional_owner_field?(reply, :upstream_error_param, &nil_or_clean_binary?/1)},
       {:transport_failure, invalid_optional_owner_field?(reply, :transport_failure, &is_map/1)}
     ]
     |> Enum.flat_map(fn
@@ -1487,16 +1444,115 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp multi_agent_round_request_id(_request, %RequestOptions{} = request_options),
     do: request_options.request_metadata.request_id
 
-  defp websocket_headers(identity, token, routing_hint) do
+  defp websocket_headers(
+         identity,
+         token,
+         routing_hint,
+         %RequestOptions{} = request_options,
+         decoded_payload
+       ) do
     upstream_headers(
       identity,
       token,
       maybe_put_routing_hint_header(
-        [{"openai-beta", "responses_websockets=2026-02-06"}],
+        [
+          {"openai-beta", "responses_websockets=2026-02-06"}
+          | websocket_provider_session_headers(request_options, decoded_payload)
+        ],
         routing_hint
       )
     )
   end
+
+  # The Codex client sends `session-id`, `thread-id` and `x-client-request-id`
+  # on its websocket handshake exactly as on HTTP (openai/codex main c11ed24c2,
+  # core/src/client.rs `build_websocket_headers`, the websocket connect path).
+  # That handshake also carries the client's `x-oai-attestation`,
+  # `OpenAI-Beta`, `x-responsesapi-include-timing-metrics`,
+  # `x-codex-beta-features`, its routing hint and the same compatibility
+  # metadata headers as an HTTP turn. The Pooler sets its own `openai-beta`
+  # value and derives its own routing hint, and deliberately copies none of
+  # the client's per-turn handshake headers onto a reused upstream connection:
+  # one owner socket serves many turns, downstream sockets and API keys of a
+  # Pool, and the attestation is bound to the client's own account. The frame
+  # `client_metadata` carries the per-turn values instead. A native
+  # Codex-backend handshake forwards only the three provider session names the
+  # authenticated downstream native upgrade carried, under the same bounds as
+  # the HTTP route and keeping the first valid value per name. They stay in
+  # the upstream websocket reuse key: a connection opened with one client's
+  # values never serves a turn carrying other values or none. `/v1` origins
+  # (translated, bridged, public websocket) send none.
+  defp websocket_provider_session_headers(
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint, forwarded_metadata_headers: headers},
+           openai_compatibility: %{
+             source_endpoint: nil,
+             openai_chat_payload: nil,
+             public_openai_responses_stream: false
+           }
+         },
+         _decoded_payload
+       )
+       when endpoint in @regular_runtime_metadata_endpoints and is_list(headers) do
+    names = TransportEnvelope.provider_session_header_names()
+
+    headers
+    |> Enum.flat_map(fn
+      {name, value} when is_binary(name) and is_binary(value) ->
+        name = String.downcase(name)
+        if name in names, do: forwarded_metadata_header(name, value), else: []
+
+      _other ->
+        []
+    end)
+    |> Enum.uniq_by(fn {name, _value} -> name end)
+  end
+
+  # Public `/v1` origin (bridged HTTP turn and public websocket alike): the
+  # caller's own session headers stay local, and the only provider session
+  # header on the handshake is the Pooler-derived `session-id`, synthesized the
+  # same way as on the `/v1` HTTP path from the raw `prompt_cache_key` of the
+  # final upstream body and the authenticated tenant scope. The routing copy is
+  # nulled for websocket and the stored form is hashed, so the body is the only
+  # source of the production key. Without a tenant scope or a usable key the
+  # handshake sends nothing, exactly as on HTTP.
+  #
+  # The header raises the chance that a turn on a fresh upstream connection
+  # lands on a replica still holding the warm prefix. It is a probability, not
+  # a guarantee, and the earlier local figures here (0.0 without, 0.9856 with)
+  # overstated it. Measured on production over 12 interleaved triples, each on
+  # a provably fresh connection with its own generated prefix: a stable derived
+  # id hit 7 of 9 turns, no `prompt_cache_key` at all hit 2 of 12, and a key
+  # present but changed between turns hit 1 of 12 (Fisher 0.0092 and 0.0022;
+  # changed-key versus no-key is p = 1.0, so it is the *stability* of the id
+  # that does the work, not the presence of a key). Every hit recovered exactly
+  # 11,008 of ~11,900 input tokens and every miss exactly zero, so the hit rate
+  # is the statistic and a mean ratio hides the behaviour. Hits also crossed
+  # upstream accounts in 5 of 7 cases, so the provider's cache is not scoped to
+  # the credential that warmed it. See codex-pooler-findings#133.
+  #
+  # Like every other handshake header except the routing hint it enters
+  # `UpstreamWebsocketSession.request_key/1`, so a later turn that changes or
+  # drops `prompt_cache_key` opens its own connection rather than riding one
+  # whose handshake carried another conversation's id.
+  defp websocket_provider_session_headers(
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint},
+           openai_compatibility: %{source_endpoint: source_endpoint}
+         } = request_options,
+         {:ok, %{"prompt_cache_key" => prompt_cache_key}}
+       )
+       when endpoint in @regular_runtime_metadata_endpoints and is_binary(source_endpoint) do
+    case TransportEnvelope.prompt_cache_session_id(
+           prompt_cache_tenant_scope(request_options),
+           prompt_cache_key
+         ) do
+      session_id when is_binary(session_id) -> forwarded_metadata_header("session-id", session_id)
+      nil -> []
+    end
+  end
+
+  defp websocket_provider_session_headers(%RequestOptions{}, _decoded_payload), do: []
 
   defp normalize_upstream_transport_result(
          {:error, %Finch.TransportError{} = exception},
@@ -1681,17 +1737,28 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
+  # The Codex client (0.148+) sends `model=<slug>[;tier=<tier>]` on every
+  # Codex-backend Responses and compact request, HTTP and websocket handshake
+  # alike. Native and `/v1`-translated turns derive it the same way: only from
+  # the final upstream body (effective model after aliasing, effective tier
+  # after policy and `fast` canonicalization). A caller-supplied header is never
+  # the source.
+  defp routing_hint_header(body, routing_hint_authorized?, %RequestOptions{} = request_options)
+       when is_binary(body) do
+    routing_hint_header(
+      decoded_upstream_payload(body),
+      routing_hint_authorized?,
+      request_options
+    )
+  end
+
   defp routing_hint_header(
-         body,
+         {:ok, %{} = payload},
          true,
-         %RequestOptions{
-           transport: %{upstream_endpoint: endpoint},
-           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
-         }
+         %RequestOptions{transport: %{upstream_endpoint: endpoint}}
        )
-       when endpoint in @regular_runtime_metadata_endpoints and is_binary(body) do
-    with {:ok, %{} = payload} <- CodexPooler.JSON.decode(body),
-         {:ok, model} <- routing_hint_component(Map.get(payload, "model")),
+       when endpoint in @regular_runtime_metadata_endpoints do
+    with {:ok, model} <- routing_hint_component(Map.get(payload, "model")),
          {:ok, service_tier} <- routing_hint_service_tier(payload) do
       case service_tier do
         nil -> "model=#{model}"
@@ -1702,7 +1769,19 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  defp routing_hint_header(_body, _routing_hint_authorized?, %RequestOptions{}), do: nil
+  defp routing_hint_header(_payload, _routing_hint_authorized?, %RequestOptions{}), do: nil
+
+  # The decoded final upstream body, or `:error` for anything that is not a
+  # JSON object. Header derivation reads the body the upstream actually
+  # receives, never a caller-supplied value.
+  defp decoded_upstream_payload(body) when is_binary(body) do
+    case CodexPooler.JSON.decode(body) do
+      {:ok, %{} = payload} -> {:ok, payload}
+      _other -> :error
+    end
+  end
+
+  defp decoded_upstream_payload(_body), do: :error
 
   defp routing_hint_service_tier(payload) do
     case Map.fetch(payload, "service_tier") do

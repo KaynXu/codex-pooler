@@ -217,19 +217,18 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
     end
 
     @tag :locking_contract_pin
-    test "L04 missing session still raises during continuity registration" do
+    test "L04 missing session returns owner unavailable during continuity registration" do
       missing_session = %CodexSession{id: Ecto.UUID.generate()}
       alias_count = Repo.aggregate(BridgeSessionAlias, :count)
       lease_count = Repo.aggregate(BridgeOwnerLease, :count)
 
-      assert_raise Ecto.NoResultsError, fn ->
-        SessionContinuity.register_codex_session_continuity(
-          missing_session,
-          %{},
-          %{"id" => "response-placeholder"},
-          request_options([])
-        )
-      end
+      assert {:error, :owner_unavailable} =
+               SessionContinuity.register_codex_session_continuity(
+                 missing_session,
+                 %{},
+                 %{"id" => "response-placeholder"},
+                 request_options([])
+               )
 
       assert Repo.aggregate(BridgeSessionAlias, :count) == alias_count
       assert Repo.aggregate(BridgeOwnerLease, :count) == lease_count
@@ -324,8 +323,7 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
 
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
-               accepted_turn_state:
-                 "locking-contract-#{System.unique_integer([:positive, :monotonic])}",
+               accepted_turn_state: "locking-contract-#{System.unique_integer([:positive, :monotonic])}",
                owner_instance_id: "node-a"
              })
 
@@ -336,6 +334,9 @@ defmodule CodexPooler.Gateway.Persistence.LockingContractTest do
   defp assert_for_update_lock(lock_id, caller, relation, id, fun) do
     handler_id = {__MODULE__, relation, System.unique_integer([:positive, :monotonic])}
     parent = self()
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     :ok =
       :telemetry.attach(

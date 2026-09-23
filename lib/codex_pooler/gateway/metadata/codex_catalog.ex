@@ -5,11 +5,14 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
+  alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
   @etag_prefix ~s(W/"cp-models-v1-)
+  @known_reasoning_efforts ~w(none minimal low medium high xhigh max ultra)
+  @reasoning_level_keys ~w(reasoning_efforts supported_reasoning_levels)
 
   @type normalized_policy :: map()
   @type body :: %{required(String.t()) => [map()]}
@@ -276,7 +279,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   # the same source — the overwhelmingly common shape — stays read-free and
   # keeps byte-identical behavior.
   defp resolve_routable_assignment_ids_by_model_id(pairs_by_model, opts) do
-    if Enum.any?(pairs_by_model, &multi_partition?/1) do
+    if Enum.any?(pairs_by_model, &selection_requires_routability?/1) do
       case Keyword.get(opts, :routable_assignment_ids_by_model_id) do
         resolver when is_function(resolver, 0) ->
           resolver.()
@@ -293,6 +296,33 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     pairs |> Enum.uniq_by(& &1.digest) |> length() > 1
   end
 
+  defp selection_requires_routability?({_model, pairs} = pair_group) do
+    multi_partition?(pair_group) or
+      pairs |> Enum.uniq_by(&reasoning_projection_signature/1) |> length() > 1
+  end
+
+  defp reasoning_projection_signature(pair) do
+    levels =
+      pair.source
+      |> ModelMetadata.metadata_reasoning_levels()
+      |> Enum.sort_by(&reasoning_level_sort_key/1)
+
+    {reasoning_source_default(pair.source), levels}
+  end
+
+  defp reasoning_source_default(source) do
+    case Map.get(source, "default_reasoning_level") do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> ReasoningEffort.normalize_known(trimmed) || trimmed
+        end
+
+      _value ->
+        nil
+    end
+  end
+
   defp canonical_pairs(%Model{} = model, candidates) do
     case Map.get(model.metadata || %{}, "source_assignment_models") do
       source_models when is_map(source_models) ->
@@ -304,8 +334,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   end
 
   defp canonical_pair(
-         {%PoolUpstreamAssignment{id: assignment_id, created_at: %DateTime{} = created_at},
-          _identity},
+         {%PoolUpstreamAssignment{id: assignment_id, created_at: %DateTime{} = created_at}, _identity},
          %Model{} = model,
          source_models
        )
@@ -336,23 +365,23 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   # sake. The contract is recorded under the `:backend_models_etag` entry in
   # `CodexPooler.CompatibilityMatrix`.
   defp select_anchored_partition(pairs, %Model{} = model, routable_assignment_ids) do
-    partitions =
+    capability_families =
       pairs
-      |> Enum.group_by(& &1.digest)
+      |> Enum.group_by(& &1.reasoning_agnostic_digest)
       |> Map.values()
       |> Enum.sort_by(&partition_anchor_key/1)
 
-    baseline_members = select_partition(partitions, nil)
-    members = select_partition(partitions, routable_assignment_ids)
+    baseline_members = select_partition(capability_families, nil)
+    members = select_partition(capability_families, routable_assignment_ids)
     anchor = partition_anchor(members)
 
     %{
       assignment_ids: members |> Enum.map(& &1.assignment_id) |> Enum.sort(),
       digest: anchor.digest,
       model: model,
-      partition_count: length(partitions),
+      partition_count: length(capability_families),
       routable_selection?: members != baseline_members,
-      source: anchor.source
+      source: reasoning_union_source(anchor, members, routable_assignment_ids)
     }
   end
 
@@ -365,11 +394,97 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   end
 
   defp partition_selection_key(members, %MapSet{} = routable_assignment_ids) do
-    routable_count =
-      Enum.count(members, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+    routable_count = partition_routable_count(members, routable_assignment_ids)
 
     {-routable_count, -length(members), partition_anchor_key(members)}
   end
+
+  defp partition_routable_count(members, %MapSet{} = routable_assignment_ids) do
+    Enum.count(members, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+  end
+
+  defp reasoning_union_source(anchor, family_pairs, routable_assignment_ids) do
+    source_pairs = routable_family_pairs(family_pairs, routable_assignment_ids)
+
+    if one_reasoning_projection?(family_pairs) do
+      anchor.source
+    else
+      union_reasoning_source(anchor, source_pairs)
+    end
+  end
+
+  defp one_reasoning_projection?(source_pairs) do
+    source_pairs
+    |> Enum.uniq_by(&reasoning_projection_signature/1)
+    |> length() == 1
+  end
+
+  defp union_reasoning_source(anchor, source_pairs) do
+    base_source =
+      Map.drop(anchor.source, ["default_reasoning_level" | @reasoning_level_keys])
+
+    reasoning_levels =
+      source_pairs
+      |> Enum.sort_by(&partition_pair_key/1)
+      |> Enum.flat_map(&ModelMetadata.metadata_reasoning_levels(&1.source))
+      |> Enum.uniq()
+      |> Enum.sort_by(&reasoning_level_sort_key/1)
+
+    case reasoning_levels do
+      [] ->
+        base_source
+
+      [_ | _] ->
+        levels = Enum.map(reasoning_levels, &%{"effort" => &1, "description" => &1})
+
+        base_source
+        |> Map.put("supported_reasoning_levels", levels)
+        |> Map.put(
+          "default_reasoning_level",
+          reasoning_union_default(source_pairs, reasoning_levels)
+        )
+    end
+  end
+
+  defp reasoning_union_default(source_pairs, reasoning_levels) do
+    source_pairs
+    |> Enum.sort_by(&partition_pair_key/1)
+    |> Enum.find_value(&reasoning_default(&1.source, reasoning_levels))
+    |> case do
+      nil -> List.first(reasoning_levels)
+      default -> default
+    end
+  end
+
+  defp reasoning_level_sort_key(effort) do
+    case Enum.find_index(@known_reasoning_efforts, &(&1 == effort)) do
+      nil -> {1, effort}
+      index -> {0, index}
+    end
+  end
+
+  defp reasoning_default(source, reasoning_levels) do
+    case Map.get(source, "default_reasoning_level") do
+      value when is_binary(value) ->
+        normalized = ReasoningEffort.normalize_known(value) || String.trim(value)
+        if normalized in reasoning_levels, do: normalized
+
+      _value ->
+        nil
+    end
+  end
+
+  defp routable_family_pairs(family_pairs, %MapSet{} = routable_assignment_ids) do
+    routable =
+      Enum.filter(family_pairs, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+
+    case routable do
+      [] -> family_pairs
+      [_ | _] -> routable
+    end
+  end
+
+  defp routable_family_pairs(family_pairs, _routable_assignment_ids), do: family_pairs
 
   defp partition_anchor(members), do: Enum.min_by(members, &partition_pair_key/1)
 

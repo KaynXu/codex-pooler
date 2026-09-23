@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   @moduledoc false
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.ErrorClassification
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -10,8 +11,6 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DownstreamSession
-
-  @overload_code "server_is_overloaded"
 
   @type socket_state :: map()
 
@@ -165,7 +164,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     %{
       "type" => "error",
       "status" => status,
-      "error" => error_payload(reason)
+      "error" => error_payload(reason, status)
     }
   end
 
@@ -173,7 +172,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     %{
       "type" => "error",
       "status" => 500,
-      "error" => error_payload(reason)
+      "error" => error_payload(reason, 500)
     }
   end
 
@@ -218,11 +217,11 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     }
   end
 
-  defp error_payload(%{code: code, message: message} = reason) do
+  defp error_payload(%{code: code, message: message} = reason, status) do
     Map.merge(
       %{
         "message" => message,
-        "type" => error_type(code),
+        "type" => ErrorClassification.error_type(code, status),
         "code" => to_string(code),
         "param" => Map.get(reason, :param)
       },
@@ -230,17 +229,17 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     )
   end
 
-  defp error_payload(reason) do
+  # An unrecognized reason renders as a status-500 gateway failure, which is a
+  # server-side failure by construction; typing it `invalid_request_error` told
+  # the client its own frame was malformed (findings#184).
+  defp error_payload(reason, _status) do
     %{
       "message" => "websocket request failed: #{ErrorSanitizer.safe_reason(reason)}",
-      "type" => "invalid_request_error",
+      "type" => ErrorClassification.server_error_type(),
       "code" => ErrorCodes.websocket_request_failed_code(),
       "param" => nil
     }
   end
-
-  defp error_type(@overload_code), do: "server_error"
-  defp error_type(_code), do: "invalid_request_error"
 
   defp metadata_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}})
        when is_binary(endpoint),

@@ -750,9 +750,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           mode={@pool_editor_mode || :edit}
           form={@edit_form}
           current_step={@pool_wizard_step}
-          upstream_options={
-            PoolForm.edit_upstream_identity_options(@editing_pool, @upstream_identity_options)
-          }
+          upstream_options={PoolForm.edit_upstream_identity_options(@editing_pool, @upstream_identity_options)}
           api_key_options={@api_key_options}
           model_serving_form={@model_serving_form}
           model_serving_status={@model_serving_status}
@@ -822,8 +820,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   defp pool_filter_tuple(filters) do
-    {Map.fetch!(filters, "query"), Map.fetch!(filters, "status"),
-     Map.fetch!(filters, "traffic_window")}
+    {Map.fetch!(filters, "query"), Map.fetch!(filters, "status"), Map.fetch!(filters, "traffic_window")}
   end
 
   # The traffic aggregate is the expensive read; running it on this process
@@ -981,8 +978,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
     socket =
       assign(socket,
-        pool_traffic_viewport_ids:
-          MapSet.intersection(socket.assigns.pool_traffic_viewport_ids, rendered_ids)
+        pool_traffic_viewport_ids: MapSet.intersection(socket.assigns.pool_traffic_viewport_ids, rendered_ids)
       )
 
     eligible_ids = eligible_pool_traffic_ids(socket)
@@ -1317,12 +1313,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       model_serving_form: form,
       model_serving_snapshot: data.snapshot,
       model_serving_models: data.models,
-      model_serving_status:
-        if(pending?, do: :stale, else: model_serving_status(data.catalog_state, form.rows)),
+      model_serving_status: if(pending?, do: :stale, else: model_serving_status(data.catalog_state, form.rows)),
       model_serving_dirty?: pending?,
       model_serving_sync_pending?: pending?,
-      model_serving_pending_attrs:
-        if(pending?, do: Map.put(pending_attrs, "revision", data.snapshot.revision)),
+      model_serving_pending_attrs: if(pending?, do: Map.put(pending_attrs, "revision", data.snapshot.revision)),
       model_serving_load_token: nil
     )
   end

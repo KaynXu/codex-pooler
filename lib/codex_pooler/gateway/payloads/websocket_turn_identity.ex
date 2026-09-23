@@ -13,7 +13,25 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @claim_prefix "codex-turn:"
   @request_claim_prefix "codex-request:"
   @request_claim_domain "native_websocket_response_claim_v1"
+  @compaction_claim_domain "native_websocket_compaction_claim_v1"
+  @kind_claim_domain_prefix "native_turn_kind_claim_v1:"
+  @resume_claim_domain "native_turn_compaction_resume_claim_v1"
+
+  # One wire prefix per domain for the two claims only native HTTP produces, so
+  # an operator can tell from `requests.correlation_id` which arm named a row
+  # (findings#212, row 212-61). `codex-request:` still covers both the
+  # tool-result continuation and the compaction claim, because the websocket
+  # codec produces those two and keys on that prefix.
+  @kind_claim_prefix "codex-kind:"
+  @resume_claim_prefix "codex-resume:"
+  @native_claim_prefixes [
+    @claim_prefix,
+    @request_claim_prefix,
+    @kind_claim_prefix,
+    @resume_claim_prefix
+  ]
   @replay_claim_domain "native_websocket_response_replay_claim_v1"
+  @http_resume_input_domain "native_http_resume_input_v1"
   @replay_volatile_metadata_keys [
     "x-codex-ws-stream-request-start-ms",
     "ws_request_header_traceparent",
@@ -65,16 +83,94 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     end
   end
 
-  @doc "True for a request claim derived from a tool-continuation frame."
+  @doc "True for a payload-scoped native websocket request claim."
   @spec request_claim?(term()) :: boolean()
   def request_claim?(value) when is_binary(value),
     do: String.starts_with?(value, @request_claim_prefix)
 
   def request_claim?(_value), do: false
 
+  @doc """
+  True for any claim this module mints for a native Codex turn, whichever arm
+  produced it. Callers that route a claim into the resend path must use this
+  rather than `request_claim?/1`, or a new domain's wire prefix silently stops
+  being routed.
+  """
+  @spec native_claim?(term()) :: boolean()
+  def native_claim?(value) when is_binary(value),
+    do: Enum.any?(@native_claim_prefixes, &String.starts_with?(value, &1))
+
+  def native_claim?(_value), do: false
+
   @spec request_claim_key(<<_::256>>, map()) :: String.t()
   def request_claim_key(semantic_turn_key, payload)
       when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
+    scoped_request_claim_key(semantic_turn_key, payload, @request_claim_domain)
+  end
+
+  @spec compaction_claim_key(<<_::256>>, map()) :: String.t()
+  def compaction_claim_key(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
+    scoped_request_claim_key(semantic_turn_key, payload, @compaction_claim_domain)
+  end
+
+  @doc """
+  The claim for the request that resumes a turn from the compaction it just
+  produced, derived from the turn and an opaque digest of that compaction and
+  from NOTHING else in the body.
+
+  It cannot take the bare turn claim, which the turn's own opening request
+  already holds. It must not be payload-scoped either: ledger row 212-20 is the
+  record of why -- the claim is an HMAC over a projection, so whatever the
+  projection includes is what a retry can move. A resume retried with a grown
+  `input`, a changed `tools` list, a flipped `parallel_tool_calls` or a
+  reordered history therefore keeps this claim, because none of that is in it.
+  """
+  @spec resume_claim_key(<<_::256>>, <<_::256>>) :: String.t()
+  def resume_claim_key(semantic_turn_key, anchor)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_binary(anchor) and byte_size(anchor) == 32 do
+    digest =
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        request_claim_hmac_key(),
+        :erlang.term_to_binary(
+          {@resume_claim_domain, semantic_turn_key, anchor},
+          [:deterministic]
+        )
+      )
+
+    @resume_claim_prefix <> Base.url_encode64(digest, padding: false)
+  end
+
+  @doc """
+  A payload-scoped claim for a request that is *about* a turn rather than one of
+  its model requests, domain separated by the declared `request_kind`.
+
+  A `prewarm` is built from the turn's own `TurnMetadataState` and so carries
+  the turn's `turn_id` (`session_startup_prewarm.rs:303-310`); a `memory`
+  request mints its own (`turn_metadata.rs:133-139`). Neither may take the
+  turn's bare claim -- that refuses a request which has no duplicate -- but both
+  are single-shot per turn, so an identical resend of one is a duplicate and
+  stays fenced (findings#212, row 212-46).
+  """
+  @spec kind_claim_key(<<_::256>>, map(), String.t()) :: String.t()
+  def kind_claim_key(semantic_turn_key, payload, kind)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_map(payload) and is_binary(kind) do
+    scoped_claim_key(
+      semantic_turn_key,
+      payload,
+      @kind_claim_domain_prefix <> kind,
+      @kind_claim_prefix
+    )
+  end
+
+  defp scoped_request_claim_key(semantic_turn_key, payload, domain),
+    do: scoped_claim_key(semantic_turn_key, payload, domain, @request_claim_prefix)
+
+  defp scoped_claim_key(semantic_turn_key, payload, domain, prefix) do
     projection = request_claim_projection(payload)
 
     digest =
@@ -83,12 +179,12 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
         :sha256,
         request_claim_hmac_key(),
         :erlang.term_to_binary(
-          {@request_claim_domain, semantic_turn_key, projection},
+          {domain, semantic_turn_key, projection},
           [:deterministic]
         )
       )
 
-    @request_claim_prefix <> Base.url_encode64(digest, padding: false)
+    prefix <> Base.url_encode64(digest, padding: false)
   end
 
   @spec replay_claim_digest(<<_::256>>, map()) ::
@@ -110,6 +206,29 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
 
   def replay_claim_digest(_semantic_turn_key, _payload),
     do: invalid_replay_claim("semantic_turn_key")
+
+  @spec http_resume_input_digest(<<_::256>>, [term()]) ::
+          {:ok, <<_::256>>} | {:error, Error.reason()}
+  def http_resume_input_digest(semantic_turn_key, input)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_list(input) do
+    with {:ok, key} <- replay_claim_hmac_key() do
+      normalized_input = Enum.map(input, &normalize_http_resume_input_item/1)
+
+      {:ok,
+       :crypto.mac(
+         :hmac,
+         :sha256,
+         key,
+         :erlang.term_to_binary(
+           {@http_resume_input_domain, semantic_turn_key, normalized_input},
+           [:deterministic]
+         )
+       )}
+    end
+  end
+
+  def http_resume_input_digest(_semantic_turn_key, _input),
+    do: invalid_replay_claim("input")
 
   @spec raw_turn_id(map()) :: {:ok, String.t()} | :missing | {:error, Error.reason()}
   defp raw_turn_id(payload) do
@@ -227,6 +346,11 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
     |> Map.drop([@turn_param, @request_param])
     |> normalize_replay_client_metadata()
   end
+
+  defp normalize_http_resume_input_item(%{} = item),
+    do: Map.delete(item, "internal_chat_message_metadata_passthrough")
+
+  defp normalize_http_resume_input_item(item), do: item
 
   defp normalize_replay_client_metadata(%{"client_metadata" => metadata} = payload)
        when is_map(metadata) do

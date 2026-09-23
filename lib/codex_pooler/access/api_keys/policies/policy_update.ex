@@ -74,6 +74,8 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
              RuntimeAuthorization.prepare_status_transition(api_key, target_status),
            previous_api_key = transition.api_key,
            {:ok, target_pool_id} <- authorize_api_key_update(scope, previous_api_key, attrs),
+           transition =
+             RuntimeAuthorization.advance_epoch_for_pool_move(transition, target_pool_id),
            {:ok, policy_attrs, policy_inputs} <-
              update_api_key_policy_attrs(scope, target_pool_id, attrs),
            update_attrs =
@@ -87,7 +89,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
            updated,
            previous_api_key,
            dashboard_session_invalidation_required?(previous_api_key, update_attrs),
-           api_key_update_notification(attrs, transition)
+           api_key_update_notification(attrs, transition, previous_api_key, updated.api_key)
          }}
       end
     end)
@@ -146,6 +148,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
       :display_name,
       :status,
       :dashboard_access,
+      :max_active_requests,
       :expires_at,
       :allowed_model_identifiers,
       :metadata
@@ -188,11 +191,12 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
 
   defp maybe_broadcast_dashboard_invalidation(_api_key, false), do: :ok
 
-  defp notify_api_key_update(result, _previous_api_key, :effective_disabling_transition) do
+  defp notify_api_key_update(result, previous_api_key, :effective_disabling_transition) do
     Notifications.notify_api_key_runtime_transition(
       result,
       "api_key_updated",
-      api_key_from_result(result).pool_id
+      api_key_from_result(result).pool_id,
+      previous_api_key.pool_id
     )
   end
 
@@ -202,11 +206,22 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
     Notifications.notify_api_key_change(result, "api_key_updated", previous_api_key.pool_id)
   end
 
-  defp api_key_update_notification(attrs, transition) do
+  defp api_key_update_notification(attrs, transition, previous_api_key, updated_api_key) do
     cond do
-      transition.effective_disabling_transition? -> :effective_disabling_transition
-      status_submitted?(attrs) -> :status_without_disable
-      true -> :ordinary_update
+      transition.effective_disabling_transition? ->
+        :effective_disabling_transition
+
+      previous_api_key.max_active_requests != updated_api_key.max_active_requests ->
+        :ordinary_update
+
+      RuntimeAuthorization.reread_required?(previous_api_key, updated_api_key) ->
+        :ordinary_update
+
+      status_submitted?(attrs) ->
+        :status_without_disable
+
+      true ->
+        :ordinary_update
     end
   end
 

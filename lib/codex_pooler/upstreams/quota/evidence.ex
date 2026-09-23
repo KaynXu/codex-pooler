@@ -22,11 +22,39 @@ defmodule CodexPooler.Upstreams.Quota.Evidence do
           window_attrs()
         ]
   @spec codex_header_windows(term(), DateTime.t(), String.t() | nil) :: [window_attrs()]
-  def codex_header_windows(headers, synced_at, dispatched_model \\ nil) do
+  @spec codex_header_windows(term(), DateTime.t(), String.t() | nil, String.t() | nil) ::
+          [window_attrs()]
+  def codex_header_windows(headers, synced_at, dispatched_model \\ nil, denial_code \\ nil) do
     headers
     |> ResponseHeaders.parse(synced_at, dispatched_model)
+    |> Enum.map(&preserve_header_denial(&1, denial_code, synced_at))
     |> Enum.map(&Evidence.to_window_attrs/1)
   end
+
+  defp preserve_header_denial(%Evidence{reset_at: %DateTime{} = reset_at} = evidence, code, at)
+       when code in ["usage_limit_reached", "usage_limit_exceeded"] do
+    if DateTime.compare(reset_at, at) == :gt and
+         Decimal.compare(evidence.used_percent, Decimal.new(100)) == :eq do
+      metadata =
+        Map.merge(evidence.metadata, %{
+          "rate_limit_reached" => true,
+          "rate_limit_error_code" => code
+        })
+
+      source = "codex_rate_limit_error"
+
+      %{
+        evidence
+        | metadata: metadata,
+          source: source,
+          merge_precedence: Evidence.merge_precedence(source, reset_at, evidence.source_precision)
+      }
+    else
+      evidence
+    end
+  end
+
+  defp preserve_header_denial(evidence, _code, _at), do: evidence
 
   @spec codex_rate_limit_event_windows(term(), DateTime.t()) :: [window_attrs()]
   def codex_rate_limit_event_windows(event, synced_at) do

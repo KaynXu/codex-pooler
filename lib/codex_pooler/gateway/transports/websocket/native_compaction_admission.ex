@@ -193,8 +193,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
   defmodule FirstCompactResult do
     @moduledoc false
 
+    require Logger
+
     alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
     alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+    alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
     alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
 
     @enforce_keys [
@@ -219,19 +222,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
           }
 
     @spec from_collection(map(), map(), map()) :: {:ok, t()} | :error
+    # A request that is not a collect-full-history compaction is not a rejection:
+    # it is every ordinary turn. It must stay silent, so eligibility is decided
+    # before the admission steps whose failures are worth a diagnostic.
     def from_collection(request, result, lifecycle) do
-      with %{
-             websocket_delivery_mode: :collect_full_history,
-             native_compaction_metadata:
-               %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
-           } <- request,
-           {:ok, request_id} <- Ecto.UUID.cast(request.request_id),
-           {:ok, attempt_id} <- Ecto.UUID.cast(request.attempt_id),
-           {:ok, %{"model" => model}} when is_binary(model) <-
-             CodexPooler.JSON.decode(request.payload),
+      case request do
+        %{
+          websocket_delivery_mode: :collect_full_history,
+          native_compaction_metadata: %NativeCodexTurnMetadata{request_kind: :compaction} = metadata
+        } ->
+          admit_first_compact_result(request, result, lifecycle, metadata)
+
+        _ineligible ->
+          :error
+      end
+    end
+
+    defp admit_first_compact_result(request, result, lifecycle, metadata) do
+      with {:ok, request_id} <- cast_identifier(request.request_id, "request_id"),
+           {:ok, attempt_id} <- cast_identifier(request.attempt_id, "attempt_id"),
+           {:ok, model} <- payload_model(request.payload),
            {:ok, %{compaction_item: item}} <-
              CompactionResultCollector.collect_websocket_body(result.body),
-           {:ok, serving_mode} <- mode(request.effective_serving_mode),
+           {:ok, serving_mode} <- serving_mode(request.effective_serving_mode),
            binding = %Binding{
              semantic_turn_key: metadata.semantic_turn_key,
              window_digest: metadata.window_id_digest,
@@ -254,9 +267,85 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
            item_digest: NativeCodexTurnMetadata.compaction_item_digest(item)
          }}
       else
-        _invalid -> :error
+        {:error, %{compaction_invalid_reason: reason_code}} ->
+          reject("collector_invalid", reason_code)
+
+        {:provider_failure, %{} = failure} ->
+          reject("provider_terminal", provider_reason_code(failure))
+
+        {:error, {:precondition, reason_code}} ->
+          reject("admission_precondition", reason_code)
+
+        {:error, reason} when is_atom(reason) ->
+          reject("admission_precondition", DiagnosticTaxonomy.identifier(reason))
       end
     end
+
+    # findings#165: every admission precondition is already known at the point
+    # it fails, so the `with` must not collapse four distinct causes into one
+    # constant. `reason_code=unclassified` told an operator only that the turn
+    # was rejected somewhere in this chain -- the single thing they could
+    # already see -- while the cause was discarded. Each step now names itself
+    # from a closed vocabulary (`precondition_reason_codes/0`, pinned by a
+    # test), and the binding step passes through the bounded atom
+    # `ordinary_success/1` already returns. No content, payload byte, or
+    # provider identifier enters any of these tokens.
+    @precondition_reason_codes ~w(
+      request_id
+      attempt_id
+      payload_decode
+      payload_model
+      serving_mode
+    )
+
+    @spec precondition_reason_codes() :: [String.t()]
+    def precondition_reason_codes, do: @precondition_reason_codes
+
+    defp cast_identifier(value, field) do
+      case Ecto.UUID.cast(value) do
+        {:ok, id} -> {:ok, id}
+        :error -> {:error, {:precondition, field}}
+      end
+    end
+
+    defp payload_model(payload) do
+      case CodexPooler.JSON.decode(payload) do
+        {:ok, %{"model" => model}} when is_binary(model) -> {:ok, model}
+        {:ok, %{}} -> {:error, {:precondition, "payload_model"}}
+        _undecodable -> {:error, {:precondition, "payload_decode"}}
+      end
+    end
+
+    defp serving_mode(effective_serving_mode) do
+      case mode(effective_serving_mode) do
+        {:ok, serving_mode} -> {:ok, serving_mode}
+        :error -> {:error, {:precondition, "serving_mode"}}
+      end
+    end
+
+    # The admission `with` collapses every rejection into `:error`. Naming the
+    # stage and the bounded sanitized reason keeps a first-compact rejection as
+    # diagnosable as the collector's own decision log; only allowlisted
+    # identifiers or fingerprints are rendered.
+    defp reject(stage, reason_code) do
+      Logger.warning(fn ->
+        "native compact admission rejected " <>
+          "source_stage=first_compact_result " <>
+          "stage=#{stage} " <>
+          "code=invalid_compaction_response " <>
+          "reason_code=#{reason_code}"
+      end)
+
+      :error
+    end
+
+    # A collector provider failure always carries `code`, and `upstream_code`
+    # only when the provider named one, so these two clauses are total over it.
+    defp provider_reason_code(%{upstream_code: code}) when is_binary(code),
+      do: DiagnosticTaxonomy.identifier(code)
+
+    defp provider_reason_code(%{code: code}) when is_binary(code),
+      do: DiagnosticTaxonomy.identifier(code)
 
     @spec model_digest(binary()) :: <<_::256>>
     def model_digest(model), do: :crypto.hash(:sha256, ["native_compact_model:v1", 0, model])
@@ -266,15 +355,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       do: expected == presented
 
     @spec request_identity(map()) :: tuple() | nil
-    def request_identity(
-          %{native_compaction_metadata: %NativeCodexTurnMetadata{} = metadata} = request
-        ) do
+    def request_identity(%{native_compaction_metadata: %NativeCodexTurnMetadata{} = metadata} = request) do
       with {:ok, %{"model" => model}} when is_binary(model) <-
              CodexPooler.JSON.decode(request.payload),
            {:ok, mode} <- mode(request.effective_serving_mode) do
-        {request.request_id, request.attempt_id, metadata.semantic_turn_key,
-         metadata.window_id_digest, metadata.context_window_id_digest, metadata.window_number,
-         mode, model_digest(model)}
+        {request.request_id, request.attempt_id, metadata.semantic_turn_key, metadata.window_id_digest, metadata.context_window_id_digest, metadata.window_number, mode, model_digest(model)}
       else
         _invalid -> nil
       end
@@ -286,8 +371,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
     def identity(%__MODULE__{} = receipt) do
       binding = receipt.binding
 
-      {receipt.request_id, receipt.attempt_id, binding.semantic_turn_key, binding.window_digest,
-       binding.context_digest, binding.window_number, binding.serving_mode, receipt.model_digest}
+      {receipt.request_id, receipt.attempt_id, binding.semantic_turn_key, binding.window_digest, binding.context_digest, binding.window_number, binding.serving_mode, receipt.model_digest}
     end
 
     defp mode("full"), do: {:ok, :full}
@@ -329,6 +413,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
           :invalid_binding
           | :invalid_transition
           | :binding_mismatch
+          | :compaction_item_mismatch
           | :capability_mismatch
           | :expired
 
@@ -361,6 +446,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
       when is_reference(control_ref) and is_integer(now_ms) and now_ms >= 0 do
     with :ok <- expected_pending_phase(pending_phase, requested_phase),
          :ok <- not_expired(expires_at_ms, now_ms),
+         :ok <- validate_final_item(requested_phase, binding, requested_binding),
          true <- reservation_binding_match?(requested_phase, binding, requested_binding) do
       capability = %Capability{
         phase: requested_phase,
@@ -385,6 +471,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission do
 
   def reserve(%__MODULE__{}, _requested_phase, _binding, _control_ref, _now_ms),
     do: {:error, :invalid_transition}
+
+  defp validate_final_item(:final, original, candidate)
+       when original.semantic_turn_key == candidate.semantic_turn_key and
+              is_binary(original.compaction_item_digest) do
+    if digest_match?(original.compaction_item_digest, candidate.compaction_item_digest),
+      do: :ok,
+      else: {:error, :compaction_item_mismatch}
+  end
+
+  defp validate_final_item(_phase, _original, _candidate), do: :ok
 
   @spec mark_accounting_started(t(), Capability.t(), non_neg_integer()) ::
           {:ok, t()} | {:error, error()}

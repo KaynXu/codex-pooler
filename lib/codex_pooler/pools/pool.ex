@@ -34,9 +34,7 @@ defmodule CodexPooler.Pools.Pool do
     |> update_change(:slug, &normalize_slug/1)
     |> update_change(:name, &String.trim/1)
     |> validate_required([:slug, :name, :status])
-    |> validate_format(:slug, @slug_format,
-      message: "must contain only lowercase letters, numbers, and hyphens"
-    )
+    |> validate_format(:slug, @slug_format, message: "must contain only lowercase letters, numbers, and hyphens")
     |> validate_inclusion(:status, ["active", "disabled", "archived"])
     |> unique_constraint(:slug, name: :pools_slug_uq)
   end

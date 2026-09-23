@@ -42,8 +42,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlanner do
         build_plan(prepared_accounts)
       end
     else
-      {:error,
-       lifecycle_error(:transaction_required, "batch import requires a caller-owned transaction")}
+      {:error, lifecycle_error(:transaction_required, "batch import requires a caller-owned transaction")}
     end
   end
 
@@ -63,8 +62,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlanner do
         {:ok, length(plan)}
       end
     else
-      {:error,
-       lifecycle_error(:transaction_required, "batch import requires a caller-owned transaction")}
+      {:error, lifecycle_error(:transaction_required, "batch import requires a caller-owned transaction")}
     end
   end
 
@@ -85,8 +83,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlanner do
         {:ok, plan, diagnostics}
       end
     else
-      {:error,
-       lifecycle_error(:transaction_required, "batch import requires a caller-owned transaction")}
+      {:error, lifecycle_error(:transaction_required, "batch import requires a caller-owned transaction")}
     end
   end
 
@@ -142,9 +139,7 @@ defmodule CodexPooler.Upstreams.ImportBatchPlanner do
       expected_ids = Enum.map(prepared_accounts, &expected_identity_id/1)
 
       locked_rows =
-        IdentitySlotLock.lock_identity_rows!(
-          expected_ids ++ Enum.map(candidates_before_lock, & &1.id)
-        )
+        IdentitySlotLock.lock_identity_rows!(expected_ids ++ Enum.map(candidates_before_lock, & &1.id))
 
       candidates_after_lock = load_candidates(closure_attrs)
 

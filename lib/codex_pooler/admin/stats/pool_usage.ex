@@ -130,8 +130,7 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
   defp raw_usage(pool_ids, histogram_pool_ids, started_at, histogram_started_at, ended_at, window) do
     %{
       summary_by_pool_id: pool_summaries(pool_ids, started_at, ended_at),
-      histogram_by_pool_id:
-        pool_histograms(histogram_pool_ids, histogram_started_at, ended_at, window),
+      histogram_by_pool_id: pool_histograms(histogram_pool_ids, histogram_started_at, ended_at, window),
       source: :raw_fallback
     }
   end
@@ -239,8 +238,7 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
 
         {pool_id,
          %{
-           request_count:
-             sum_admitted_requests(completed_rows) + Map.get(tail.request_counts, pool_id, 0),
+           request_count: sum_admitted_requests(completed_rows) + Map.get(tail.request_counts, pool_id, 0),
            tokens_per_second: pool_tokens_per_second(usage.total_tokens, latency_ms),
            total_tokens: usage.total_tokens,
            latency_ms: latency_ms,

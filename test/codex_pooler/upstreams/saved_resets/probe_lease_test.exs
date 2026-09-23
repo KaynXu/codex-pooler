@@ -28,8 +28,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
         "generation" => Keyword.get(opts, :generation, @generation),
         "trigger_kind" => "gateway_auto",
         "consumed_at" => DateTime.to_iso8601(consumed_at),
-        "deadline_at" =>
-          consumed_at |> RedemptionLifecycle.deadline_at() |> DateTime.to_iso8601(),
+        "deadline_at" => consumed_at |> RedemptionLifecycle.deadline_at() |> DateTime.to_iso8601(),
         "result" => %{"code" => "reset", "applied" => true}
       }
       |> Map.merge(Keyword.get(opts, :extra, %{}))
@@ -90,8 +89,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
   end
 
   defp probe_holder(identity),
-    do:
-      RedemptionLifecycle.probe_holder(Repo.reload!(identity).metadata["saved_reset_redemption"])
+    do: RedemptionLifecycle.probe_holder(Repo.reload!(identity).metadata["saved_reset_redemption"])
 
   test "a fresh legacy token cannot create a new probe claim" do
     identity = identity_with_pending()
@@ -403,8 +401,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
        fn generation, attempt, probe ->
          {generation, attempt, %{probe | token: Ecto.UUID.generate()}}
        end},
-      {:version,
-       fn generation, attempt, probe -> {generation, attempt, %{probe | version: 3}} end},
+      {:version, fn generation, attempt, probe -> {generation, attempt, %{probe | version: 3}} end},
       {:assignment,
        fn generation, attempt, probe ->
          {generation, attempt, %{probe | pool_upstream_assignment_id: Ecto.UUID.generate()}}
@@ -500,8 +497,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
     cases = [
       {:terminal, "confirmed_by_quota", DateTime.add(now, 1, :second)},
       {:exact_deadline, "consumed_pending_probe", DateTime.add(now, 15, :minute)},
-      {:after_deadline, "consumed_pending_probe",
-       now |> DateTime.add(15, :minute) |> DateTime.add(1, :microsecond)}
+      {:after_deadline, "consumed_pending_probe", now |> DateTime.add(15, :minute) |> DateTime.add(1, :microsecond)}
     ]
 
     for {event, phase, confirmation_time} <- cases do

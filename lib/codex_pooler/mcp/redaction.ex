@@ -144,9 +144,7 @@ defmodule CodexPooler.MCP.Redaction do
   defp assert_no_forbidden_value!(_value, _surface), do: :ok
 
   defp assert_no_raw_struct!(%{__struct__: struct}, path) do
-    raise_assertion(
-      "structuredContent contains raw struct #{inspect(struct)} at #{format_path(path)}"
-    )
+    raise_assertion("structuredContent contains raw struct #{inspect(struct)} at #{format_path(path)}")
   end
 
   defp assert_no_raw_struct!(%{} = map, path) do

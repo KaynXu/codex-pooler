@@ -194,6 +194,7 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserverTest do
     assert NativeCompactionAuthorizationObserver.status()["telemetryHandlers"] == 1
   end
 
+  @tag slow: "races real observer reset and disarm across multiple concurrent lifecycle rounds"
   test "reset racing disarm has a deterministic terminal state without caller failure" do
     for final_operation <- [:arm, :disarm] do
       operations = Enum.map(1..24, fn index -> if rem(index, 2) == 0, do: :arm, else: :disarm end)
@@ -355,6 +356,7 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserverTest do
     assert :telemetry.list_handlers(@event) == []
   end
 
+  @tag slow: "repeats concurrent observer teardown and repairs an actual orphan telemetry handler"
   test "parallel absent disarms remove an orphan handler and new arm self-heals it" do
     for _round <- 1..3 do
       :ok = NativeCompactionAuthorizationObserver.arm()
@@ -419,6 +421,7 @@ defmodule CodexPooler.Dev.NativeCompactionAuthorizationObserverTest do
     assert :telemetry.list_handlers(@event) == []
   end
 
+  @tag slow: "races 24 real observer arm/disarm operations for both final lifecycle states"
   test "arm racing disarm finishes in one internally consistent state" do
     for final_operation <- [:arm, :disarm] do
       :ok = NativeCompactionAuthorizationObserver.arm()

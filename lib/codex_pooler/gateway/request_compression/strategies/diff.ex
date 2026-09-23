@@ -165,9 +165,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
               omitted_hunk_count: length(file.hunks) - length(selected_hunks)
             }
 
-            {:cont,
-             {[selected_file | selected_files], file_count + 1,
-              kept_hunks + length(selected_hunks)}}
+            {:cont, {[selected_file | selected_files], file_count + 1, kept_hunks + length(selected_hunks)}}
         end
       end)
 
@@ -184,8 +182,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
 
         file_lines = file.header ++ hunk_lines ++ omitted_hunk_marker(file.omitted_hunk_count)
 
-        {[file_lines | lines], kept_context + file_kept_context,
-         omitted_context + file_omitted_context}
+        {[file_lines | lines], kept_context + file_kept_context, omitted_context + file_omitted_context}
       end)
 
     omitted_file_count = length(files) - length(selected_files)
@@ -205,8 +202,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
         {hunk_lines, hunk_kept_context, hunk_omitted_context} =
           render_hunk(hunk, context_lines)
 
-        {[hunk_lines | chunks], kept_context + hunk_kept_context,
-         omitted_context + hunk_omitted_context}
+        {[hunk_lines | chunks], kept_context + hunk_kept_context, omitted_context + hunk_omitted_context}
       end)
 
     {chunks |> Enum.reverse() |> List.flatten(), kept_context, omitted_context}

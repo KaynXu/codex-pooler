@@ -1,12 +1,13 @@
 defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionRemoteTest do
   use ExUnit.Case, async: false
+  use CodexPooler.CommittedWriteGuard
 
   import Ecto.Query
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [gateway_setup: 2, start_upstream: 1, register_unboxed_pool_cleanup!: 1]
 
-  alias CodexPooler.{Access, Accounting, FakeUpstream, Repo}
+  alias CodexPooler.{Access, Accounting, FakeUpstream, PeerRegistry, Repo}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.{CandidateDispatch, Context, PreDispatch}
   alias CodexPooler.Gateway.Runtime.Service
@@ -21,6 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionRemoteTest do
   setup_all do
     if node() == :nonode@nohost do
       {_, 0} = System.cmd("epmd", ["-daemon"])
+      PeerRegistry.assert_epmd_ready!()
       previous = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
       Application.put_env(:kernel, :prevent_overlapping_partitions, false)
 
@@ -65,10 +67,7 @@ defmodule CodexPooler.Gateway.Runtime.OrdinaryPermissionRemoteTest do
 
         identity =
           fixture.identity
-          |> Ecto.Changeset.change(
-            metadata:
-              Map.put(fixture.identity.metadata, "usage_base_url", FakeUpstream.url(upstream))
-          )
+          |> Ecto.Changeset.change(metadata: Map.put(fixture.identity.metadata, "usage_base_url", FakeUpstream.url(upstream)))
           |> Repo.update!()
 
         assert {:ok, identity} =

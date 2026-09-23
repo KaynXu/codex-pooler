@@ -1,183 +1,172 @@
 defmodule CodexPooler.Accounting.RequestLifecycle.WindowUsage do
   @moduledoc false
 
-  import Ecto.Query
-
-  alias CodexPooler.Accounting.{APIKeyUsageBucket, LedgerEntry}
   alias CodexPooler.Repo
 
-  @entry_release "release"
-  @entry_settlement "settlement"
-  @amount_recorded "recorded"
-  @usage_known "usage_known"
-
   @type usage_window :: atom()
+  @type windows :: keyword(DateTime.t()) | %{usage_window() => DateTime.t()}
   @type window_usage :: %{
-          required(:effective_request_count) => integer(),
-          required(:effective_total_tokens) => integer(),
+          required(:effective_request_count) => non_neg_integer(),
+          required(:known_total_tokens) => non_neg_integer(),
+          required(:provisional_total_tokens) => non_neg_integer(),
+          required(:pending_total_tokens) => non_neg_integer(),
+          required(:effective_total_tokens) => non_neg_integer(),
           required(:effective_cost_micros) => Decimal.t()
         }
 
-  @spec window_usages(Ecto.UUID.t(), keyword(DateTime.t()) | %{usage_window() => DateTime.t()}) ::
-          %{
-            usage_window() => window_usage()
-          }
-  def window_usages(api_key_id, windows) do
-    windows = normalize_windows(windows)
+  @spec window_usages(Ecto.UUID.t(), windows()) :: %{usage_window() => window_usage()}
+  def window_usages(api_key_id, windows),
+    do: window_usages(api_key_id, windows, DateTime.utc_now())
 
-    windows
-    |> Enum.reject(fn {_window, since} -> is_nil(since) end)
-    |> Map.new(fn {window, since} -> {window, window_usage(api_key_id, since)} end)
-  end
+  @spec window_usages(Ecto.UUID.t(), windows(), DateTime.t()) ::
+          %{usage_window() => window_usage()}
+  def window_usages(api_key_id, windows, %DateTime{} = as_of) do
+    windows = Enum.reject(windows, fn {_window, since} -> is_nil(since) end)
 
-  defp window_usage(api_key_id, since) do
-    bucket_since = next_minute_boundary(since)
-    bucket_usage = bucket_window_usage_query(api_key_id, bucket_since)
-
-    if DateTime.compare(since, bucket_since) == :eq do
-      Repo.one(bucket_usage) || empty_window_usage()
+    if windows == [] do
+      %{}
     else
-      combined_window_usage(api_key_id, since, bucket_since, bucket_usage)
+      api_key_id
+      |> query_windows(Enum.map(windows, &elem(&1, 1)), as_of)
+      |> Map.new(fn [ordinal, known, provisional, admissions, cost, pending] ->
+        {window, _since} = Enum.at(windows, ordinal - 1)
+
+        {window,
+         %{
+           effective_request_count: admissions,
+           known_total_tokens: known,
+           provisional_total_tokens: provisional,
+           pending_total_tokens: pending,
+           effective_total_tokens: known + provisional + pending,
+           effective_cost_micros: cost
+         }}
+      end)
     end
   end
 
-  defp combined_window_usage(api_key_id, since, bucket_since, bucket_usage) do
-    # Keep the leading ledger edge and complete buckets in one snapshot so a
-    # concurrent settlement correction cannot be observed half-applied.
-    Repo.one(
-      from e in LedgerEntry,
-        right_join: bucket in subquery(bucket_usage),
-        on:
-          e.api_key_id == ^api_key_id and e.amount_status == @amount_recorded and
-            e.occurred_at >= ^since and e.occurred_at < ^bucket_since,
-        select: %{
-          effective_request_count:
-            type(
-              fragment(
-                """
-                (
-                  COALESCE(
-                    SUM(CASE WHEN ? = ? THEN -COALESCE(?, 0) ELSE COALESCE(?, 0) END),
-                    0
-                  ) +
-                  COALESCE(MAX(?), 0)
-                )::bigint
-                """,
-                e.entry_kind,
-                ^@entry_release,
-                e.request_count,
-                e.request_count,
-                bucket.effective_request_count
-              ),
-              :integer
-            ),
-          effective_total_tokens:
-            type(
-              fragment(
-                """
-                (
-                  COALESCE(
-                    SUM(
-                      CASE
-                        WHEN ? = ? THEN -COALESCE(?, 0)
-                        WHEN ? = ? AND ? = ? THEN COALESCE(?, 0)
-                        WHEN ? = ? THEN 0
-                        ELSE COALESCE(?, 0)
-                      END
-                    ),
-                    0
-                  ) +
-                  COALESCE(MAX(?), 0)
-                )::bigint
-                """,
-                e.entry_kind,
-                ^@entry_release,
-                e.total_tokens,
-                e.entry_kind,
-                ^@entry_settlement,
-                e.usage_status,
-                ^@usage_known,
-                e.total_tokens,
-                e.entry_kind,
-                ^@entry_settlement,
-                e.total_tokens,
-                bucket.effective_total_tokens
-              ),
-              :integer
-            ),
-          effective_cost_micros:
-            type(
-              fragment(
-                """
-                COALESCE(
-                  SUM(
-                    CASE
-                      WHEN ? = ? THEN -COALESCE(?, 0)
-                      WHEN ? = ? AND ? = ? THEN COALESCE(?, 0)
-                      WHEN ? = ? THEN 0
-                      ELSE COALESCE(?, 0)
-                    END
-                  ),
-                  0
-                ) +
-                COALESCE(MAX(?), 0)
-                """,
-                e.entry_kind,
-                ^@entry_release,
-                e.estimated_cost_micros,
-                e.entry_kind,
-                ^@entry_settlement,
-                e.usage_status,
-                ^@usage_known,
-                e.settled_cost_micros,
-                e.entry_kind,
-                ^@entry_settlement,
-                e.estimated_cost_micros,
-                bucket.effective_cost_micros
-              ),
-              :decimal
+  defp query_windows(api_key_id, starts, as_of) do
+    # Boundary buckets, excluded edge events and the outstanding set use
+    # one PostgreSQL snapshot. A release/settlement ends a reservation by
+    # identity, including a voided terminal, never by a signed window delta.
+    # Keep the grouped edge facts equivalent to api_key_usage_events without
+    # per-request function calls or joins between materialized request sets.
+    # OFFSET 0 preserves parameterized range/history scans: flattening these
+    # lateral reads can scan retained history even for a tiny excluded edge.
+    # Keep terminal existence parameterized too: stale empty-table statistics
+    # can otherwise choose a quadratic unparameterized nested-loop anti join.
+    %{rows: rows} =
+      Repo.query!(
+        """
+        WITH bounds AS (
+          SELECT ordinal, since, $3::timestamptz AS as_of,
+            date_trunc('minute', since) AS full_since,
+            date_trunc('minute', $3::timestamptz) + interval '1 minute' AS full_until
+          FROM unnest($2::timestamptz[]) WITH ORDINALITY AS windows(since, ordinal)
+        ), edge_requests AS (
+          SELECT e.request_id FROM bounds b CROSS JOIN LATERAL (
+            SELECT request_id FROM public.ledger_entries
+            WHERE api_key_id = $1::uuid AND occurred_at >= b.full_since AND occurred_at < b.since
+            OFFSET 0
+          ) e
+          WHERE b.full_since < b.since
+          UNION
+          SELECT request_id FROM public.ledger_entries
+          WHERE api_key_id = $1::uuid AND occurred_at > $3::timestamptz
+            AND occurred_at < date_trunc('minute', $3::timestamptz) + interval '1 minute'
+        ), edge_history AS MATERIALIZED (
+          SELECT e.request_id, e.id, e.api_key_id, e.occurred_at, e.created_at, e.entry_kind,
+            e.amount_status, e.usage_status, e.total_tokens, e.settled_cost_micros,
+            e.attempt_id IS NOT NULL AS has_attempt,
+            e.details->>'estimated_from_reserve' = 'true' AS estimated
+          FROM edge_requests r CROSS JOIN LATERAL (
+            SELECT * FROM public.ledger_entries WHERE request_id = r.request_id OFFSET 0
+          ) e
+        ), ranked_edges AS (
+          SELECT e.*,
+            row_number() OVER (PARTITION BY request_id ORDER BY
+              CASE WHEN entry_kind = 'reservation' AND amount_status = 'recorded' THEN 0 ELSE 1 END,
+              occurred_at, created_at, id) AS reservation_rank,
+            row_number() OVER (PARTITION BY request_id ORDER BY
+              CASE WHEN amount_status = 'recorded' AND entry_kind = 'settlement' THEN 0
+                WHEN amount_status = 'recorded' AND entry_kind = 'release' THEN 1 ELSE 2 END,
+              occurred_at, created_at, id) AS terminal_rank
+          FROM edge_history e
+        ), edge_facts AS MATERIALIZED (
+          SELECT request_id,
+            max(api_key_id::text) FILTER (WHERE reservation_rank = 1 AND entry_kind = 'reservation'
+              AND amount_status = 'recorded')::uuid AS reservation_key,
+            max(occurred_at) FILTER (WHERE reservation_rank = 1 AND entry_kind = 'reservation'
+              AND amount_status = 'recorded') AS reservation_at,
+            max(total_tokens) FILTER (WHERE reservation_rank = 1 AND entry_kind = 'reservation'
+              AND amount_status = 'recorded') AS reservation_tokens,
+            max(api_key_id::text) FILTER (WHERE terminal_rank = 1 AND entry_kind IN ('settlement','release')
+              AND amount_status = 'recorded')::uuid AS api_key_id,
+            max(entry_kind) FILTER (WHERE terminal_rank = 1 AND entry_kind IN ('settlement','release')
+              AND amount_status = 'recorded') AS entry_kind,
+            max(usage_status) FILTER (WHERE terminal_rank = 1) AS usage_status,
+            max(total_tokens) FILTER (WHERE terminal_rank = 1) AS total_tokens,
+            max(settled_cost_micros) FILTER (WHERE terminal_rank = 1) AS settled_cost_micros,
+            bool_or(estimated) FILTER (WHERE terminal_rank = 1) AS estimated,
+            min(occurred_at) FILTER (WHERE entry_kind IN ('settlement', 'release')) AS terminal_at,
+            bool_or(has_attempt) AS has_attempt,
+            bool_or(entry_kind = 'settlement' AND usage_status IN ('usage_known', 'not_applicable')) AS has_known
+          FROM ranked_edges e GROUP BY request_id
+        ), edge_values AS (
+          SELECT reservation_key AS api_key_id, reservation_at AS occurred_at, 0::bigint AS known_total_tokens,
+            0::bigint AS provisional_total_tokens, 1::bigint AS admission_count,
+            0::numeric AS known_cost_micros FROM edge_facts WHERE reservation_at IS NOT NULL
+          UNION ALL
+          SELECT t.api_key_id, t.terminal_at,
+            CASE WHEN t.entry_kind = 'settlement' AND t.usage_status = 'usage_known'
+              THEN COALESCE(t.total_tokens, 0) ELSE 0 END,
+            CASE WHEN t.usage_status <> 'not_applicable'
+              AND (t.entry_kind = 'release' OR t.usage_status <> 'usage_known')
+              AND (t.entry_kind <> 'release' OR NOT t.has_known)
+              AND (t.has_attempt OR EXISTS (SELECT 1 FROM public.attempts a WHERE a.request_id = t.request_id)
+                OR (t.entry_kind = 'settlement' AND t.estimated))
+              THEN COALESCE(t.reservation_tokens, CASE WHEN t.entry_kind = 'settlement'
+                AND t.estimated THEN t.total_tokens END, 0)
+              ELSE 0 END,
+            0::bigint,
+            CASE WHEN t.entry_kind = 'settlement' AND t.usage_status = 'usage_known'
+              THEN COALESCE(t.settled_cost_micros, 0) ELSE 0 END
+          FROM edge_facts t WHERE t.entry_kind IS NOT NULL
+        ), edge_events AS (
+          SELECT b.ordinal, v.* FROM edge_values v
+          CROSS JOIN bounds b
+          WHERE v.api_key_id = $1::uuid AND v.occurred_at >= b.full_since AND v.occurred_at < b.full_until
+            AND (v.occurred_at < b.since OR v.occurred_at > b.as_of)
+        ), components AS (
+          SELECT ordinal, -known_total_tokens AS known_total_tokens,
+            -provisional_total_tokens AS provisional_total_tokens, -admission_count AS admission_count,
+            -known_cost_micros AS known_cost_micros
+          FROM edge_events
+          UNION ALL
+          SELECT b.ordinal, k.known_total_tokens, k.provisional_total_tokens, k.admission_count, k.known_cost_micros
+          FROM public.api_key_usage_buckets k CROSS JOIN bounds b
+          WHERE k.api_key_id = $1::uuid AND k.bucket_started_at >= b.full_since
+            AND k.bucket_started_at < b.full_until
+        ), pending AS MATERIALIZED (
+          SELECT COALESCE(SUM(r.total_tokens), 0)::bigint AS tokens
+          FROM public.ledger_entries r
+          WHERE r.api_key_id = $1::uuid AND r.entry_kind = 'reservation'
+            AND r.amount_status = 'recorded' AND r.occurred_at <= $3::timestamptz
+            AND NOT EXISTS (
+              SELECT 1 FROM public.ledger_entries t WHERE t.request_id = r.request_id
+                AND t.entry_kind IN ('release', 'settlement')
+              OFFSET 0
             )
-        }
-    ) || empty_window_usage()
-  end
+        )
+        SELECT b.ordinal, COALESCE(SUM(known_total_tokens), 0)::bigint,
+          COALESCE(SUM(provisional_total_tokens), 0)::bigint,
+          COALESCE(SUM(admission_count), 0)::bigint,
+          COALESCE(SUM(known_cost_micros), 0), (SELECT tokens FROM pending)
+        FROM bounds b LEFT JOIN components c ON c.ordinal = b.ordinal
+        GROUP BY b.ordinal ORDER BY b.ordinal
+        """,
+        [Ecto.UUID.dump!(api_key_id), starts, as_of]
+      )
 
-  defp bucket_window_usage_query(api_key_id, since) do
-    from bucket in APIKeyUsageBucket,
-      where: bucket.api_key_id == ^api_key_id and bucket.bucket_started_at >= ^since,
-      select: %{
-        effective_request_count:
-          type(
-            fragment("COALESCE(SUM(?), 0)::bigint", bucket.effective_request_count),
-            :integer
-          ),
-        effective_total_tokens:
-          type(
-            fragment("COALESCE(SUM(?), 0)::bigint", bucket.effective_total_tokens),
-            :integer
-          ),
-        effective_cost_micros:
-          type(fragment("COALESCE(SUM(?), 0)", bucket.effective_cost_micros), :decimal)
-      }
-  end
-
-  defp normalize_windows(windows) when is_list(windows), do: Map.new(windows)
-  defp normalize_windows(windows) when is_map(windows), do: windows
-
-  defp next_minute_boundary(%DateTime{} = timestamp) do
-    minute_start = %{timestamp | second: 0, microsecond: {0, 6}}
-
-    if DateTime.compare(timestamp, minute_start) == :eq do
-      minute_start
-    else
-      DateTime.add(minute_start, 1, :minute)
-    end
-  end
-
-  defp empty_window_usage do
-    %{
-      effective_request_count: 0,
-      effective_total_tokens: 0,
-      effective_cost_micros: Decimal.new(0)
-    }
+    rows
   end
 end

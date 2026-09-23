@@ -300,9 +300,7 @@ defmodule CodexPooler.Jobs do
         "evaluation_window_started_at" => DateTime.to_iso8601(evaluation_window_started_at),
         "trigger_kind" => trigger_kind(opts)
       }
-      |> AlertEvaluationWorker.new(
-        Options.job_options(opts, unique_keys: [:alert_rule_id, :evaluation_window_started_at])
-      )
+      |> AlertEvaluationWorker.new(Options.job_options(opts, unique_keys: [:alert_rule_id, :evaluation_window_started_at]))
       |> Oban.insert()
     end
   end
@@ -332,9 +330,7 @@ defmodule CodexPooler.Jobs do
         "alert_channel_id" => channel_id,
         "trigger_kind" => trigger_kind(opts)
       }
-      |> AlertDeliveryWorker.new(
-        Options.job_options(opts, unique_keys: [:alert_incident_id, :alert_channel_id])
-      )
+      |> AlertDeliveryWorker.new(Options.job_options(opts, unique_keys: [:alert_incident_id, :alert_channel_id]))
       |> Oban.insert()
     end
   end

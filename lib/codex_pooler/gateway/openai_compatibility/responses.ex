@@ -77,9 +77,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
         opts
         |> drop_surface()
         |> RequestOptions.build(@endpoint, payload)
-        |> RequestOptions.put_openai_compatibility(
-          custom_tool_namespaces: custom_tool_namespaces(payload)
-        )
+        |> RequestOptions.put_openai_compatibility(custom_tool_namespaces: custom_tool_namespaces(payload))
 
       {:ok, %{endpoint: @endpoint, payload: payload, request_options: request_options}}
     end
@@ -219,9 +217,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp normalize_optional_function_tool_booleans(%{"type" => "function", "strict" => nil} = tool),
     do: Map.delete(tool, "strict")
 
-  defp normalize_optional_function_tool_booleans(
-         %{"type" => "namespace", "tools" => tools} = tool
-       )
+  defp normalize_optional_function_tool_booleans(%{"type" => "namespace", "tools" => tools} = tool)
        when is_list(tools) do
     Map.put(tool, "tools", Enum.map(tools, &normalize_optional_function_tool_booleans/1))
   end
@@ -239,9 +235,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   end
 
   defp validate_prompt_cache_options(%{"prompt_cache_options" => _options}),
-    do:
-      {:error,
-       Error.invalid_request("prompt_cache_options must be an object", "prompt_cache_options")}
+    do: {:error, Error.invalid_request("prompt_cache_options must be an object", "prompt_cache_options")}
 
   defp validate_prompt_cache_options(_payload), do: :ok
 
@@ -307,9 +301,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
        do: :ok
 
   defp validate_max_output_tokens(%{"max_output_tokens" => _value}),
-    do:
-      {:error,
-       Error.invalid_request("max_output_tokens must be a positive integer", "max_output_tokens")}
+    do: {:error, Error.invalid_request("max_output_tokens must be a positive integer", "max_output_tokens")}
 
   defp validate_max_output_tokens(_payload), do: :ok
 
@@ -453,8 +445,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
         :ok
 
       [key | _rest] ->
-        {:error,
-         Error.invalid_request("stream_options field is not supported", "stream_options." <> key)}
+        {:error, Error.invalid_request("stream_options field is not supported", "stream_options." <> key)}
     end
   end
 
@@ -634,12 +625,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   end
 
   defp validate_namespace_tools(_tools),
-    do:
-      {:error, Error.invalid_request("namespace tool requires function or custom tools", "tools")}
+    do: {:error, Error.invalid_request("namespace tool requires function or custom tools", "tools")}
 
-  defp validate_namespace_tool(
-         %{"type" => "function", "name" => name, "parameters" => parameters} = tool
-       )
+  defp validate_namespace_tool(%{"type" => "function", "name" => name, "parameters" => parameters} = tool)
        when is_binary(name) and is_map(parameters) do
     validate_function_tool(tool)
   end
@@ -647,12 +635,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_namespace_tool(%{"type" => "custom"} = tool), do: validate_custom_tool(tool)
 
   defp validate_namespace_tool(_tool),
-    do:
-      {:error, Error.invalid_request("namespace tool requires function or custom tools", "tools")}
+    do: {:error, Error.invalid_request("namespace tool requires function or custom tools", "tools")}
 
-  defp validate_function_tool(
-         %{"type" => "function", "name" => name, "parameters" => parameters} = tool
-       )
+  defp validate_function_tool(%{"type" => "function", "name" => name, "parameters" => parameters} = tool)
        when is_binary(name) and is_map(parameters) do
     with :ok <-
            validate_exact_tool_keys(tool, [
@@ -675,8 +660,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   end
 
   defp validate_function_tool(_tool),
-    do:
-      {:error, Error.invalid_request("function tool requires flat name and parameters", "tools")}
+    do: {:error, Error.invalid_request("function tool requires flat name and parameters", "tools")}
 
   defp validate_custom_tool(tool) do
     with :ok <-
@@ -903,14 +887,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
        do: validate_exact_tool_choice_keys(choice, ["type"])
 
   defp validate_tool_choice(%{"tool_choice" => %{"type" => "function"}}, _surface),
-    do:
-      {:error,
-       Error.invalid_request("tool_choice function requires a non-empty name", "tool_choice")}
+    do: {:error, Error.invalid_request("tool_choice function requires a non-empty name", "tool_choice")}
 
   defp validate_tool_choice(%{"tool_choice" => %{"type" => "custom"}}, _surface),
-    do:
-      {:error,
-       Error.invalid_request("tool_choice custom requires a non-empty name", "tool_choice")}
+    do: {:error, Error.invalid_request("tool_choice custom requires a non-empty name", "tool_choice")}
 
   defp validate_tool_choice(%{"tool_choice" => _choice}, _surface),
     do: invalid_tool_choice_shape()
@@ -966,15 +946,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_named_tool_choice(payload, type, name) do
     cond do
       String.trim(name) == "" ->
-        {:error,
-         Error.invalid_request("tool_choice #{type} requires a non-empty name", "tool_choice")}
+        {:error, Error.invalid_request("tool_choice #{type} requires a non-empty name", "tool_choice")}
 
       name in named_tool_names(payload, type) ->
         :ok
 
       true ->
-        {:error,
-         Error.invalid_request("tool_choice references unknown #{type} tool", "tool_choice")}
+        {:error, Error.invalid_request("tool_choice references unknown #{type} tool", "tool_choice")}
     end
   end
 

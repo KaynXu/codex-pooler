@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     ]
 
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.AccountingBoundaryTrace
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
@@ -46,6 +47,29 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert request.status == "succeeded"
     assert request.request_metadata["operation"] == "models"
     assert request.request_metadata["model_source"]["upstream_identity_id"] == setup.identity.id
+  end
+
+  test "GET /v1/models omits the raw idempotency key at the accounting boundary", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    raw_key = "models-private-key-#{System.unique_integer([:positive])}"
+
+    {conn, [_auth, attrs]} =
+      AccountingBoundaryTrace.capture_call(
+        {CodexPooler.Accounting, :record_metadata_request, 2},
+        fn ->
+          conn
+          |> auth(setup)
+          |> put_req_header("idempotency-key", raw_key)
+          |> get("/v1/models")
+        end
+      )
+
+    assert %{"object" => "list"} = json_response(conn, 200)
+    refute Map.has_key?(attrs, :idempotency_key)
+    refute inspect(attrs, limit: :infinity, printable_limit: :infinity) =~ raw_key
   end
 
   test "GET /v1/models keeps its schema unchanged for reasoning-restricted API keys", %{

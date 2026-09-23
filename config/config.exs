@@ -17,13 +17,18 @@ config :codex_pooler,
   ecto_repos: [CodexPooler.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :codex_pooler, CodexPooler.Repo,
+  migration_lock: :pg_advisory_lock,
+  migration_advisory_lock_retry_interval_ms: 1_000,
+  migration_advisory_lock_max_tries: 10
+
 config :codex_pooler,
        CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
        mode: :off
 
 config :codex_pooler, CodexPooler.Upstreams.CodexClientIdentity,
   # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
-  default_client_version: "0.154.0"
+  default_client_version: "0.155.1"
 
 jobs_schedule = [
   %{
@@ -184,8 +189,7 @@ config :codex_pooler, CodexPooler.Mailer, adapter: Swoosh.Adapters.Local
 config :esbuild,
   version: "0.25.4",
   codex_pooler: [
-    args:
-      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+    args: ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
@@ -219,8 +223,7 @@ config :phoenix, :json_library, CodexPooler.JSON
 config :postgrex, :json_library, CodexPooler.JSON
 config :swoosh, :json_library, CodexPooler.JSON
 
-config :req, :default_options,
-  decoders: [json: &CodexPooler.JSON.decode/1, json_api: &CodexPooler.JSON.decode/1]
+config :req, :default_options, decoders: [json: &CodexPooler.JSON.decode/1, json_api: &CodexPooler.JSON.decode/1]
 
 config :phoenix, :filter_parameters, [
   "access_token",

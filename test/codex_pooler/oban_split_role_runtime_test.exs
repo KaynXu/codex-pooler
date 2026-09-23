@@ -13,6 +13,7 @@ defmodule CodexPooler.ObanSplitRoleRuntimeTest do
     :ok
   end
 
+  @tag slow: "boots separate real scheduler and worker BEAM peers and observes Oban promotion and execution"
   test "scheduler leader Stager promotes a due retryable job for the queue-owning worker" do
     run_id = Ecto.UUID.generate()
     oban_name = String.to_atom("oban_split_role_#{System.unique_integer([:positive])}")

@@ -22,9 +22,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     release_ref = make_ref()
 
     timeout_upstream =
-      start_upstream(
-        FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref)
-      )
+      start_upstream(FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref))
 
     fallback_upstream =
       start_upstream(
@@ -76,8 +74,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
         )
       end)
 
-    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid,
-                    ^release_ref},
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid, ^release_ref},
                    1_000
 
     try do
@@ -316,9 +313,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
       setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
 
       second =
-        gateway_upstream(setup.pool, second_upstream, "upstream-token-ws-model-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-ws-model-fallback", compact?: false)
 
       prime_routing_quota!(second.identity)
       use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -344,8 +339,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
                  CodexPooler.JSON.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" =>
-                     native_text_input("synthetic websocket assignment model failover input"),
+                   "input" => native_text_input("synthetic websocket assignment model failover input"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -521,8 +515,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
       start_upstream(
         FakeUpstream.sse_stream(
           [
-            {"response.output_text.delta",
-             %{"type" => "response.output_text.delta", "delta" => "visible"}},
+            {"response.output_text.delta", %{"type" => "response.output_text.delta", "delta" => "visible"}},
             {"response.failed",
              %{
                "type" => "response.failed",
@@ -542,9 +535,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-visible-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-visible-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
@@ -594,7 +585,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     assert attempt.retryable == false
   end
 
-  test "live direct websocket keeps an accepted assignment model miss on its established lane" do
+  test "live direct websocket keeps an anchored assignment model miss on its established lane" do
     # Strict finite scenario: the anchor and the model-miss turn both ride the
     # established first physical connection; a sibling dispatch or a retry
     # would be an unexpected extra request and fail the fixture.
@@ -657,9 +648,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
       assert {:ok, state} = receive_socket_done(state)
 
       fallback =
-        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-live-direct-fallback",
-          compact?: false
-        )
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-live-direct-fallback", compact?: false)
 
       prime_routing_quota!(fallback.identity)
 
@@ -672,6 +661,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
                     "type" => "response.create",
                     "model" => setup.model.exposed_model_id,
                     "input" => native_text_input("synthetic live direct model miss"),
+                    "previous_response_id" => "resp_live_direct_anchor",
                     "stream" => true,
                     "generate" => true
                   }), [opcode: :text]},
@@ -746,9 +736,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-limit-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-limit-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -888,9 +876,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
       )
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-exhausted-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-exhausted-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -916,8 +902,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
                  CodexPooler.JSON.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" =>
-                     native_text_input("exhaust the native websocket connection limit retry"),
+                   "input" => native_text_input("exhaust the native websocket connection limit retry"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -997,9 +982,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-rate-limit-retry-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-rate-limit-retry-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -1111,9 +1094,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     setup = gateway_setup(upstream)
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-unknown-control-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-unknown-control-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
 
@@ -1197,9 +1178,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocket.AssignmentRetryTest do
     setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
 
     fallback =
-      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-#{label}-fallback",
-        compact?: false
-      )
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-#{label}-fallback", compact?: false)
 
     prime_routing_quota!(fallback.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)

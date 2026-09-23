@@ -241,8 +241,7 @@ defmodule CodexPoolerWeb.McpController do
        when is_binary(method) do
     cond do
       Map.has_key?(message, "result") or Map.has_key?(message, "error") ->
-        {:error, 400, -32_600, "JSON-RPC message cannot mix request and response fields",
-         id(message)}
+        {:error, 400, -32_600, "JSON-RPC message cannot mix request and response fields", id(message)}
 
       Map.has_key?(message, "id") and not valid_id?(Map.get(message, "id")) ->
         {:error, 400, -32_600, "request id must be a string or number", nil}
@@ -265,8 +264,7 @@ defmodule CodexPoolerWeb.McpController do
         {:error, 400, -32_600, "request id must be a string or number", nil}
 
       true ->
-        {:error, 400, -32_600,
-         "request body must be a JSON-RPC request, notification, or response", nil}
+        {:error, 400, -32_600, "request body must be a JSON-RPC request, notification, or response", nil}
     end
   end
 

@@ -420,9 +420,11 @@ policy is derived from its configured fields:
    value, passes through this policy.
 2. **Allow up to** permits only known efforts at or below the selected ceiling:
    `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
-   The selected model's effective known levels narrow the permitted set. An
-   omitted effort resolves to the permitted model default, or the highest
-   permitted known effort.
+   The Pool model's known levels (the union across the Pool's assignments,
+   as `/v1/models` lists them) narrow the permitted set; admission happens
+   before routing, so it cannot know which assignment will serve. An omitted
+   effort resolves to the permitted model default, or the highest permitted
+   known effort.
 3. **Always use** applies the legacy exact configured effort. It remains
    compatible even when the configured effort is absent from model metadata.
 
@@ -447,9 +449,21 @@ is model-effective, otherwise it returns no levels and no default. Models stay
 visible, and public `/v1/models` remains unchanged.
 
 `minimal` and `ultra` remain distinct for policy evaluation. Backend Codex
-compatibility rewrites them to `low` and `max` respectively before upstream
-dispatch. Safe reasoning summaries retain requested, applied, and effective
-values.
+compatibility rewrites `minimal` to `low` and `ultra` to `max` before upstream
+dispatch. When the serving assignment's own source model lists reasoning
+levels without `max`, `ultra` becomes the highest level that assignment
+lists (the Pool-wide union only when the assignment has no levels of its
+own), and it never becomes `none` or `minimal`. `none` and every other explicit effort are forwarded
+unchanged, even when the model catalog does not list them, so the upstream
+decides whether that model accepts the value. Routing prefers a candidate whose
+own source model lists the effort the turn will send, so an effort the Pool-wide
+union advertises is served by an assignment that advertises it whenever one is
+eligible; when no candidate lists it, every candidate stays and the upstream
+refusal stands. Safe reasoning summaries retain
+requested, applied, and effective values and name the rewrite as
+`minimal_to_low` or `ultra_to_<level>`.
+
+Native backend turns apply the same rule within their canonical cap. When otherwise-equivalent source partitions differ only in reasoning levels, the models catalog advertises the union from the quota-routable capability family and all reasoning variants in that family remain allowed through canonical filtering. After quota and circuit eligibility, an explicit known effort prefers an eligible assignment that lists it, preserving hard continuation pins and healthy fallbacks. This never crosses a partition that differs in another capability such as context window or serving mode. If no eligible assignment lists the effort, every effective candidate stays and the upstream decides. The resulting `x-models-etag` remains byte-identical to the authenticated backend models ETag because both snapshots use the same stable family union.
 
 Non-strict function tool schemas are lowered before local validation and
 upstream dispatch for backend Responses HTTP, backend Responses websocket
@@ -560,6 +574,52 @@ detail may expose it as `upstream_error_param`. The value is limited to a
 bounded field or numeric-index path. Invalid values and successful attempts
 omit the field, and raw upstream error messages or rejected values are never
 projected through it.
+
+### Upstream parameter validation rejections
+
+When upstream rejects an ordinary Responses or Chat Completions HTTP request
+with status `400`, an error object of type `invalid_request_error`, and one of
+the parameter-validation codes `unsupported_value`, `invalid_value`,
+`unsupported_parameter`, `missing_required_parameter`, `invalid_type`, or
+`string_above_max_length`, the client receives that rejection instead of an
+empty or generic error:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "unsupported_value",
+    "param": "reasoning.effort",
+    "message": "upstream rejected parameter reasoning.effort (unsupported_value); supported values: low, medium, high"
+  }
+}
+```
+
+`param` is a bounded field path such as `reasoning.effort` or `input[0].content`,
+or `null` when upstream supplies no valid path. Chat Completions requests
+receive the Chat field they sent where Codex Pooler renamed it, such as
+`reasoning_effort`, `max_tokens` or `max_completion_tokens`, `verbosity`,
+`response_format`, and nested `tools[N].function` fields; other paths stay as
+upstream reported them. The message is written by Codex Pooler from the code
+and param; the provider message is never forwarded because validation messages
+can quote submitted or gateway-normalized values. For `unsupported_value` and
+`invalid_value`, the message may list up to 12 supported values when upstream
+reports them as a plain list of simple identifiers; the rejected value is never
+included, and the list is omitted when it cannot be read safely.
+
+Auto, Lite, Full relay the same bounded supported-values list from persisted attempt metadata.
+
+A streaming
+`POST /backend-api/codex/responses` request receives this JSON body with
+`content-type: application/json` and no SSE stream; a non-streaming native
+request keeps its existing upstream body.
+
+Every other upstream failure keeps its existing behavior: other statuses
+(including `401`, `403`, `404`, `422`, `429`, and `5xx`), other error types or
+codes, `{"detail": ...}` bodies,
+compact routes, and websocket turns. The request remains a non-retried failure
+recorded as `upstream_status`, and the rejection does not demote the upstream
+or affect its circuit.
 
 ### Unsupported `/v1` Responses request shapes
 
@@ -786,7 +846,7 @@ Continuity headers are also local routing inputs. Codex Pooler chooses them in t
 6. `session_id`
 7. `x-codex-conversation-id`
 
-`session-id`, `x-session-id`, and `x-session-affinity` are not forwarded upstream. On `/v1/responses` and `/v1/chat/completions`, a `prompt_cache_key` in the body produces a Codex Pooler-derived upstream `session-id` for provider sticky routing; see Routing strategies. If a pinned continuation points at an upstream account that now requires reauthentication, `/v1/responses` HTTP and websocket requests fail closed with a recovery hint to restart with full context and remove stale continuation anchors.
+`x-session-id` and `x-session-affinity` are never forwarded upstream. The Codex client's `session-id`, `thread-id`, and `x-client-request-id` are forwarded only on the native `/backend-api/codex/responses` and `/backend-api/codex/responses/compact` routes, on HTTP requests and on the websocket handshake, when each value is a short ASCII identifier; `/v1` routes never forward them. On `/v1/responses` and `/v1/chat/completions`, a `prompt_cache_key` in the body produces a Codex Pooler-derived upstream `session-id` for provider sticky routing, scoped to the calling API key and its Pool so different API keys or Pools that send the same key never share one; see Routing strategies. If a pinned continuation points at an upstream account that now requires reauthentication, `/v1/responses` HTTP and websocket requests fail closed with a recovery hint to restart with full context and remove stale continuation anchors.
 
 ## Related references
 

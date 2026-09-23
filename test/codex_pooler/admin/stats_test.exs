@@ -6,6 +6,7 @@ defmodule CodexPooler.Admin.StatsTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPooler.UnboxedFixture, only: [register_unboxed_cleanup!: 1]
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, DailyRollup, DailyRollupCoverage, LedgerEntry, Request}
@@ -1216,9 +1217,7 @@ defmodule CodexPooler.Admin.StatsTest do
       )
     end
 
-    insert_hourly_model_usage_rollup!(pool, model, ~U[2026-08-14 08:00:00.000000Z],
-      total_tokens: 20
-    )
+    insert_hourly_model_usage_rollup!(pool, model, ~U[2026-08-14 08:00:00.000000Z], total_tokens: 20)
 
     assert {:ok, dashboard} =
              Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
@@ -1509,20 +1508,22 @@ defmodule CodexPooler.Admin.StatsTest do
     assert result.summary_by_pool_id[hidden_pool.id].total_tokens == 25
     assert Map.keys(result.histogram_by_pool_id) == [pool.id]
 
-    assert Enum.sum(
-             Enum.map(result.histogram_by_pool_id[pool.id].token_histogram, & &1.total_tokens)
-           ) == 100
+    assert Enum.sum(Enum.map(result.histogram_by_pool_id[pool.id].token_histogram, & &1.total_tokens)) == 100
 
-    assert Enum.sum(
-             Enum.map(result.histogram_by_pool_id[pool.id].request_histogram, & &1.requests)
-           ) == 1
+    assert Enum.sum(Enum.map(result.histogram_by_pool_id[pool.id].request_histogram, & &1.requests)) == 1
   end
 
   @tag :pool_usage_rollup_fallback
   test "seven-day Pool usage falls back wholly when the coverage query is unavailable" do
+    # Registered before the commit, never scoped in `try/after`: the coverage lock holder is a
+    # linked task, so its failure kills the test process before an enclosing `after` runs, and
+    # the committed pool, identity, request and ledger rows would outlive the test.
+    suffix = System.unique_integer([:positive])
+    register_unboxed_cleanup!(fn -> delete_unboxed_pool_usage_fixture!(suffix) end)
+
     Sandbox.unboxed_run(Repo, fn ->
       as_of = DateTime.new!(Date.utc_today(), ~T[12:00:00.000000], "Etc/UTC")
-      fixture = insert_unboxed_pool_usage_fixture!(as_of)
+      fixture = insert_unboxed_pool_usage_fixture!(as_of, suffix)
       opts = [as_of: as_of, traffic_window: "7d", histogram_pool_ids: [fixture.pool.id]]
       raw = Stats.pool_usage_by_pool_ids([fixture.pool.id], Keyword.put(opts, :force_raw, true))
       parent = self()
@@ -1559,16 +1560,27 @@ defmodule CodexPooler.Admin.StatsTest do
           parent
         )
 
+      # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       try do
         assert_receive {^barrier, :coverage_locked}, 5_000
-        Repo.query!("SET lock_timeout TO '100ms'")
 
+        # The session-level timeout is set and reset inside one checkout. An owner killed between
+        # two queries of a plain unboxed checkout (the linked lock task failing, the ExUnit timeout)
+        # hands the connection back to the pool with the 100 ms timeout still set, and whichever
+        # test draws it next fails its own lock waits; an owner killed inside a checkout gets the
+        # connection disconnected instead.
         result =
-          try do
-            Stats.pool_usage_by_pool_ids([fixture.pool.id], opts)
-          after
-            Repo.query!("SET lock_timeout TO DEFAULT")
-          end
+          Repo.checkout(fn ->
+            Repo.query!("SET lock_timeout TO '100ms'")
+
+            try do
+              Stats.pool_usage_by_pool_ids([fixture.pool.id], opts)
+            after
+              Repo.query!("SET lock_timeout TO DEFAULT")
+            end
+          end)
 
         assert result.source == :raw_fallback
         assert result == raw
@@ -1586,7 +1598,6 @@ defmodule CodexPooler.Admin.StatsTest do
         :telemetry.detach(handler_id)
         send(lock_task.pid, {barrier, :release})
         assert {:ok, :released} = Task.await(lock_task, 5_000)
-        cleanup_unboxed_pool_usage_fixture!(fixture)
       end
     end)
   end
@@ -2107,11 +2118,10 @@ defmodule CodexPooler.Admin.StatsTest do
         request_metadata: %{
           "prompt" => raw_prompt,
           "authorization" => "Bearer #{raw_token}",
+          "idempotency_key" => raw_idempotency_key,
           "safe_request_id" => "req-safe"
         }
       })
-      |> Ecto.Changeset.change(%{idempotency_key: raw_idempotency_key})
-      |> Repo.update!()
 
     attempt = attempt_fixture(request, assignment)
 
@@ -2457,8 +2467,7 @@ defmodule CodexPooler.Admin.StatsTest do
     %{datetime | microsecond: {elem(datetime.microsecond, 0), 6}}
   end
 
-  defp insert_unboxed_pool_usage_fixture!(as_of) do
-    suffix = System.unique_integer([:positive])
+  defp insert_unboxed_pool_usage_fixture!(as_of, suffix) do
     occurred_at = DateTime.add(as_of, -30, :minute)
 
     pool =
@@ -2576,15 +2585,26 @@ defmodule CodexPooler.Admin.StatsTest do
     }
   end
 
-  defp cleanup_unboxed_pool_usage_fixture!(fixture) do
-    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
-    Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
+  # Keyed on the suffix every committed key derives from, so it can be registered before the
+  # fixture exists and still finds one that failed partway. The pool delete cascades to the
+  # request and ledger rows; the refutes come last, so a broken cascade fails loudly without
+  # cutting the rest of the teardown short.
+  defp delete_unboxed_pool_usage_fixture!(suffix) do
+    Repo.delete_all(from pool in Pool, where: pool.slug == ^"stats-unavailable-#{suffix}")
 
-    refute Repo.exists?(from request in Request, where: request.id == ^fixture.request_id)
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.account_label == ^"Stats unavailable upstream #{suffix}"
+    )
+
+    refute Repo.exists?(
+             from request in Request,
+               where: request.correlation_id == ^"stats-unavailable-#{suffix}"
+           )
 
     refute Repo.exists?(
              from ledger_entry in LedgerEntry,
-               where: ledger_entry.id == ^fixture.ledger_entry_id
+               where: ledger_entry.source_event_id == ^"stats-unavailable-settlement-#{suffix}"
            )
   end
 
@@ -2616,6 +2636,9 @@ defmodule CodexPooler.Admin.StatsTest do
         &__MODULE__.handle_repo_query_event/4,
         {handler_id, self()}
       )
+
+    # Also on_exit: a linked crash or the ExUnit timeout kills the test before `after` runs.
+    on_exit(fn -> :telemetry.detach(handler_id) end)
 
     try do
       result = fun.()

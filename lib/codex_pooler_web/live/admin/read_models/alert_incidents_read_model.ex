@@ -285,9 +285,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
     incidents
     |> Enum.filter(&incident_matches_severity?(&1, filters.severity))
-    |> Enum.map(
-      &incident_row(&1, linked_rules_by_incident, delivery_summaries, upstream_account_labels)
-    )
+    |> Enum.map(&incident_row(&1, linked_rules_by_incident, delivery_summaries, upstream_account_labels))
     |> Enum.filter(&incident_matches_link_filters?(&1, filters))
   end
 

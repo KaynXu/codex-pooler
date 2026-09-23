@@ -117,12 +117,13 @@ defmodule CodexPooler.Quotas.AccountAvailabilityTest do
   end
 
   describe "blockers and conflicts" do
-    test "complementary blocked flags and reached spend control block" do
+    test "complementary blocked flags and reached spend control without included quota block" do
       for payload <- [
             %{"plan_type" => "plus", "rate_limit" => status(false, true)},
+            %{"plan_type" => "plus", "spend_control" => %{"reached" => true}},
             %{
               "plan_type" => "plus",
-              "rate_limit" => status(true, false),
+              "credits" => %{"has_credits" => true, "unlimited" => false},
               "spend_control" => %{"reached" => true}
             }
           ] do
@@ -132,6 +133,22 @@ defmodule CodexPooler.Quotas.AccountAvailabilityTest do
           %AccountAvailability{state: :blocked, basis: :blocker, account_windows: :absent}
         )
       end
+    end
+
+    test "affirmative included quota overrides reached spend control" do
+      assert_result(
+        %{
+          "plan_type" => "plus",
+          "rate_limit" => status(true, false),
+          "spend_control" => %{"reached" => true}
+        },
+        [],
+        %AccountAvailability{
+          state: :available,
+          basis: :affirmative,
+          account_windows: :absent
+        }
+      )
     end
 
     test "every known reached type blocks" do
@@ -195,7 +212,17 @@ defmodule CodexPooler.Quotas.AccountAvailabilityTest do
             %{"plan_type" => "plus", "credits" => %{"has_credits" => true}},
             %{"plan_type" => "plus", "credits" => "bad"},
             %{"plan_type" => "plus", "spend_control" => %{"reached" => "true"}},
-            %{"plan_type" => "plus", "spend_control" => "bad"}
+            %{"plan_type" => "plus", "spend_control" => "bad"},
+            %{
+              "plan_type" => "plus",
+              "rate_limit" => status(true, false),
+              "spend_control" => %{"reached" => "true"}
+            },
+            %{
+              "plan_type" => "plus",
+              "rate_limit" => status(true, false),
+              "spend_control" => "bad"
+            }
           ] do
         assert_result(
           payload,

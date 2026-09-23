@@ -85,8 +85,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorization
         topology <- NativeCompactionAuthorizationObservation.topologies() do
       assert :ok = NativeCompactionAuthorizationObservation.emit(transition, topology)
 
-      assert_receive {:observed, @event, %{count: 1},
-                      %{transition: ^transition, topology: ^topology}}
+      assert_receive {:observed, @event, %{count: 1}, %{transition: ^transition, topology: ^topology}}
     end
 
     assert :ignored = NativeCompactionAuthorizationObservation.emit(:unknown, :direct)

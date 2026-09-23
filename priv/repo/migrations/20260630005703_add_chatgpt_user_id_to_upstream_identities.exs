@@ -11,20 +11,17 @@ defmodule CodexPooler.Repo.Migrations.AddChatgptUserIdToUpstreamIdentities do
 
     create unique_index(:upstream_identities, [:chatgpt_account_id],
              name: :upstream_identities_chatgpt_legacy_workspace_uq,
-             where:
-               "chatgpt_account_id IS NOT NULL AND workspace_id IS NULL AND chatgpt_user_id IS NULL"
+             where: "chatgpt_account_id IS NOT NULL AND workspace_id IS NULL AND chatgpt_user_id IS NULL"
            )
 
     create unique_index(:upstream_identities, [:chatgpt_account_id, :workspace_id],
              name: :upstream_identities_chatgpt_workspace_slot_uq,
-             where:
-               "chatgpt_account_id IS NOT NULL AND workspace_id IS NOT NULL AND chatgpt_user_id IS NULL"
+             where: "chatgpt_account_id IS NOT NULL AND workspace_id IS NOT NULL AND chatgpt_user_id IS NULL"
            )
 
     create unique_index(:upstream_identities, [:chatgpt_account_id, :chatgpt_user_id],
              name: :upstream_identities_chatgpt_user_legacy_workspace_uq,
-             where:
-               "chatgpt_account_id IS NOT NULL AND workspace_id IS NULL AND chatgpt_user_id IS NOT NULL"
+             where: "chatgpt_account_id IS NOT NULL AND workspace_id IS NULL AND chatgpt_user_id IS NOT NULL"
            )
 
     create unique_index(
@@ -35,8 +32,7 @@ defmodule CodexPooler.Repo.Migrations.AddChatgptUserIdToUpstreamIdentities do
                :chatgpt_user_id
              ],
              name: :upstream_identities_chatgpt_user_workspace_slot_uq,
-             where:
-               "chatgpt_account_id IS NOT NULL AND workspace_id IS NOT NULL AND chatgpt_user_id IS NOT NULL"
+             where: "chatgpt_account_id IS NOT NULL AND workspace_id IS NOT NULL AND chatgpt_user_id IS NOT NULL"
            )
   end
 
